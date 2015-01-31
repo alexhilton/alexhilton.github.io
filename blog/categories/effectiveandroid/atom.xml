@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 猿轩阁]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2015-01-30T22:35:26+08:00</updated>
+  <updated>2015-01-31T23:03:31+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,102 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[诡异的EOF Exception]]></title>
+    <link href="http://toughcoder.net/blog/2015/01/31/unexpected-eof-exception/"/>
+    <updated>2015-01-31T17:00:39+08:00</updated>
+    <id>http://toughcoder.net/blog/2015/01/31/unexpected-eof-exception</id>
+    <content type="html"><![CDATA[<p>近日在写一个简单的HTTP代码中遇到了诡异的EOFException,当读取ResponseCode的时候就抛出了EOF异常,感觉很诡异,下面进行问题还原,以及分析和解决过程.</p>
+
+<h2>问题</h2>
+
+<p>有问题的代码如下:</p>
+
+<!-- more -->
+
+
+<pre><code class="java">    private void testEcho() {
+        String payload = "The quick brown fox jumps over the lazy dog.";
+        try {
+            HttpURLConnection conn = null;
+            BufferedReader br = null;
+            try {
+                String ep = Base64.encodeToString(payload.getBytes(), Base64.URL_SAFE);
+                URL u = new URL("http://httpbin.org/get?p=" + ep + "&amp;key=testEcho");
+                conn = (HttpURLConnection) u.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setDoInput(true);
+                conn.setDoOutput(false);
+                conn.connect();
+                if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                    Log.e(TAG, "http res " + conn.getResponseCode() + ", msg : " + conn.getResponseMessage());
+                    return;
+                }
+                br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                String buf = null;
+                while ((buf = br.readLine()) != null) {
+                    Log.e(TAG, "HTTP res: " + buf);
+                }
+            } finally {
+                if (br != null) {
+                    br.close();
+                }
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "ioexception ", e);
+        }
+    }
+</code></pre>
+
+<p>这段代码进行后会在getResponseCode()这行抛出EOFException:
+<a href=""><img src="http://7u2scv.com1.z0.glb.clouddn.com/eof.png" title="auto auto" ></a>
+很疑惑,百思不得解,这是一个简单的GET请求,却抛出了这样难以理解的异常.于是去Google,发现都认为是Android本身的问题,要加上connection close
+<code>java
+conn.setRequestProperty("Connection", "close");
+</code>
+比如,<a href="http://stackoverflow.com/questions/19258518/android-httpurlconnection-eofexception">这个讨论</a>,以及<a href="http://stackoverflow.com/questions/15411213/android-httpsurlconnection-eofexception">这个讨论</a>.
+尝试了,但仍没有解决掉抛出的EOFException.</p>
+
+<h2>分析与解决</h2>
+
+<p>这个时候就要冷静的分析下,先从根本开始,怀疑一切,把请求的每一句都打印出来,突然发现URL竟然含有一个CRLF换行符(\r\n). 感觉奇怪,于是查阅文档,发现Base64在编码的时候会默认给结果加上CRLF以换行,于是再加一个Flag, NO_WRAP后,问题解决:
+<code>java
+     String ep = Base64.encodeToString(payload.getBytes(), Base64.URL_SAFE | Base64.NO_WRAP);
+</code></p>
+
+<h2>深入分析</h2>
+
+<p>问题是解决了,但感觉没有完全弄明白.于是做了多次尝试,发现只要URL中部含有换行(\n或\r\n)都会引发此问题,而在尾部则没事.
+<a href="http://7u2scv.com1.z0.glb.clouddn.com/eof_req.png"><img src="http://7u2scv.com1.z0.glb.clouddn.com/eof_req.png" title="auto auto" ></a>
+这是请求包
+<a href="http://7u2scv.com1.z0.glb.clouddn.com/eof_res.png"><img src="http://7u2scv.com1.z0.glb.clouddn.com/eof_res.png" title="auto auto" ></a>
+这是Server回应</p>
+
+<p>通过抓包可以看出,换行符会导致发送的HTTP请求包不完整,Server返回也认为HTTP是trunk的,所以期待更多的数据,因此这个时候是没有response的,任何对response的读操作(getResponseCode(), getResponseMessage(), getInputStream())都会立即抛出EOFException.</p>
+
+<h2>总结</h2>
+
+<p>虽然这个问题不大,但是也还值得总结一下:</p>
+
+<ol>
+<li><p> 遇到问题先检查没犯低级错误</p>
+
+<p> 也就是说,当遇到诡异的问题时,先查看文档,检查参数,确保是否是在按正确的方式在做事情,这很关键,因为很多时候都是我们犯了低级错误,比如拼写错误,或者没传正确的参数,或者解错了API等.因为越是简单的错误越容易被忽略.</p></li>
+<li><p> 问Google和其他人</p>
+
+<p> Google一下或者问下身边的人,可能会很有帮助</p></li>
+<li> 如果还搞不定,那就真的是遇到难题了,这个时候只能去查阅源码和书籍,定位出问题,分析原因,解不解得了,就看造化了.</li>
+<li><p> 找Plan B</p>
+
+<p> 不用认死理儿,一条路不通,可走另外的路,或者搭个桥什么的.</p></li>
+</ol>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[让Android模拟器飞一会]]></title>
@@ -372,141 +468,6 @@
 <p>另外，就是对于重复的定义是达到三次及三次以上。如果仅出现二次，并且，无可能出现别一次，这个时候其时，要不要去重复有在商榷，写第二次时，花时间重构，与拷贝或重新实现，其实代码差不多。当发现第三次实现某个东西时，就要考虑好好的重构一下，减少重复。</p>
 
 <p>还有，就是，在项目开始不要考虑的太多，不要过度设计。孤认为，不过过度设计，更不要过早优化，就根据需求和进度和发展状况综合来看。当出现了重复，需要重构时就立马去做，这样就不会出问题。但如果没能及时去做重构，欠了债，那么由于涉及代码，功能和模块都比较多时，再去重构，难度大，风险也大。就好比房屋的维护保养，当出现灰尘时就去打扫，很容易，个把小时就搞定了，但如果一直拖着，一年才打扫一次，可能要十天半个月才能完事。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[使用工具来提升Android开发效率]]></title>
-    <link href="http://toughcoder.net/blog/2014/10/24/boosts-android-development-with-tools/"/>
-    <updated>2014-10-24T18:15:56+08:00</updated>
-    <id>http://toughcoder.net/blog/2014/10/24/boosts-android-development-with-tools</id>
-    <content type="html"><![CDATA[<p>正所谓工欲善其事，必先利其器。学习并应用优秀的轮子，可以让我们跑的更快，走的更远。这里所指的工具是广义的，泛指能帮助我们开发的东西，或者能提高我们效率的东西，包括：开发工具，监测工具，第三方代码库等。
-<a href=""><img src="http://img.clubic.com/05250064-photo-apple-tools.jpg" width="600" height="320"></a></p>
-
-<h2>优质的第三方开源类库</h2>
-
-<!-- more -->
-
-
-<h3>图片加载与缓存</h3>
-
-<p>现代的应用程序难免会有图片显示给用户，对于资讯类，旅游类，购物类等应用程序而言，图片的展示更是应用里面关键的一环。而图片从加载，到缓存再到显示是一个比较复杂的过程，中间还要处理网络异常，解析异常等。图片又是极其耗费内存的，稍不注意就会出现OutOfMemory（OOM）的错误。如果你的图片在你的应用中不是主要的东西，仅是偶尔显示个Icon和图标之类的，那还好，普通的异步加载和解析（<a href="http://developer.android.com/reference/android/graphics/BitmapFactory.html">BitmapFactory</a>）就好。但如果要在应用中展示大量的图片时，甚至应用的主要内容就是图片时，这时就要借助于优秀的开源库了：</p>
-
-<ul>
-<li><p><a href="https://github.com/nostra13/Android-Universal-Image-Loader">Universal Image Loader</a></p>
-
-<p> 这个库非常强大，从加载，到解析到显示，你只配置参数，告诉它如何做，再给它一个ImageView就可以了，然后你就可以去喝茶去了。</p></li>
-<li><a href="https://github.com/square/picasso">Picasso</a></li>
-</ul>
-
-
-<h3>EventBus完全解耦模块</h3>
-
-<p>观察者模式，或者生产者消费者模型在开发中是很常见的，比如说异步加载数据，之类的都会用到类似的结构。通常的做法就是创建一个Listener用于回调，以返回数据。如果有一个二个还好，但如果多了，应用需要获取大量的不同的数据，就会出现大量的线程和Listener，到处是addListener和implements Listener，这会造成大量的代码和依赖，程序会变得混乱，业务逻辑会迷失在Listener之中，而且还要及时的unregisterListener，以防不该被回调到时能取消。这还会造成代码和模块之间的强耦合，也就是写代码的时候必要在有另一方，否则不会编译过。这时就可以用EventBus来解耦了，它是一个框架能让双方很容易的进行通讯，而不必知道彼此的存在与否：</p>
-
-<ul>
-<li><a href="https://github.com/greenrobot/EventBus">EventBus</a>
- 这个库非常的高效与方便，它完全不依赖于注解。</li>
-<li><a href="http://square.github.io/otto/">Otto</a>
- 这个要使用注解，所以在效率上可能会略差一些。</li>
-<li><a href="https://code.google.com/p/guava-libraries/wiki/EventBusExplained">Guava</a>
- 这个是Google Java增加库Guava中的一个</li>
-</ul>
-
-
-<p>这些的库的基思想和目的都是一致的，都是以总线的方式，让强耦合的双方解耦，不妨在你的应用中使用一下，体验一下。</p>
-
-<h3><a href="https://github.com/hdodenhof/CircleImageView">CirclImageView</a></h3>
-
-<p>这似乎是一个比较小型的库，它只是一个特殊的ImageView用圆形的方式来显示图片。</p>
-
-<h3><a href="https://github.com/Maxwin-z/XListView-Android">XListView</a></h3>
-
-<p>这是一个支持下拉刷新(PulltoRefresh)和上拉加载更多(Load more)的定制ListView。</p>
-
-<h3><a href="https://github.com/JakeWharton/Android-ViewPagerIndicator">ViewPageIndicator</a></h3>
-
-<p>这个是要与官方的<a href="http://developer.android.com/reference/android/support/v4/view/ViewPager.html">ViewPager</a>一起使用的，为ViewPager添加indicator的类库，非常的有名，很多应用都在使用。</p>
-
-<h3><a href="https://github.com/JakeWharton/ActionBarSherlock">ActionbarSherlock</a></h3>
-
-<p>这个库非常的有名，很多优秀的应用都基于此。<a href="http://developer.android.com/reference/android/app/ActionBar.html">ActionBar</a>是一个不错的用户体验，它能集导航，操作和信息于一体的导航栏，Google也极力推荐使用它。但是有一个问题就是它是<a href="http://developer.android.com/about/versions/android-3.0-highlights.html">HoneyCombe</a>（API 11）才引及的一个组件，而对于大多数开发者来说，GingerBread(2.3)还是不能放弃的肉，所以这个类库应运而生。这个库易于使用，根据手机版本来选择实现方式，如果是3.0以上就直接使用系统的Actionbar。其中的代码也是值得所有开发者去拜读。</p>
-
-<h3><a href="https://github.com/bauerca/drag-sort-listview">DragSortListView</a></h3>
-
-<p>用过iOS设备的人可能会注意到iOS里面的所有列表都有一个非常酷的功能，那就是在编辑模式下，可以任意对列表进行重新排库。但是令开发沮丧的是，这是iOS中UITableView的标准内嵌功能。而Android的ListView只提供最基本的功能。因此就有了此类库的出现。其实除了此库，还有很多其他的库的出现也都是为了实现类似iOS体验而做的。
-当然这个类库有一个小问题需要注意，就是它内部会创建一个ItemView来Wrapper客户代码提供的ItemView，而在Wrapper时，它会使用WRAP_CONTENT做为高和宽，所以，用了这个类库会发现宽度不会Match整个屏幕。解决的办法就是在创建Adapter#getView时再用代码指定一扁LayoutParams，把宽设为MatchParent就好了。</p>
-
-<h3><a href="http://nineoldandroids.com">NineOldAndroid</a></h3>
-
-<p>这个库也是解决低版本之痛的。从3.0开始，Google引入了新的动画库，称作Property动画，使实现动画不但变得非常简单，同时也能实现更加复杂的动画。只要对对象的属性进行计算，就能让这个对象动起来。但是同样，对于2.3以前就只能用旧的补间动画(Tween Animation)，这种动画复杂，需要写大量的代码。这个库就能统一操作，让动画变得简单
-这里介绍的，只是一些比较常用的也是比较有名的类库。这些库不但优秀，好用，而且最重要的是还开源，你可以去学习，去研究，甚至去改进。那么，这些还远远不够，我们的应用日益复杂，各种需求，怎么办呢？</p>
-
-<h2>如何获取更多的类库</h2>
-
-<p>学习编程的第一天起，前辈们就说，不要重复制造轮子，老手与新手的区别也在于，老手善于利用已有的东西，而不是一起都从0开始，无数的优秀的类库已经能帮忙解决很多问题，它们健壮，方便，好用，所以为什么还要自己费劲去重新造轮子呢？</p>
-
-<h3>二个开发者必备之神器</h3>
-
-<p>现在的开源类库非常之多，有些我们可能不知道，即使看到一个类库的主页或者源码，也要花时间研究下，它究竟能干什么，适合干什么，以及能否解决我们遇到的问题，这是介绍三款神器：</p>
-
-<ul>
-<li> <a href="https://play.google.com/store/apps/details?id=com.indianic.coslib">Developer Library for Android</a></li>
-<li> <a href="https://play.google.com/store/apps/details?id=com.inappsquared.devappsdirect">DevAppsDirect</a></li>
-<li> <a href="https://play.google.com/store/apps/details?id=com.limecreativelabs.app">LiME Creative Labs</a></li>
-</ul>
-
-
-<p>这三款都是Android应用，只是它们的内容是介绍众多优质的开源类库，它会列出每个类库的信息，如作者，源友位置，简要说明。最最重要的是它把类库的例子也集成起来了，你可以立马运行类库的Demo以体验这个类库到底是干啥的，这真的是良心之作。等什么呢，赶快去下载安装吧。</p>
-
-<h3>Github</h3>
-
-<p>提起开源，<a href="https://github.com/">Github</a>当然是首届一指的，其上托管着无数的优秀的开源库，没事常去逛逛总会有好处，甚至是惊喜的。唯一麻烦的就是，里面的内容太多了，容易看花眼和找不到想要的东西。所以还是上面的应用来的干脆直接。</p>
-
-<h3>优质的聚合平台</h3>
-
-<p>除此之外，还有一些优秀的网络社区和博客会收集和整理优秀的开源类库，这也是我们需要关注的，比如：</p>
-
-<ul>
-<li> <a href="http://hao.jobbole.com/category/android/">伯乐</a>
-  这里面罗列了大量的优秀的库和工具，这里不仅有库还有工具。此外这个网站也值得所有开发者收藏，里面会聚合优秀的博客和资源。</li>
-<li> <a href="http://guides.codepath.com/android">CodePath</a></li>
-</ul>
-
-
-<h2>每个应用程序必不可少的组件</h2>
-
-<p>现在的应用程序有一些东西是必要的，比如分享功能，比如推送消息，比如应用程序统计和崩溃报告等，如果你是一个大型公司，拥有大团队，或者已经发现成为行业领头羊，那么这些东西最好自己实现，以达到更好的控制和运营，也防止数据外泄。但对于小团队，或者个人开发者，来说，还是利用现成的解决方案比如靠谱。</p>
-
-<h3>分享到社交平台</h3>
-
-<p><a href="http://www.mob.com/">ShareSDK</a>和<a href="http://www.umeng.com">友盟</a>都提供了免费的SDK用以实现分享到各大社交平台。
-其实每个社交平台都有提供了SDK，但是有些麻烦的是开发者必须要一一去注册，以获取APP_KEY，同时还要处理用户授权以获得访问社交数据，不同的SDK，虽然基本思想是一致的，但是具体开发过程难免会有坑。ShareSDK就是帮助开发者解决了这些问题，它在各个媒体平台上都注册了，也封装处理了授权过程，但是带来方便的同时，它有缺点：
-   * 分享到社交媒体上的信息会显示“来自ShareSDK”，而非你的应用。这个通常是显示开发者在社交媒体上注册的信息。
-   * ShareSDK的授权方式是通过网页形式，而非API，过于简单且授权信息不容易持久化，也就是用户可能会经常（甚至每次）分享时都需要授权。而如果直接使用媒体授权API，可以直接获取APP_SECRETE，在未过期（一般Expiration会比较长）之前都可以直接分享，无需授权。</p>
-
-<p>所以你看所有的用户量超大的应用，各大新闻客户端等，都是自己集成和绑定社交媒体，不会通过第三方的库。</p>
-
-<h3>推送消息</h3>
-
-<p>现在的应用程序基本上都会有后台服务提供数据，也会增加推送消息，这个是运营的重要手段，能保持应用的活跃，虽然我不喜欢推送消息，因为早上一打开手机，全都是推送消息。但是推送还是必要的，也有现成的方案可以用：</p>
-
-<ul>
-<li> <a href="http://www.igetui.com">个推</a></li>
-<li> <a href="http://www.umeng.com/">友盟</a></li>
-</ul>
-
-
-<p>这二个也都非常好用，它包括客户端SDK和Server端后台，是全套的，非常方便实用。
-除此之外，如果是面向海外用户，可以用Google提供的，<a href="http://developer.android.com/google/gcm/index.html">Google Clould Messaging</a>，它也非常好用，因为毕竟是官方的，可以与Apple的推送服务媲美。但是它的最大的缺点在于，Google Services都依赖于Google Play，也就是说运行时手机上必须要有Google Play Services，也即必须要安装有GMS才可以。但中国大陆的手机全部没有GMS，因此GCM也用不了。所以个推和友盟也才有机会。</p>
-
-<h3>应用统计信息</h3>
-
-<p>移动开发不单单只有开发出一个出色的APP这么简单，开发完了还要运营，而应用的统计绝对是运营的一个重要手段，后期的新功能，以及发展方向要取决于应用的统计数据，统计能看出用户的特征，分布，使用习惯等。当然了，在统计方面友盟绝对是最好的，它开始的最好，现在也是做的最好的，使用也非常的简单。</p>
-
-<h3>应用崩溃报告</h3>
-
-<p>现在的Android手机种类极其之多，各种奇葩的设备都有，在标准的手机和模拟器上运行没有问题，但是在某些定制ROM的手机上可能就会挂。另外，程序也会有你想不到Bug导致崩溃。因此我们需要收集应用的崩溃信息，以后期改进。如果你集成了友盟统计，它会自动收集崩溃信息，但是它只能收集Java层的，且信息比较简单，只有一个StackTrace。如果想要收集Native层的，以及获得更多的信息的话，就要使用其他库，或者自己实现。自己实现也不难，就是要处理unhandledException，然后把客户端的信息，如版本，配置，再把手机的信息收集一下，发到后台，后台再做个报表，能查看错误信息就可以了。但如果不想自己做，可以使用<a href="https://github.com/ACRA/acra">Application Crash Reports for Android</a>这个库可以解决客户端的问题，也就是说它能在发生Crash时，收集足够的信息(哪配置要收集哪些信息)，然后发送，它可以配置成发送到Server后台，也可以发送到开发者的邮箱，很方便和实用，特别是对于个人开发者来说。需要注意的是，要想能发送到邮箱，手机用户必须配置了Email帐户，国内用户貌似没有这习惯，因为国内用户不习惯用邮件，更不要说给手机配置邮件帐户。但是对于国外用户，这是没有问题的，国外用户习惯电子邮件，而且手机上都会配置。</p>
 ]]></content>
   </entry>
   
