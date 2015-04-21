@@ -1,0 +1,474 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Effectiveandroid | 猿轩阁]]></title>
+  <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
+  <link href="http://toughcoder.net/"/>
+  <updated>2015-02-25T17:22:13+08:00</updated>
+  <id>http://toughcoder.net/</id>
+  <author>
+    <name><![CDATA[Alex Hilton]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[诡异的EOF Exception]]></title>
+    <link href="http://toughcoder.net/blog/2015/01/31/unexpected-eof-exception/"/>
+    <updated>2015-01-31T17:00:39+08:00</updated>
+    <id>http://toughcoder.net/blog/2015/01/31/unexpected-eof-exception</id>
+    <content type="html"><![CDATA[<p>近日在写一个简单的HTTP代码中遇到了诡异的EOFException,当读取ResponseCode的时候就抛出了EOF异常,感觉很诡异,下面进行问题还原,以及分析和解决过程.</p>
+
+<h2>问题</h2>
+
+<p>有问题的代码如下:</p>
+
+<!-- more -->
+
+
+<pre><code class="java">    private void testEcho() {
+        String payload = "The quick brown fox jumps over the lazy dog.";
+        try {
+            HttpURLConnection conn = null;
+            BufferedReader br = null;
+            try {
+                String ep = Base64.encodeToString(payload.getBytes(), Base64.URL_SAFE);
+                URL u = new URL("http://httpbin.org/get?p=" + ep + "&amp;key=testEcho");
+                conn = (HttpURLConnection) u.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setDoInput(true);
+                conn.setDoOutput(false);
+                conn.connect();
+                if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                    Log.e(TAG, "http res " + conn.getResponseCode() + ", msg : " + conn.getResponseMessage());
+                    return;
+                }
+                br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                String buf = null;
+                while ((buf = br.readLine()) != null) {
+                    Log.e(TAG, "HTTP res: " + buf);
+                }
+            } finally {
+                if (br != null) {
+                    br.close();
+                }
+                if (conn != null) {
+                    conn.disconnect();
+                }
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "ioexception ", e);
+        }
+    }
+</code></pre>
+
+<p>这段代码进行后会在getResponseCode()这行抛出EOFException:
+<a href=""><img src="http://7u2scv.com1.z0.glb.clouddn.com/eof.png" title="auto auto" ></a>
+很疑惑,百思不得解,这是一个简单的GET请求,却抛出了这样难以理解的异常.于是去Google,发现都认为是Android本身的问题,要加上connection close
+<code>java
+conn.setRequestProperty("Connection", "close");
+</code>
+比如,<a href="http://stackoverflow.com/questions/19258518/android-httpurlconnection-eofexception">这个讨论</a>,以及<a href="http://stackoverflow.com/questions/15411213/android-httpsurlconnection-eofexception">这个讨论</a>.
+尝试了,但仍没有解决掉抛出的EOFException.</p>
+
+<h2>分析与解决</h2>
+
+<p>这个时候就要冷静的分析下,先从根本开始,怀疑一切,把请求的每一句都打印出来,突然发现URL竟然含有一个CRLF换行符(\r\n). 感觉奇怪,于是查阅文档,发现Base64在编码的时候会默认给结果加上CRLF以换行,于是再加一个Flag, NO_WRAP后,问题解决:
+<code>java
+     String ep = Base64.encodeToString(payload.getBytes(), Base64.URL_SAFE | Base64.NO_WRAP);
+</code></p>
+
+<h2>深入分析</h2>
+
+<p>问题是解决了,但感觉没有完全弄明白.于是做了多次尝试,发现只要URL中部含有换行(\n或\r\n)都会引发此问题,而在尾部则没事.
+<a href="http://7u2scv.com1.z0.glb.clouddn.com/eof_req.png"><img src="http://7u2scv.com1.z0.glb.clouddn.com/eof_req.png" title="auto auto" ></a>
+这是请求包
+<a href="http://7u2scv.com1.z0.glb.clouddn.com/eof_res.png"><img src="http://7u2scv.com1.z0.glb.clouddn.com/eof_res.png" title="auto auto" ></a>
+这是Server回应</p>
+
+<p>通过抓包可以看出,换行符会导致发送的HTTP请求包不完整,Server返回也认为HTTP是trunk的,所以期待更多的数据,因此这个时候是没有response的,任何对response的读操作(getResponseCode(), getResponseMessage(), getInputStream())都会立即抛出EOFException.</p>
+
+<h2>总结</h2>
+
+<p>虽然这个问题不大,但是也还值得总结一下:</p>
+
+<ol>
+<li><p> 遇到问题先检查没犯低级错误</p>
+
+<p> 也就是说,当遇到诡异的问题时,先查看文档,检查参数,确保是否是在按正确的方式在做事情,这很关键,因为很多时候都是我们犯了低级错误,比如拼写错误,或者没传正确的参数,或者解错了API等.因为越是简单的错误越容易被忽略.</p></li>
+<li><p> 问Google和其他人</p>
+
+<p> Google一下或者问下身边的人,可能会很有帮助</p></li>
+<li> 如果还搞不定,那就真的是遇到难题了,这个时候只能去查阅源码和书籍,定位出问题,分析原因,解不解得了,就看造化了.</li>
+<li><p> 找Plan B</p>
+
+<p> 不用认死理儿,一条路不通,可走另外的路,或者搭个桥什么的.</p></li>
+</ol>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[让Android模拟器飞一会]]></title>
+    <link href="http://toughcoder.net/blog/2014/10/31/boosts-android-emulator/"/>
+    <updated>2014-10-31T17:27:29+08:00</updated>
+    <id>http://toughcoder.net/blog/2014/10/31/boosts-android-emulator</id>
+    <content type="html"><![CDATA[<p>Android模拟器是公认的慢，而且不是一般的慢，即使在高性能的PC上，跟开发环境没关系，因为它就是慢。但是我们又必须使用模拟器，比如在测试Android不同版本的兼容性时，或者在测试不同屏幕尺寸的UI显示问题时，都是需要的。当然我们还是鼓励使用一个真机来调试和测试，模拟器无法取代真机。但是在测试兼容性时，我们还是要使用模拟器，因为即使是BAT也不可能把各种版本，各种屏幕的Android手机都买一个。</p>
+
+<p><a href=""><img src="http://codebutler.com/img/posts/2012-10-10-configuring-a-usable-android-emualtor/android-emulator-ugly.png" width="320" height="480"></a></p>
+
+<!-- more -->
+
+
+<h2>为啥模拟器会这么慢</h2>
+
+<p>关键就是在模拟这二个字。PC啊，我们所使用的开发环境的CPU都是x86架构的，而手机呢一般都是ARM架构，这就产生问题了，这个手机的系统无法像PC上面的一个应用程序那样直接运行在PC里，所以就需要一个虚拟的ARM机器。Android模拟器是基于QEMU的，QEMU可以模拟ARM指令，另外，存储，等等所有模拟器的硬件，都是由软件实现的。总之，为了能让PC上跑起来ARM，就慢了很多。</p>
+
+<p>详细的可以看<a href="http://www.developer.com/ws/android/development-tools/supercharge-your-android-emulator-speed-with-intel-emulation-technologies.html">这篇文章</a></p>
+
+<p>我们可能不关心它为啥慢，我们要关心的是如何能让它跑的更快一些！</p>
+
+<h2>使用x86架构</h2>
+
+<p>既然它慢是因为必须在x86上面模拟ARM，那么让它快起来第一个方法就是直接使用x86架构，这样子的话，就能够直接使用开发环境的CPU了，性能肯定会大幅的提升，正如<a href="http://www.developer.com/ws/android/development-tools/supercharge-your-android-emulator-speed-with-intel-emulation-technologies.html">这篇文章</a>所说。</p>
+
+<p>配置方法也不难，主要是：</p>
+
+<ul>
+<li>安装Intel的<a href="https://software.intel.com/en-us/android/articles/intel-hardware-accelerated-execution-manager">加速驱动HAXM</a></li>
+<li>下载和使用x86版本的Android System images</li>
+</ul>
+
+
+<p>使用起来并不难，只是可能会遇到坑，借助<a href="https://www.google.com.hk/">Google</a>和<a href="http://www.baidu.com/">百度</a>都能解决。唯一需要注意的是，Intel的HAEM对硬件的配置要求比较苛克，要求CPU必须支持虚拟化VT，具体的可以参考官方和Google进行解决。</p>
+
+<h2>使用<a href="http://www.genymotion.com/">Genymotion</a></h2>
+
+<p>Genymotion是一个全功能的Android模拟器，它不但能测试应用，还有同步等功能，在PC上面跑的非常快。先去注册成为它的用户，然后就可以下载了。它的安装，也比较方便，直接看官方的文档就可以了。</p>
+
+<h3>快速功能列表</h3>
+
+<ul>
+<li>支持主流的三种平台Windows, Mac OS X和Linux</li>
+<li>需要注册成为它的用户才可下载</li>
+<li>高级功能的版本需要付费</li>
+<li>不能安装在虚拟机中，因为它要使用硬件加速，而且本身也要运行在虚拟机(VMWare, VirtualBox)之中，所以，它是不能安装在已经是虚拟中的系统中的</li>
+</ul>
+
+
+<h3>安装与使用方法</h3>
+
+<ul>
+<li>Windows
+    下载安装文件后直接安装即可，会把所有的依赖（Virtualbox）都装上</li>
+<li>Linux(Ubuntu 64)
+
+<ul>
+<li>下载genymotion-[version]_[arch].bin</li>
+<li>chmod +x genymotion-[version]_[arch].bin</li>
+<li>./genymotion-[version]_[arch].bin（注意一下子安装的路径，是放在$PWD/genymotion/下面</li>
+<li>安装Virtualbox，如果还没安装的话sudo apt-get install virtualbox</li>
+<li>启动cd genymotion; ./genymotion。登录帐户然后选择设备进行下载，之后就可以使用了，都是GUI页面，有问题可以Google。</li>
+</ul>
+</li>
+</ul>
+
+
+<h2>使用<a href="http://www.andyroid.net/">Andy the Android Emulator</a></h2>
+
+<p>貌似官方网站不能下载。</p>
+
+<h3>快速功能列表</h3>
+
+<ul>
+<li>支持Windows和Mac</li>
+<li>支持开发所需要的所有功能</li>
+<li>支持同步</li>
+</ul>
+
+
+<h2>使用<a href="http://www.bluestacks.com/">Blue Stacks App Player</a></h2>
+
+<h3>功能列表</h3>
+
+<ul>
+<li>仅支持Windows</li>
+</ul>
+
+
+<h2>使用<a href="https://www.manymo.com/">Manymo</a></h2>
+
+<p>这个网站经常打不开，因为访问量太大。</p>
+
+<p>它不是运行在本地的，它是一个运行在浏览器中的Android模拟器，注册用户以后，就可以上传应用，然后在浏览器中运行Android应用了，听起很酷，但是这个并不适合开发者用。这个适合测试人员用。或者开发完成后做一些兼容性测试之类的场景。</p>
+
+<h3>快速功能列表</h3>
+
+<ul>
+<li>运行在浏览器之中</li>
+<li>适合测试，而不是实时的调试</li>
+<li>缺点就是网站经常打不开</li>
+</ul>
+
+
+<h2>总结与推荐</h2>
+
+<p>其实，所有的加速的模拟器，也都是以x86为基础建立起来的，只不过他们做了更多的封装，让它的安装和使用更加的方便而已。</p>
+
+<p>最出名的，也是最方便好用当属Genymotion，推荐使用。</p>
+
+<p>如果你有更好的秘密武器，也请与我分享。</p>
+
+<h2>参考</h2>
+
+<ul>
+<li><a href="http://stackoverflow.com/questions/1554099/why-is-the-android-emulator-so-slow">Why is the Android emulator so slow?</a></li>
+<li><a href="http://stackoverflow.com/questions/2662650/making-the-android-emulator-run-faster">Making the Android emulator run faster</a></li>
+<li><a href="http://www.techbate.com/5-best-android-emulator-for-windows-87xp/">5 Best Android Emulator For Windows 8,7,XP</a></li>
+<li><a href="http://techapple.net/2014/05/3-best-android-emulators-for-mac-os-macbook-run-and-install-android-app-on-your-mac-os-x-macbook-airpro/">3 Best Android Emulators for Mac OS / Macbook </a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[不断更新，保持高效]]></title>
+    <link href="http://toughcoder.net/blog/2014/10/26/stay-tune-with-state-of-art/"/>
+    <updated>2014-10-26T22:13:51+08:00</updated>
+    <id>http://toughcoder.net/blog/2014/10/26/stay-tune-with-state-of-art</id>
+    <content type="html"><![CDATA[<p>正所谓学历代表过去，学习力代表未来。柯维大师的七个习惯之中的终极习惯就是要“不断更新”，今天的你再牛B，知道的再，如果不去学习，不去提升，不去更新自己，那么总有一天也会被超越，时代在进步，别人在进步，发逆水行舟，不进则退，你停止了学习，就表明你退步了，因为别人在进步。
+那么，为了保持能够高效的进行Android开发，我们就必须不断的学习，不断的充电，这些列出一些，能够提高Android开发的进阶教程，注意是进阶教程，而非入门教程。</p>
+
+<p><a href=""><img src="http://www.bvsc.org/sites/default/files/images/5%20ways-KEEP%20LEARNING.png"></a></p>
+
+<!-- more -->
+
+
+<h2>书箱</h2>
+
+<p>虽然说现代人忙的都没有时间看书了，虽然说，我们浮躁的没有耐心把一本书看完，但是书籍仍然是学习和获取知识的最佳途径，前提是你选对了书。对于Android的进阶学习，这些书籍是非常好的：</p>
+
+<ul>
+<li><p>《50 Android Hacks》</p>
+
+<p> 这本书有点类似《Effective Java》和《Effective C++》，它是以话题形式来讨论提升Android开发的技巧，每个话题一个技巧，非常实用的一本书，里面有很多干货，有实例，拿来就可以用</p></li>
+<li><p>《Smashing Android UI》</p>
+
+<p> 这本书重点讨论如何提升UI，包括动画，布局，UI性能，定制Widget等。</p></li>
+<li><p>《Pro Android Apps Performance Optimization》</p>
+
+<p> 这本书是讲如何提升应用的性能。</p></li>
+<li><p>《Decompiling Android》</p>
+
+<p> 这本书比较有意思，是从另外一个角度来讲Android开发，从逆向工程角度，主要讲如何逆向工程一个应用，以及如何从开发层面来防止应用被逆向。里面讲了很多工具，很实用。</p></li>
+<li><p>《Android Design Patterns: Interaction Design Solution for Developers》</p>
+
+<p> 这本书的话题跟开发比较远，主要是从UX角度来讲解Android上面的用户体验的模式，比如现在非常流行的Drawer等等。孤认为开发者也要懂一些用户体验方面的东西，而且这些东西跟开发者关系更大一些。因为UXD并不清楚什么可以实现，什么难以实现，什么无法实现，以及实现起来的代价有多大。现在不是流行全栈工程师吗。Anyway，多了解点知识总是没坏处的。</p></li>
+</ul>
+
+
+<p>这些书随便就能搜索到，就不提供下载链接了。至于说为什么这里都是英文的，因为都是外国人写的啊！推荐直接看原版，因为翻译有些时候不会太准，因为译者的理解可能会不一样。并不需要多牛B的英文水平才能读懂英文书。这些都是专业的书籍，语言都非常的通俗易懂，对于常见的一些专业术语，查几次词典就记住了。关键还是态度。</p>
+
+<h2>网络博客资源</h2>
+
+<p>光看书，也还不够，因为最新的技术总是先出现在网络，尔后由人总结才能出现在书中。</p>
+
+<ul>
+<li><p><a href="http://developer.android.com/develop/index.html">Android Developers</a></p>
+
+<p> 这个不用多说，开发Android，无论是新手还是老手，官方的文档总是一个必须要常访问的地方。今日的官方文档已经10时的大不一样，那时里面除了API Reference外，几乎有很少其他内容，但是现在从Tutorials, Training Docs, References, Articles, Videos, Best Practices and Samples可以说凡是能用来学习的全都有了，里面已是相当的丰富了。</p></li>
+<li><p><a href="http://blog.jobbole.com">伯乐在线</a></p>
+
+<p> 这里每天会汇集一些优质的网络博客，各个方面的，当然也包括Android。</p></li>
+<li><p><a href="http://android-developers.blogspot.com">Android Developer Blogs</a></p>
+
+<p> 这个貌似是一群Android系统的开发者所定的博客，里面的文章相当有深度和权威，都是一等一的干货。</p></li>
+<li><p><a href="http://blog.stylingandroid.com">Styling Android</a></p>
+
+<p> 这个博客主要讲高级的UI定制，比如实现颜色选择器那种高级复杂的UI。</p></li>
+<li><p><a href="https://www.youtube.com/playlist?list=PLWz5rJ2EKKc_XOgcRukSoKKjewFJZrKV0">Android Dev Bytes</a></p>
+
+<p> 这个是YouTube上面的一个频道，是由Android系统的开发者做的一些教程类的视频，讲述如何进行开发，和提升的技巧。视频的内容非常丰富，从新的API，到游戏，再到UX，和Android Design。每个视频都算长，几十分钟。其中有几个哥们是Framework图形库的，讲述的如何做各种非常炫和酷的动画，相当的赞。这可以世界上最优秀的工程师，且是Android的维护者做的教程，错不了。</p></li>
+<li><p><a href="http://www.androiddesignpatterns.com">Android Design Patterns</a></p>
+
+<p> 这个博客的内容都是关于深度解析Frameworks中某些组件的工作原理的，很有深度。</p></li>
+</ul>
+
+
+<h2>优质的网站和社区</h2>
+
+<ul>
+<li><p><a href="http://hao.jobbole.com/category/android/">伯乐资源</a></p>
+
+<p> 这里面有非常全的Android相关的资源。</p></li>
+<li><p><a href="http://www.android-studio.org">Android Studio</a></p>
+
+<p> 这个是AndroidStudio的中文社区，主要关注AS，但也有开发相关内容。</p></li>
+<li><p><a href="http://androidweekly.net">Android Weekly</a></p>
+
+<p> 这个网站会像周报一样，每周更新Android开发相关的新闻，技术等。</p></li>
+<li><p><a href="http://www.androidpatterns.com">Android Patterns</a></p>
+
+<p> 这个主要是UX相关的。</p></li>
+<li><p><a href="http://www.android-app-patterns.com">Android App Patterns</a></p>
+
+<p> 这个也是UX设计相关的。</p></li>
+</ul>
+
+
+<h2>线下社区</h2>
+
+<p>这个要看具体的城市而定，现在大多数城市都有谷歌开发者社区<a href="http://www.chinagdg.com/forum.php">GDG(Google Developer Group)</a>他们都会定期的举办活动，因为是关于Google的，所以肯定有Android相关的。对于像北京，上海，杭州这些移动互联网热门城市，各种社区应该很多的。</p>
+
+<h2>请分享你常常使用的好的资源</h2>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[适配多屏幕的最佳实践]]></title>
+    <link href="http://toughcoder.net/blog/2014/10/26/best-practices-to-support-multiple-screen/"/>
+    <updated>2014-10-26T19:58:10+08:00</updated>
+    <id>http://toughcoder.net/blog/2014/10/26/best-practices-to-support-multiple-screen</id>
+    <content type="html"><![CDATA[<p>对于Android应用开发来讲，比较头疼的，也是比较重要的一个工作就是要尽可能多的支持市场上的Android设备，由于Android的开放性，各种奇奇怪怪的设备都有，符合标准的，不符合标准的，行货，水货，山寨货鱼龙混杂，防不胜防。为了让我们的应用能够得到尽可能多的用户，我们就必须能让应用以超强的适应性，以能在混乱的手机里生存。而适配设备，GUI屏幕的适配又是重中之中，如果用户都无法正确的看到你的UI页面，那还用个毛线啊！</p>
+
+<p>之前曾经写过<a href="http://blog.csdn.net/hitlion2008/article/details/9200135">一篇文章</a>，介绍了一下子如何使用dimen资源来适配多屏幕，随着Android版本的演进，有些概念已经过时，需要重新整理一下。</p>
+
+<p><a href=""><img src="http://developer.android.com/images/resources/resource_devices_diagram2.png"></a></p>
+
+<p>其实对于多屏幕适配，一个核心的原则就是要对布局做好抽象的分离，把可变与不可变分开，把与屏幕相关的尺度dimen写在单独的dimen文件中，然后使用引用。如果不这样做，就会造成更多的代码重复。</p>
+
+<!-- more -->
+
+
+<h2>以最佳的方式来提供资源</h2>
+
+<p>通常我们的做法是以屏幕密度(<a href="http://developer.android.com/guide/topics/resources/providing-resources.html">Screen Density</a>)，做为区分来提供不同的资源，以达到支持和适配不同的屏幕，比如我们会为mdpi, hdpi, xhdpi，各准备一套图片和dimen，大多数情况下，这很好，能对付了大多数设备，但这还不够。</p>
+
+<p>比如说，480x800, 480x854, 540x960这三种设备，都是同样的屏幕密度hdpi，但是屏幕尺寸并不相同，对于qHD(540x960)，它的可用空间要比标准hdpi(480x800)要多得多，如果以qHD为基准来调的布局，那么放到480x800上，有些元素会被挤扁，或者显示不完全。而且目前，540x960的设备要多于480x800的，因为屏幕都是越来越大，精度越来越高的。</p>
+
+<p>那么如何解决呢？
+现在推荐的做法是用屏幕的可用高度(注意是可用高度，不包括状态栏和底部硬键)来区分不同的资源。以前是可以在屏幕密度后面指定具体的分辨率来区分，比如values-hdpi-960x540。但是现在这种做法已被废弃，<a href="http://developer.android.com/guide/practices/screens_support.html">官方文档</a>中都不会提及了。很显然它的问题在于不够通用。</p>
+
+<p>现在推荐的做法是用可用高度或者可用宽度来指定：</p>
+
+<ul>
+<li>values-h&lt;sw&gt;dp</li>
+<li>values-h&lt;sh&gt;dp</li>
+</ul>
+
+
+<p>这里面的sw和sh就是屏幕的可用宽度和可用高度。这种方式的适配规则是：用小于且最接近设备屏幕高度或宽度的那个资源，比如设备可用高度是610dp，则选择values-h600dp，以此类推。用这个方式就能区分同为hdpi的480x800和540x960，因为：</p>
+
+<ul>
+<li>480x800     533dp</li>
+<li>540x960     640dp</li>
+</ul>
+
+
+<p>所以，可以用values-h600dp来区分二者。
+使用此的方法为：</p>
+
+<ul>
+<li>计算某个设备的高度或者宽度，以dp为单位。高度dp=可用高度px/density</li>
+<li>创建可以区分不同设备的资源目录，如values-h500dp, values-h600dp等</li>
+</ul>
+
+
+<h2>增加适配性的更多技巧</h2>
+
+<p>除了上面提到的，还有一些在适配时需要注意的事情。</p>
+
+<ol>
+<li>尽量多用WRAP_CONTENT和MATCH_PARENT，特别是对于像文字图片等元素的度量</li>
+<li>对于页面的边框距离，最好用最外层的ViewGroup来指定，或者使用margin或者使用padding。
+这点的主要意思是，如果你想要页边框距是20dip，那么用一个ViewGroup来指定，要么是最外层的，要么是最里层的，千万不要是外面的5dp，中间的5dp，里面的5dp，最里面的5dp，虽然整体效果看起来是一致的，但是当适配时就会蛋疼了。固定在某个上面，这样既方便调试，也方便适配和移植。</li>
+<li>同一个应用，边框距等最好做到一致，起码对于同一类型的页面更是如此。</li>
+</ol>
+
+
+<h2>一些常见设备的参数</h2>
+
+<ul>
+<li>320x480   1   mdpi  480dp</li>
+<li>480x800   1.5 hdpi  533dp</li>
+<li>540x960   1.5 hdpi  640dp</li>
+<li>720x1280  2   xhdpi 640dp</li>
+<li>1080x1920 3 xxhdpi 640dp</li>
+</ul>
+
+
+<h2>参考</h2>
+
+<ul>
+<li><a href="http://developer.android.com/guide/topics/resources/providing-resources.html">http://developer.android.com/guide/topics/resources/providing-resources.html</a></li>
+<li><a href="http://developer.android.com/guide/topics/resources/providing-resources.html#Compatibility">http://developer.android.com/guide/topics/resources/providing-resources.html#Compatibility</a></li>
+<li><a href="http://developer.android.com/guide/topics/resources/runtime-changes.html">http://developer.android.com/guide/topics/resources/runtime-changes.html</a></li>
+<li><a href="http://stackoverflow.com/questions/16907023/best-way-to-support-540x960-and-480x800-both-hdpi">http://stackoverflow.com/questions/16907023/best-way-to-support-540x960-and-480x800-both-hdpi</a></li>
+<li><a href="http://forums.xamarin.com/discussion/2784/best-way-to-support-540x960-and-480x800-both-hdpi">http://forums.xamarin.com/discussion/2784/best-way-to-support-540x960-and-480x800-both-hdpi</a></li>
+<li><a href="http://developer.android.com/guide/practices/screens_support.html">http://developer.android.com/guide/practices/screens_support.html</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[如何有效的减少重复的代码]]></title>
+    <link href="http://toughcoder.net/blog/2014/10/25/tricks-to-remove-duplicates/"/>
+    <updated>2014-10-25T21:59:26+08:00</updated>
+    <id>http://toughcoder.net/blog/2014/10/25/tricks-to-remove-duplicates</id>
+    <content type="html"><![CDATA[<p>重复的代码一直都是可维护性的大敌，重构的重要任务之一也就是要去除掉重复的代码，有效的减少重复代码，可以大大提高软件的扩展性。</p>
+
+<p>在Android开发中，很容易产生重复的代码。因为Android是组件，模板式开发，每个页面都是独立用Activity或Fragment实现，布局文件都是用XML方式去写，所以很容易造成代码的重复，虽然二个页长的差不多，但毕竟是二个Activity，于是就拷一份出来，改吧改吧就成了。</p>
+
+<p><a href=""><img src="https://cdn.tutsplus.com/mobile/uploads/legacy/134_Android-User-Interface-Design_Relative-Layouts/fig2.png" width="600" height="320"></a></p>
+
+<p>那么我们如何做才能去掉重复的代码呢？</p>
+
+<!-- more -->
+
+
+<h2>为你的项目定义一个基Activity或Fragment</h2>
+
+<p>无论你的项目大或小，定义一个基Activity或Fragment总是有好处的。随着项目的发展，会有大量的公共代码可以抽出来放到基类里去。或者在基类里面做一些项目特色的事情。再或者添加一些统计，崩溃反馈等等。在一个基类里面改动总比把每个Activity或Fragment里面都改一遍要好的多。</p>
+
+<h2>代码的去重复技巧</h2>
+
+<p>从代码上去除重复的代码就是用通用的重构技巧，比如提炼方法，抽象基类，提炼常量等。但是光是代码还不够，因为Android的页面代码跟布局文件的关联非常大，通常Activity或者Fragment都是为了操作布局页写的，所以要想彻底的减少代码的重复，还必须先减少布局的重复。</p>
+
+<h2>用<a href="http://developer.android.com/training/improving-layouts/reusing-layouts.html">include</a>减少局部布局的重复</h2>
+
+<p><include/>标签是减少布局重复的利器，它的作用是把另外一个布局文件全部无修改式的嵌入到标签所在的位置。这与C/C++语言的预处理指令#include是一样的。在WEB框架式开发中，也非常常用HTML模板，其中也有类似的include。目的也是减少代码的重复。</p>
+
+<p>要想把include用的恰到好处，首先要做的就是把整体布局模块化，从整体的布局出发，找出可复用的局部布局或布局组合，把它们放入单独一个布局文件中，然后在其他的地方就可以include了。</p>
+
+<h2>用<a href="http://developer.android.com/reference/android/view/ViewStub.html">ViewStub</a>减少整体的布局的重复</h2>
+
+<p>前面是找出布局中的可复用布局组合，include以减少重复。但有些时候是反过来的，也就是说有几个页面，它们整体的一样的，但是某个局部是不同的，这个时候include就不行了。这个时候就可以使用一样的整体布局+ViewStub来做布局。</p>
+
+<p>ViewStub是一个轻量级别的，不可见的View，当ViewStub被设为visible时，或者显示调用layout()时，才会去把它所指向的布局渲染出来，所以它非常适合处理整体相同，局部不同的情况。关于ViewStub的使用可以参考<a href="http://blog.csdn.net/hitlion2008/article/details/6737537">这篇博客</a>。
+具体的策略是：</p>
+
+<ul>
+<li>规划整体布局，抽象出共同的布局，把可变的布局识别出来</li>
+<li>写整体布局，对于可变的局部布局用ViewStub替代</li>
+<li>用一个基Fragment来操作整体布局。</li>
+<li>创建基Fragment的子类，每个子类，用真正的布局来替换ViewStub。</li>
+</ul>
+
+
+<h2>多用引用而不是写死</h2>
+
+<p>这点是非常重要的，Android的强大之处在于，所有的资源的指定都可以用引用，而非直接写死，直接写死就会出现重复代码，比如颜色，背影，字串，布局，ID，度量(dimen)，风格等等。那么，我们在使用的时候，也尽可能的使用引用，这样非常易于复用，修改和定制，从而也就更方便复用。</p>
+
+<h2>分析，分离变与不变</h2>
+
+<p>其实代码的去重复的关键都在于要分析出可变与不可变，共性和特性，这是抽象与封装的基础。这个没有直接可操作性的建议，只能靠自己平时多多积累，以及遇到问题时多多思考。</p>
+
+<p>另外，就是对于重复的定义是达到三次及三次以上。如果仅出现二次，并且，无可能出现别一次，这个时候其时，要不要去重复有在商榷，写第二次时，花时间重构，与拷贝或重新实现，其实代码差不多。当发现第三次实现某个东西时，就要考虑好好的重构一下，减少重复。</p>
+
+<p>还有，就是，在项目开始不要考虑的太多，不要过度设计。孤认为，不过过度设计，更不要过早优化，就根据需求和进度和发展状况综合来看。当出现了重复，需要重构时就立马去做，这样就不会出问题。但如果没能及时去做重构，欠了债，那么由于涉及代码，功能和模块都比较多时，再去重构，难度大，风险也大。就好比房屋的维护保养，当出现灰尘时就去打扫，很容易，个把小时就搞定了，但如果一直拖着，一年才打扫一次，可能要十天半个月才能完事。</p>
+]]></content>
+  </entry>
+  
+</feed>
