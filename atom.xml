@@ -4,7 +4,7 @@
   <title><![CDATA[猿轩阁]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2015-04-22T23:12:25+08:00</updated>
+  <updated>2015-04-27T23:39:34+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,91 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Android NDK开发的一些技巧]]></title>
+    <link href="http://toughcoder.net/blog/2015/04/27/android-ndk-backward-compatibility/"/>
+    <updated>2015-04-27T23:34:58+08:00</updated>
+    <id>http://toughcoder.net/blog/2015/04/27/android-ndk-backward-compatibility</id>
+    <content type="html"><![CDATA[<p>Android NDK(Native Development Kit)是基于Java JNI的使用C/C++和Java来混合开发应用的一种方式，甚至在Android 2.3(API 9)以后可以用Native(Native这个字在不同的语境中意义是不一样的，这里指的是JNI中的C/C++的代码；如果放在Hybrid中Native就是指平台原生的语言和API)代码来创建标准界面组件Activity，换句话说就可以用纯C/C++来写一个Android应用，但是貌似还没有人这么干过，这只是一种理论上的可能性。因为除了Activity以外很多东西比如权限，广播通知等等很多东西在Native中还是不够方便。</p>
+
+<p><a href="http://toughcoder.net/blog/2015/04/27/android-ndk-backward-compatibility/"><img src="http://androids.zone/wp-content/uploads/2014/06/android-ndk.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>函数签名的写法</h2>
+
+<p>Java代码中调用Native的代码还是比较简单的，把方法声明成为native，然后可以当作普通的Java方法一样来使用，只不过这个native的方法的实现是在Native中。</p>
+
+<p>JNI是一个桥梁，让不同的语言能够在一起使用，不但Java能调用Native层代码，在Native层也是能够调用Java的代码。但是JNI的最初目的是能够让Java使用C/C++语言来解决Java做不到的事情，所以在Native中调用Java的方法要稍微费一点劲。要获取JNI的执行环境(JNIEnv)，要找到类和对象，更重要的是要写对函数签名，否则是找不到的。</p>
+
+<h3>函数签名的写法</h3>
+
+<p>&ldquo;(<em>[type1]</em>;<em>[type2]</em>&hellip;)<em>[return types]</em>&rdquo;</p>
+
+<p>type包括：</p>
+
+<ul>
+<li> B = byte</li>
+<li> C = char</li>
+<li> D = double</li>
+<li> F = float</li>
+<li> I = int</li>
+<li> J = long</li>
+<li> S = short</li>
+<li> V = void</li>
+<li> Z = boolean</li>
+<li> V = void</li>
+<li> Lfully-qualified-class = fully qualified class. For instance String &ndash; Ljava/lang/String;</li>
+<li> [type = array of type</li>
+</ul>
+
+
+<p>Samples:
+   * &ldquo;(Ljava/lang/String;I)V&rdquo; // void foo(String str, int limit);</p>
+
+<h2>线程解惑</h2>
+
+<p>Native的代码是执行在其直接调入的Java的方法所在的调用栈里的，比较绕，简单来说吧，JNI的方法也是一个方法，只不过它是在Native层实现的，所以都是一系列的方法的调用，因此调用栈从Java层开始，一直到Native，JNI不会改变调用栈，因此也不会改变线程环境，除非你让它改变。</p>
+
+<p>当你改变线程时，就要注意了，如果你在Native用pthread开启了一个新的线程，且这个线程又需要与Java通信，要调用Java层的方法，那么常规的方式是不行的，要先把线程attach到JNI环境，findClass也不会找到相应的类，因为这个线程是pthread_create出来的，不具备JNI的环境，甚至常规的类，方法和对象的引用在新衍生出的线程中统统都是无效的。</p>
+
+<p>那么该如何做呢？首先，要先调用AttachCurrentThread来把线程attach到JVM；然后，把要在此线程里访问的Java类，方法和对象生成JVM的Global引用，也就是NewGlobalRef来保存引用；最后，当完成与Java的通信后要调用DetachCurrentThread来做detach。</p>
+
+<h2>注意内存问题</h2>
+
+<p>到了Native的环境，就要注意内存问题，因为Native的代码都是要手动的申请内存，手动的释放。当然，业务逻辑里面的申请和释放用标准的new/delete或者malloc/free，或者用智能指针之类的。JNI部分是有封装好的方法的，比如NewGlobalRef，NewLocalRef, DeleteGlobalRef, DeleteLocalRef等。</p>
+
+<p>需要注意的是用这些方法创建出来的引用要及时的删除。因为这些引用都是在JVM中一个表中存放的，而这个表是有容量限制，当到达一定数量后就不能再存放了，就会报出异常。所以要及时删除创建出来的引用。</p>
+
+<h2>版本的兼容性</h2>
+
+<p>使用SDK开发应用时可以用minsdk和targetsdk来解决版本的兼容性问题，minsdk指定最低SDK版本要求，targetsdk指定目标的版本。但在NDK，只能用一个android-target来指定最低的版本要求，其实这就是限定了在NDK你能使用的API的范围。为了保证最好的兼容性，要保证NDK中的android-target与minsdk保持一致。</p>
+
+<p>SDK中的做法是指定了minsdk后，选择尽可能高的targetsdk，这样可以获取最好和最新的编译toolchains的支持。但是NDK中不建议这样做，尽管你没有使用高版本的API，但是使用高版本来编译会链到高版本的库，有可能会导致问题，因为高版本的某些API实现方式会变。比如signal.h中的signal函数，如果使用android-21编译，那么在低于5.0 版本的手机上是跑不起来，错误是无法找到signal函数，原因就是5.0以后signal.h中的signal函数的实现方式变了。</p>
+
+<h2>多多参考NDK文档以及官方教程和指导</h2>
+
+<p>使用任何的别人提供的东西，最好获取帮助的方式就是看人家给你的文档和指导。现在的文档都写的很详细了。Android开发者官网上面也有很多关于NDK开发的<a href="http://developer.android.com/training/articles/perf-jni.html">教程</a>，都值得仔细读一读的。</p>
+
+<h2>使用第三方工具来简化开发</h2>
+
+<p>最好的开发方式不是自己写，而是去用别人现有的东西，子曰：不能重复造轮子。NDK的开发，也是有一些第三方的工具来帮助我们减少开发量的。<a href="http://swig.org/">SWIG</a>就是一个优秀的工具，它能免去写丑陋的JNI方法的痛苦，而且SWIG是编译工具链的一个组件，不是运行时，所以不会带来性能上的损失。</p>
+
+<h2>不错的书籍</h2>
+
+<p><a href="http://www.apress.com/9781430248279">《Pro Android C++ with NDK》</a>是一本相当不错的书籍，有中文版本了，可以好好的读一读。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="http://docs.oracle.com/javase/6/docs/technotes/guides/jni/spec/invocation.html">The Invocation API</a></li>
+<li><a href="http://docs.oracle.com/javase/7/docs/technotes/guides/jni/spec/functions.html">The JNI Functions</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[使用Octopress和Github Pages搭建博客的高级技巧]]></title>
@@ -29,6 +114,20 @@
 
 <p>按照教程搭建好的博客，访问起来总是很慢很慢，即使把什么Google Plus和Google Analyze之类的都关闭掉后，仍然很慢。原因就是在HTML中的某些资源，比如脚本或者字体什么的是使用Google提供的，所以就会慢，那么怎么解决呢？就是用国内的替代品。<a href="http://libs.useso.com/">360</a>提供了几个Google的替代库，跟Google是一样的，只需要找到代码，把链接替换360的就可以了。至此发现360还真是一个良心企业。
 具体的就是把source/<em>include/head.html和source/</em>include/custom/head.html中的fonts.google.com和ajax.google.com都替换成userso.com然后就Okay，速度哗哗的。</p>
+
+<h2>为图片选择存储</h2>
+
+<p>Github为我们的博客提供免费的存储空间，其实也可以把图片直接在我们博客的源码里，这样就会传到Github上面去。但是这样子会有问题，一是增加博客占用的空间，虽然Github免费，且没有限制，但是天长是久以后就不好说了； 另外就是Github访问速度要慢一些，至少对于我大天朝是如此。所以选择国内的云存储就显得百分有必要了。
+推荐使用<a href="http://www.qiniu.com/">七牛</a>，原因是：</p>
+
+<ol>
+<li>. 有免费空间</li>
+<li>. 可以对每个文件进行公开，且有稳定链接，即使文件后来编辑过</li>
+<li>. 有命令行工具可以进行批处理</li>
+</ol>
+
+
+<p>使用方法的话看官方的<a href="http://developer.qiniu.com/docs/v6/tools/qrsync.html">文档</a>就可以了，安装下它的命令行工具，把图片放到要同步的目录，然后同步。创建一个公开的Bucket，然后放图片于其中，同步上传后就可以得到链接了。</p>
 
 <h2>Mac下的优质Markdown编辑器</h2>
 
@@ -1510,9 +1609,9 @@ Android 4.0及以上的版本当连接到PC时，通知栏也会有一个与存�
 
 <blockquote><p>repo init -u git://github.com/CyanogenMod/android.git -b stable/cm-11.0</p>
 
-<p>gpg: key 920F5C65: &ldquo;Repo Maintainer <a href="&#x6d;&#97;&#x69;&#108;&#x74;&#x6f;&#58;&#114;&#x65;&#112;&#111;&#64;&#x61;&#x6e;&#100;&#114;&#111;&#105;&#x64;&#x2e;&#107;&#101;&#x72;&#110;&#x65;&#108;&#x2e;&#x6f;&#114;&#x67;">&#114;&#x65;&#x70;&#x6f;&#64;&#97;&#110;&#100;&#114;&#x6f;&#105;&#x64;&#x2e;&#107;&#101;&#114;&#110;&#101;&#108;&#x2e;&#x6f;&#114;&#103;</a>&rdquo; not changed</p>
+<p>gpg: key 920F5C65: &ldquo;Repo Maintainer <a href="&#x6d;&#97;&#x69;&#108;&#x74;&#111;&#x3a;&#114;&#101;&#x70;&#111;&#x40;&#97;&#110;&#100;&#x72;&#x6f;&#105;&#100;&#x2e;&#107;&#x65;&#x72;&#x6e;&#x65;&#x6c;&#x2e;&#x6f;&#x72;&#x67;">&#114;&#101;&#112;&#111;&#64;&#x61;&#110;&#100;&#x72;&#x6f;&#x69;&#100;&#46;&#107;&#101;&#114;&#x6e;&#x65;&#108;&#46;&#x6f;&#x72;&#x67;</a>&rdquo; not changed</p>
 
-<p>gpg: key 692B382C: public key &ldquo;Conley Owens <a href="&#109;&#97;&#x69;&#108;&#x74;&#111;&#x3a;&#99;&#99;&#111;&#x33;&#x40;&#97;&#110;&#x64;&#x72;&#111;&#x69;&#x64;&#x2e;&#99;&#x6f;&#x6d;">&#99;&#99;&#x6f;&#51;&#x40;&#x61;&#110;&#x64;&#x72;&#111;&#105;&#100;&#46;&#x63;&#x6f;&#109;</a>&rdquo; imported</p>
+<p>gpg: key 692B382C: public key &ldquo;Conley Owens <a href="&#109;&#97;&#105;&#108;&#x74;&#x6f;&#x3a;&#x63;&#99;&#x6f;&#x33;&#64;&#97;&#110;&#100;&#114;&#111;&#x69;&#x64;&#46;&#x63;&#x6f;&#109;">&#x63;&#x63;&#x6f;&#51;&#x40;&#97;&#x6e;&#100;&#x72;&#x6f;&#105;&#x64;&#x2e;&#x63;&#111;&#109;</a>&rdquo; imported</p>
 
 <p>gpg: Total number processed: 2</p>
 
