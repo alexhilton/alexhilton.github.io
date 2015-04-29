@@ -4,7 +4,7 @@
   <title><![CDATA[猿轩阁]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2015-04-28T23:28:04+08:00</updated>
+  <updated>2015-04-29T23:29:26+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,157 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Android实战技巧：Fragment的那些坑]]></title>
+    <link href="http://toughcoder.net/blog/2015/04/30/android-fragment-the-bad-parts/"/>
+    <updated>2015-04-30T00:40:26+08:00</updated>
+    <id>http://toughcoder.net/blog/2015/04/30/android-fragment-the-bad-parts</id>
+    <content type="html"><![CDATA[<p>Fragment是Android在3.0（Homeycomb)版本时加入的用以更灵活的构建多屏幕界面的可UI组件。关于Fragment以基本使用方法可以参考官方的<a href="http://developer.android.com/guide/components/fragments.html">教程</a>和<a href="http://developer.android.com/training/basics/fragments/index.html">最佳实践</a>，以及<a href="http://toughcoder.net/blog/2014/10/22/effective-android-ui-architecture/">选择Activity还是Fragment</a>。
+但是Fragment使用起来却远没有教程中说的那样简单，也远比Activity要复杂一些，这里总结了孤在使用Fragment时所遇到的坑。</p>
+
+<p><a href="http://toughcoder.net/blog/2015/04/30/android-fragment-the-bad-parts/"><img src="http://mindlee.net/wp-content/uploads/2012/07/fragments_diff_modes.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>嵌套Fragment时Duplicated id或者Tag之痒</h2>
+
+<p>这是一个小坑，但是初学者很容易遇到，特别是在Fragment之中套有Fragment时，且又是布局中添加子Fragment时更容易遇到。</p>
+
+<h3>现象：</h3>
+
+<p>Fragment中套有另一个Fragment，当第二次进入父Fragment时或者由Fragment创建的界面时会抛异常，大致意思是子Fragment的Id或Tag重复了。如果你在layout中给子fragment加了id或者tag，那么一定会遇到此异常。</p>
+
+<h3>原因：</h3>
+
+<p>在添加Fragment时都可以为Fragment指定一个Id或者Tag用以标识这个Fragment。因为每个Activity所附带的Fragment都是放在一个对象池中，在Activity的生命周期里，Fragment仍然在池中，即使是把某一个Fragment从Activity中detach掉（也即用FragmentManager pop掉），这个池是由FragmentManager来管理的。当你再次要以某个id或者Tag添加Fragment时，FragmentManager会在池中检索，如果发现已经存在Fragment对象带有此Id或者Tag时，就会抛此异常并报怨Id重复。这么做的目的就是减少对象的创建，尽可以的复用对象。</p>
+
+<h3>如何破解：</h3>
+
+<ol>
+<li>. 在布局中写fragment时，不要添加id或者tag；</li>
+<li><p>. 如果非要添加id或者tag，就在代码中添加fragment，如使用Id或者Tag时，先到FragmentManager中查找对象是否存在，不存在时再创建，也即：</p>
+
+<pre><code class="``java">  Fragment target = getFragmentManager().findFragmentByTag("tag");
+  if (target == null) {
+      targe = new SomeFragment();
+  }
+  FragmentTransaction ft = getFragmentManager().beginTransaction();
+  ft.add(R.id.content, target, "tag");
+  ft.commit();
+</code></pre></li>
+</ol>
+
+
+<h2>replace之痛</h2>
+
+<h3>现象：</h3>
+
+<p>当有二个相同的整体页面层叠时，想把最后一个布局中的某个用Fragment来replace，会发现，它把前面的replace，后面的没效果。</p>
+
+<h3>原因：</h3>
+
+<p>布局的Id在一个窗体（Activity)中是唯一的，Fragment的replace也是使用此唯一的Id来把相应布局替换成Fragment的。当相同的页面层叠时，同一个Id的布局出现了二次，但Id是一样的。所以FragmentTransaction在replace时仅替换了一个。而不会像期待的那样，替换最后一个页面。</p>
+
+<h3>如何破解：</h3>
+
+<p>如果相同的页面非要层叠，要么不使用Fragment，要么为布局设置不同的Id。这种情况多出现在布局的复用上面，比如某二个页面长的像，所以复用了同一整体布局。但实际的逻辑上不是相同的页面，完全可以为布局设置不同的Id。</p>
+
+<h2>可见性之疼</h2>
+
+<h3>现象：</h3>
+
+<p>当有多个Fragment层叠在一起时，每个Fragment如何能感知其对用户的可见性。比如应用有三个页面，A，B和C，比如A是整体类别列表，B是每个类别的详情，C又是类别的某种更详细的信息，当C显示出来时，A和B怎么能知道它其实对于用户已经不可见了，所以就可以不刷新，不加载数据等等。当C被用户BACK后，B又如何感觉它变成可见了？</p>
+
+<h3>原因：</h3>
+
+<p>Fragment的生命周期与Activity是一样的，添加到Activity会把OnCreate类似的回调走一遍，然后，Activity onResume/onPause/onstart/onStop时，其所持有的Fragment也走相应的onResume/onPause/onstart/onPause。但是Fragment与Activity非常不同的是，Activity当有另一个Activity显示时，当前的Activity会走onPause/onStop，而Fragment则完全没有感知。最多只能从FragmentManager那里知道BackStackState改变了，但是是Fragment增加了，还是减少了，并不能知道。</p>
+
+<h3>如何破解：</h3>
+
+<p>这个一个非常令人蛋疼的问题，简单的页面还好，但是涉及到数据加载或者要针对某些事件（网络）刷新时就有问题了，对用户不可见的页面没必要刷新。可行的解法就是：</p>
+
+<ol>
+<li>. 监听FragmentManager的BackStackState的改变</li>
+<li>. 定义页面路径深度然后与BackStack深度比较，以感知是否对用户可见
+  如前面A是一级，其path为1，B是2，C是3。当前Stack深度为3时，C是可见的，A与B不可见，以此类推。</li>
+</ol>
+
+
+<h2>空白区域的点击之脓</h2>
+
+<h3>现象:</h3>
+
+<p>一个Fragment，层叠在另外一个Fragment或者Activity之上，此Fragment中有一些空白区域，也即Widget之外的空白区域，当点击这些空白区域的时候发现这个Fragment下面的Fragment或者Activity中的View收到了事件并且响应了点击事件。</p>
+
+<h3>原因：</h3>
+
+<p>Fragment的本质就是一个View布局的管理器，当Fragment attach到Activity时，其实就是把Fragment#onCreateView()返回的View，替换掉(如果是用replace)FragmentTransaction#replace中指定的View，或者添加到(如果是add)FragmentTransaction#add()中指定的ViewGroup里面。</p>
+
+<p>当我们以层叠方式显示多个Fragment时，通常的做法就是弄一个FrameLayout，然后每次把Fragment add到此布局。因此，这时Activity的页面布局树实际上就是一个FrameLayout里面包含几个View。</p>
+
+<p>所以，当点击上面Fragment的空白区域时，如果事件没被吃掉，就会向下传递。</p>
+
+<h3>如何破解：</h3>
+
+<p>在Fragment的根布局加上一个clickable=true，这会让根布局把点击事件吃掉，以防止事件会继续传递下去，造成上面的情况。</p>
+
+<h2>Activity重新创建之殇</h2>
+
+<h3>现象：</h3>
+
+<p>这个没有一般性的错误，只会有与项目相关的具体的错误异常，或者页面显示不正确。以及为什么教程中都有这么一句：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="nd">@Override</span>
+</span><span class='line'><span class="n">onCreate</span><span class="o">(</span><span class="n">Bundle</span> <span class="n">savedInstance</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>   <span class="k">if</span> <span class="o">(</span><span class="n">savedIntance</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>      <span class="c1">// create fragment and add it to Activity.</span>
+</span><span class='line'>   <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>原因：</h3>
+
+<p>Activity除了正常启动走到onCreate，还有另外的入口，比如系统配置信息发生变化时，或者Activity在栈比较深的地方，系统会把Activity杀掉，然后再<em>重新创建</em>它，问题就是在这个重新创建。重新创建与新建一个Activity不同，它是要尽可能的恢复先前所在的状态，因为这对用户来说是透明的，也就是说不能让用户感知到，否则体验会相当差。唯一与常规创建的区别就在于传给onCreate的参数savedInstanceState是不是null.</p>
+
+<h3>如何破解：</h3>
+
+<p>为了能在Activity重建时恢复状态，需要：</p>
+
+<ol>
+<li><p>. 对于Activity</p>
+
+<p>  要在onSaveInstanceState()时，把一些变量保存，然后在onCreate时恢复</p></li>
+<li><p>. 对于Fragment</p>
+
+<p> 告诉系统，你想恢复状态Fragment#setRetainInstance(true)。然后，也在onSavedInstance()中保存状态，在onCreate时恢复。
+这就够了，系统会在重新创建Activity时把其所持有的Fragment也创建出来。所以为什么每个Fragment子类都需要定义一个默认的Constructor。更多的可以参考<a href="http://www.androiddesignpatterns.com/2013/04/retaining-objects-across-config-changes.html">这篇文章</a>。</p></li>
+</ol>
+
+
+<h2>FragmentTransaction的异步操作之殇</h2>
+
+<p>FragmentTransaction是异步的，commit()仅是相当于把操作加入到FragmentManager的队列，然后FragmentManager会在某一个时刻来执行，并不是立即执行。所以，真正开始执行commit()时，如果Activity的生命周期发生了变化，比如走到了onPause，或者走到了onStop，或者onDestroy都走完了，那么就会报出IllegalStateException。具体的原因，以及如何避免可以参考大牛的<a href="http://www.androiddesignpatterns.com/2013/08/fragment-transaction-commit-state-loss.html">这篇文章</a>。</p>
+
+<h2>参考</h2>
+
+<ul>
+<li><a href="http://developer.android.com/guide/components/fragments.html">Fragments</a></li>
+<li><a href="http://developer.android.com/training/basics/fragments/index.html">Building a Dynamic UI with Fragments</a></li>
+<li><a href="http://www.androiddesignpatterns.com/2013/08/fragment-transaction-commit-state-loss.html">Fragment Transactions &amp; Activity State Loss</a></li>
+<li><a href="http://www.androiddesignpatterns.com/2013/04/retaining-objects-across-config-changes.html">Handling Configuration Changes with Fragments</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Android NDK开发的一些技巧]]></title>
@@ -1618,9 +1769,9 @@ Android 4.0及以上的版本当连接到PC时，通知栏也会有一个与存�
 
 <blockquote><p>repo init -u git://github.com/CyanogenMod/android.git -b stable/cm-11.0</p>
 
-<p>gpg: key 920F5C65: &ldquo;Repo Maintainer <a href="&#109;&#x61;&#x69;&#x6c;&#x74;&#111;&#58;&#x72;&#x65;&#x70;&#x6f;&#x40;&#x61;&#x6e;&#x64;&#114;&#x6f;&#x69;&#x64;&#x2e;&#x6b;&#101;&#114;&#110;&#101;&#x6c;&#46;&#x6f;&#114;&#x67;">&#114;&#101;&#112;&#x6f;&#64;&#x61;&#110;&#100;&#114;&#x6f;&#x69;&#x64;&#x2e;&#107;&#x65;&#114;&#110;&#101;&#108;&#x2e;&#x6f;&#x72;&#x67;</a>&rdquo; not changed</p>
+<p>gpg: key 920F5C65: &ldquo;Repo Maintainer <a href="&#x6d;&#x61;&#x69;&#108;&#x74;&#x6f;&#58;&#x72;&#101;&#112;&#111;&#64;&#97;&#x6e;&#100;&#x72;&#x6f;&#x69;&#x64;&#46;&#x6b;&#101;&#114;&#110;&#x65;&#108;&#46;&#x6f;&#x72;&#103;">&#x72;&#101;&#x70;&#x6f;&#64;&#97;&#110;&#100;&#x72;&#111;&#x69;&#100;&#46;&#x6b;&#x65;&#x72;&#110;&#101;&#108;&#46;&#x6f;&#x72;&#103;</a>&rdquo; not changed</p>
 
-<p>gpg: key 692B382C: public key &ldquo;Conley Owens <a href="&#x6d;&#x61;&#x69;&#x6c;&#116;&#x6f;&#x3a;&#x63;&#x63;&#x6f;&#51;&#64;&#x61;&#x6e;&#100;&#x72;&#111;&#105;&#100;&#x2e;&#x63;&#111;&#109;">&#x63;&#x63;&#x6f;&#x33;&#64;&#97;&#x6e;&#100;&#114;&#111;&#x69;&#x64;&#46;&#99;&#111;&#109;</a>&rdquo; imported</p>
+<p>gpg: key 692B382C: public key &ldquo;Conley Owens <a href="&#x6d;&#97;&#x69;&#x6c;&#116;&#111;&#58;&#99;&#99;&#111;&#x33;&#x40;&#97;&#110;&#x64;&#114;&#x6f;&#x69;&#x64;&#x2e;&#99;&#x6f;&#x6d;">&#x63;&#x63;&#x6f;&#x33;&#x40;&#97;&#x6e;&#100;&#x72;&#x6f;&#x69;&#100;&#x2e;&#99;&#111;&#x6d;</a>&rdquo; imported</p>
 
 <p>gpg: Total number processed: 2</p>
 
