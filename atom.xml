@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2015-10-13T08:22:03+08:00</updated>
+  <updated>2015-10-29T23:59:53+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -316,6 +316,655 @@
   </entry>
   
   <entry>
+    <title type="html"><![CDATA[Android应用性能剖析全攻略]]></title>
+    <link href="http://toughcoder.net/blog/2015/09/11/android-performance-profiling-made-easy/"/>
+    <updated>2015-09-11T10:36:31+08:00</updated>
+    <id>http://toughcoder.net/blog/2015/09/11/android-performance-profiling-made-easy</id>
+    <content type="html"><![CDATA[<p>性能是软件质量的一个重要方面，好的软件必须要在性能上达到一定的标准。对于Android应用程序来讲，更是如此，移动互联网的红海竞争，如果应用的性能差，肯定会缺少竞争力的，这里就来聊一聊应用开发中如何提升性能，以及在开发过程中如何处理性能问题。</p>
+
+<p><a href="http://toughcoder.net/blog/2015/09/11/android-performance-profiling-made-easy/"><img src="http://3.bp.blogspot.com/-T5jWwrZtlqE/U6BY9MNJ84I/AAAAAAAAA5k/q7-mXWmovms/s1600/up.jpg"></a></p>
+
+<!-- more -->
+
+
+<h2>性能的定义</h2>
+
+<p>对于Android应用程序来讲分为三个方面，一方面是软件整体表现上的性能，也就是能多快给用户想要的结果，比如新闻阅读类应用，这个性能就是当用户点一条新闻时，多快能把新闻内容展示给用户，这个通常取决于业务逻辑，网络，以及后台服务器的性能。</p>
+
+<p>另外一方面就是UI性能，也就是所谓的流畅度，这个在移动应用上面有着更严重的影响，因为触摸和手势的原因，如果应用程序不流畅，会严重影响体验，相比如PC桌面软件会更严重。这个是我们通常所谓的性能，大多数情况下，以及网络上绝大多数文章都是针对于此。对于安卓应用来说要想达到流畅，或者说做动画时，列表滑动时不卡顿，那么帧率（FPS Frame per Second）要达到60这个也是我们在做性能优化时的一个衡量的标杆。</p>
+
+<p>还有一方面就是更少的资源占用，包括内存，CPU，电池，磁盘，网络流量，服务器资源等等。这个也很重要，特别是内存，CPU和电池，前二个对于所有软件来说都是衡量性能的一个重要指标，电池则是移动应用特有的，特别是智能手机上面。</p>
+
+<p>总之，性能是一个很大很大的话题，也是一个无止境的任务，适可而止，见好就收。虽我们都有着一颗工程师的心，都想把东西做到极致，但试问天下，又有谁真的能把所有的东西都做到最优呢？具体把性能做到什么程度，要看需要强烈与否。比如一个应用在生命初期，可能没有人关注性能。但假如已到百万，千万级别的时候，才考虑性能也是作死的节奏。即使是超级App，性能优化也要适可而止，</p>
+
+<h2>如何提升UI流畅度</h2>
+
+<h3>造成UI不流畅的原因</h3>
+
+<p>要想让UI流畅，首先要了解一下造成不流畅的原因都有哪些：</p>
+
+<ul>
+<li>主线程做了费时操作，或者本不该在主线程中做的轻微逻辑，这不但会严重影响帧率，甚至还会触发ANR(Application Not Responding)</li>
+<li><p>布局过于复杂或者View层次太多</p>
+
+<p>这个情况也是经常出现。无论是页面确实复杂，或者为了实现某些特殊的视觉效果（比如边框或者3D效果），结果就是一个非常复杂，层次深，View个数多的布局，最终结果就是渲染性能差。特别是对于列表的Cell，影响更加严重，都会造成滑动时的卡顿。</p></li>
+<li><p>局部更新造成了整体布局的重绘</p>
+
+<p>这里指的是，一个View层次中的某一个View需要刷新，但是却会触发整体页面的刷新，从而造成浪费。</p></li>
+<li><p>整体布局的重绘被触发了多次</p>
+
+<p>这通常出现在需要动画的场景，比如以改变View的布局（大小）的方式来实现动画，或者频繁的改变View的层次，比如频繁的addView和removeView。这都会不断的触发measure/onMeasure，layout/onLayout和View的重绘。</p></li>
+<li><p>敏感方法里面做了太多不相干的事情</p>
+
+<p>通常是View的一些关键的方法中onDraw, onMeasure, onLayout，特别是onDraw里面只应该做绘制相关的，连创建对象这种级别的事情都最好别做。当然，这个出现的情况比较少，毕竟需要直接自定义一个原始View的情况并不多见。</p></li>
+<li><p>频繁的GC发生</p>
+
+<p>无论是在主线程，还是worker线程，如果频繁的大量的创建对象，就会触发频繁的GC，GC会对所有的线程产生影响，对UI线程也是有影响。</p></li>
+</ul>
+
+
+<p>90%的情况前四种情况是主因，把前四种情况解决了就无大碍了。而前四个中，前二个又是重灾区，通常情况处理了前二个就能解决不流畅的问题。</p>
+
+<p>知道了原因，就可以对症下药了：</p>
+
+<h3>设计和编码时要考虑性能</h3>
+
+<p>性能是设计和编码时必须要考虑的一个因素，跟程序的正确性，robustness和可维护性同样重要。而不是应用已经上线了很久后才开始考虑性能问题。但是我们活在现实生活中，实际的情况往往都是当应用已经上线了并且稳定了之后才开始做，而且情况往往都是代码都还不是你写的。设计和编码时不考虑性能的原因一般有：</p>
+
+<ul>
+<li>开发人员水平不足，意识不到性能问题，或者不知道如何写出高性能的代码</li>
+<li>需求太多，或者需求经常变动，没时间考虑别的</li>
+</ul>
+
+
+<p>总之，无论如何，在设计和编码时不考虑性能是很令人烦恼的事情，但亡羊补牢，虽有些无奈但还是有益的。</p>
+
+<h3>简单设计做更少的事情</h3>
+
+<p>这似乎是废话，少做事情，或者不做事情效率自然高，性能肯定能上去。页面布局尽可能简单，功能尽可能简单，能做一遍的事情不要做二遍，没必要的准备工作不做，等等。但是现实情况往往是应用越做越复杂，越做越功能越多，页面越来越复杂，这是多种元素决定的，或许是竞争的需要，或者是产品这么定义的，或者是老板就喜欢这样。</p>
+
+<p>但无论怎么样，对于开发人员来讲，当实现功能时要本着简单的原则，这说来容易，但是当代码出来时却千差万别，明明很简单的逻辑，有人却能代码写的巨复杂，一坨一坨的。虽然可能说你看得懂他的设计图，看得懂他的流程图看得懂他的类图等等，但是你却不一定看得他的懂代码。</p>
+
+<p>这里扯一点题外话，写代码绝对是衡量一个程序员的重要指标，虽然不能做为全部，但是至少应该占50%。所以如果面试时看不到应聘者近一二个月的代码，或者不让其当场写代码的话，面试可以认定是失败的。尽管他可能是BAT出身，尽管他可能做过（维护）过顶级App，但是很可能他写出的代码都跟翔一样，一坨一坨的，完全看不懂写的是啥玩意儿。孤认为，面试时最好花一天或者一个下午时间，让应聘者在<strong>近似真实</strong>的环境中写代码，或者是一个小功能，或者是一个小项目，或是修改一个bug，最好还是坐在他旁边，与其一起工作，就好像平日里你跟同事一起工作一样，这非常有效果，也很能看出一个人的水平，而且你聘他来后也是要这样子工作的。光在那里Bla bla的问答，连他说的是真是假都难以分辨，而且世上事永远都是说起来容易做起来难，我们都见过很多人Blabla就会说，就会吹，不会做事情，或者干起事情跟小孩子一样，也有很多人实干型的，会做事，能把事情做好，但就是说不出，或者非常不愿意在别人面前blabla。然并卵。。。。蛋扯远了</p>
+
+<h3>远离主线程（UI线程）</h3>
+
+<p>这似乎才是正题。</p>
+
+<p>对于应用程序来说主线程是很重要的，因为主线程通常的作用是用于刷新用户界面（UI），与用户进行交互，是与用户接触最近的，因此也通常被称作UI线程。Android和iOS都是如此。想像一下，应用要想达到60FPS，也就是说一帧的绘制要在16ms内完成，你的布局又那么的复杂，一层套一层，每个View都要一遍遍的measure, layout, draw，就知道主线程有多么忙碌了，还能忍心再做其他事情吗？</p>
+
+<p>那么，让应用流畅就变得很简单，在主线程中做最少的事情，但不能更少，它只做二件事情：</p>
+
+<ul>
+<li><p>UI(<a href="http://developer.android.com/reference/android/view/View.html">View</a>)相关的事情</p>
+
+<p>这个是平台框架的限制，必须遵守。</p></li>
+<li><p>必须在主线程中做的事情</p>
+
+<p>比如启动其他线程，必要的初始化等等。比如像AsyncTask是一定要在主线程中初始化的，否则会有Crash，具体可以看<a href="http://blog.csdn.net/hitlion2008/article/details/8194510">这篇文章</a>的分析。</p></li>
+</ul>
+
+
+<p>其他，所有事情，都应该放到其他线程中去。如果在设计和编码的时候能考虑到这二点，那么你的应用流畅至少不会卡。使用其他线程异步操作时一定要注意生命周期和上下文，也即当执行任务时生命周期是否还是活动的，或者所依赖的上下文是否已经变化了，不在了。</p>
+
+<h3>布局的优化</h3>
+
+<h4>减少View的层次和数目，减化复杂布局</h4>
+
+<p>View的层次越少，数目越少，肯定渲染越快，这个常见的技巧有：</p>
+
+<ul>
+<li>删除没有用的View</li>
+<li>除去无必要的嵌套，比如当内部仅有一个View时，外面就没有必要再加一个ViewGroup了</li>
+<li>多使用<a href="http://developer.android.com/reference/android/widget/RelativeLayout.html">RelativeLayout</a>。它能够随意的排版View，三维上的方位都可以搞定，所以对象像列表的Cell之类的，一个RelativeLayout基本上就可以搞定。</li>
+<li><a href="http://toughcoder.net/blog/2015/05/20/android-layout-trick-drawable-of-textview/">用TextView的drawable属性来组合图片+文字</a></li>
+<li>用merge来减少层次</li>
+<li>对于某些情况才用到的View，就使用<a href="http://blog.csdn.net/hitlion2008/article/details/6737537">ViewStub</a>，然后在需要显示的时候再inflate。也就是所谓的延时和按需渲染</li>
+<li>尽量不要用背景图片，特别整个Activity大小的背景，费内存，占资源</li>
+<li>尽可能用矢量图形，比如颜色，drawable，shape，icon font等等</li>
+</ul>
+
+
+<p>减少View的层次和数目能显著提高帧率。曾经有一个列表，列表不复杂，左边一个TextView，右边有三个也是TextView，但是在添加的时候在外面又包了一层TextView，布局就变成了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;LinearLayout</span> <span class="err">....</span><span class="nt">&gt;</span>
+</span><span class='line'>  <span class="nt">&lt;TextView</span> <span class="nt">/&gt;</span>
+</span><span class='line'><span class="nt">&lt;/LinearLayout&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>虽然可能这不起眼的多加了一个LinearLayout，但是别忘记了，这是在List中，一屏会显示10多行，每一行多3个View，加起来就是30多个View啊！一次多绘制30多个View是什么概念？</p>
+
+<p>对于布局的优化可以多看看lint的输出Warning，它对于无用的View，没必要的嵌套，以及优化建议都能准确的给出提示。</p>
+
+<h4>当局部更新时不要触发整体重绘</h4>
+
+<p>比如一个坨复杂布局中，仅需要更新一个图标时，就直接更新它所属的ImageView就好；再如，有CheckBox选中状态的列表，点击时，就只更新具体的列表的具体的CheckBox就可以了，而不是改变数据，然后notifyDataSetChanged。</p>
+
+<p>这里需要，首先，不要故意的去触发整体刷新（除非非常的有必要，比如多个View都需要刷新数据时）；另外，就是要小心防止触发整体刷新的坑，因为某些原因，即使小心的更新局部也会造成整体的刷新。</p>
+
+<h4>避免频繁的触发整体的重绘</h4>
+
+<p>千万不要直接改变View的大小的方式来做动画，或者在做动画的同时改变View的布局，更不要添加或者移除View，这都会直接触发整体的重绘。</p>
+
+<h4>避免在onDraw的时候做额外的事情</h4>
+
+<p>如果是自定义的View就要注意这个事情，在onDraw的时候不要去new对象或者做其他不相干的事情，即使这些操作在UI线程中作也毫不费时的。</p>
+
+<h4>列表类的优化</h4>
+
+<p>对于列表（List和Grid）优化除了上面提到的，还要注意使用组件传回来的convertView以及ViewHolder。convertView可以复用View对象，避免inflate过多的View。ViewHolder模式主要是减少findViewById的调用。</p>
+
+<h4>把界面设计的尽可能简单</h4>
+
+<p>大道至简，简约是最优秀的用户体验，没有之一，所以产品汪们，不要把页面搞的太复杂，会导致不好用：用户不会用，和渲染性能差。</p>
+
+<h4>写布局时要考虑到渲染性能</h4>
+
+<p>这是非常重要的，再牛B的方法和技巧，如果你不鸟，或者不用都木有卵用，如果你心系性能，必然会有所思，有所为，然后渲染性能就所升。</p>
+
+<h3>及时反馈给用户</h3>
+
+<p>这实际上不是真正的流畅，而是给用户感觉流畅，避免用户认为应用假死。比如当做一些费时操作的时候，是放在了工作线程中，但是主线程也却没事情做，应用流畅不卡顿，但在用户看来却是无意义的，这时可以用一些动画，进度等等及时反馈给用户程序当前的状态。</p>
+
+<p>另外，当做费时操作的时候也要及时终止并反馈，程序可能会有异常情况或者错误情况，都是需要处理的，比如从网络加载数据，可能会有无网络，或者网络异常，或者服务器返回异常，那么要尽早失败。比如是不是可以在任务启动前先判断网络状态，而不是照常发请求，网络返回异常了，那么正常情况时的结果处理就不要做了，等等。</p>
+
+<p>说到这里，不得不讲一下代码的编写原则：先检查异常情况，尽早退出，而不是层层if，举个例子：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="n">Data</span> <span class="nf">fetchNewsDetail</span><span class="o">(</span><span class="n">String</span> <span class="n">url</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">url</span> <span class="n">is</span> <span class="n">invalid</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">empty</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">no</span> <span class="n">networks</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">empty</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">some</span> <span class="n">other</span> <span class="n">bad</span> <span class="n">conditions</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">empty</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="n">send</span> <span class="n">requset</span><span class="o">;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">response</span> <span class="n">code</span> <span class="n">not</span> <span class="mi">200</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">no</span> <span class="n">response</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">parse</span> <span class="n">response</span> <span class="n">failed</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">parse</span> <span class="n">data</span><span class="o">;</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>而不是这样：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="c1">// Ugly code, DO NOT do this</span>
+</span><span class='line'><span class="n">Data</span> <span class="nf">fetchNewsDetail</span><span class="o">(</span><span class="n">String</span> <span class="n">url</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">url</span> <span class="n">valid</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">has</span> <span class="n">networks</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">response</span> <span class="n">code</span> <span class="mi">200</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">....</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>流畅度剖析工具</h2>
+
+<h3>流畅度定性体验</h3>
+
+<p>那么如何测试或者衡量我们应用是否流畅呢？
+首先就是自己体验，快速滑动，看看是否能感觉到卡顿，或者页面闪烁。</p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/gpu-options.png" width="320" height="480"></p>
+
+<h3>借助开发者工具来感受</h3>
+
+<p>开发者工具有很多选项可以帮助开发者来测量，比如调试过度绘制，显示GPU更新等。通过这些可以看出不必要的UI刷新。</p>
+
+<p>比如开发者选项里有一个”硬件加速渲染“，里面有一个“调试GPU过度绘制”，这个会在屏幕上以颜色来区分overdraw（过度绘制，也就是进行了不必要的绘制）的严重重度：</p>
+
+<ul>
+<li>蓝色 1 倍overdraw</li>
+<li>绿色 2 倍overdraw</li>
+<li>红色 3 倍overdraw</li>
+<li>紫色 4 倍overdraw</li>
+</ul>
+
+
+<p>总之，颜色越深，证明做了过多的不必要的绘制(overdraw).什么又叫过度绘制呢(overdraw)比如一个列表，如果每个Item都有背景色，那么List本身实际上是不需要背景色的，比如子View占满了父View，那么父View不用画背景，等等。对于不可见的元素，就不要运行绘制，这是减少overdraw的方法。</p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/gpu-monitor.png" width="320" height="480"></p>
+
+<p>在开发者选项面有一个是“监控”，里面有几个：</p>
+
+<ul>
+<li>启用严格模式</li>
+<li>显示CPU使用情况</li>
+<li>GPU呈现模式分析</li>
+<li>启用OpenGL跟踪</li>
+</ul>
+
+
+<p>特别是第3个“GPU使用情况”，它是系统在GPU渲染时加入一些分析，以呈现UI渲染的性能，它有三个选项：</p>
+
+<ul>
+<li>关闭</li>
+<li>在屏幕上显示为条形</li>
+<li>在adb shell dumpsys gfxinfo中</li>
+</ul>
+
+
+<p>其实，它的数据是一样的，只不过一个是在命令行把raw data输出，一个是在手机屏幕以图表方式展示。后面会详细介绍这个。</p>
+
+<h3>adb shell dumpsys gfxinfo <pkg name></h3>
+
+<p>这个能收集GPU渲染时的一些数据，从而反映应用UI渲染的性能信息。</p>
+
+<p>从这个命令的输出能看出二个信息一个帧的数量，另一个就是每一帧绘制的情况。
+应用比较卡，表现出来就是丢帧，也就是有些帧太慢了，赶不上火车了，不得不丢掉，从而页面会卡顿。正常来讲，即使是简单的布局，用这个命令抓也至少能抓到20+帧的数据，如果少了，或者很少，只有几帧，就就证明你在主线程中干了太多其他的事情，也就是说主线程被block了。这时就要好好看看源码，主线程中都干了啥，哪里可能会耗时，把非UI操作都放到工作线程中去。</p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/gfxinfo.png" width="640" height="480"></p>
+
+<p>对于每一帧的数据，体现着绘制这一帧所花的时间：</p>
+
+<ul>
+<li>Draw是创建列表所需要的时间，表示运行绘图方法用了多长时间，比如View.onDraw()所花的时间；</li>
+<li>Prepare在5.0版本加入了这一列数据的显示</li>
+<li>Process是Android 2D引擎渲染显示列表(DisplayList)所需要的时间。页面上的View越多，层次越深，就会有越多的绘制命令需要执行，这个值会越大。</li>
+<li>Execute是把一帧数据送到屏幕上排版显示的时间，这个值通常会比较小，且在应用层无法直接控制，换句话说，这个时间是无法优化的。</li>
+</ul>
+
+
+<p>为了流畅，每一帧的绘制时间应该少于16ms，因为应用要想流畅要达到60FPS，算下来就是一帧不能超过16ms，但这个并不是死规定，不是说某一帧超过，应用就会卡，就会慢，而是说几十帧的平均值或者90%的帧应该在16ms以内。</p>
+
+<p>这个方法是针对每个ViewRootImpl的统计数据。ViewRootImpl对象就是一个View的根元素，通常情况下一个Activity仅有一个ViewRootImpl对象。需要注意的是Dialog也会有一个ViewRootImpl，所以当有Dialog时，你会看到二个ViewRootImpl的统计数据。</p>
+
+<p>还有需要注意的是，如果使用了SurfaceView（比如GLSurfaceView)，因为它不是使用常规View的渲染方法来渲染的，它有自己的线程和渲染方式，所以这个方法是抓不到SurfaceView的渲染性能的。</p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/gpu-onscreen.png" width="320" height="480"></p>
+
+<p>在屏幕显示，则会在屏幕上面以柱状图的方式实时显示UI每一帧渲染的性能，可以看到一条绿色的线，这个就是16ms。柱状图中几种颜色所代码的意义分别是</p>
+
+<h3>traceview</h3>
+
+<p>这是一个十分强大的功能，能得到某一时间段内，进程内的时序执行情况，具体到能体现出所有线程的所有方法执行所花的CPU时间和实际时间，并且还能看出包含子调用和不包含的情况。</p>
+
+<h4>启用方法</h4>
+
+<p>在Android Studio中点击Android Device Monitor或者直接运行monitor (位于SDK/tools/），选择某一进程，然后点击，开始录制，再点击结束，就会出现。</p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/device-monitor.png"></p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/traceview-start.png"></p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/traceview-stop.png"></p>
+
+<h4>如何分析</h4>
+
+<p>颜色越深代码花的时间越多。</p>
+
+<p><img src="http://7u2scv.com1.z0.glb.clouddn.com/tcperf/traceview.png" width="640" height="480"></p>
+
+<p>主要指标有：</p>
+
+<ul>
+<li>CPU time 某个方法占用的CPU时间</li>
+<li>Real time 某个方法运行的真实时间</li>
+<li>CPU time/call - 某方法CPU时间与调用次数比</li>
+</ul>
+
+
+<p>还有二个前缀：</p>
+
+<ul>
+<li>Incl - 这是Inclusive简写，意思就是包含方法里面的子调用</li>
+<li>Excl - 这个是Exclusive的简写，意思方法本身，不包含子调用</li>
+</ul>
+
+
+<p>通过这个可以分析出哪些方法比较耗时。</p>
+
+<h3>systrace</h3>
+
+<p><a href="http://developer.android.com/tools/help/systrace.html">systrace</a>可以查看出进程的执行情况，不单单是你的应用进程，也能看到系统进程的执行情况，能够以时间线的形式来展示进程中各线程的执行情况。</p>
+
+<h4>如何使用</h4>
+
+<p>根据系统版本的不同使用方法略有不同：</p>
+
+<ul>
+<li><p>Android 4.3及以上系统</p>
+
+<ol>
+<li>确保打开了ADB调试模式</li>
+<li>执行以下命令</li>
+</ol>
+
+
+<pre><code class="``shell">$ cd android-sdk/platform-tools/systrace
+$ python systrace.py --time=10 -o mynewtrace.html sched gfx view wm
+</code></pre>
+
+<p>  输出的mynewtrace.html文件就是带有trace的结果，用浏览器打开查看即可。</p></li>
+<li><p>Android 4.2及以下系统</p>
+
+<ol>
+<li>打开ADB调试模式</li>
+<li>开发者选项中->监控->启用跟踪中选择想要查看的类型</li>
+<li>执行命令</li>
+</ol>
+
+
+<pre><code class="``shell">  $ python systrace.py --cpu-freq --cpu-load --time=10 -o mytracefile.html
+</code></pre></li>
+</ul>
+
+
+<p>更多的systrace命令的使用方法可以参考<a href="http://developer.android.com/tools/help/systrace.html">官方文档</a>。</p>
+
+<h4>如何分析结果</h4>
+
+<p>systrace命令得到的结果是一个HTML文件，用浏览器打开即可.</p>
+
+<p>基本操作：w 放大；s 缩小; a 向左移动；s 向右移动</p>
+
+<p>从中可以看出帧绘制的信息，通常每一帧应该小于16.6ms，为绿色。对于有问题的，比如delay或者绘制时间长的，会以黄色和红色标注出来，并且在顶部会有Alert。点击帧F和Alert可以看到具体的详细信息，以及系统自动分析出来的可能的原因。
+ </p>
+
+<h3>hierarchyview</h3>
+
+<p>这个工具很明显就是用来调试布局的，它能以可视化的方式展示View的层次结构，顺带显示每一层View的渲染速度。运行方法是找到SDK/tools/运行hierarchyviewer.</p>
+
+<p><em>注意</em>：默认情况下只有调试的ROM（build with eng)才能抓到View的层次信息（否则，应用的页面就很容易被破解了），对于可控制源码的可以用<a href="https://github.com/romainguy/ViewServer">开源库</a>来解决这个问题。</p>
+
+<h3>代码层次剖析打点</h3>
+
+<p>这个要对代码熟悉后可以进行，对于怀疑执行较慢的代码加上时间打点（System.currentTimeMillis())来确定其执行所花的时间。也就是说在编码的时候要有意识，对于持有怀疑态度的方法，要时不时的打时间点，以看其是否能放在主线程中。</p>
+
+<h3>打开StrictMode</h3>
+
+<p>这是一个开发者工具，能够帮助开发者检测到不经意间做的一些违反平台开发原则的事情，比如在主线程中做了IO操作或者主线程中操作网络等等。时至今日它能检测的远不止这些，还能检测主线程中的比较慢的方法调用，还有检测Dialog的泄露(Dialog未关闭，Activity就退出了），Activity的泄露以及未正确关闭的对象(Cursor, Binder)等。总之，它能帮助你减少因为代码写法不规范而造成的问题。详细的如何使用可以<a href="http://developer.android.com/reference/android/os/StrictMode.html">参考文档</a>。</p>
+
+<h2>如何提升程序性能</h2>
+
+<p>这个比较难，比如读取大文件必然耗时，从服务器上取数据肯定慢（比从本地读），但是聪明的人类还是有方法做的更好的：</p>
+
+<h4>把业务逻辑弄简单点</h4>
+
+<p>这个就不废话了，代码搬运工们没有太多的话语权。但是对于能控制的部分要做好，比如尽早失败，不重复等等。</p>
+
+<h4>多用缓存</h4>
+
+<p>缓存绝对是计算机技术一个非常重要的东西，发明这东西的人肯定是个天才。缓存无处不在，缓存的目的就是提高性能，加快访问速度，衡量缓存好坏就看命中率。CPU有三层缓存来提升运算性能。软件中缓存也是提升性能的一个非常重要的手段。</p>
+
+<p>比如对于不太常变化的数据，从网络成功获取后就要缓存在本地；再如，对于经常访问的本地数据也要在内存中有缓存；用到的图片比较多的应用，要做内存和本地二级缓存，以减少图片的加载时间（比如<a href="https://github.com/nostra13/Android-Universal-Image-Loader">UIL</a>的做法）；</p>
+
+<p>常见的缓存工具有内存级的<a href="http://developer.android.com/reference/android/util/LruCache.html">LruCache</a>以及磁盘级的<a href="https://developer.android.com/samples/DisplayingBitmaps/src/com.example.android.displayingbitmaps/util/DiskLruCache.html">DiskLruCache</a>，教程可以参考<a href="http://blog.csdn.net/guolin_blog/article/details/28863651">这里</a>。</p>
+
+<h4>延迟加载和按需加载</h4>
+
+<p>这个就容易理解一些，比如三层页面才用到的数据，你没必要一启动在第一级页面就加载它（当然，也可能有这样的情况，比如数据有依赖时）。</p>
+
+<p>按需要加载就是，第一个页应该只加它需要的数据，而不是一个请求，把应用所有数据都拉下来。</p>
+
+<h4>尽早发出异步请求</h4>
+
+<p>对于像异步从网络获取数据，或者异步IO加载数据的，或者做一些费时的异步初始化等，可以尽早的把请求发送出去，在等待结果的同时再做其他事情，这样能保证结果最快的呈现出来。</p>
+
+<h4>使用工具（开源库）</h4>
+
+<p>这个就是，世上总有人比你聪明，他们的方法更巧妙，更高效，为什么不用呢？比如图片加载，比如网络库，比如JSON解析等等，那么多优秀的人做的优秀的东西不用太浪费了。要感谢那些优秀的开发者，总能找到合适的库，不但好用，而且开源，既然完成任务，又能学习，还有比这更好的事情么？</p>
+
+<p>可以到<a href="https://github.com/wasabeef/awesome-android-ui">这里</a>和<a href="http://alamkanak.github.io/android-libraries-and-resources/">这里</a>来找需要的开源库。</p>
+
+<h2>如何占用更少资源</h2>
+
+<p>对于资源的使用首页的原则就是，尽量少用或者不用，听上去是废话，其实不然，有一些具体的可实践的准则可供参考。其实这里面的话题每一个都可以扩展成一整篇文章来探讨，这里仅列出一些要点，不作细致讨论。</p>
+
+<h3>内存</h3>
+
+<h4>尽可能的少创建对象</h4>
+
+<p>主要的原则就是尽可能的复用，比如像对话框，或者Toast之类的都是可以复用的。再如尽可能的把创建对象放在循环外面等等。</p>
+
+<h4>尽量缩短对象的生命周期</h4>
+
+<p>比如能在一个调用链中传递的对象就没有必要非声明为成员变量。在方法尾部使用的对象就别在一进入方法时就创建。用户事件触发的逻辑就没有必要一进入页面时就创建。当onResume后才会使用到的对象就没有必要在onCreate里创建等等。</p>
+
+<h4>避免内存泄露</h4>
+
+<p>所谓内存泄露就是内存在不再使用之后仍没有得到释放，一般情况下它是无害的，无非也就多用点内存，现在设备内存越来越大，空着不用也浪费，但是内存总有用尽的时候。对于Android，更是如此，每个应用（进程）有固定的内存配额（HeapSize），它是由系统ROM决定的，所以一旦有泄露，程序必定会因OOM（Out Of Memory Error)而崩溃（其实崩溃了也是好事，一是你会重视，二是进程退出了，重新启动后内存泄露会得到一定的缓解），特别是现在应用中的图片和视频等多媒体元素越来越多，这些东西本来就吃内存，再来点泄露，那么发生OOM的机率大大增加。</p>
+
+<p>Android中最容易泄露的对象就是Activity，Activity对象由系统创建，生命周都是由系统来控制，我们只能发送请求， 不能强行干预。正常情况下的Activity对象在onDestroy（）之后是要被回收的，所以如果在onDestroy以后仍有其他生命周期更长的对象持有对Activity对象的引用的话，就会导致Activity的泄露。</p>
+
+<p>而Android中很多系统API都是需要Context（少量的是需要Activity，比如Dialog），而Activity又是Context的一个实现，因此啊，很多人在很多时候都简单的把Activity对象直接传了过去，很多系统API的生命周期要比应用程序长的得多，这就是导致Activity对象泄露的原因。避免这种泄露很简单，就是尽可能传ApplicationContext，也就是说不要直接传Activity对象，而是传activity.getApplicationContext()。因为ApplicationContext一个应用只有一个，也就是说一个手机里只有一个，而且系统本身就会缓存它，所以长一点持有它也没关系。当然要视情况而定，比如像Dialog虽然是Context，但必须传Activity。</p>
+
+<h4>缓存对象，以避免复创建</h4>
+
+<p>比如像Dialog对象，可以缓存起来以避免每次都创建新的。</p>
+
+<p>对于大量的缓存对象可以使用<a href="http://developer.android.com/reference/android/support/v4/util/LruCache.html">LruCache</a>来管理。</p>
+
+<h4>对于缓存，尽量用WeakReference</h4>
+
+<p>特别是像Activity和Fragment以及Service等有固定生命周期，且生命周期又是由系统来控制的对象，最好加持有WeakReference。</p>
+
+<h4>监听onTrimMemory和onLowMemory，以采取措施</h4>
+
+<p>当系统内存吃紧的时候会向Activity发送通知，此时可以做一些措施，比如释放不用的资源，释放不用的对象，清空缓存等以缓解压力。</p>
+
+<h4>内存使用监测工具和分析方法</h4>
+
+<p>可以时不时的用监测工具来监测一下应用所消耗的内存，有这些方式：</p>
+
+<ul>
+<li>adb shell dumpsys meminfo <pkgname></li>
+<li>Android Device Monitor - (其实就是早期的DDMS的进化版本)监测用的GUI工具，选择进程，然后update heap，就能实时看到heap使用情况</li>
+<li>AndroidStudio 已经集成了内存监测工具，可以实时看到内存的使用情况。</li>
+<li>MAT - Memory Analysis Tool它是Java的标准内存分析工具，安卓的dex不直接支持，但无妨，可先用monitor dump出prof文件，再用SDK中的工具hprof-conv进行转换后MAT就认识了。详细的可以参考<a href="http://androidperformance.com/2015/04/11/AndroidMemory-Usage-Of-MAT/">这篇文章</a>。</li>
+<li>更多的Java内存使用建议可以参考<a href="http://androidperformance.com/2015/07/20/Android-Performance-Memory-Java/">这篇文章</a>.</li>
+<li><p>学会查看GC输出的信息</p>
+
+<p>Logcat日志中的GC信息也能非常直观看出内存的使用情况，而且看出性能上的原因，特别是UI卡顿，或者动画丢帧等情况。因为GC或者说频繁的GC发生，是会影响到应用性能，特别是会影响UI线程。GC的日志通常能看出触发GC的原因，释放掉了多少内存以及花了多少时间，具体的还跟虚拟机的版本不一样而不同，下面分别来详细的讲述：</p>
+
+<ul>
+<li><p>Dalvik</p>
+
+<p>Dalvik虚拟机GC的日志格式如下：</p>
+
+<blockquote><p>dalvikvm: &lt;reason&gt; &lt;freed&gt;, &lt;free memory&gt;, &lt;time&gt;</p></blockquote>
+
+<ul>
+<li>reason &ndash; 触发GC的原因</li>
+<li>freed &ndash; 此次GC释放了多少内存</li>
+<li>free memory &ndash; 还有多少空闲的内存空间</li>
+<li>time &ndash; 此次GC花费多少时间</li>
+</ul>
+
+
+<p>其中reason又有几个：</p>
+
+<ul>
+<li>GC_CONCURRENT</li>
+<li>GC_MALLOC</li>
+<li>GC_EXPLICT</li>
+<li>GC_BEFORE_OOM</li>
+</ul>
+</li>
+<li><p>ART</p>
+
+<p>ART虚拟机的GC格式比Dalvik要详细一些：</p>
+
+<blockquote><p>I/art: &lt;GC_Reason&gt;&lt;Amount_freed&gt;,&lt;LOS_Space_Status&gt;,&lt;Heap_stats&gt;,&lt;Pause_time&gt;,&lt;Total_time&gt;</p></blockquote></li>
+</ul>
+
+
+<p>  更多内容可以参考<a href="http://mp.weixin.qq.com/s?__biz=MzI1MTA1MzM2Nw==&amp;mid=400021278&amp;idx=1&amp;sn=0e971807eb0e9dcc1a81853189a092f3&amp;scene=0#rd">这篇文章</a>。</p></li>
+</ul>
+
+
+<p>准确的来讲MAT是分析工具而非监测工具，也就是当发现有内存泄露的时候抓一段heap的使用情况用MAT来分析。其他几个都可以用来监测，也就是说看一下内存是否有问题，表现都是当操作时内存使用会有所增加，但当操作停止后内存应该迅速回落到操作前的水平。重复操作，内存使用不应该一直增加。如果长时间内存没回落或者内存一直增长，那么就很可能存在内存没有释放掉，就要抓heap然后用MAT分析，看是哪里出了问题。</p>
+
+<h3>CPU</h3>
+
+<h4>减少忙等待</h4>
+
+<p>也就是说使用注册Listener（通俗的就是callback）方式来处理异步事件，而不是忙等待：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="c1">// DO NOT do this</span>
+</span><span class='line'><span class="k">while</span> <span class="o">(</span><span class="n">somethingNotReady</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">sleep</span><span class="o">(</span><span class="mi">100</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h4>合理使用线程</h4>
+
+<p>理性的仅在有必要的费时操作启动worker线程来完成。不要盲目的创建线程。线程多了，不一定性能就上去了，反尔会带来同步的无尽烦恼和不可捉摸的诡异偶现Bug，而且频繁的<a href="https://en.wikipedia.org/wiki/Context_switch">Context Switch</a>也会带额外的损耗。</p>
+
+<p>对于频繁执行的异步任务，最好使用<a href="http://developer.android.com/reference/java/util/concurrent/ThreadPoolExecutor.html">线程池</a>，一方面可以复用资源，另一方面也方便控制。</p>
+
+<p>对于长时间执行的任务，或者有Server用途的长时间工作线程，要使用<a href="http://developer.android.com/reference/android/os/Looper.html">Looper</a>和消息队列<a href="http://developer.android.com/reference/android/os/Handler.html">Handler</a>，详细的可以参考<a href="http://blog.csdn.net/hitlion2008/article/details/8194510">这篇文章</a>。</p>
+
+<p>仅当需要与UI有交互的情况下才考虑使用<a href="http://developer.android.com/reference/android/os/AsyncTask.html">AsyncTask</a>，具体看<a href="http://blog.csdn.net/hitlion2008/article/details/7983449">这篇文章</a>。</p>
+
+<h4>严格控制Service的生命周期，做到按需启动，及时停止</h4>
+
+<p>安卓的Service绝对要为手机的卡顿负一部分责任，系统放任Service，Service的控制权都在开发者手中，所以Service被滥用的特别严重。打开手机的设置，看看正在运行的应用程序，可以发现几乎所有的应用都有至少一个到二个左右的Service进程在运行。所以说安卓能不耗电么，能不卡么，能不耗流量么，跟水果手机咋比啊。</p>
+
+<p>为了体现专业性，使用Service就要小心，当有需求的时候再启动（startService or bindService），当不用了就stopSelf or stopService。</p>
+
+<h4>监测工具</h4>
+
+<p>在Android Studio中有工具可以监测CPU的使用情况</p>
+
+<h3>磁盘</h3>
+
+<h4>没必要存的东西就不要存</h4>
+
+<p>比如直接作用到UI层面的一些信息，显示完就不再使用了，这种数据是没有必要缓存到磁盘上的，至多在内存中缓存就可以了。</p>
+
+<h4>不是长期使用的就用临时文件，且是用标准API创建的临时文件</h4>
+
+<p>在同一个启动Session中，不同阶段都要使用的数据，可以用临时文件来存取，比如启动时，或者加载完时创建一个临时文件来存储，后面再使用。创建临时文件要用标准的File#createTempFile方法，而不是创建一个普通文件当作临时用。因为常常会忘记删除掉，即使有删除动作，但假如有异常出现，也会走不到删除。久而久之磁盘上的垃圾文件会越来越多。</p>
+
+<h4>如果不再需要就及时的删除文件</h4>
+
+<p>这个可以讲其实国内的甚至国外的绝大多数软件做的都不好，特别是机身存储和SD扩展卡上面的内容，因为这些区域是开放给所有App的，而且容量一般都很大，所以大家都很高兴的写，没有人去删除。这也是为什么市场上面的清理软件如此的受欢迎。作为良心开发者，还是自己擦自己的屁股吧！</p>
+
+<h4>定期整理数据库，删除旧数据</h4>
+
+<p>数据库也跟磁盘一样，长期使用后会有过期的数据，也是需要清理的。</p>
+
+<p>另外，由于数据库不断的增删改，会导致数据库文件产生断层（文件大小不必要的大于实际内容），或者碎片，这时就需要<a href="https://sqlite.org/lang_vacuum.html">execute(&ldquo;vacuum&rdquo;)</a>来重新生成数据库文件。当然这个比较有风险，而且耗时比较长，所以，只有当达到一定时间时才有必要这样做。</p>
+
+<h4>给APK瘦身</h4>
+
+<p>虽然，安卓应用程序发布较PC软件非常之容易，各大应用市场傻瓜式的一键式搞定，但是，用户仍然需要下载和安装，这期间APK的大小直接影响应用的成功安装率，小的APK文件，下载快，耗流量少，安装快，占用ROM也少，低端机型的ROM没那么大。所以APK的瘦身也是势在必行的一个优化指标。</p>
+
+<p>一般来说有这么几个方面，可以去下功夫：</p>
+
+<ul>
+<li><p>删除无用资源</p>
+
+<p>不再使用的图片，布局，库不但增加目标文件大小，而且会延长编译和打包的时间。不用了就删除，后面用的时候再还原。如果代码太多，或者不够熟悉搞不清该不该删除，可以参考<a href="http://developer.android.com/tools/debugging/improving-w-lint.html">lint</a>的warning信息。</p></li>
+<li><p>删除无用代码</p>
+
+<p>这个比资源还严重，其实不用的代码对包增大没太大的作用，但是没有代码会严重影响项目的清析度和可维护性。比如新人来了，看一坨代码，最后发现半坨都是没用的代码，心中必有万个马在奔腾。不用了就删除，以后用到时可再还原，版本控制就是专门干这事的。</p></li>
+<li>集中使用xhdpi（或者xxhdpi），对于确实适配有问题的资源再添加其他支持(hdpi)，一般情况下足够了</li>
+<li>对于PNG图片，可以使用<a href="http://www.p-edge.nl/eng/products/pngshrink">pngshrink</a>或者<a href="https://pngquant.org/">pngquant</a>来进行一下无损压缩，之后再放入工程。视觉给的图都能达到50%~70%的压缩率。</li>
+<li><p>使用混淆器</p>
+
+<p>一方面防小白反编译你的项目，虽然可能也没啥有技术含量的代码，但让人家那么容易就获得了你的全部源码，也还是挺闹心的（虽然，可能你的代码也都是Github+Google来的，哈哈哈）；另外一方面就是混淆，特别是Android中最流行的<a href="http://developer.android.com/tools/help/proguard.html">ProGuard</a>，能显著的减少目标dex的大小。</p></li>
+</ul>
+
+
+<h3>网络流量</h3>
+
+<p>对于这点，其实优先级没那么高，现在Wifi覆盖越来越广，移动流量资费也越来越便宜，套餐越来越实惠，所以这些问题不必太纠结。</p>
+
+<h4>对于更新时间比较长的要缓存到本地存储，以避免重复请求</h4>
+
+<p>这个其实也是提升响应速度的一个方式，对于更新周期比较长，且时效性要求不高的数据可以缓存在本地。客户端每隔一定时间更新一次。</p>
+
+<h4>服务端主动推送更新通知</h4>
+
+<p>就是对于数据，客户端拿到后就缓存着，当数据有更新时服务端推送通知给客户端，然后客户端再来获取。这样即可以保证数据的更新到达，又可以减少不必要的网络请求。</p>
+
+<h4>差分获取更新数据</h4>
+
+<p>当已经拿到了数据后，想要更新时，可以让服务端返回数据的差异，而不是返回整个数据，客户端拿到数据后再做融合。</p>
+
+<h4>无论是请求还是服务器返回，没有用的参数不要带上</h4>
+
+<h4>使用压缩技术请求加上&#8221;Accept-Encoding&#8221;=gzip, deflate</h4>
+
+<p>无论是上传文件还是下载文件尽可能压缩一下，即使不为了省流量，也能提升些响应速度。当然这个需要服务端配合，如果无法控制服务端就没有办法了。</p>
+
+<h4>对于要下载，事先判断网络类型，并给予提示，让用户来选择</h4>
+
+<p>相对于上面几点，这点倒是要注意，比如更新，或者下载插件，要判断网络类型，如果是移动网络，给出提示，让用户自己来判断。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="http://blog.chengyunfeng.com/?p=458">Android 性能分析案例</a></li>
+<li><a href="http://coderrobin.com/2015/05/04/android%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96%E7%AC%94%E8%AE%B0/">android性能优化笔记</a></li>
+<li><a href="http://blog.venmo.com/hf2t3h4x98p5e13z82pl8j66ngcmry/performance-tuning-on-android">Performance Tuning On Android</a></li>
+<li><a href="http://android-performance.com/android/2014/04/24/android-strict-mode.html">StrictMode 详解</a></li>
+<li><a href="http://droidyue.com/blog/2015/09/26/android-tuning-tool-strictmode/">Android性能调优利器StrictMode</a></li>
+<li><a href="http://stackvoid.com/performance-tuning-on-android/">Android App 性能优化实践</a></li>
+<li><a href="https://developer.android.com/tools/debugging/debugging-memory.html">Investigating Your RAM Usage</a></li>
+<li><a href="http://blog.csdn.net/yanbober/article/details/48394201">Android应用开发性能优化完全分析</a></li>
+<li><a href="http://www.cnblogs.com/coding-way/p/4294225.html">HierarchyView的实现原理和Android设备无法使用HierarchyView的解决方法</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
     <title type="html"><![CDATA[Android Studio技能之快捷键]]></title>
     <link href="http://toughcoder.net/blog/2015/09/07/tricks-of-android-studio-shortcuts/"/>
     <updated>2015-09-07T23:10:27+08:00</updated>
@@ -406,6 +1055,7 @@
 <li><strong>CMD + Shift + i</strong> &mdash; 不离开当前窗口快速预览某个方法或者类的实现</li>
 <li><strong>CMD + Shift + a</strong> &mdash; 可以索引快捷键设置，当忘记快捷键时，非常有用</li>
 <li><strong>CMD + p</strong> &mdash; 显示当前方法的参数</li>
+<li><strong>Shift + Shift(Double Shift)</strong> &mdash; 全局搜索，整个项目范围内搜索任何文件或者字串</li>
 </ul>
 
 
@@ -2927,9 +3577,9 @@ Android 4.0及以上的版本当连接到PC时，通知栏也会有一个与存�
 
 <blockquote><p>repo init -u git://github.com/CyanogenMod/android.git -b stable/cm-11.0</p>
 
-<p>gpg: key 920F5C65: &ldquo;Repo Maintainer <a href="&#109;&#97;&#x69;&#x6c;&#116;&#x6f;&#58;&#114;&#101;&#112;&#x6f;&#64;&#97;&#x6e;&#100;&#x72;&#x6f;&#x69;&#x64;&#46;&#107;&#101;&#x72;&#x6e;&#x65;&#x6c;&#46;&#111;&#114;&#x67;">&#x72;&#x65;&#x70;&#x6f;&#64;&#x61;&#110;&#x64;&#x72;&#111;&#x69;&#x64;&#46;&#x6b;&#101;&#114;&#x6e;&#101;&#108;&#46;&#111;&#114;&#103;</a>&rdquo; not changed</p>
+<p>gpg: key 920F5C65: &ldquo;Repo Maintainer <a href="&#x6d;&#97;&#x69;&#108;&#116;&#x6f;&#58;&#x72;&#x65;&#112;&#111;&#x40;&#97;&#x6e;&#100;&#x72;&#111;&#x69;&#100;&#x2e;&#x6b;&#101;&#114;&#x6e;&#x65;&#108;&#46;&#111;&#114;&#103;">&#x72;&#x65;&#112;&#111;&#64;&#97;&#x6e;&#100;&#x72;&#111;&#105;&#x64;&#46;&#107;&#101;&#114;&#x6e;&#x65;&#x6c;&#x2e;&#111;&#114;&#x67;</a>&rdquo; not changed</p>
 
-<p>gpg: key 692B382C: public key &ldquo;Conley Owens <a href="&#x6d;&#x61;&#x69;&#108;&#x74;&#111;&#x3a;&#99;&#x63;&#111;&#x33;&#64;&#97;&#x6e;&#x64;&#x72;&#111;&#x69;&#x64;&#x2e;&#99;&#111;&#109;">&#99;&#x63;&#111;&#51;&#x40;&#97;&#110;&#x64;&#x72;&#111;&#x69;&#x64;&#x2e;&#x63;&#111;&#109;</a>&rdquo; imported</p>
+<p>gpg: key 692B382C: public key &ldquo;Conley Owens <a href="&#109;&#97;&#105;&#108;&#116;&#x6f;&#58;&#99;&#99;&#x6f;&#51;&#x40;&#x61;&#110;&#100;&#x72;&#x6f;&#x69;&#x64;&#46;&#x63;&#111;&#109;">&#x63;&#x63;&#x6f;&#x33;&#x40;&#x61;&#x6e;&#100;&#x72;&#x6f;&#x69;&#x64;&#x2e;&#99;&#x6f;&#x6d;</a>&rdquo; imported</p>
 
 <p>gpg: Total number processed: 2</p>
 
@@ -3131,99 +3781,6 @@ Android 4.0及以上的版本当连接到PC时，通知栏也会有一个与存�
 <li><a href="http://techapple.net/2014/05/3-best-android-emulators-for-mac-os-macbook-run-and-install-android-app-on-your-mac-os-x-macbook-airpro/">3 Best Android Emulators for Mac OS / Macbook </a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[不断更新，保持高效]]></title>
-    <link href="http://toughcoder.net/blog/2014/10/26/stay-tune-with-state-of-art/"/>
-    <updated>2014-10-26T22:13:51+08:00</updated>
-    <id>http://toughcoder.net/blog/2014/10/26/stay-tune-with-state-of-art</id>
-    <content type="html"><![CDATA[<p>正所谓学历代表过去，学习力代表未来。柯维大师的七个习惯之中的终极习惯就是要“不断更新”，今天的你再牛B，知道的再，如果不去学习，不去提升，不去更新自己，那么总有一天也会被超越，时代在进步，别人在进步，发逆水行舟，不进则退，你停止了学习，就表明你退步了，因为别人在进步。
-那么，为了保持能够高效的进行Android开发，我们就必须不断的学习，不断的充电，这些列出一些，能够提高Android开发的进阶教程，注意是进阶教程，而非入门教程。</p>
-
-<p><a href="http://toughcoder.net/blog/2014/10/26/stay-tune-with-state-of-art/"><img src="http://www.bvsc.org/sites/default/files/images/5%20ways-KEEP%20LEARNING.png"></a></p>
-
-<!-- more -->
-
-
-<h2>书箱</h2>
-
-<p>虽然说现代人忙的都没有时间看书了，虽然说，我们浮躁的没有耐心把一本书看完，但是书籍仍然是学习和获取知识的最佳途径，前提是你选对了书。对于Android的进阶学习，这些书籍是非常好的：</p>
-
-<ul>
-<li><p>《50 Android Hacks》</p>
-
-<p> 这本书有点类似《Effective Java》和《Effective C++》，它是以话题形式来讨论提升Android开发的技巧，每个话题一个技巧，非常实用的一本书，里面有很多干货，有实例，拿来就可以用</p></li>
-<li><p>《Smashing Android UI》</p>
-
-<p> 这本书重点讨论如何提升UI，包括动画，布局，UI性能，定制Widget等。</p></li>
-<li><p>《Pro Android Apps Performance Optimization》</p>
-
-<p> 这本书是讲如何提升应用的性能。</p></li>
-<li><p>《Decompiling Android》</p>
-
-<p> 这本书比较有意思，是从另外一个角度来讲Android开发，从逆向工程角度，主要讲如何逆向工程一个应用，以及如何从开发层面来防止应用被逆向。里面讲了很多工具，很实用。</p></li>
-<li><p>《Android Design Patterns: Interaction Design Solution for Developers》</p>
-
-<p> 这本书的话题跟开发比较远，主要是从UX角度来讲解Android上面的用户体验的模式，比如现在非常流行的Drawer等等。孤认为开发者也要懂一些用户体验方面的东西，而且这些东西跟开发者关系更大一些。因为UXD并不清楚什么可以实现，什么难以实现，什么无法实现，以及实现起来的代价有多大。现在不是流行全栈工程师吗。Anyway，多了解点知识总是没坏处的。</p></li>
-</ul>
-
-
-<p>这些书随便就能搜索到，就不提供下载链接了。至于说为什么这里都是英文的，因为都是外国人写的啊！推荐直接看原版，因为翻译有些时候不会太准，因为译者的理解可能会不一样。并不需要多牛B的英文水平才能读懂英文书。这些都是专业的书籍，语言都非常的通俗易懂，对于常见的一些专业术语，查几次词典就记住了。关键还是态度。</p>
-
-<h2>网络博客资源</h2>
-
-<p>光看书，也还不够，因为最新的技术总是先出现在网络，尔后由人总结才能出现在书中。</p>
-
-<ul>
-<li><p><a href="http://developer.android.com/develop/index.html">Android Developers</a></p>
-
-<p> 这个不用多说，开发Android，无论是新手还是老手，官方的文档总是一个必须要常访问的地方。今日的官方文档已经10时的大不一样，那时里面除了API Reference外，几乎有很少其他内容，但是现在从Tutorials, Training Docs, References, Articles, Videos, Best Practices and Samples可以说凡是能用来学习的全都有了，里面已是相当的丰富了。</p></li>
-<li><p><a href="http://blog.jobbole.com">伯乐在线</a></p>
-
-<p> 这里每天会汇集一些优质的网络博客，各个方面的，当然也包括Android。</p></li>
-<li><p><a href="http://android-developers.blogspot.com">Android Developer Blogs</a></p>
-
-<p> 这个貌似是一群Android系统的开发者所定的博客，里面的文章相当有深度和权威，都是一等一的干货。</p></li>
-<li><p><a href="http://blog.stylingandroid.com">Styling Android</a></p>
-
-<p> 这个博客主要讲高级的UI定制，比如实现颜色选择器那种高级复杂的UI。</p></li>
-<li><p><a href="https://www.youtube.com/playlist?list=PLWz5rJ2EKKc_XOgcRukSoKKjewFJZrKV0">Android Dev Bytes</a></p>
-
-<p> 这个是YouTube上面的一个频道，是由Android系统的开发者做的一些教程类的视频，讲述如何进行开发，和提升的技巧。视频的内容非常丰富，从新的API，到游戏，再到UX，和Android Design。每个视频都算长，几十分钟。其中有几个哥们是Framework图形库的，讲述的如何做各种非常炫和酷的动画，相当的赞。这可以世界上最优秀的工程师，且是Android的维护者做的教程，错不了。</p></li>
-<li><p><a href="http://www.androiddesignpatterns.com">Android Design Patterns</a></p>
-
-<p> 这个博客的内容都是关于深度解析Frameworks中某些组件的工作原理的，很有深度。</p></li>
-</ul>
-
-
-<h2>优质的网站和社区</h2>
-
-<ul>
-<li><p><a href="http://hao.jobbole.com/category/android/">伯乐资源</a></p>
-
-<p> 这里面有非常全的Android相关的资源。</p></li>
-<li><p><a href="http://www.android-studio.org">Android Studio</a></p>
-
-<p> 这个是AndroidStudio的中文社区，主要关注AS，但也有开发相关内容。</p></li>
-<li><p><a href="http://androidweekly.net">Android Weekly</a></p>
-
-<p> 这个网站会像周报一样，每周更新Android开发相关的新闻，技术等。</p></li>
-<li><p><a href="http://www.androidpatterns.com">Android Patterns</a></p>
-
-<p> 这个主要是UX相关的。</p></li>
-<li><p><a href="http://www.android-app-patterns.com">Android App Patterns</a></p>
-
-<p> 这个也是UX设计相关的。</p></li>
-</ul>
-
-
-<h2>线下社区</h2>
-
-<p>这个要看具体的城市而定，现在大多数城市都有谷歌开发者社区<a href="http://www.chinagdg.com/forum.php">GDG(Google Developer Group)</a>他们都会定期的举办活动，因为是关于Google的，所以肯定有Android相关的。对于像北京，上海，杭州这些移动互联网热门城市，各种社区应该很多的。</p>
-
-<h2>请分享你常常使用的好的资源</h2>
 ]]></content>
   </entry>
   
