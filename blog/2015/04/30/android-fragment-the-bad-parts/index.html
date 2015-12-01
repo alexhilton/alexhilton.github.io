@@ -217,7 +217,54 @@
 
 <h2>FragmentTransaction的异步操作之殇</h2>
 
-<p>FragmentTransaction是异步的，commit()仅是相当于把操作加入到FragmentManager的队列，然后FragmentManager会在某一个时刻来执行，并不是立即执行。所以，真正开始执行commit()时，如果Activity的生命周期发生了变化，比如走到了onPause，或者走到了onStop，或者onDestroy都走完了，那么就会报出IllegalStateException。具体的原因，以及如何避免可以参考大牛的<a href="http://www.androiddesignpatterns.com/2013/08/fragment-transaction-commit-state-loss.html">这篇文章</a>。</p>
+<p>FragmentTransaction是异步的，commit()仅是相当于把操作加入到FragmentManager的队列，然后FragmentManager会在某一个时刻来执行，并不是立即执行。所以，真正开始执行commit()时，如果Activity的生命周期发生了变化，比如走到了onPause，或者走到了onStop，或者onDestroy都走完了，那么就会报出IllegalStateException。</p>
+
+<p>还有一个异步的原因就是，在异步中操作（显示）Fragment。比如，先去网络请求数据，然后根据数据显示一个Fragment，这个特别容易出现的情况是网络请求回来了，但是Activity已经不在了，这时如果commit也会报出IllegalStateException。</p>
+
+<p>具体的原因，以及如何避免可以参考大牛的<a href="http://www.androiddesignpatterns.com/2013/08/fragment-transaction-commit-state-loss.html">这篇文章</a>。</p>
+
+<p>常见的解法就是作者建议的：1. 小心在生命周期中commit 。2 尽量不要在异步回调中commit
+另外的解法 就是</p>
+
+<ul>
+<li>在异步回调中判断Activity是否在销毁中，isFinishing，如果true，就停止做其他事情</li>
+<li><p>尽可能把异步任务控制在活动的生命周期内（onStart->onStop）。当出现stop时终止异步任务。再次start时再次启动。</p>
+
+<p> 但是这个并不适用所有情况。比如按HOME的情况，通常这个过程不需要把任务停掉。因为一般情况下，再切回来时，应用应该保持切走时的状态，比如，加载一个数据，按HOME切走，再回来时，应该加载完成。这也正是多任务系统的一个表现。
+如果onstop时停掉任务，那么要做很多工作来在onstart时恢复状态。</p></li>
+<li>使用commitAllowStateLoss（）
+这个是最终方案。除了从设计 上避免以外，这是唯 一的方式。</li>
+</ul>
+
+
+<h2>恶心的Activity重建以及恢复其Fragment</h2>
+
+<p>首先说安卓系统非常恶心的一点就是某些情况下系统会杀掉Activity，然后重新创建并尝试恢复其先前的状态，比如当旋转屏幕时，当系统语言发生变化时，当栈中的Activity被回收了，又到栈顶时等等，这点非常恶心，常常带来问题。识别重建与新建的方法就是看onCreate中的Bundle参数是不是null。</p>
+
+<p>对于FragmentActivity，更加恶心，此种场景时，它在onSaveInstance时会保存Fragment，然后在onCreate时会重新创建，会调用Framgment的默认无参构造来创建Fragment对象。所以这也是为什么文档中说Fragment一定要有一个默认的构造函数，而且最好不要有带参数的构造函数，传参数要用setArguments。默认构造函数的原因是为了重建Fragment实例。setArguments的参数是一个Bundle也会跟随Fragment保存起来，在重建Fragment时会帮你恢复。这里的恢复状态的数据的保存都是通过Binder方式保存在系统中，这也说明为啥参数非要是一个Bundle。</p>
+
+<p>那么问题来了，当你确实需要带参数的构造函数，或者说系统无法帮你重建Fragment（比如Fragment要从动态加载的Dex中获取）时怎么办呢？</p>
+
+<p>首先，我们要模拟这一场景，最方便的就是把activity的configChanges去掉，然后旋转屏幕。</p>
+
+<p>一个思路就是阻止系统恢复Fragment，我们可以自己来加载，因为重建也会走到Activity的onCreate，所以我们有理由重走一遍初始化流程。怎么阻止呢，就是在FragmentActivity保存所有Fragment状态前把Fragment从FragmentManager中移除掉。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="nd">@Override</span>
+</span><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">onSaveInstance</span><span class="o">(</span><span class="n">Bundle</span> <span class="n">out</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>  <span class="n">FragmentTransaction</span> <span class="n">ft</span> <span class="o">=</span> <span class="n">getSupportFragmentManager</span><span class="o">().</span><span class="na">benginTransaction</span><span class="o">();</span>
+</span><span class='line'>  <span class="n">ft</span><span class="o">.</span><span class="na">remove</span><span class="o">(</span><span class="n">frag</span><span class="o">);</span>
+</span><span class='line'>  <span class="n">ft</span><span class="o">.</span><span class="na">commitAllowStateLoss</span><span class="o">();</span>
+</span><span class='line'>  <span class="kd">super</span><span class="o">.</span><span class="na">onSaveInstance</span><span class="o">(</span><span class="n">out</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
 
 <h2>参考</h2>
 
