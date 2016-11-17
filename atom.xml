@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2016-11-15T19:02:39+08:00</updated>
+  <updated>2016-11-17T20:38:12+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,312 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[理解Android Gradle构建系统]]></title>
+    <link href="http://toughcoder.net/blog/2016/11/15/understanding-android-gradle/"/>
+    <updated>2016-11-15T22:27:59+08:00</updated>
+    <id>http://toughcoder.net/blog/2016/11/15/understanding-android-gradle</id>
+    <content type="html"><![CDATA[<p>Gradle是一个新型的强大的构建系统。Android很早就开始支持Gradle了，到现在已经完全切换到Gradle构建。它的优势也是比较明显的，更强大的配置，方便的依赖管理，简洁的语法（Groovy DSL），跟啰嗦的XML相对，这是很大的进步。</p>
+
+<p><a href="http://toughcoder.net/blog/2016/11/15/understanding-android-gradle/"><img src="https://img.alicdn.com/imgextra/i1/715978679/TB2s0nGcygSXeFjy0FcXXahAXXa_!!715978679.jpg"></a></p>
+
+<!-- more -->
+
+
+<h3>基本概念</h3>
+
+<p>为了方便讨论和理解，需要对一些概念进行定义：</p>
+
+<ul>
+<li>项目：可以理解为一个安卓应用。或者说一个可构建的所有配置，代码和资源的集合。</li>
+<li>模块：最小的可构建单元
+项目可以只有一个模块，或者说一个模块也可以作为一个项目。项目通常都由一个或者几个，甚至多个模块组成。每一个模块都要有相应的build.gradle来描述它是如何构建的。项目根目录下面也会有一个build.gradle，用于对应用于整个项目的配置，比如依赖库的repositories，Android Gradle Plugin的版本指定。</li>
+</ul>
+
+
+<h3>项目结构</h3>
+
+<p>典型的项目结构是酱紫的：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>|-project
+</span><span class='line'>| |-app
+</span><span class='line'>| | |-build.gradle
+</span><span class='line'>| |-library1
+</span><span class='line'>| | |-build.gradle
+</span><span class='line'>| |-build.gradle
+</span><span class='line'>| |-settings.gradle
+</span><span class='line'>| |-gradle/wrapper/gradle-wrapper.properties
+</span><span class='line'>| |-local.properties
+</span><span class='line'>| |-gradle.properties</span></code></pre></td></tr></table></div></figure>
+
+
+<ul>
+<li>gradle.properties 是用来配置gradle本身的运行的参数，比如是否并行，Gradle的JVM参数，因为Gradle也是基于JVM的。</li>
+<li>local.properties是用于配置本机操作环境的安卓参数，这里就二个，一个是sdk.dir就是配置安卓SDK的本机路径；另一个就是ndk.dir是配置NDK的本机路径，当然，如果不需要在构建时编译JNI代码，是不用配置ndk.dir的</li>
+<li>gradle/wrapper/gradle-wrapper.properties是用于配置Gradle本身的版本信息，比如使用哪个版本的Gradle</li>
+<li>build.gradle是整个构建系统的核心文件，类似make的Makefile以及maven的pom.xml，里面描述如何构建一个目标（应用，或者库）。这个文件 是我们修改最多的</li>
+<li>settings.gradle是项目结构的配置文件，它指定了项目中包含了哪些模块，比如上面这个例子，settings.gradle应该这样写：</li>
+</ul>
+
+
+<pre><code class="`"> include ':app', ':library1'
+</code></pre>
+
+<p> 当然，这是典型的项目结构，但是没有完全这样，因为Gradle的配置是相当灵活且强大的，也就是说真实的文件夹结构，跟Gradle中的项目结构是没有关系的，只不过默认的情况下（也即没有特别的指定和定制）模块的名字就是子目录的名字，项目的结构就按文件夹结构来确定的。</p>
+
+<p> 但是可以不用这样，下面详细说</p>
+
+<h3>配置非文件夹结构的项目</h3>
+
+<p>意思就是每一个模块，不一定非在项目所在文件夹里，换句话说，你可以在项目中引用随便在哪里的模块，举个例子：</p>
+
+<p>你的项目project是在，Documents/project/，想引用一个库是在Downloads/library/，不必非把library拷贝到project下面，只需要在project/settings.gradle中配置一下就可以了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='groovy'><span class='line'><span class="n">include</span> <span class="s1">&#39;:app&#39;</span><span class="o">,</span> <span class="s1">&#39;:library&#39;</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">project</span><span class="o">(</span><span class="s1">&#39;:library&#39;</span><span class="o">).</span><span class="na">projectDir</span> <span class="o">=</span> <span class="k">new</span> <span class="n">File</span><span class="o">(</span><span class="n">settingsDir</span><span class="o">,</span> <span class="s1">&#39;../../../Downloads/library&#39;</span><span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这样就可能在项目project中引入了模块library。</p>
+
+<h3>分清楚二个版本</h3>
+
+<ul>
+<li>gradle的版本，在./gradle/wrapper/gradle-wrapper.properties中通过distributionUrl来指定</li>
+</ul>
+
+
+<p> Gradle是一个构建系统，像make和cmake，ant和maven一样。安卓的项目里推荐使用gradle wrapper，实际上就是在项目中指定gradle的版本，这样有一个好处就是，这个项目换了操作系统环境，也不受影响。我们都知道软件的不同的版本对软件的使用是有影响的。所以如果像make或者cmake一样，使用操作系统环境中的gradle，那么同一个项目会因为不同的环境而带来一些诡异的配置相关的问题。</p>
+
+<p> Gradle跟Android或者Google没有关系，它是由Gradle Inc.在开发和维护的。所以Gradle的升级要到<a href="http://www.gradle.org/">gradle.org</a>。</p>
+
+<ul>
+<li>Android Gradle Plugin的版本，通过buildScript DSL中的dependencies DSL来指定</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='groovy'><span class='line'><span class="n">buildscript</span> <span class="o">{</span>
+</span><span class='line'>  <span class="n">repositories</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">mavenLocal</span><span class="o">()</span>
+</span><span class='line'>    <span class="n">mavenCentral</span><span class="o">()</span>
+</span><span class='line'>    <span class="n">jcenter</span><span class="o">()</span>
+</span><span class='line'>  <span class="o">}</span>
+</span><span class='line'>  <span class="n">dependencies</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">classpath</span> <span class="s1">&#39;com.android.tools.build:gradle:2.2.2&#39;</span>
+</span><span class='line'>  <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p> Gradle是一个构建系统，有它自身的规则，可以用来构建任何语言的任何项目。但每一个语言和平台都有自己的特性，如果直接使用Gradle也不是不可以，但是要做很多重复性的工作。Gradle是有插件机制的，也就是每个语言或者平台实现一些Gradle插件，以让开发者更加方便来构建，而不从头一条指令一条的写。Android Gradle Plugin就是专门用来构建安卓应用开发相关的插件。这个是由Google开发并维护，与SDK一起发布的。</p>
+
+<h3>常见命令</h3>
+
+<p>除了在Android Studio中直接操作以外，gradle是支持命令行的。而且命令行有时候会更方便。执行的方式是./gradlew <task-name>。gradlew实际上就是一个Shell脚本，它的作用是运行gradle/wrapper/中的Gradle二进制文件。task（任务）是Gradle构建中的可执行单元，与makefile中的target有些类似，可以理解为一个应用的构建，就是执行一些定义好的task。常见的task有：</p>
+
+<ul>
+<li>assemble - 构建项目的所有目标输出</li>
+<li>assembleDebug - 只构建调试环境下的输出</li>
+<li>assembRelease - 构建发布环境下的输出</li>
+<li>uninstallDebug/uninstallRelease - 从设备上卸载调试的应用，或者卸载发布环境的应用</li>
+<li>clean - 清理编译过程中产生的输出，包括最终输出。通常就是把build目录删除</li>
+</ul>
+
+
+<p>可以用gradle tasks来查看支持的所有任务。</p>
+
+<h3>Dependency managament</h3>
+
+<p>在每个模块的build.gradle中dependencies {} DSL中定义该模块的依赖树。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='groovy'><span class='line'><span class="n">dependencies</span> <span class="o">{</span>
+</span><span class='line'>  <span class="c1">// 本地lib的依赖</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="nf">fileTree</span><span class="o">(</span><span class="nl">dir:</span> <span class="s1">&#39;libs&#39;</span><span class="o">,</span> <span class="nl">include:</span> <span class="o">[</span><span class="s1">&#39;*.jar&#39;</span><span class="o">])</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// 对其他模块的依赖</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="o">(</span><span class="n">project</span><span class="o">(</span><span class="s1">&#39;:library&#39;</span><span class="o">))</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// 从远程的repo中下载依赖</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="s2">&quot;com.android.support:support-v4:23.1.0&quot;</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="s1">&#39;com.android.support:appcompat-v7:23.0.0&#39;</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="s1">&#39;com.squareup.picasso:picasso:2.5.2&#39;</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>有几种不的指定编译方式：
+* compile - 把所需要的依赖会编译进目标，类似于C++中的静态库的概念
+* provided - 只在编译时依赖一下，不会打于目标中，运行时环境应该提供相同的库，否则会找不到依赖，类似于动态库的概念
+* compileProvided</p>
+
+<h3>常见的tricks</h3>
+
+<ul>
+<li>gradle.org访问缓慢或者根本无法访问</li>
+</ul>
+
+
+<p> ./gradle/wrapper/gradle-wrapper.properties中的distributionUrl=https://services.gradle.org/distributions/gradle-2.14.1-all.zip，这个地址下载十分缓慢，或者根本无法下载，导致gradle sync花费很长时间，甚至卡死无法完成。改成国内的镜像会好很多distributionUrl=http://mirrors.taobao.net/mirror/gradle/gradle-2.14.1-all.zip</p>
+
+<ul>
+<li>transitive false</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='groovy'><span class='line'><span class="n">dependencies</span> <span class="o">{</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="o">(</span><span class="s1">&#39;com.squareup.picasso:picasso:2.5.2&#39;</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">transitive</span> <span class="kc">false</span>
+</span><span class='line'>  <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p> 依赖是一个树状结构，比如项目中依赖了rxlifecircle，但rxlifecircle本身也有依赖，解析依赖时，会把所有依赖以及依赖的依赖都下载下来，这就构成了依赖树，当然，也会涉及冲突的处理，比如二个库都依赖了另外一个库，但是不同的版本，这个Gradle本身是有策略的。</p>
+
+<p> 可以用./gradlew -q dependencies &ndash;configuration compile命令来查看依赖树
+* 指定依赖的具体类型@aar or @jar</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='groovy'><span class='line'><span class="n">dependencies</span> <span class="o">{</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="s2">&quot;com.android.support:support-v4:23.1.0&quot;</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="s1">&#39;com.android.support:appcompat-v7:23.0.0&#39;</span>
+</span><span class='line'>  <span class="n">compile</span> <span class="s1">&#39;com.squareup.picasso:picasso:2.5.2@jar&#39;</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p> 默认情况，Gradle认为依赖库都是Java 的jar类型。也就说当其在repo中寻找依赖时会去找jar。所以，如果是aar的依赖库，就需要指定其具体类型，通过在版本号后面加上@aar或者@jar来指定其具体的类型。</p>
+
+<ul>
+<li>在Android Studio中没问题，但是运行命令行时，会报错误:</li>
+</ul>
+
+
+<blockquote><p>FAILURE: Build failed with an exception.</p>
+
+<p>* What went wrong:
+A problem occurred configuring root project &lsquo;pailitao-sdk&rsquo;.
+Could not resolve all dependencies for configuration &lsquo;:classpath&rsquo;.</p>
+
+<p>  > Could not find com.android.tools.build:gradle:2.2.2.</p>
+
+<p>  Searched in the following locations:
+     file:/Users/alexhilton/.m2/repository/com/android/tools/build/gradle/2.2.2/gradle-2.2.2.pom
+     file:/Users/alexhilton/.m2/repository/com/android/tools/build/gradle/2.2.2/gradle-2.2.2.jar
+     <a href="https://repo1.maven.org/maven2/com/android/tools/build/gradle/2.2.2/gradle-2.2.2.pom">https://repo1.maven.org/maven2/com/android/tools/build/gradle/2.2.2/gradle-2.2.2.pom</a>
+     <a href="https://repo1.maven.org/maven2/com/android/tools/build/gradle/2.2.2/gradle-2.2.2.jar">https://repo1.maven.org/maven2/com/android/tools/build/gradle/2.2.2/gradle-2.2.2.jar</a>
+  Required by:
+     :pailitao-sdk:unspecified</p>
+
+<p>* Try:</p>
+
+<p>Run with &ndash;stacktrace option to get the stack trace. Run with &ndash;info or &ndash;debug option to get more log output.</p></blockquote>
+
+<p> 这个问题的根本原因是Android Gradle Plugin没有找到。查看要目录的build.gradle，在repositories里面加上jcenter()，或者把mavenCenteral()改成jcenter()就可以解决了。</p>
+
+<ul>
+<li>如何直接构建子项目，比如project下面有app和library二个子项目：</li>
+</ul>
+
+
+<pre><code class="`"> |-project
+ | |-app
+ | |-library
+</code></pre>
+
+<p> 在根目录执行命令./gradlew assembleDebug或者assembleRelease，会构建整个应用。假如只想构建library呢？可以执行这样的命令：<strong>./gradlew :library:assembleRelease</strong>也即，前面是子项目，后面跟命令。</p>
+
+<ul>
+<li>Gradle refresh failed:
+com.android.build.gradle.internal.model.defaultandroidproject   unsupported major.minor version 51.0</li>
+</ul>
+
+
+<p> 这个错误的原因是Android Studio运行的JVM版本太低了，看一下Android Studio的关于，里面会有JVM的版本信息，如果是1.6就会上面的错误。如果是Mac，到app/info.list里面把JVM的版本改成1.7+</p>
+
+<ul>
+<li>Gradle sync failed: &ldquo;java.lang.OutOfMemoryError: GC overhead limit exceeded&rdquo;</li>
+</ul>
+
+
+<p> 明显是Gradle运行时，内存爆了。解决方法就是加大它的内存配额。在相应的build.gradle中加入:</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='groovy'><span class='line'><span class="n">dexOptions</span> <span class="o">{</span>
+</span><span class='line'>  <span class="n">incremental</span> <span class="kc">true</span>
+</span><span class='line'>  <span class="n">javaMaxHeapSize</span> <span class="mi">4</span><span class="n">g</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>进阶之Gradle</h3>
+
+<p>对于日常的开发，了解基本的就够用了，但若想做一些额外的事情，比如自定义一些task等就需要深入研究Gradle本身了。这个建议直接看Gradle的<a href="https://docs.gradle.org/current/userguide/userguide.html">文档</a>比较好。</p>
+
+<h3>进阶之Groovy</h3>
+
+<p>Gradle的文件是用Groovy语言来描述的，所以如果想要实现高级功能，也必须熟悉Groovy语言。同样还是要参考相应的文档。</p>
+
+<h3>参考资料</h3>
+
+<ul>
+<li><a href="http://tools.android.com/tech-docs/new-build-system/user-guide">Gradle Plugin User Guide</a></li>
+<li><a href="http://stackoverflow.com/questions/16976214/gradle-build-only-one-module">Gradle build only one module</a></li>
+<li><a href="http://stackoverflow.com/questions/24309950/create-aar-file-in-android-studio">Create aar file in Android Studio</a></li>
+<li><a href="https://guides.codepath.com/android/Building-your-own-Android-library">Building your own Android library</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[理解Java ThreadLocal]]></title>
@@ -4119,102 +4425,6 @@ Android 4.0及以上的版本当连接到PC时，通知栏也会有一个与存�
 
 <p>不用认死理儿,一条路不通,可走另外的路,或者搭个桥什么的.</p></li>
 </ol>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[从手机丢失看数据安全]]></title>
-    <link href="http://toughcoder.net/blog/2015/01/30/security-concerns-after-phone-stollen/"/>
-    <updated>2015-01-30T21:30:39+08:00</updated>
-    <id>http://toughcoder.net/blog/2015/01/30/security-concerns-after-phone-stollen</id>
-    <content type="html"><![CDATA[<p>手机在现代生活中扮演重要角色，里面有大量的隐私和数据，手机银行，支付宝等都能操作个人的财产，所以手机的安全也越来越重要，一旦手机丢失，造成的不仅仅是一部手机的损失，还可能造成隐私的泄露，重要数据的丢失以及财产的损失。</p>
-
-<h2>手机丢失后应该做的事情</h2>
-
-<p>2015年1月28日下班，晚上七点左右在挤公交车，可能上车时，手机（红米Note）被偷，由于平日里都是骑自行车上下班，只是偶尔遇到不好的天气才会坐公交，刚好那天是2015年的第一场雪，下了一天多没停，不方便骑车，所以就坐公交，正值下班时人又多又挤，估计是上车时被小偷钻了空子。</p>
-
-<p><a href="http://toughcoder.net/blog/2015/01/30/security-concerns-after-phone-stollen/"><img src="https://img.alicdn.com/imgextra/i3/715978679/TB24PofmVXXXXbyXXXXXXXXXXXX_!!715978679.jpg" title="auto auto" ></a></p>
-
-<p>先是打了个电话，确认手机的状态，因为也有可能是忘在公司了。电话关机，可以确认被偷。然后马上采取安全补救措施：</p>
-
-<!-- more -->
-
-
-<ol>
-<li>先冻结支付宝
-   这个是最关键的一个，因为支付宝有钱，支付宝也关联了很多银行卡，所以要第一时间处理它。具体策略就是：
-
-<ol>
-<li>先取消无线支付功能，这个会关闭手机平板等支付功能，方法是登录网页支付宝，支付方式，关闭无线支付</li>
-<li>修改登录密码，并且修改支付密码</li>
-</ol>
-</li>
-<li>再冻结微信
-   微信也很关键进入到110.qq.com冻结微信帐号，如果已关联QQ，可以用QQ号来冻结，如果手机卡已重新办理，可以用手机号冻结。不过这里要说一下，手机刚丢失，肯定没有办法用手机来冻结，所以一般是用QQ号。但是也有一些情况：1. 你要把QQ号关联到微信。2. 就是新版本的QQ有移动锁定功能，而且默认开启，也就是说你在电脑上还无法登录QQ。这时就相当被动了。从这里也可以看出移动QQ锁定电脑登录这个功能是多么的不好。相对来说手机要比电脑容易丢失，一旦丢失，电脑上就无法登录QQ，这是多么悲剧的事情。</li>
-<li>冻结QQ
-   先要改密码，不过改QQ密码要手机短信验证，对于手机丢失，这又是一个大悲剧。不光是QQ，很多帐户都要有手机短信验证来修改密码。</li>
-<li>打电话给运营商让号码停机
-   这个也要越快越好，打10086（我是移动的号码），按指引停掉手机，无需人工，自动可完成。</li>
-<li>修改所有的手机上安装应用的密码
-   首先是跟钱有关的应用，如银行客户端，股票，基金 等等，优先处理。
- 然后是重要社交帐户，然后是笔记帐户，因为笔记里可能有重要的信息</li>
-<li>发消息给亲人朋友同事，注意安全
-   通过其他方式了，比如QQ或者用别的电话</li>
-<li>查找手机
-   比如苹果或者小米之类的用户可以用查找手机来找手机，不过希望不大。如果是聪明的小偷，得手后第一件事就是关机，扔SIM卡，扣掉电池。偷我手机的小偷应该 就是惯贼。找不到，确定被偷了，就擦除数据,但是查找手机与擦除数据都需要手机处于可用状态，因为小米的方式就是向手机发送特殊内容的短信，查找以及擦除数据的指令就是短信内容。</li>
-</ol>
-
-
-<p>以上安全措施都做完后，就报警。不指望能找回手机，只求能惩治一下猖狂的小偷。不过一般都没什么用处。只能是自己多加小心，保护好自己的财产。</p>
-
-<h2>评价各大重量级应用对安全的保护</h2>
-
-<h3>支付宝</h3>
-
-<p>支付宝做的还蛮赞的，在网页版本能控制手机端的支付，这个很重要，而且也合理。毕竟手机可能丢，而网页在哪里都能登录，无所谓丢与不丢的问题，所以网页应该 是最根本最保险的，并且能控制无线的支付方式。另外，支付宝也有手势密码功能，这个也能在一定程度上防止财产受损，为补救争取更多时间。</p>
-
-<h3>腾讯</h3>
-
-<p>腾讯做的就不太好，首先它鼓励手机QQ锁定PC和WEB的登录，所谓的安全，让手机QQ扫二维码来登录PC，这个太弱了，而且有问题，一旦手机丢失PC端都无法登录，也就很难修改密码和冻结帐户。这会让人很被动。很不幸的是新版本QQ还在鼓励启用这个功能。
-微信也是如此，提供的冻结功能，必须要QQ或者手机验证来辅助，这也会影响冻结帐户的速度，手机刚丢，手机验证用不了，有上面的问题QQ也用不了，这就叫天天不应，叫地地不灵了。另外，QQ和微信都没有启动密码，或者进入客户端的密码，这也会让QQ和微信更容易产生损失。</p>
-
-<h3>其他应用：淘宝，百度等</h3>
-
-<p>另外还有很多的帐户比如百度帐户，银行客户端帐户和淘宝帐户等，修改密码也需要手机验证，只能等手机卡重新办理后才能修改。</p>
-
-<h3>应用的安全策略</h3>
-
-<p>可以看出业务的发起点对安全的依赖也不一样，支付宝起源于PC网页，后有支付宝钱包，所以，最后的防线，或者说最高级的控制中心是在PC网页，因此，一旦手机丢了，没关系，上PC在网页可以关掉无线支付，所以安全性较高。</p>
-
-<p>而微信则不一样，它起源于手机，后有PC端和WEB端，所以最高级的控制中心是在手机应用上，这样就不方便了，一旦手机丢失很难把帐户锁定，于是腾讯专门有<a href="http://110.qq.com">110.qq.com</a>来处理帐户的冻结。如上面说微信的PC上是弱端，所以微信的冻结必须依赖于外部帐号，这会让一部分用户无法进行冻结，假如用户没有绑定QQ号，那就只能等死。</p>
-
-<p>而QQ的做法却很让人难受，手机丢失，无法立即通过手机号来冻结微信，那么只剩下QQ号，前提是要绑定QQ号（这是一个坑），所以你必须在PC上登录PC上的QQ，但手机QQ有一个非常二的功能就是锁定PC的登录，话说为了安全，但这种情况下就会造成PC上无法登录QQ。这个功能太二了，QQ起源于PC，所以应该PC上有最高控制权，不应试让后者（手机端）有最高的控制权。更加二的是，解冻微信需要修改QQ密码，而修改QQ密码又需要手机短信验证码，所以直到手机卡补办前，很多密码还是改不了。</p>
-
-<p>这次手机被盗，由于小偷目的在于手机，且是惯贼，补救也及时，没有造成额外的财产损失和其他损失。</p>
-
-<h3>移动应用如何设计安全措施</h3>
-
-<p>常规的帐户补救措施比如手机验证码，等方法就目前来讲都还可以接受，但是必须要为手机丢失这种情况做相应的替代措施。
-如果太依赖于手机短信验证码，那么安全隐患也大，一旦手机丢失，用户就只能等死。所以必须要有替代方案，就是一定要有PC端的登录方式和PC端的冻结和解救帐户的方式，比如邮箱验证，密保问题等方式。这是一个相互依赖的过程。PC端可能需要手机短信验证码来做身份验证，但是反过来，手机上的帐户在PC的帮忙下也必须能够解救。</p>
-
-<h2>提高安全意识，加强对数据的保护</h2>
-
-<p>但是为了防止再次损失，要提高安全意识：</p>
-
-<ul>
-<li>要保护好手机，尽量放在裤子前面，不要放在外衣的口袋中。人多的时候比如公交站地铁等，最好把手机放手里。但有时提东西，没办法。</li>
-<li><p>手机要做好安全防范，简单来说就是多设密码：</p>
-
-<p>  # 解锁一定要开，最好用图案，Android手机都支持图案，设置的不要太简单</p>
-
-<p>  # 重要应用，比如支付宝等要开启应用启动密码，为了安全，所有支持进入 密码的应用都要把它开启，不要怕麻烦，因为手机一旦丢失，麻烦更大。</p>
-
-<p>  # 另外，各种银行的客户端最好不要安装，因为银行客户端的安全措施可能没那么好，所以一旦丢失，很容易造成损失。</p></li>
-<li>还有，手机里不要存放重要文件，重要文件还是用电脑来存放。手机里的文件，也最好备份到云端，以防止丢失。重要的帐户和密码也最好不要使用手机短信，微信或者起手机QQ之类的来存放。</li>
-<li>联系人尽量用名字，不要用老爸，老妈，老婆，老公之类的，反正这些人你也分得清。试想小偷得手后给老爸发一短信要五千块，这怎么办？</li>
-<li>另外，就是要定期更新所有网络帐户的密码。</li>
-</ul>
 
 ]]></content>
   </entry>
