@@ -1,0 +1,704 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>让你不再俱怕Fragment State Loss - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="讲解Android Fragment状态丢失异常产生的原因，以及如何安全规避">
+  <meta name="keywords" content="Fragment, State loss, IllegalStateException">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://toughcoder.net/blog/2016/11/28/fear-android-fragment-state-loss-no-more">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="//ajax.lug.ustc.edu.cn/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:toughcoder.net" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">让你不再俱怕Fragment State Loss</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2016-11-28T20:57:36+08:00'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>28</span><span class='date-suffix'>th</span>, <span class='date-year'>2016</span></span> <span class='time'>8:57 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>使用过<a href="http://www.android-doc.com/reference/android/app/Fragment.html">Fragment</a>的人我相信对臭名昭著的状态丢失问题（<a href="https://www.google.com.hk/webhp?sourceid=chrome-instant&amp;ion=1&amp;espv=2&amp;ie=UTF-8#q=IllegalStateException%3A%20Can%20not%20perform%20this%20action%20after%20onSaveInstanceState">IllegalStateException: Can not perform this action after onSaveInstanceState</a>）一定不会陌生。曾经被这个问题困扰了很久，相信很多同学也是。花些时间来好好把它研究一下，以弄懂为何会有这样的问题产生，然后就可以解决问题，或者合理的规避问题。</p>
+
+<p><a href="/blog/2016/11/28/fear-android-fragment-state-loss-no-more/"><img src="https://img.alicdn.com/imgextra/i2/715978679/TB2lTose0uO.eBjSZFCXXXULFXa_!!715978679.png"></a></p>
+
+<!-- more -->
+
+
+<h2>什么是状态恢复</h2>
+
+<p>安卓的状态恢复是一个比较令人困惑的特性，它源于拙劣的系统设计。当一个页面正在显示的时候，如果系统发生了一些变化，变化又足以影响页面的展示，比如屏幕旋转了，语言发生了变化等。安卓的处理方式就是把页面（Activity）强制杀掉，再重新创建它，重建时就可以读取到新的配置了。又或者，当离开了一个页面，再回到页面时，如果页面（Activity）因为资源不足被回收了，那么当再回到它时，系统也会重新创建这个页面。</p>
+
+<p>状态恢复，是为了保持更好的用户体验，让用户感觉认为页面，是一直存在的，类似于处理器调用函数的保护现场和恢复现场。</p>
+
+<p>Activity有二个钩子onSaveInstanceState和onRestoreInstanceState就是用来保存状态和恢复状态的。</p>
+
+<p>当从Honeycomb引入了Fragment后，为了想让开发者更多的使用Fragment，或者想让Fragment更容易的使用，状态保存与恢复的时候也必须要把Fragment保存与恢复。Fragment本质上就是一个View tree，强行附加上一些生命周期钩子。所以，为了让页面能恢复成先前的样子，View是必须要重新创建的，因此Fragment是必须要恢复的。</p>
+
+<p>Fragment的作用域是Activity，<a href="http://www.android-doc.com/reference/android/app/FragmentManager.html">FragmentManager</a>管理着一个Activity所有的Fragment，这些Fragment被放入一个栈中。每个Fragment有一个<a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.1.1_r1/android/support/v4/app/Fragment.java#FragmentState">FragmentState</a>，它相当于Fragment的snapshot，保存状态时FragmentManager把每个Fragment的FragmentState存储起来，最终存储到Activity的savedInstanceState中。</p>
+
+<h2>为什么会有这个异常</h2>
+
+<p>既然状态的保存与恢复都必须要把Fragment带上，那么一旦当Fragment的状态已保存过了，那么就不应该再改变Fragment的状态。因此FragmentManager的每一个操作前，都会调用一个方法来检查状态是否保存过了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">private</span> <span class="kt">void</span> <span class="nf">checkStateLoss</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">mStateSaved</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">throw</span> <span class="k">new</span> <span class="nf">IllegalStateException</span><span class="o">(</span>
+</span><span class='line'>                    <span class="s">&quot;Can not perform this action after onSaveInstanceState&quot;</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">mNoTransactionsBecause</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">throw</span> <span class="k">new</span> <span class="nf">IllegalStateException</span><span class="o">(</span>
+</span><span class='line'>                    <span class="s">&quot;Can not perform this action inside of &quot;</span> <span class="o">+</span> <span class="n">mNoTransactionsBecause</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Fragment状态保存是在Activity#onSaveInstanceState时做的，会调用FragmentManager#saveAllState方法，来进行Fragment的状态保存，同时设置mStateSaved为true，以标识状态已被保存过。</p>
+
+<h2>发生的场景以及如何应对</h2>
+
+<h3>FragmentTransaction#commit()</h3>
+
+<p>栈信息是这样子的：</p>
+
+<blockquote><p>java.lang.IllegalStateException: Can not perform this action after onSaveInstanceState
+   at android.support.v4.app.FragmentManagerImpl.checkStateLoss(FragmentManager.java:1341)
+   at android.support.v4.app.FragmentManagerImpl.enqueueAction(FragmentManager.java:1352)
+   at android.support.v4.app.BackStackRecord.commitInternal(BackStackRecord.java:595)
+   at android.support.v4.app.BackStackRecord.commit(BackStackRecord.java:574)</p></blockquote>
+
+<p>或者是这样的:</p>
+
+<blockquote><p>java.lang.IllegalStateException: Activity has been destroyed                                                                               <br/>
+at android.app.FragmentManagerImpl.enqueueAction(FragmentManager.java:1456)                                                                                 <br/>
+at android.app.BackStackRecord.commitInternal(BackStackRecord.java:707)                                                                              <br/>
+at android.app.BackStackRecord.commit(BackStackRecord.java:671)                                                                                  <br/>
+at net.toughcoder.miscellaneous.FragmentTestActivity</p></blockquote>
+
+<p>原因就是commit操作发生在了状态保存之后。Activity#onSaveInstanceState的调用是不受开发者控制的，并且不同的安卓版本之间存在差异。具体的可以参考大神的<a href="http://www.androiddesignpatterns.com/2013/08/fragment-transaction-commit-state-loss.html">文章</a>。</p>
+
+<p>解决之道，如大神提的一样，就是保证Fragment的操作发生在Activity可见周期之内，换句话说，Fragment的操作应该发生在Activity#onResume与Activity#onPause之间，为什么限制这么死呢？一方面为了防止上面问题发生；另外，Fragment本质上是View，View的操作理应该是页面处于活动状态时才应该进行。</p>
+
+<p>关键的点就是小心控制异步任务，在onPause或者最迟在onStop中要终止所有的异步任务。</p>
+
+<p>另外，大招就是使用commitAllowStateLoss。</p>
+
+<h3>Activity#onBackPressed</h3>
+
+<p>还有一种情况，也会出现此异常，而且是在Activity中完全 没有Fragment的情况下：</p>
+
+<blockquote><p>java.lang.IllegalStateException: Can not perform this action after onSaveInstanceState
+                                                                                   at android.app.FragmentManagerImpl.checkStateLoss(FragmentManager.java:1434)
+                                                                                   at android.app.FragmentManagerImpl.popBackStackImmediate(FragmentManager.java:577)
+                                                                                   at android.app.Activity.onBackPressed(Activity.java:2751)
+                                                                                   at net.toughcoder.miscellaneous.FragmentStateLossActivity.onBackPressed(FragmentStateLossActivity.java:90)
+                                                                                   at net.toughcoder.miscellaneous.FragmentStateLossActivity$1.run(FragmentStateLossActivity.java:59)
+                                                                                   at android.os.Handler.handleCallback(Handler.java:751)
+                                                                                   at android.os.Handler.dispatchMessage(Handler.java:95)
+                                                                                   at android.os.Looper.loop(Looper.java:154)
+                                                                                   at android.app.ActivityThread.main(ActivityThread.java:6077)
+                                                                                   at java.lang.reflect.Method.invoke(Native Method)
+                                                                                   at com.android.internal.os.ZygoteInit$MethodAndArgsCaller.run(ZygoteInit.java:865)
+                                                                                   at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:755)</p></blockquote>
+
+<p>或者是这样的：</p>
+
+<blockquote><p>java.lang.IllegalStateException: Can not perform this action after onSaveInstanceState
+                                                                                     at android.support.v4.app.FragmentManagerImpl.checkStateLoss(FragmentManager.java:1500)
+                                                                                     at android.support.v4.app.FragmentManagerImpl.popBackStackImmediate(FragmentManager.java:584)
+                                                                                     at android.support.v4.app.FragmentActivity.onBackPressed(FragmentActivity.java:169)
+                                                                                     at net.toughcoder.miscellaneous.FragmentStateLossActivity.onBackPressed(FragmentStateLossActivity.java:90)
+                                                                                     at net.toughcoder.miscellaneous.FragmentStateLossActivity$1.run(FragmentStateLossActivity.java:59)
+                                                                                     at android.os.Handler.handleCallback(Handler.java:751)
+                                                                                     at android.os.Handler.dispatchMessage(Handler.java:95)
+                                                                                     at android.os.Looper.loop(Looper.java:154)
+                                                                                     at android.app.ActivityThread.main(ActivityThread.java:6077)
+                                                                                     at java.lang.reflect.Method.invoke(Native Method)
+                                                                                     at com.android.internal.os.ZygoteInit$MethodAndArgsCaller.run(ZygoteInit.java:865)
+                                                                                     at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:755)</p></blockquote>
+
+<p>这二个异常都是发生在没有使用Fragment的Activity中。相当的诡异，根本没有用Fragment为何还会抛出State loss的异常。只能从栈信息中的方法开始分析：</p>
+
+<p><a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.1.1_r1/android/app/Activity.java#Activity.onBackPressed%28%29">Activity的onBackPressed</a>:</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">onBackPressed</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">mActionBar</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="n">mActionBar</span><span class="o">.</span><span class="na">collapseActionView</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(!</span><span class="n">mFragments</span><span class="o">.</span><span class="na">popBackStackImmediate</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">finishAfterTransition</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>以及<a href="http://grepcode.com/file/repo1.maven.org/maven2/com.google.android/support-v4/r7/android/support/v4/app/FragmentActivity.java#FragmentActivity.onBackPressed%28%29">FragmentActivity的onBackPressed</a>:</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">onBackPressed</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(!</span><span class="n">mFragments</span><span class="o">.</span><span class="na">popBackStackImmediate</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">supportFinishAfterTransition</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>从其源码中不难看出，响应BACK键时，一定会去pop fragment。前面提到过，<a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.1.1_r1/android/support/v4/app/FragmentManager.java#FragmentManagerImpl.popBackStackImmediate%28%29">FragmentManager</a>在改变Fragment的状态前（增加，移除，改变生命周期状态都是改变状态）都会检查state loss：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="nd">@Override</span>
+</span><span class='line'><span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">popBackStackImmediate</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">checkStateLoss</span><span class="o">();</span>
+</span><span class='line'>    <span class="n">executePendingTransactions</span><span class="o">();</span>
+</span><span class='line'>    <span class="k">return</span> <span class="nf">popBackStackState</span><span class="o">(</span><span class="n">mActivity</span><span class="o">.</span><span class="na">mHandler</span><span class="o">,</span> <span class="kc">null</span><span class="o">,</span> <span class="o">-</span><span class="mi">1</span><span class="o">,</span> <span class="mi">0</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>前面说了，checkStateLoss其实就是检查mStateSaved这个变量是否为true。那么都哪里给它设置为true了呢？对于正统的Activity和Fragment（android.app.*），是在<a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.1.1_r1/android/support/v4/app/FragmentManager.java#FragmentManagerImpl.saveAllState%28%29">onSaveInstanceState</a>时，且只有这时才设置：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="n">Parcelable</span> <span class="nf">saveAllState</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="c1">// Make sure all pending operations have now been executed to get</span>
+</span><span class='line'>    <span class="c1">// our state update-to-date.</span>
+</span><span class='line'>    <span class="n">execPendingActions</span><span class="o">();</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">mStateSaved</span> <span class="o">=</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>    <span class="c1">// other codes.</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但是对于support包中的Fragment（android.support.v4.app.*）除了在onSaveInstanceState中设置以外，在<a href="http://grepcode.com/file/repository.grepcode.com/java/ext/com.google.android/android/5.1.1_r1/android/support/v4/app/FragmentManager.java#FragmentManagerImpl.dispatchStop%28%29">onStop</a>中也把mStateSaved置为true：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">dispatchStop</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="c1">// See saveAllState() for the explanation of this.  We do this for</span>
+</span><span class='line'>    <span class="c1">// all platform versions, to keep our behavior more consistent between</span>
+</span><span class='line'>    <span class="c1">// them.</span>
+</span><span class='line'>    <span class="n">mStateSaved</span> <span class="o">=</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">moveToState</span><span class="o">(</span><span class="n">Fragment</span><span class="o">.</span><span class="na">STOPPED</span><span class="o">,</span> <span class="kc">false</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>所以，无论你用的是哪个Fragment，如果onBackPressed发生在onSavedInstanceState之后，那么就会上面的crash。
+Stack Overflow上面有类似的讨论，比较全面和票数较高就是<a href="http://stackoverflow.com/questions/7469082/getting-exception-illegalstateexception-can-not-perform-this-action-after-onsa/10261438#10261438">这个</a>和<a href="http://stackoverflow.com/questions/7575921/illegalstateexception-can-not-perform-this-action-after-onsaveinstancestate-wit">这个</a>。</p>
+
+<p>二个讨论中，针对此场景的获得最多赞同的解法是，覆写Activity的onSaveInstanceState，然后不要调用super：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="nd">@Override</span>
+</span><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">onSaveInstanceState</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="c1">// DO NOT call super</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>从上面的分析来看，这个对于android.app.*中的Fragment是能解决问题的，因为是在Activity的onSaveInstanceState（super.onSaveInstanceState）中才把mStateSaved置为true，所以不调super，它就仍是false，当再pop时，也就不会抛出异常的。</p>
+
+<p>但是这明显是一个拙劣的workaround，首先，你在防止系统保存fragment的状态，可能会引发一引起其他的问题；再有就是，对于support包，这还是不管用，你仍然能够遇到state loss exception，因为在其onStop时也会把mStateSaved置为true。</p>
+
+<p>上面分析得出，问题产生的原因是onBackPressed发生在了onSavedInstance之后，那么的解法是，同样设置一个标志，如果状态已保存过，就不要再处理onBackPressed：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">FragmentStateLossActivity</span> <span class="kd">extends</span> <span class="n">Activity</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">static</span> <span class="kd">final</span> <span class="n">String</span> <span class="n">TAG</span> <span class="o">=</span> <span class="s">&quot;Fragment state loss&quot;</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kt">boolean</span> <span class="n">mStateSaved</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onCreate</span><span class="o">(</span><span class="n">Bundle</span> <span class="n">savedInstanceState</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onCreate</span><span class="o">(</span><span class="n">savedInstanceState</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">setContentView</span><span class="o">(</span><span class="n">R</span><span class="o">.</span><span class="na">layout</span><span class="o">.</span><span class="na">activity_fragment_state_loss</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">mStateSaved</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onSaveInstanceState</span><span class="o">(</span><span class="n">Bundle</span> <span class="n">outState</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="c1">// Not call super won&#39;t help us, still get crash</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onSaveInstanceState</span><span class="o">(</span><span class="n">outState</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">Build</span><span class="o">.</span><span class="na">VERSION</span><span class="o">.</span><span class="na">SDK_INT</span> <span class="o">&gt;=</span> <span class="n">Build</span><span class="o">.</span><span class="na">VERSION_CODES</span><span class="o">.</span><span class="na">HONEYCOMB</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">mStateSaved</span> <span class="o">=</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onResume</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onResume</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">mStateSaved</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onPause</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onPause</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onStop</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onStop</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">mStateSaved</span> <span class="o">=</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onStart</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onStart</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">mStateSaved</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onDestroy</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onDestroy</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">onKeyDown</span><span class="o">(</span><span class="kt">int</span> <span class="n">keyCode</span><span class="o">,</span> <span class="n">KeyEvent</span> <span class="n">event</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">mStateSaved</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">return</span> <span class="kd">super</span><span class="o">.</span><span class="na">onKeyDown</span><span class="o">(</span><span class="n">keyCode</span><span class="o">,</span> <span class="n">event</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// State already saved, so ignore the event</span>
+</span><span class='line'>            <span class="k">return</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onBackPressed</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">mStateSaved</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="kd">super</span><span class="o">.</span><span class="na">onBackPressed</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了更彻底的杜绝问题，应该是状态保存过后，都不应该处理KEY事件。</p>
+
+<p>其实，这也是合理的，onBackPressed一般是由BACK触发的，与KEY事件一样，都属于用户交互事件，用户交互事件都应该在Activity处于活动期间来响应，特别是过了onStop以后，再处理这样的事件也是没有意义的。</p>
+
+<p>通常情况下，是不会发生这样的问题的，因为一般情况下是由BACK键触发onBackPressed，onBackPressed中调用finish()，finish才会触发销毁生命周期（save instance，pause，stop，destroy），自然不会产生onBackPressed发生在它们之后，也就没有此异常。但假如，有人为处理BACK事件，或者涉及Webview的BACK处理时，就有可能异步处理BACK，从而产生这个异常。</p>
+
+<p>其实，从根儿上来讲，这是Android的设计不完善导致的，再看下pop back的实现：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="nd">@Override</span>
+</span><span class='line'><span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">popBackStackImmediate</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">checkStateLoss</span><span class="o">();</span>
+</span><span class='line'>    <span class="n">executePendingTransactions</span><span class="o">();</span>
+</span><span class='line'>    <span class="k">return</span> <span class="nf">popBackStackState</span><span class="o">(</span><span class="n">mActivity</span><span class="o">.</span><span class="na">mHandler</span><span class="o">,</span> <span class="kc">null</span><span class="o">,</span> <span class="o">-</span><span class="mi">1</span><span class="o">,</span> <span class="mi">0</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>难道第一句不应该是先判断此栈是否为空吗？如果为空（压根儿就没有用Fragment），为什么要check state loss，为什么还要去executePendingTransactions()? 但是，它又不得不这样做，因为Fragment的很多操作是异步的，到这个时候，有可能某些Fragment已被用户commit，但是还没有真正的添加到stack中去，因为只有把所有的pending transactions执行完了，才能知道到底有没有Fragment，但是执行pending transactions就会改变fragment的状态，就必须要check state loss。</p>
+
+<p>看来万恶之源就是Fragment的transactions都是异步的。Anyway，Fragment的设计是有很多缺陷的，因为这并不是系统设计之初就考虑到的东西，所以，不可能像水果里的ViewController那样健壮好用。作为我们开发者，要么就干脆不用它，要么就把它研究透彻再使用，否则将会陷入无尽痛苦之中。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="http://www.androiddesignpatterns.com/2013/08/fragment-transaction-commit-state-loss.html">Fragment Transactions &amp; Activity State Loss</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2016-11-28T20:57:36+08:00'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>28</span><span class='date-suffix'>th</span>, <span class='date-year'>2016</span></span> <span class='time'>8:57 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2016/11/15/understanding-android-gradle/" title="Previous Post: 理解Android Gradle构建系统">&laquo; 理解Android Gradle构建系统</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments" aria-live="polite"><!-- Duoshuo COMMENT BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name: "alexhilton"};
+    (function() {
+        var ds = document.createElement('script');
+        ds.type = 'text/javascript';
+        ds.async = true;
+        ds.src = (document.location.protocol == 'https:' ? 'https:' : 'http:') + '//static.duoshuo.com/embed.js';
+        ds.charset = 'utf-8';
+        (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(ds);
+    })();
+</script>
+<!-- Duoshuo COMMENT END -->
+</div>
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+  <h1>About Me</h1>
+  <p>实用主义的浮躁码农</p>
+  <p>人生苦短，注重实效，少说废话，多读书，多写代码</p>
+  <p><a href="http://weibo.com/alexhilton/" target="_blank"><img src="/images/weibo.png" width="64" height="64"></a> <a href="mailto:dragonhilton@gmail.com" target="_blank"><img src="/images/emailme.png" width="64" height="64"></a> <a href="http://www.linkedin.com/profile/view?id=92114460"><img src="/images/linked_in.png" width="64" height="64"></a></p>
+</section>
+<section>
+  <h1>Recent Posts</h1>
+  <ul id="recent_posts">
+    
+      <li class="post">
+        <a href="/blog/2016/11/28/fear-android-fragment-state-loss-no-more/">让你不再俱怕Fragment State Loss</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2016/11/15/understanding-android-gradle/">理解Android Gradle构建系统</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2016/11/14/understanding-java-threadlocal/">理解Java ThreadLocal</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2016/11/12/understanding-java-keyword-final/">理解 Java 关键字 Final</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2016/10/15/understanding-java-keyword-volatile/">理解Java关键字volatile</a>
+      </li>
+    
+  </ul>
+</section>
+<section>
+  <h1>更多的文章</h1>
+  <p><a href="http://blog.csdn.net/hitlion2008/" target="_blank">浪人的星空</a></p>
+</section>
+<section>
+    <h1>Categories</h1>
+    <ul id="categories">
+        
+            <li class="category">
+                
+                <a class="list-group-item " href="/blog/categories/miscellaneous/index.html">miscellaneous</a>
+            </li>
+        
+            <li class="category">
+                
+                <a class="list-group-item " href="/blog/categories/effectiveandroid/index.html">effectiveandroid</a>
+            </li>
+        
+            <li class="category">
+                
+                <a class="list-group-item " href="/blog/categories/android/index.html">android</a>
+            </li>
+        
+            <li class="category">
+                
+                <a class="list-group-item " href="/blog/categories/ios/index.html">ios</a>
+            </li>
+        
+            <li class="category">
+                
+                <a class="list-group-item " href="/blog/categories/effectivejava/index.html">effectivejava</a>
+            </li>
+        
+            <li class="category">
+                
+                <a class="list-group-item " href="/blog/categories/web/index.html">web</a>
+            </li>
+        
+    </ul>
+</section>
+
+<section>
+  <h1>GitHub Repos</h1>
+  <ul id="gh_repos">
+    <li class="loading">Status updating&#8230;</li>
+  </ul>
+  
+  <a href="https://github.com/alexhilton">@alexhilton</a> on GitHub
+  
+  <script type="text/javascript">
+    $(document).ready(function(){
+        if (!window.jXHR){
+            var jxhr = document.createElement('script');
+            jxhr.type = 'text/javascript';
+            jxhr.src = '/javascripts/libs/jXHR.js';
+            var s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(jxhr, s);
+        }
+
+        github.showRepos({
+            user: 'alexhilton',
+            count: 0,
+            skip_forks: true,
+            target: '#gh_repos'
+        });
+    });
+  </script>
+  <script src="/javascripts/github.js" type="text/javascript"> </script>
+</section>
+
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2016 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+
+<script>
+    var _hmt = _hmt || [];
+    (function() {
+         var hm = document.createElement("script");
+         hm.src = "//hm.baidu.com/hm.js?3b8ca71d801a2f5af0a456e0b4635bae";
+         var s = document.getElementsByTagName("script")[0];
+         s.parentNode.insertBefore(hm, s);
+    })();
+</script>
+
+
+</body>
+</html>
