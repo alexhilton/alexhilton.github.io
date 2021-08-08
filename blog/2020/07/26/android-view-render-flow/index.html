@@ -1,0 +1,789 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Android View的渲染过程 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="深入浅出的介绍Android视图的渲染过程">
+  <meta name="keywords" content="View, ViewRootImpl, Window, WindowManager, ViewParent, ViewGroup">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://toughcoder.net/blog/2020/07/26/android-view-render-flow">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="http://libs.baidu.com/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:toughcoder.net" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Android View的渲染过程</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2020-07-26T22:53:03+08:00'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>26</span><span class='date-suffix'>th</span>, <span class='date-year'>2020</span></span> <span class='time'>10:53 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>对于安卓开发猿来说，每天都会跟布局打交道，那么从我们写的一个布局文件，到运行后可视化的视图页面，这么长的时间内到底 发生了啥呢？今天我们就一起来探询这一旅程。</p>
+
+<p><img src="https://miro.medium.com/max/1400/1*6jNYifMX0MvMHxg2cxrzkg.png" alt="" /></p>
+
+<!-- more -->
+
+
+<h2>View tree的创建过程</h2>
+
+<h3>布局文件的生成过程</h3>
+
+<p>一般情况下，一个布局写好了，如果不是特别复杂的布局，那么当把布局文件塞给Activity#setContentView或者一个Dialog或者一个Fragment，之后这个View tree就创建好了。那么setContentView，其实是通过<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/LayoutInflater.java;bpv=0;bpt=0">LayoutInflater</a>这个对象来具体的把一个布局文件转化为一个内存中的View tree的。这个对象不算太复杂，主要的逻辑就是解析XML文件，把每个TAG，用反射的方式来生成一个View对象，当XML文件解析完成后，一颗View tree就生成完了。</p>
+
+<p>但是需要注意，inflate之后虽然View tree是创建好了，但是这仅仅是以单纯对象数据的形式存在，这时去获取View的一些GUI的相关属性，如大小，位置和渲染状态，是不存在的，或者是不对的。</p>
+
+<h3>手动创建</h3>
+
+<p>除了用布局文件来生成布局，当然也可以直接用代码来撸，这个就比较直观了，view tree就是你创建的，然后再把根节点塞给某个窗口，如Activity或者Dialog，那么view tree就创建完事了。</p>
+
+<h2>渲染前的准备工作</h2>
+
+<p>View tree生成的最后一步就是把根结点送到ViewRootImpl#setView里面，这里会把view添加到wms之中，并着手开始渲染，接下来就主要看ViewRootImpl这个类了，主要入口方法就是<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=1604;drc=master;bpv=1;bpt=1?q=viewrootimpl">ViewRootImpl#requestLayout</a>，然后是scheduleTraversals()，这里会把请求放入到队列之中，最终执行渲染的是doTraversal，它里面调用的是performTraversals()，所以，我们需要重点查看<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=2332;drc=master;bpv=1;bpt=1?q=viewrootimpl">ViewRootImpl#performTraversals</a>这个方法，view tree渲染的流程全在这里面。这个方法相当之长，接近1000行，主要就是三个方法performMeasure，performLayout和performDraw，就是常说的三大步：measure，layout和draw。</p>
+
+<h2>渲染之measure</h2>
+
+<p>就看<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;drc=master;l=3391?q=viewrootimpl">performMeasure</a>方法，这个方法很简单，就是调用了根view的measure方法，然后传入widthSpec和heightSpec。measure的目的就是测量view tree的大小，就是说view tree在用户可视化角度所占屏幕大小。要想理解透彻measure，需要理解三个事情，MeasureSpec，View#measure方法和View#onMeasure方法：</p>
+
+<h3>理解MeasureSpec</h3>
+
+<p>从<a href="https://developer.android.com/reference/android/view/View.MeasureSpec">文档</a>中可以了解到，MeasureSpec是从父布局传给子布局，用以代表父布局对子布局在宽度和高度上的约束，它有两部分一个是mode，一个是对应的size，打包成一个integer。</p>
+
+<ul>
+<li><p>UNSPECIFIED</p>
+
+<p> 父布局对子布局没有要求，子布局可以设置任意大小，这个 基本上 不常见。</p></li>
+<li><p>EXACTLY</p>
+
+<p> 父布局已经计算好了一个精确的大小，子布局要严格按照 这个来。</p></li>
+<li><p>AT_MOST</p>
+
+<p> 子布局最大可以达到传过来的这个尺寸。</p></li>
+</ul>
+
+
+<p>光看这几个mode，还是不太好理解。因为我们平日里写布局，在大小（或者说宽和高）这块就三种写法：一个是<a href="https://developer.android.com/reference/android/view/ViewGroup.LayoutParams#MATCH_PARENT">MATCH_PARENT</a>，也就是要跟父布局一样大；要么是<a href="https://developer.android.com/reference/android/view/ViewGroup.LayoutParams#WRAP_CONTENT">WRAP_CONTENT</a>，也就是说子布局想要刚好合适够显示自己就行了；再者就是写死的如100dp等。需要把measure时的mode与LayoutParams结合联系起来，才能更好的理解measure的过程。</p>
+
+<p>还是得从performMeasure这时入手，这个MeasureSpec是由父节点传给子节点，追根溯源，最原始的肯定是传给整个view tree根节点的，也就是调用performMeasure时传入的参数值。</p>
+
+<h4>根节点的MeasureSpec</h4>
+
+<p>根节点的MeasureSpec是由<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewRootImpl.java;l=3624;drc=master;bpv=1;bpt=1?q=viewrootimpl">getRootMeasureSpec</a>得来的，这个方法传入的是窗口的大小，这是由窗口来给出的，当前的窗口肯定 是知道自己的大小的，以及根节点布局中写的大小。从这个方法就能看出前面说的布局中的三种写法对MeasureSpec的影响了：</p>
+
+<ul>
+<li>如果 根节点布局是MATCH_PARENT的，那么 mode就是EXACTLY，大小就是父布局的尺寸，因为根节点的父亲就是窗口，所以就是窗口的大小</li>
+<li>如果 根节点布局是WRAP_CONTENT的，那么 mode是AT_MOST，大小依然会是父布局的尺寸。这个要这样理解，WRAP_CONTENT是想让子布局自己决定自己多大，但是，你的极限 就是父布局的大小了。</li>
+<li>其他，其实就是根节点写死了大小的（写布局时是必须 要指定layout_width和layout_height的，即使某些view可以省略一个，也是因为缺省值，而并非不用指定），那么mode会是EXACTLY，大小用根节点指定的值。</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">private</span> <span class="kd">static</span> <span class="kt">int</span> <span class="nf">getRootMeasureSpec</span><span class="o">(</span><span class="kt">int</span> <span class="n">windowSize</span><span class="o">,</span> <span class="kt">int</span> <span class="n">rootDimension</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kt">int</span> <span class="n">measureSpec</span><span class="o">;</span>
+</span><span class='line'>    <span class="k">switch</span> <span class="o">(</span><span class="n">rootDimension</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">case</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">LayoutParams</span><span class="o">.</span><span class="na">MATCH_PARENT</span><span class="o">:</span>
+</span><span class='line'>        <span class="c1">// Window can&#39;t resize. Force root view to be windowSize.</span>
+</span><span class='line'>        <span class="n">measureSpec</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">makeMeasureSpec</span><span class="o">(</span><span class="n">windowSize</span><span class="o">,</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">EXACTLY</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">break</span><span class="o">;</span>
+</span><span class='line'>    <span class="k">case</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">LayoutParams</span><span class="o">.</span><span class="na">WRAP_CONTENT</span><span class="o">:</span>
+</span><span class='line'>        <span class="c1">// Window can resize. Set max size for root view.</span>
+</span><span class='line'>        <span class="n">measureSpec</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">makeMeasureSpec</span><span class="o">(</span><span class="n">windowSize</span><span class="o">,</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">AT_MOST</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">break</span><span class="o">;</span>
+</span><span class='line'>    <span class="k">default</span><span class="o">:</span>
+</span><span class='line'>        <span class="c1">// Window wants to be an exact size. Force root view to be that size.</span>
+</span><span class='line'>        <span class="n">measureSpec</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">makeMeasureSpec</span><span class="o">(</span><span class="n">rootDimension</span><span class="o">,</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">EXACTLY</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">break</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">measureSpec</span><span class="o">;</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h4>子View的MeasureSpec</h4>
+
+<p>MeasureSpec这个东西是自上而下的，从根节点向子View传递。前面看过了根节点的spec生成方式，还有必要再看一下子View在measure过程中是如何生成spec的，以更好的理解整体过程。主要看<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewGroup.java;l=6979;bpv=0;bpt=1">ViewGroup#getChildMeasureSpec</a>方法就可以了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+<span class='line-number'>66</span>
+<span class='line-number'>67</span>
+<span class='line-number'>68</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kd">static</span> <span class="kt">int</span> <span class="nf">getChildMeasureSpec</span><span class="o">(</span><span class="kt">int</span> <span class="n">spec</span><span class="o">,</span> <span class="kt">int</span> <span class="n">padding</span><span class="o">,</span> <span class="kt">int</span> <span class="n">childDimension</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kt">int</span> <span class="n">specMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">getMode</span><span class="o">(</span><span class="n">spec</span><span class="o">);</span>
+</span><span class='line'>    <span class="kt">int</span> <span class="n">specSize</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">getSize</span><span class="o">(</span><span class="n">spec</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kt">int</span> <span class="n">size</span> <span class="o">=</span> <span class="n">Math</span><span class="o">.</span><span class="na">max</span><span class="o">(</span><span class="mi">0</span><span class="o">,</span> <span class="n">specSize</span> <span class="o">-</span> <span class="n">padding</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kt">int</span> <span class="n">resultSize</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>    <span class="kt">int</span> <span class="n">resultMode</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">switch</span> <span class="o">(</span><span class="n">specMode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="c1">// Parent has imposed an exact size on us</span>
+</span><span class='line'>    <span class="k">case</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">EXACTLY</span><span class="o">:</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">childDimension</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">EXACTLY</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">==</span> <span class="n">LayoutParams</span><span class="o">.</span><span class="na">MATCH_PARENT</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants to be our size. So be it.</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">size</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">EXACTLY</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">==</span> <span class="n">LayoutParams</span><span class="o">.</span><span class="na">WRAP_CONTENT</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants to determine its own size. It can&#39;t be</span>
+</span><span class='line'>            <span class="c1">// bigger than us.</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">size</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">AT_MOST</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">break</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Parent has imposed a maximum size on us</span>
+</span><span class='line'>    <span class="k">case</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">AT_MOST</span><span class="o">:</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants a specific size... so be it</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">childDimension</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">EXACTLY</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">==</span> <span class="n">LayoutParams</span><span class="o">.</span><span class="na">MATCH_PARENT</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants to be our size, but our size is not fixed.</span>
+</span><span class='line'>            <span class="c1">// Constrain child to not be bigger than us.</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">size</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">AT_MOST</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">==</span> <span class="n">LayoutParams</span><span class="o">.</span><span class="na">WRAP_CONTENT</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants to determine its own size. It can&#39;t be</span>
+</span><span class='line'>            <span class="c1">// bigger than us.</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">size</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">AT_MOST</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">break</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Parent asked to see how big we want to be</span>
+</span><span class='line'>    <span class="k">case</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">UNSPECIFIED</span><span class="o">:</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants a specific size... let them have it</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">childDimension</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">EXACTLY</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">==</span> <span class="n">LayoutParams</span><span class="o">.</span><span class="na">MATCH_PARENT</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants to be our size... find out how big it should</span>
+</span><span class='line'>            <span class="c1">// be</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">View</span><span class="o">.</span><span class="na">sUseZeroUnspecifiedMeasureSpec</span> <span class="o">?</span> <span class="mi">0</span> <span class="o">:</span> <span class="n">size</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">UNSPECIFIED</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">childDimension</span> <span class="o">==</span> <span class="n">LayoutParams</span><span class="o">.</span><span class="na">WRAP_CONTENT</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Child wants to determine its own size.... find out how</span>
+</span><span class='line'>            <span class="c1">// big it should be</span>
+</span><span class='line'>            <span class="n">resultSize</span> <span class="o">=</span> <span class="n">View</span><span class="o">.</span><span class="na">sUseZeroUnspecifiedMeasureSpec</span> <span class="o">?</span> <span class="mi">0</span> <span class="o">:</span> <span class="n">size</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">resultMode</span> <span class="o">=</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">UNSPECIFIED</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">break</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="c1">//noinspection ResourceType</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">MeasureSpec</span><span class="o">.</span><span class="na">makeMeasureSpec</span><span class="o">(</span><span class="n">resultSize</span><span class="o">,</span> <span class="n">resultMode</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>单纯从spec角度来理解，与上面的是一样的，基本上WRAP_CONTENT会是AT_MOST，而其他都是EXACTLY。</p>
+
+<p>后面会再详细讨论一下，父布局与子View的相互影响。</p>
+
+<h3>View#measure和View#onMeasure</h3>
+
+<p>performMeasure比较简单，只是调用根节点的measure方法，然后把计算出来的根节点的MeasureSpec传进去，就完事了，所以 重点要<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;l=25428;drc=master;bpv=0;bpt=1">View#measure</a>方法。这里需要注意的是整个View的设计体系里面一些主要的逻辑流程是不允许子类override的，可定制的部分作被动式的方法嵌入在主要逻辑流程中，如measure是不能被override的，它会调用可以被子类override的<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;l=25539;drc=master;bpv=1;bpt=1">onMeasure</a>。onMeasure是每个View必须实现的方法，用传入的父布局的约束来计算出自已的大小。</p>
+
+<p>为了优化measure流程，还有一个cache机制，用从父布局传入的MeasureSpec作为key，从onMeasure得出的结果 作为value，保存在cache中，当后面再次调用measure时，如果MeasureSpec未发生变化，那么就直接从cache中取出结果，如果 有变化 那么再调用onMeasure去计算一次。光看View#measure和onMeasure这两个方法也没啥啊，或者说常见的view或者我们自己定义的view的onMeasure方法也没啥啊，都不算太复杂，有同学就会问，这里为啥这么费劲 非要搞出一个cache呢？这个也好理解，要明白任何一个view不光是你自己，还涉及到所有你的子view啊，如果你只是一个未端的view（叶子），那当然 无所谓了，但如果是一个ViewGroup，下面有很多个子view，那么 如果能少调用一次onMeasure，还是能节省不少CPU资源的。</p>
+
+<h3>ViewGroup的onMeasure</h3>
+
+<p>每个View的本身的onMeasure并不复杂，只需要关注好本身的尺寸就好了。</p>
+
+<p>复杂的在于ViewGroup的onMeasure，简单来理解也并不复杂，它除了需要测量自己的宽与高之外，还需要逐个遍历子view以measure子view。如果ViewGroup自身是EACTLY的，那么onMeasure过程就会简单不少，因为它自身的宽与高是确定的，只需要挨个measure子View就可了，而且子View并不影响它本身。当然，要把padding和margin考虑进来。</p>
+
+<p>最为复杂的就是AT_MOST，ViewGroup自身的宽与高是由其所有子View决定的，这才是最复杂的，也是各个ViewGroup子类布局器需要重点解决的，而且过程各不相同，因为每个布局器的特点不一样，所以过程并不相同，下面来各自讨论一下。</p>
+
+<h3>几种常见的ViewGroup的measure逻辑</h3>
+
+<p>下来来看一下一些非常常见的ViewGroup是如何measure的：</p>
+
+<h4>LinearLayout</h4>
+
+<p>它的方向只有两个，可以只分析一个方向，另外一个方向是差不多的，我们就看看measureVertical。</p>
+
+<p>第1种情况，也就是height mode是EXACTLY的时候，这个时候LinearLayout布局本身的高度是已知的，挨个遍历子view然后measure一下就可以。</p>
+
+<p>第2种情况，比较复杂的情况，是AT_MOST时，这其实也还好，理论上高度就是所有子view的高度之和。</p>
+
+<p>对于LinearLayout，最为复杂的情况是处理weight，这需要很多复杂处理，要把剩余所有的空间按weight来分配，具体比较复杂，有兴趣的可以具体去看源码。这也说明了，为何在线性布局中使用weight会影响性能，代码中就可以看出当有weight要处理的时候，至少多遍历一遍子view以进行相关的计算。</p>
+
+<p>虽然方向是VERTICAL时，重点只处理垂直方向，但是width也是需要计算的，但width的处理就要简单得多，如果其是EXACTLY的，那么就已知了；如果是AT_MOST的，就要找子view中width的最大值。</p>
+
+<h4>FrameLayout</h4>
+
+<p>FrameLayout其实是最简单的一个布局管理器，因为它对子view是没有约束的，无论水平方向还是垂直方向，对子view都是没有约束，所以它的measure过程最简单。</p>
+
+<p>如果是EXACTLY的，它本身的高度与宽度是确定的，那么就遍历子view，measure一下就可以了，最后再把margin和padding加一下就完事了。</p>
+
+<p>如果是AT_MOST的，那么也不难，遍历子View并measure，然后取子view中最大宽为它的宽度，取最大的高为其高度，再加上margin和padding，基本上就做完了。</p>
+
+<p>因为，FrameLayout的measure过程最为简单，因此系统里很多地方默认用的就是FrameLayout，比如窗口里的root view。</p>
+
+<h4>RelativeLayout</h4>
+
+<p>这个是最为复杂的，从设计的目的来看，RelativeLayout要解决的问题也是提供了长与宽两个维度来约束子view。</p>
+
+<p>总体过的过程就是要分别从vertical方向和horizontal方向，来进行两遍的measure，同时还要计算具体的坐标，实际上RelativeLayout的measure过程是把measure和layout一起做了。</p>
+
+<h3>自定义View如何实现onMeasure</h3>
+
+<p>如果是一个具体的View，那就相当简单了，默认的实现就可以了。</p>
+
+<p>如果是ViewGroup会相对复杂一些，取决于如何从水平和垂直方向上约束子view，然后进行遍历，并把约束考虑进去。可以参考LinearLayout和RelativeLayout的onMeasure实现。</p>
+
+<h2>渲染之layout</h2>
+
+<p>measure是确定控件的尺寸，下一步就是layout，也就是对控件进行排列。</p>
+
+<p>首先，需要理解现代GUI窗口的坐标系统，假设屏幕高为height，宽为width，那么屏幕左上角为坐标原点（0，0），右下角为（width, height），屏幕从上向下为Y轴方向，从左向右则是X轴方向。安卓当中，也是如此。每一个控件都是一个矩形区域，为了能知道如何渲染每一块矩形（每 一个控件）就需要知道它的坐标，在前一步measure中，能知道它的宽与高，如果再能确定它的起始坐标左上角，那么它在整个屏幕中的位置就可以确定了。</p>
+
+<p>对于Android来说，view的渲染的第二步骤就是layout，其目的就是要确定好它的坐标，每一个View都有四个变量mLeft, mTop，mRight和mBottom，(mLeft, mTop)是它的左上角，(mRight, mBottom）是它的右下角，很明显width=mRight-mLeft，而height=mBottom-mTop。这些数值是相对于父布局来说的，每个View都是存在于view tree之中，知道相对于父布局的数值就足够在渲染时使用了，没必要用相对屏幕的绝对数值，而且用相对父布局的坐标数值再加上父布局的坐标，就可以得到在屏幕上的绝对数值，如果需要这样做的话。</p>
+
+<p><img src="https://developervisits.files.wordpress.com/2017/11/androidscreencoordinates.jpg" alt="" /></p>
+
+<p>layout过程依然是从根节点开始的，所以仍要从ViewRootImpl#performLayout作为起点来理顺layout的逻辑。performLayout的参数是一个LayoutParam，以及一个windowWidth和desiredWindowHeight，调用performLayout是在performTraversal当中，在做完performMeasure时，传入的参数其实就是窗口window的宽与高（因为毕竟是根节点嘛）。performLayout中会从根节点mView开开对整个view tree进行layout，其实就是调用mView.layout，传入的是0, 0和view的经过measure后宽与高。</p>
+
+<p>单个View的layout方法实现较简单，把传入的参数保存到mLeft,mTop,mRight和mBottom变量，再调用onLayout就完事了，这个很好理解，因为子view是由父布局确定好的位置，只要在measure过程把自己需要的大小告诉父布局后，父布局会根据LayoutParam做安排，传给子view的就是计算过后的结果，每个子view记录一下结果就可以了，不需要做啥额外的事情。</p>
+
+<p>ViewGroup稍复杂，因为它要处理其子view，并且要根据其设计的特点对子view进行约束排列。还是可以看看常见的三个ViewGroup是如何做layout的。</p>
+
+<h4>LinearLayout</h4>
+
+<p>依然是两个方向，因为LinearLayout的目的就是在某一个方向上对子view进行约束。看layoutVertical就可以了，水平方向上逻辑是一样的。</p>
+
+<p>遍历一次子View即可，从父布局的left, top起始，考虑子view的height 以及上下的padding和margin，依次排列就可以了。需要注意的是，对于left的处理，理论上子view的left就应该等于父布局，因为这毕竟是vertical的，水平上是没有约束的，但是也要考虑Gravity，当然也要把padding和margin考虑进来。最后通过setChildFrame把排列好的坐标设置给子view。</p>
+
+<p>总体来看，线性布局的layout过程比其measure过程要简单不少。</p>
+
+<h4>FrameLayout</h4>
+
+<p>FrameLayout对子view的排列其实是没有约束的，所以layout过程也不复杂，遍历子view，子view的left和top初始均为父布局，依据其Gravity来做一下排布即可，比如如果Gravity是right，那么子view就要从父布局的右侧开始计算，childRight=parentRight-margin-padding，childLeft=childRight-childWidth，以次类推，还是比较好理解的。</p>
+
+<h4>RelativeLayout</h4>
+
+<p>前面提到过RelativeLayout是在measure的时候就把坐标都计算好了，它的layout就是把坐标设置给子view，其余啥也没有。</p>
+
+<h4>自定义View如何实现onLayout</h4>
+
+<p>如果是自定义View的话，不需要做什么。</p>
+
+<p>如果是自定义的ViewGroup的话，要看设计的目的，是如何排列子view的。</p>
+
+<p>总之，layout过程相较measure过程还是比较好理解的，约束规则越复杂的view，其measure过程越复杂，但layout过程却不复杂。</p>
+
+<h2>渲染之draw</h2>
+
+<p>draw是整个渲染过程的核心也是最复杂的一步，前面的measure和layout只能算作准备，draw才会真正进行绘制。</p>
+
+<h3>draw的整个逻辑流程</h3>
+
+<p>与measure和layout的过程非常不一样，虽然在performTraversals中也会调用performDraw，也就是说看似draw流程的起点仍是ViewRootImpl#performDraw，但查看一下这个方法的实现就可以发现，这里面其实并没有调用到View#draw，就是说它其实也是做一些准备工作，整个View tree的draw触发，并不在这里。</p>
+
+<p>从performDraw中并没有做直接与draw相关的事情，它会调用另外一个方法draw()来做此事情，在draw方法中，它会先计算需要渲染的区域（dirty区域），然后再针对 此区域做渲染，正常情况下会走硬件加速方式去渲染，这部分比较复杂，它直接与一个叫做ThreadedRenderer打交道，稍后再作分析。</p>
+
+<p>由于各种原因，假如硬件加速未没有成功，那么会走到软件渲染，这部分逻辑相对清晰一些，可以先从这里看起，会直接调用到drawSoftware()，这个方法有助于我们看清楚渲染的流程。这个方法里面会创建一个Canvas对象，是由ViewRootImpl持有的一个Surface对象中创建出来的，并调用view tree根节点的mView.draw(canvas)，由此便把流程转移到了view tree上面。</p>
+
+<h3>view tree的draw的过程</h3>
+
+<p>ViewRootImpl是直接调用根节点的draw方法，那么这里便是整个view tree的入口。可先从View#draw(canvas）方法看起。主要分为四步：1）画背景drawBackground；2）画自己的内容通过onDraw来委派，具体的内容是在onDraw里面做的；3）画子view，通过dispatchDraw方法；4）画其他的东西，如scroll bar或者focus highlight等。可以重点关注一下这些操作的顺序，先画背景，然后画自己，然后画子view，最后画scroll bar和focus之类的东西。</p>
+
+<p>重点来看看dispatchDraw方法，因为其他几个都相对非常好理解，这个方法主要要靠ViewGroup来实现，因为在View里面它是空的，节点自己只需要管自己就可以了，只有父节点才需要关注如何画子View。<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewGroup.java;bpv=0;bpt=1">ViewGroup#dispatchDraw</a>这个方法做一些准备工作，如把padding考虑进来并进行clip，后会遍历子View，针对 每个子view调用drawChild方法，这实际上就 是调用回了View#draw(canvas，parent，drawingTime)方法，注意这个方法是package scope的，也就是说只能供view框架内部调用。这个方法并没有做具体的渲染工作（因为每个View的具体渲染都是在onDraw里面做的），这个方法里面做了大量与动画相关的各种变换。</p>
+
+<h3>Canvas对象是从哪里来的</h3>
+
+<p>View的渲染过程其实大都是GUI框架内部的逻辑流程控制，真正涉及graphics方面的具体的图形如何画出来，其实都是由Canvas对象来做的，比如如何画点，如何画线，如何画文字，如何画图片等等。一个Canvas对象从ViewRootImpl传给View tree，就在view tree中一层一层的传递，每个view都把其想要展示的内容渲染到Canvas对象中去。</p>
+
+<p>那么，这个Canvas对象又是从何而来的呢？从view tree的一些方法中可以看到，都是从外面传进来的，view tree的各个方法（draw, dipsatchDraw和drawChild）都只接收Canvas对象，但并不创建它。</p>
+
+<p>从上面的逻辑可以看到Canvas对象有二个来源：一是在ViewRootImpl中创建的，当走软件渲染时，会用Surface创建出一个Canvas对象，然后传给view tree。从ViewRootImpl的代码来看，它本身就会持有一个Surface对象，大概的逻辑就是每一个Window对象内，都会有一个用来渲染的Surface；</p>
+
+<p>另外一个来源就是走硬件加速时，会由hwui创建出Canvas对象。</p>
+
+<h3>draw过程的触发逻辑</h3>
+
+<p>从上面的讨论中可以看出draw的触发逻辑有两条路：</p>
+
+<p>一是，没有启用硬件加速时，走的软件draw流程，也是一条比较好理解的简单流程：performTraversal->performDraw->draw->drawSoftware->View#draw。</p>
+
+<p>二是，启用了硬件加速时，走的是performTraversal->performDraw->draw->ThreadedRenderer#draw，到这里就走进了硬件加速相关的逻辑了。</p>
+
+<h2>硬件加速</h2>
+
+<p>硬件加速是从Android 4.0开始支持的，在此之前都是走的软件渲染，也就是从ViewRoot（4.0版本以前是叫ViewRoot，后来才是ViewRootImpl）中持有的Surface直接创建Canvas，然后传给view tree去做具体的渲染，与前面提到的drawSoftware过程类似。</p>
+
+<p>硬件加速则要复杂得多，多了好多东西，它又搞出了一套渲染架构，但这套东西是直接与GPU联系，有点类似于OpenGL，把view tree的渲染转换成为一系列命令，直接传给GPU，软件渲染则是需要CPU把所有的运算都做了，最终生成graphic buffer送给屏幕（当然也是GPU）。</p>
+
+<p>这一坨东西中最为核心就是RenderNode和RecordingCanvas。其中<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/RenderNode.java">RenderNode</a>是纯新的东西，它是为了构建 一个render tree（类似于view tree），用以构建复杂的渲染逻辑关系。<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/RecordingCanvas.java?q=recordingcanvas">RecordingCanvas</a>是Canvas的一个子类，它是专门用于硬件加速渲染的，但又为了兼容老的Canvas（软件渲染），为啥叫recording呢？因为硬件加速方式渲染，对于view tree的draw过程来说就是记录一系列的操作，这其实就是给GPU的指令，渲染的最后一步就是把整个render tree丢给GPU，就完了。</p>
+
+<p>前面说的两个是数据结构，还不够，还有<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/graphics/java/android/graphics/HardwareRenderer.java">HardwareRenderer</a>和<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ThreadedRenderer.java?q=threadedrenderer&amp;ss=android%2Fplatform%2Fsuperproject">ThreadedRenderer</a>，这两个用来建立和管理render tree的，也就是说它们内部管理着一组由RenderNode组成的render tree，并且做一些上下文环境的初始化与清理资源的工作。类似于OpenGL中GLSurfaceView的RenderThread做的事情。</p>
+
+<p>硬件加速与原框架的切入点都是RenderNode和RecordingCanvas，View类中多了一个RenderNode成员，当draw的时候，从RenderNode中得到RecordingCanvas，其余操作都与原来一致，都是调用Canvas的方法进行graphics的绘制，这样整体渲染流程就走入到了硬件加速里面。</p>
+
+<h2>Choreographer与vsync</h2>
+
+<p>虽然在Android 4.0版本加入了硬件加速的支持，但这还是不够，因为它只是相当于具体的渲染时间可能快了一些，举例来说，可能是普通火车与高铁之间的差异，虽然确实行程所花时间变短了，但是对于整体的效率来说提升并不大。对于整体GUI的流畅度，响应度，特别是动画这一块的流程程度与其他平台（如水果）差距仍是巨大的。一个最重要的原因就在于，GUI整体的渲染流程是缺少协同的，仍是按需式渲染：应用层布局加载完了要渲染了，或者ViewRootImpl发现dirty了，需要重绘了，或者有用户事件了需要响应了，触发整体渲染流程，更新graphic buffer，屏幕刷新了。</p>
+
+<p>这一过程其实也没有啥大问题，对于常规的UI显示，没有问题，我没有更新，没有变化 ，当然 不需要重绘了，如果有更新有变化时再按需重新渲染，这显然 没有什么问题。最大的问题在于动画，动画是要求连续不停的重绘，如果仅靠客户这一端（相较于graphic buffer和屏幕这一端来说）来触发，显然FPS（帧率）是不够的，由此造成流畅度肯定不够好。</p>
+
+<p>于是在Android 4.1 （Jelly Bean）中就引入了<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/Choreographer.java?q=choreographer">Choreographer</a>以及vsync机制，来解决此问题，它们两个并不全完是一回事，Choreographer是纯软件的，vsync则是更为复杂的更底层的机制，有没有vsync，Choreographer都能很好的工作，只不过有了vsync会更好，就好比硬件加速之于View的渲染，没有硬件加速也可以渲染啊，有了硬件加速渲染会更加的快一些。</p>
+
+<h4>Choreographer</h4>
+
+<p>它的英文本意是歌舞的编舞者，有点类似于导演，但歌舞一般时间更短，所以对编舞者要求更高，需要在短时间内把精华全部展现出来。它的目的就是要协调整个View的渲染过程，对输入事件响应，动画和渲染进行时间上的把控。文档原文是说：Coordinates the timing of animations, input and drawing.，精华就在于timing这个词上。</p>
+
+<p>但其实，这个类本身并不是很复杂，相较于其他frameworks层的东西来说它算简单的了，它就是负责定时回调，按照一定的FPS来给你回调，简单来说它就是做了这么一件事情。它公开的接口也特别少，就是postFrameCallback和removeFrameCallback，而<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/Choreographer.java;bpv=1;bpt=1?q=choreographer">FrameCallback</a>也是一个非常简单的接口doFrame(long frameTimeNanos)，里面的参数是当前帧开始渲染的时间序列。</p>
+
+<p>所以，它的工作就是在计时，或者叫把控时间，到了每一帧该渲染的时候了，它会告诉你。有了它，那么GUI的渲染将不再是按需重绘了，而是有节奏的，可以以固定FPS定时刷新。ViewRootImpl那头也需要做调整，每当有主动重绘时（view tree有变化，用户有输入事件等），也并不是说立马就去做draw，而是往Choreographer里post一个FrameCallback，在里面做具体的draw。</p>
+
+<h4>vsync（Vertical Synchronization）</h4>
+
+<p>垂直同步，是另外一套更为底层的机制，简单来理解就是由屏幕显示系统直接向软件层派发定时的脉冲信号，用以提高整体的渲染流畅程度，屏幕刷新，graphic buffer和window GUI（view tree）三者在这个脉冲信号下，做到同步。</p>
+
+<p><a href="https://source.android.com/devices/graphics/implement-vsync">vsync</a>是通过对Choreographer来发挥作用的。Choreographer有两套timing机制，一是靠它自己实现的一套，另外就是直接传导vsync的信号。通过<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/DisplayEventReceiver.java;bpv=1;bpt=1">DisplayEventReceiver</a>（这个类对于App层是完全不可见的被hide了）就可以接收到vsync的信号了，调用其sheduleVsync来告诉vsync说我想接收下一次同步的信号，然后在重载onVsync方法以接收信号，就能够与vsync系统连接起来了。</p>
+
+<h2>渲染性能优化</h2>
+
+<p>这是一个很大的话题</p>
+
+<h4>保持简单</h4>
+
+<p>最最重要的原则就是要保持简单，比如，UI页面尽可能的简洁，view tree的层级要尽可能的少，能用颜色就别用背景图片，能merge就merge。</p>
+
+<p>动画也要尽可能的简单，并且使用标准的ValueAnimator接口，而不要简单粗暴的去修改LayoutParams（如height和width）。</p>
+
+<h4>减少重绘</h4>
+
+<p>这个要多用系统中开发者模式里面的重绘调试工具来做优化，尽可能的减少重绘。</p>
+
+<h4>专项定制</h4>
+
+<p>有些时候，对于一些特殊需求的view要进行定制优化。举个例子，比如一个巨复杂的页面（如某宝的首页），中有一个用于显示倒计时的view，实现起来并不复杂，一个TextView就搞定了，一个Timer来倒计时，不断的刷新数字 就可以了。但是，这通常会导致整个页面都跟着在重绘。因为数字在变化，会导致TextView的大小在变化，进而导致整个View tree都在不断的跟着重绘。</p>
+
+<p>像这种case，如果遇到了，就需要自定义一个专门用于此的View，并针对数字不断刷新做专门的优化，以不让其影响整个view tree。</p>
+
+<p>不要在意这个例子的真实性，要知道，当某个View演变成了整个页面的瓶颈的时候，就需要专门针对 其进行特殊定制以优化整体页面的渲染性能。</p>
+
+<p>更多的技巧可以参考<a href="http://toughcoder.net/blog/2015/09/11/android-performance-profiling-made-easy/">这篇文章</a>和后面的参考资料。</p>
+
+<h2>参考资料</h2>
+
+<p>列举一下关于此话题的比较好的其他资源</p>
+
+<ul>
+<li><a href="https://blog.csdn.net/guolin_blog/article/details/16330267">Android视图绘制流程完全解析，带你一步步深入了解View</a></li>
+<li><a href="https://www.jianshu.com/p/9ac245657127">Android性能优化第（四）篇&mdash;Android渲染机制
+</a></li>
+<li><a href="https://www.jianshu.com/p/1ef2a9e5aa91">深入Android渲染机制</a></li>
+<li><a href="https://blog.csdn.net/CrazyMo_/article/details/80038948">Android进阶——性能优化之布局渲染原理和底层机制机详解及卡顿根源探究（四）</a></li>
+<li><a href="https://blog.csdn.net/say_from_wen/article/details/79093883">View渲染机制</a></li>
+<li><a href="https://blog.csdn.net/hfy8971613/article/details/108041504">Android屏幕刷新机制</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2020-07-26T22:53:03+08:00'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>26</span><span class='date-suffix'>th</span>, <span class='date-year'>2020</span></span> <span class='time'>10:53 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/android/'>android</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2020/03/16/understanding-the-view-system-of-android/" title="Previous Post: 理解安卓的视图体系结构">&laquo; 理解安卓的视图体系结构</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2021/07/21/android-view-event-dispatching/" title="Next Post: Android View 事件派发流程">Android View 事件派发流程 &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2021 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+    var _hmt = _hmt || [];
+    (function() {
+         var hm = document.createElement("script");
+         hm.src = "//hm.baidu.com/hm.js?3b8ca71d801a2f5af0a456e0b4635bae";
+         var s = document.getElementsByTagName("script")[0];
+         s.parentNode.insertBefore(hm, s);
+    })();
+</script>
+
+
+</body>
+</html>

@@ -1,0 +1,668 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Android View 事件派发流程 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="深入浅出式的讲解Android View的事件系统">
+  <meta name="keywords" content="Android, View, Event, Event dispatching">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://toughcoder.net/blog/2021/07/21/android-view-event-dispatching">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="http://libs.baidu.com/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:toughcoder.net" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Android View 事件派发流程</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2021-07-21T19:14:58+08:00'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>21</span><span class='date-suffix'>st</span>, <span class='date-year'>2021</span></span> <span class='time'>7:14 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>自从乔帮主横空出世推出了iPhone以来，触控式的操作便成了21世纪智能设备的标准输入方式。对于同是智能操作系统的Android来说，也不例外。事件，特别是触控事件对于移动应用程序开发来说是一个非常重要的，也是开发人猿必须掌握的事情。这里就要讨论一下Android View中的Event系统，重点探讨一下事件的派发流程。</p>
+
+<p><a href="/blog/2021/07/21/android-view-event-dispatching/"><img src="https://i.stack.imgur.com/PgRvm.png"></a></p>
+
+<!-- more -->
+
+
+<h2>输入事件综述</h2>
+
+<h3>事件的分类</h3>
+
+<p>对于Android系统来说用户输入事件分为两类，一个是<a href="https://developer.android.com/reference/android/view/KeyEvent?hl=en">KeyEvent</a>，这个是硬件产生的事件，或者更准确的说是非触控手势产生的事件，通常包括硬件按扭如音量键，电源键，系统导航（HOME，BACK和MENU）以及外设（如外接设备，键盘，自拍杆等）系统层也都会统一的做成映射转成KeyEvent传给当前Window窗口（当前进程）。</p>
+
+<p>还有一类就是专指解控屏幕产生的触摸式的手势事件，是<a href="https://developer.android.com/reference/android/view/MotionEvent">MotionEvent</a>，为啥不叫TouchEvent呢，因为啊最初的Android版本是支持滑动球的，现在已经没有这种设备，但是名字就这么流传下来了。这个事件专门由视图系统view tree来处理，本文也将重点讨论此类事件。</p>
+
+<h3>事件从哪里来</h3>
+
+<p>简单来说事件是源自于硬件，比如屏幕或者按键，这是废话，知道了这个意义也不大，硬件产生电子信号后会经由驱动传给内核，内核再报给输入系统，再传给wms（Windows Manager Server），最终会到Window这里。对于应用层来说，可以理解 为事件都是从Window对象这里来的就行了。</p>
+
+<h3>谁先收到事件</h3>
+
+<p>对于GUI应用程序层来说，wms就是事件来源，那么ViewRootImpl对象是第一个接收到事件，ViewRootImpl并没有直接把事件派发给view tree，而是先给到DecorView，宿主组件在DecorView处有一个专门接收事件的回调，由此事件便到了当前的宿主组件如Activity或者Dialog，看它是否愿意做处理，如果它不处理，那么就会把事件再派发给GUI视图系统，也即view tree，这一次没有再经过ViewRootImpl对象，而是由Window对象直接调用根节点的dispatchTouchEvent或者dispatchKeyEvent。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>   15:57:02.254   W/System.err: java.lang.Exception: Stack trace
+</span><span class='line'>   15:57:02.255   W/System.err:     at java.lang.Thread.dumpStack(Thread.java:1348)
+</span><span class='line'>   15:57:02.256   W/System.err:     at net.toughcoder.view.ViewWindowExampleActivity.dispatchKeyEvent(ViewWindowExampleActivity.java:107)
+</span><span class='line'>   15:57:02.256   W/System.err:     at com.android.internal.policy.DecorView.dispatchKeyEvent(DecorView.java:342)
+</span><span class='line'>   15:57:02.256   W/System.err:     at android.view.ViewRootImpl$ViewPostImeInputStage.processKeyEvent(ViewRootImpl.java:5053)
+</span><span class='line'>   15:57:02.257   W/System.err:     at android.view.ViewRootImpl$ViewPostImeInputStage.onProcess(ViewRootImpl.java:4921)
+</span><span class='line'>   15:57:02.257   W/System.err:     at android.view.ViewRootImpl$InputStage.deliver(ViewRootImpl.java:4442)
+</span><span class='line'>   15:57:02.258   W/System.err:     at android.view.ViewRootImpl$InputStage.onDeliverToNext(ViewRootImpl.java:4495)
+</span><span class='line'>   15:57:02.258   W/System.err:     at android.view.ViewRootImpl$InputStage.forward(ViewRootImpl.java:4461)
+</span><span class='line'>   15:57:02.259   W/System.err:     at android.view.ViewRootImpl$AsyncInputStage.forward(ViewRootImpl.java:4601)
+</span><span class='line'>   15:57:02.259   W/System.err:     at android.view.ViewRootImpl$InputStage.apply(ViewRootImpl.java:4469)
+</span><span class='line'>   15:57:02.259   W/System.err:     at android.view.ViewRootImpl$AsyncInputStage.apply(ViewRootImpl.java:4658)
+</span><span class='line'>   15:57:02.260   W/System.err:     at android.view.ViewRootImpl$InputStage.deliver(ViewRootImpl.java:4442)
+</span><span class='line'>   15:57:02.260   W/System.err:     at android.view.ViewRootImpl$InputStage.onDeliverToNext(ViewRootImpl.java:4495)
+</span><span class='line'>   15:57:02.260   W/System.err:     at android.view.ViewRootImpl$InputStage.forward(ViewRootImpl.java:4461)
+</span><span class='line'>   15:57:02.261   W/System.err:     at android.view.ViewRootImpl$InputStage.apply(ViewRootImpl.java:4469)
+</span><span class='line'>   15:57:02.261   W/System.err:     at android.view.ViewRootImpl$InputStage.deliver(ViewRootImpl.java:4442)
+</span><span class='line'>   15:57:02.261   W/System.err:     at android.view.ViewRootImpl$InputStage.onDeliverToNext(ViewRootImpl.java:4495)
+</span><span class='line'>   15:57:02.262   W/System.err:     at android.view.ViewRootImpl$InputStage.forward(ViewRootImpl.java:4461)
+</span><span class='line'>   15:57:02.262   W/System.err:     at android.view.ViewRootImpl$AsyncInputStage.forward(ViewRootImpl.java:4634)
+</span><span class='line'>   15:57:02.263   W/System.err:     at android.view.ViewRootImpl$ImeInputStage.onFinishedInputEvent(ViewRootImpl.java:4795)
+</span><span class='line'>   15:57:02.263   W/System.err:     at android.view.inputmethod.InputMethodManager$PendingEvent.run(InputMethodManager.java:2571)
+</span><span class='line'>   15:57:02.263   W/System.err:     at android.view.inputmethod.InputMethodManager.invokeFinishedInputEventCallback(InputMethodManager.java:2081)
+</span><span class='line'>   15:57:02.264   W/System.err:     at android.view.inputmethod.InputMethodManager.finishedInputEvent(InputMethodManager.java:2072)
+</span><span class='line'>   15:57:02.264   W/System.err:     at android.view.inputmethod.InputMethodManager$ImeInputEventSender.onInputEventFinished(InputMethodManager.java:2548)
+</span><span class='line'>   15:57:02.265   W/System.err:     at android.view.InputEventSender.dispatchInputEventFinished(InputEventSender.java:141)
+</span><span class='line'>   15:57:02.265   W/System.err:     at android.os.MessageQueue.nativePollOnce(Native Method)
+</span><span class='line'>   15:57:02.265   W/System.err:     at android.os.MessageQueue.next(MessageQueue.java:326)
+</span><span class='line'>   15:57:02.265   W/System.err:     at android.os.Looper.loop(Looper.java:160)
+</span><span class='line'>   15:57:02.266   W/System.err:     at android.app.ActivityThread.main(ActivityThread.java:6692)
+</span><span class='line'>   15:57:02.266   W/System.err:     at java.lang.reflect.Method.invoke(Native Method)
+</span><span class='line'>   15:57:02.266   W/System.err:     at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:493)
+</span><span class='line'>   15:57:02.266   W/System.err:     at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:858)</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>   15:57:14.582   W/System.err: java.lang.Exception: Stack trace
+</span><span class='line'>   15:57:14.586   W/System.err:     at java.lang.Thread.dumpStack(Thread.java:1348)
+</span><span class='line'>   15:57:14.586   W/System.err:     at net.toughcoder.view.DemoEventView.dispatchTouchEvent(DemoEventView.java:24)
+</span><span class='line'>   15:57:14.586   W/System.err:     at android.view.ViewGroup.dispatchTransformedTouchEvent(ViewGroup.java:3030)
+</span><span class='line'>   15:57:14.586   W/System.err:     at android.view.ViewGroup.dispatchTouchEvent(ViewGroup.java:2662)
+</span><span class='line'>   15:57:14.586   W/System.err:     at android.view.ViewGroup.dispatchTransformedTouchEvent(ViewGroup.java:3030)
+</span><span class='line'>   15:57:14.587   W/System.err:     at android.view.ViewGroup.dispatchTouchEvent(ViewGroup.java:2662)
+</span><span class='line'>   15:57:14.587   W/System.err:     at android.view.ViewGroup.dispatchTransformedTouchEvent(ViewGroup.java:3030)
+</span><span class='line'>   15:57:14.587   W/System.err:     at android.view.ViewGroup.dispatchTouchEvent(ViewGroup.java:2662)
+</span><span class='line'>   15:57:14.587   W/System.err:     at android.view.ViewGroup.dispatchTransformedTouchEvent(ViewGroup.java:3030)
+</span><span class='line'>   15:57:14.587   W/System.err:     at android.view.ViewGroup.dispatchTouchEvent(ViewGroup.java:2662)
+</span><span class='line'>   15:57:14.587   W/System.err:     at com.android.internal.policy.DecorView.superDispatchTouchEvent(DecorView.java:440)
+</span><span class='line'>   15:57:14.588   W/System.err:     at com.android.internal.policy.PhoneWindow.superDispatchTouchEvent(PhoneWindow.java:1830)
+</span><span class='line'>   15:57:14.588   W/System.err:     at android.app.Activity.dispatchTouchEvent(Activity.java:3400)
+</span><span class='line'>   15:57:14.588   W/System.err:     at com.android.internal.policy.DecorView.dispatchTouchEvent(DecorView.java:398)
+</span><span class='line'>   15:57:14.588   W/System.err:     at android.view.View.dispatchPointerEvent(View.java:12753)
+</span><span class='line'>   15:57:14.588   W/System.err:     at android.view.ViewRootImpl$ViewPostImeInputStage.processPointerEvent(ViewRootImpl.java:5122)
+</span><span class='line'>   15:57:14.588   W/System.err:     at android.view.ViewRootImpl$ViewPostImeInputStage.onProcess(ViewRootImpl.java:4925)
+</span><span class='line'>   15:57:14.588   W/System.err:     at android.view.ViewRootImpl$InputStage.deliver(ViewRootImpl.java:4442)
+</span><span class='line'>   15:57:14.588   W/System.err:     at android.view.ViewRootImpl$InputStage.onDeliverToNext(ViewRootImpl.java:4495)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$InputStage.forward(ViewRootImpl.java:4461)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$AsyncInputStage.forward(ViewRootImpl.java:4601)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$InputStage.apply(ViewRootImpl.java:4469)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$AsyncInputStage.apply(ViewRootImpl.java:4658)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$InputStage.deliver(ViewRootImpl.java:4442)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$InputStage.onDeliverToNext(ViewRootImpl.java:4495)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$InputStage.forward(ViewRootImpl.java:4461)
+</span><span class='line'>   15:57:14.589   W/System.err:     at android.view.ViewRootImpl$InputStage.apply(ViewRootImpl.java:4469)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.view.ViewRootImpl$InputStage.deliver(ViewRootImpl.java:4442)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.view.ViewRootImpl.deliverInputEvent(ViewRootImpl.java:7117)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.view.ViewRootImpl.doProcessInputEvents(ViewRootImpl.java:7086)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.view.ViewRootImpl.enqueueInputEvent(ViewRootImpl.java:7047)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.view.ViewRootImpl$WindowInputEventReceiver.onInputEvent(ViewRootImpl.java:7220)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.view.InputEventReceiver.dispatchInputEvent(InputEventReceiver.java:187)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.os.MessageQueue.nativePollOnce(Native Method)
+</span><span class='line'>   15:57:14.590   W/System.err:     at android.os.MessageQueue.next(MessageQueue.java:326)
+</span><span class='line'>   15:57:14.591   W/System.err:     at android.os.Looper.loop(Looper.java:160)
+</span><span class='line'>   15:57:14.591   W/System.err:     at android.app.ActivityThread.main(ActivityThread.java:6692)
+</span><span class='line'>   15:57:14.591   W/System.err:     at java.lang.reflect.Method.invoke(Native Method)
+</span><span class='line'>   15:57:14.591   W/System.err:     at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:493)
+</span><span class='line'>   15:57:14.591   W/System.err:     at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:858)</span></code></pre></td></tr></table></div></figure>
+
+
+<p>因此，从应用程序的角度来说，第一个收到事件的是Activity或者Dialog这种持有Window的顶级组件，所以如果想要从窗口级别来拦截掉所有的事件，那么Activity会是最好的选择，代码示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'>   <span class="nd">@Override</span>
+</span><span class='line'>   <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">dispatchKeyEvent</span><span class="o">(</span><span class="n">KeyEvent</span> <span class="n">event</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">want</span> <span class="n">to</span> <span class="n">intercept</span> <span class="n">all</span> <span class="n">key</span> <span class="n">events</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>              <span class="k">return</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">return</span> <span class="kd">super</span><span class="o">.</span><span class="na">dispatchKeyEvent</span><span class="o">(</span><span class="n">event</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>     <span class="nd">@Override</span>
+</span><span class='line'>   <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">dispatchTouchEvent</span><span class="o">(</span><span class="n">MotionEvent</span> <span class="n">event</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">want</span> <span class="n">to</span> <span class="n">intercept</span> <span class="n">all</span> <span class="n">touch</span> <span class="n">events</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>              <span class="k">return</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">return</span> <span class="kd">super</span><span class="o">.</span><span class="na">dispatchTouchEvent</span><span class="o">(</span><span class="n">event</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>上面两个方法是在view tree之前最先收到事件的方法，是组件里面想拦截的最佳地点，这是从前面打先锋。而要想处理掉view tree未处理的事件，则需要在<a href="https://developer.android.com/reference/android/app/Activity?hl=en#onKeyUp(int,%20android.view.KeyEvent">onKeyUp(int keyCode, KeyEvent event)</a>)和<a href="https://developer.android.com/reference/android/app/Activity?hl=en#onKeyDown(int,%20android.view.KeyEvent">onKeyDown(int keyCode, KeyEvent event)</a>)以及<a href="https://developer.android.com/reference/android/app/Activity?hl=en#onTouchEvent(android.view.MotionEvent">onTouchEvent(MotionEvent event）</a>)这几个方法里面处理，这个相当于是断后。</p>
+
+<h3>事件的散发过程（Event Propagation)</h3>
+
+<p>事件到达应用程序这一端后，从Activity开始了散发过程，它的机制 和过程好比一个各处流动的小球，每个节点都接收一个事件对象，返回一个boolean，如果返回true则表示事件在此被消耗，当前事件散发终止，而如果返回false，表示当前节点对此事件不感兴趣，事件继续散发。</p>
+
+<p>而具体的流程，则是先到Activity（Dialog等第一级组件），再到view tree，在view tree里面也是如此从父view到子view如此一个一个的传递，这个先后顺序流程则是由整个系统构架决定的。</p>
+
+<h3>事件是一个数据流</h3>
+
+<p>前面讲的事件的散发过程，就可以看作是一个球在在流动，这是从单个事件的处理角度看，是这样。但从整个的事件来看更如此，因为事件通常像电子信号一样，是从来源出发（如触摸屏，硬件等），有一定时间间隔的一连串的事件对象的派发的整个过程，简单来比喻就是几个球，每隔1秒就发出一个球，这样一个数据流。</p>
+
+<p>说了这么多，其实真实要做起来还是比较简单的，虽然是一个数据流，但是每 一个流都有开始和结束的标志，处理起来并不难。比如KeyEvent，开始是onKeyDown，然后是onKeyUp，在这两个里面处理，就完成了对KeyEvent流的处理。</p>
+
+<p>而MotionEvent则稍复杂一些，一个MotionEvent流，系统会不断的回调onTouchEvent，直到结束，通过<a href="https://developer.android.com/reference/android/view/MotionEvent?hl=en#getAction(">MotionEvent#getAction()</a>)来判断，从<a href="https://developer.android.com/reference/android/view/MotionEvent?hl=en#ACTION_DOWN">ACTION_DOWN</a>到ACTION_MOVE到ACTION_UP或者ACTION_CANCEL结束。</p>
+
+<p><strong>注意</strong>：因为KeyEvent的处理相对较简单，所以剩下的部分将重点讨论MotionEevnt。</p>
+
+<h2>Touch Event的派发流程</h2>
+
+<p>事件产生以后，会传递给Activity#dispatchTouchEvent，如果没有被拦截，那么就会传给Window，而Window则会传给ViewRootImpl来处理，view tree处理完后，会再交给Activity#onTouchEvent：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'> <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">dispatchTouchEvent</span><span class="o">(</span><span class="n">MotionEvent</span> <span class="n">ev</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">ev</span><span class="o">.</span><span class="na">getAction</span><span class="o">()</span> <span class="o">==</span> <span class="n">MotionEvent</span><span class="o">.</span><span class="na">ACTION_DOWN</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">onUserInteraction</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">getWindow</span><span class="o">().</span><span class="na">superDispatchTouchEvent</span><span class="o">(</span><span class="n">ev</span><span class="o">))</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>    <span class="k">return</span> <span class="nf">onTouchEvent</span><span class="o">(</span><span class="n">ev</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个方法可以清楚地看到，先锋和断后和view tree在事件派发流动中的顺序。</p>
+
+<p>下面重点看看在Window中（view tree）里面事件的派发流动过程。其实重点看<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/View.java;bpv=0;bpt=1">View#dispatchTouchEvent</a>和<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewGroup.java;bpv=0;bpt=1">ViewGroup#dispatchTouchEvent</a>就可以了，需要注意的是，事件的派发流程与处理流程是不一样的，派发在先，处理在后，所以如果看事件的派发需要看dispatch打头的方法，而处理则是看on打头的。</p>
+
+<p>View的dispatch较为简单一些，因为它提供的是一个默认的实现，并且View是作为view tree中的一个叶子的，因此它的dispatch实际上就是一个终点，所以它做的事情就是，看是否有OnTouchListener，有就调用其onTouch，然后再调用onTouchEvent把事件处理一下，就完了。从这里也可以看出来OnTouchListener是走在onTouchEvent方法的前面的。</p>
+
+<p>至于ViewGroup则相对复杂，因为它要管理子View，向子View派发事件，并且还要处理拦截。它的逻辑大概是：先看自己是否要拦截<a href="https://developer.android.com/reference/android/view/ViewGroup?hl=en#onInterceptTouchEvent(android.view.MotionEvent">onInterceptTouchEvent</a>)返回true表示要拦截，false不会拦截，如果要拦截，则调用自己的onTouchEvent处理掉事件，然后终止派发(真实的逻辑要略微复杂一些，不同的ACTION处理逻辑不一样)。</p>
+
+<p>重点讲一下ViewGroup是如何向子View派发事件的，当不拦截的时候，这是比较常规的时候，会把事件向子View派发，来捋一捋这一流程：首先，会通过buildTouchDispatchChildList这个方法来选择子View的顺序，这个方法是把子View按事件派发的流程来排序，这个顺序是就是用户看到的顺序，会以Z轴（屏幕从里到外）来排序，以及渲染（draw）的顺序，毕竟从用户角度看最先点击到的，肯定 是Z轴最大（离用户最近），最先draw完的（没有被遮挡）。然后按这个顺序，按个子View调用其上面的dispatchTouchEvent，就把事件向子View传递了过去，当然 这个也是事件在流动，一旦事件被消耗，就会停止派发。</p>
+
+<p>从这个过程来看view tree事件派发是个深度优先的过程，所以view tree的深度不单单影响渲染的性能，连事件处理也比扁平的要慢一些。</p>
+
+<h2>Touch Event事件处理方法</h2>
+
+<p>事件的处理也即是各种on开头的方法如onTouchEvent，或者各种listener（OnClickListener，OnTouchListener）。一般常规来说设置各种listener就够了，但如果想要自定义一些就直接override onTouchEvent方法，这里就不细说了，各种教程太多了。</p>
+
+<h3>listener与直接Override父类方法的区别</h3>
+
+<p>需要注意的是如果要override，那么肯定 要自定义View才可以，所以这个是更『黑客式』的方法，只有有必要自定义View，且常规各种listener不能满足需求才有必要如此做，如实现各种自定义的手势等。</p>
+
+<p>listener最大的好处是，很简单方便，隔离性好，事件的触发与结果是隔离的，想针对 事件做处理，实现一个接口就好了，至于事件条件的触发则不用关心，任何对象都可以实现接口以处理事件，而不必非去子类化（继承）View对象。</p>
+
+<p>还需要注意的是OnTouchListener发生的时间要早于onTouchEvent，而常规的手势回调接口（如OnClickListener和onLongClickListner）是在onTouchEvent中触发的。因此，OnTouchListener其实也是一个更为低级的『黑客式』的接口，一般当需要自定义识别手势时才需要实现此接口。</p>
+
+<h3>防止点击穿透</h3>
+
+<p>有些时候会有一些点击穿透的问题出现，比如写了一个布局，里面有几个Button和TextView，但是当点击这些主要内容之外的空白区域时，此页面下一层的Button却收到事件，比如触发了其onClick事件。当使用层叠 式的Fragment时，此问题较常见。其实从View#onTouchEvent中就可以看到解决方案，如此某个View是clickable的，那么它会把事件消耗掉，而如果clickable为false就会继续传递。</p>
+
+<p>出现穿透的原因就是空白区域，只有这个层页面的一个根布局，通常会是一个ViewGroup，而大部分的ViewGroup默认clickable都是false，因而事件会继续向view tree里面传递，直到其被消耗。</p>
+
+<p>此类问题最简单的解决就是把View设置为clickable=&ldquo;true&#8221;，这个在布局文件中就可以设置。</p>
+
+<h3>基础手势识别</h3>
+
+<p>基础的手势识别，是说对于触控式操作的一些简单的操作的分类，比如轻触屏幕马上拿开，这视为点击（click或者叫press，或者叫tap），长按屏幕视为long click或者叫long press，还有滑动，双击等等。手势识别，即是一套逻辑算法，用以判断用户当前是哪一种操作，然后触发相当的处理逻辑，给与用户操作上的反馈。废话就这么多，接下来来看具体如何做吧。</p>
+
+<p>在Android的GUI系统中基础的手势有点击(click)和长按(long click)。要识别这些基础手势有两种方法，一是设置接口回调给View，也即实现一个<a href="https://developer.android.com/reference/android/view/View.OnClickListener">OnClickListener</a>，然后把此对象设置给<a href="https://developer.android.com/reference/android/view/View#setOnClickListener(android.view.View.OnClickListener">View#setOnClickListener</a>)（长按就是<a href="https://developer.android.com/reference/android/view/View.OnLongClickListener">OnLongClickListener</a>和<a href="https://developer.android.com/reference/android/view/View#setOnLongClickListener(android.view.View.OnLongClickListener">View#setOnLongClickListener</a>)）；另外一种方法，就是针对view tree内部，比如子类化（继承）某个View对象，然后override相应的方法。</p>
+
+<p><strong>注意</strong>: 在写布局xml文件中也可以方便的用onclick属于来指定   手势回调方法，但它的本质与设置一个OnClickListener是一样的。</p>
+
+<p>假如，点击和长按不能满足操作需求时，就需要稍复复杂的基础手势识别对象来帮助，也即是<a href="https://developer.android.com/reference/android/view/GestureDetector?hl=en">GestureDetector</a>，它与View的连接方式是接口分离，其实不见得可以用于View，只要有MotionEvent事件 来源即可。使用的方法并不复杂，只需要设置一个<a href="https://developer.android.com/reference/android/view/View.OnTouchListener">OnTouchListener</a>或者子类化View并override onTouch方法，从中拿到MotionEvent对象，然后把MotionEvent塞给一个GestureDetecotor对象，就完了，GestureDetector会回调你感兴趣的对应手势处理回调方法，通过<a href="https://developer.android.com/reference/android/view/GestureDetector.OnGestureListener?hl=en">OnGestureListener</a>对象。因为OnGestureListener是一个接口，但如果你仅对某几个手势回调方法感兴趣，不想把所有方法都 写一遍（哪怕是空实现），那么可以子类化<a href="https://developer.android.com/reference/android/view/GestureDetector.SimpleOnGestureListener?hl=en">SimpleOnGestureListener</a>，这是一个类，它实现了OnGestureListener的所有方法，我们仅需要override感兴趣的方法即可。</p>
+
+<p>有一个需要特别注意的事情就是，当你用GestureDetector时，它与常规的onClick或者onLongClick的先后顺序，或者 叫冲突处理。基于一致性的原则，如果使用了GestureDetector时，意味着你想要自己控制事件处理，那么就不应该再 设置onClick或者 onLongClick了。但如果真不小心这么做了，结果又会怎么样呢？这就需要从View的事件处理流程找答案。OnTouchListener的调用是在View#dispatchTouchEvent，这个是在View#onTouchEvent之前，而OnClickListener和OnLongClickListener是在View#onTouchEvent中调用的。所以，顺序是这样的：</p>
+
+<ol>
+<li>如果你用OnTouchListener获取的MotionEvent，那么你的OnGestureListener的回调方法是最先被调用到的，在所有的其他回调之前。</li>
+<li>如果是override View#onTouchEvent方法获取的event，那么取决于你调用super#onTouchEvent的顺序，如果你是在调用super之前，那么还是你的gesture listener先执行。其实吧，正常人override的写法肯定都先写自己的逻辑最后再调用super，或者干脆不调用super，这是最正统子类override父类的姿式。</li>
+</ol>
+
+
+<p>由此，可以得出的结论就是如果使用了GestureDetector，那么你的gesture listener肯定是优先被执行的。</p>
+
+<h3>onClick与onLongClick的触发时机</h3>
+
+<p>再 来看另外 一个比较 有意思的两个问题，onClick的触发时机是啥时候？从View#onTouchEvent方法中可看出来，是在ACTION_UP时触发的，如果它还没有触发long click，而long click则是在事件开始以后ACTION_DOWN以后开始计时，到达一定时间间隔后便触发，不算后续的事件类型。</p>
+
+<p>整体的流程是这样，在View#onTouchEvent里面，分事件类型来处理，ACTION_DOWN中开始计时，后面ACTION_MOVE中继续计时，如果达到长按标准，则触发long click，在正常结束的ACTION_UP中，看有没有达到长按标准，有就触发long click，没有则触发on click。</p>
+
+<h3>系统阈值定义</h3>
+
+<p>像长按的时长，滑动的最小距离，拉伸的最小距离等 等 这些关键的阈值都 是有系统建议的定义的，这些值都 在<a href="https://developer.android.com/reference/android/view/ViewConfiguration">ViewConfiguration</a>里面，通常建议直接使用系统定义的要好一些，除非真有特殊需要。</p>
+
+<p>可以查看<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/GestureDetector.java?q=gesturedetector">GestureDetector</a>中对这些常量的使用。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://betterprogramming.pub/mastering-the-android-touch-system-41234cf3c3b3">Mastering the Android Touch System</a></li>
+<li><a href="https://stackoverflow.com/questions/7449799/how-are-android-touch-events-delivered">How are Android touch events delivered?</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2021-07-21T19:14:58+08:00'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>21</span><span class='date-suffix'>st</span>, <span class='date-year'>2021</span></span> <span class='time'>7:14 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/android/'>android</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2020/07/26/android-view-render-flow/" title="Previous Post: Android View的渲染过程">&laquo; Android View的渲染过程</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2021/07/26/android-view-scrolling-made-easy/" title="Next Post: Android View滑动处理大法">Android View滑动处理大法 &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2021 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+    var _hmt = _hmt || [];
+    (function() {
+         var hm = document.createElement("script");
+         hm.src = "//hm.baidu.com/hm.js?3b8ca71d801a2f5af0a456e0b4635bae";
+         var s = document.getElementsByTagName("script")[0];
+         s.parentNode.insertBefore(hm, s);
+    })();
+</script>
+
+
+</body>
+</html>
