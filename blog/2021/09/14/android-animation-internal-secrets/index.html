@@ -1,0 +1,1172 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Android Animation Internal Secrets - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="深入的探索Android平台上面动画的内部实现原理">
+  <meta name="keywords" content="Android Animation">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://toughcoder.net/blog/2021/09/14/android-animation-internal-secrets">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="http://libs.baidu.com/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:toughcoder.net" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Android Animation Internal Secrets</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2021-09-14T21:07:00+08:00'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>14</span><span class='date-suffix'>th</span>, <span class='date-year'>2021</span></span> <span class='time'>9:07 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>前面的文章重点讲了如何使用安卓平台提供的能力来做好一个动画。为了更深入的理解，需要去了解一下动画框架的内部机理，这样能够帮助我们做出更优雅的动画实现。</p>
+
+<p><a href="/blog/2021/09/14/android-animation-internal-secrets/"><img src="https://miro.medium.com/max/2732/1*u5Fiyt4kb0RyYF_J-8CmwA.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2><a href="https://developer.android.com/guide/topics/graphics/view-animation">View Animation</a>的原理</h2>
+
+<h3>View Animation源码解析</h3>
+
+<p>View animation的代码都是在<a href="https://developer.android.com/reference/android/view/animation/package-summary">android.view.animation</a>包下面。</p>
+
+<p>这里面主要有三个东西，下面来分别仔细说说</p>
+
+<h4><a href=".https://developer.android.com/reference/android/view/animation/Animation">Animation</a></h4>
+
+<p>主要是抽象类<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/Animation.java">Animation</a>以及它的四大子类，也是View animation中的四大变幻对象&ndash;位移变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/TranslateAnimation.java">TranslateAnimation</a>，缩放变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/ScaleAnimation.java">ScaleAnimation</a>，旋转变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/RotateAnimation.java">RotateAnimation</a>和渐变变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/AlphaAnimation.java">AlphaAnimation</a>。</p>
+
+<p>以及一些工具对象，如<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/AnimationSet.java">AnimationSet</a>和<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/AnimationUtils.java">AnimationUtils</a>。</p>
+
+<p>仔细看这些类的源码可以发现，其实它们不复杂，里面也没啥东西，主要是用于各种参数管理，相当于封装出来的工具和原料，具体内部的原理并不在这里。仔细看四大变幻的<a href="https://developer.android.com/reference/android/view/animation/Animation#applyTransformation(float,%20android.view.animation.Transformation)">applyTransformation</a>方法，可以发现这一坨把最接近『原理』的东西都放在了一个叫做Transformation的对象中去了。</p>
+
+<h4><a href="https://developer.android.com/reference/android/view/animation/Transformation">Transformation</a></h4>
+
+<p>直译变幻，但文档中的定义是动画过程中某一时刻应该做的变幻，此为<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/Transformation.java">Transformation</a>。</p>
+
+<p>这货的实现也不复杂，它也就是个中间商，只是一个存储从Animation传过来的参数 的中间变量，它里面有一个Alpha成员参数用以保存当前的渐变参数值，以及一个<a href="https://developer.android.com/reference/android/graphics/Matrix">Matrix</a>，Matrix可以保存当前的位移，旋转和缩放。Matrix应该不算太陌生，处理过<a href="https://developer.android.com/reference/android/graphics/Bitmap">Bitmap</a>变幻的同学，对它应该会有了解，都是通过Matrix来设置参数的。</p>
+
+<h4><a href="https://developer.android.com/reference/android/view/animation/Interpolator">Interpolator</a></h4>
+
+<p>动画是随时间变化的一系列视觉变幻，因人眼视觉残留，连在一起就是动画，跟电影是一个道理。这里就有一个非常关键的参数就是时间。时间对于动画来说体现在两方面一是时长，就是整个动画持续 的时间，另外一个就是变幻变化的速率，也就是说动画播放速度的变化率。其实，这里变化的并不是时间，时间是永恒的以固定速度在流逝，对于动画来说，帧率是固定的，后面会谈到，动画的帧率是由时间驱动器驱动的，它是以固定的时间脉冲来回调渲染动画的每一帧。这里的时间变化其实是做动画的每一帧时用到的参数 的变化，它并不是线性的，假设动画一共有10帧，要把View向右移动100px，默认是线性的，匀速的，也即每一帧都向前移动10px，但如果使用加速插值器，那么可能就是一个变加速运动，第1帧可能在0px，第2帧在5px，第3帧25px，第4帧到36px，以此类推。</p>
+
+<p>时间插值器，就是用来调整播放速度的，用以实现时间变化。</p>
+
+<h3>View Animation的渲染原理</h3>
+
+<p>从前面的讨论来看，动画的渲染跟那几个对象都没有关系，使用View animation的时候，只有两种方法可以让动画生效，一是调用<a href="https://developer.android.com/reference/android/view/View?hl=en#startAnimation(android.view.animation.Animation)">View#startAnimation</a>，另外一个是<a href="https://developer.android.com/reference/android/view/View?hl=en#setAnimation(android.view.animation.Animation)">View#setAnimation</a>，然后再<a href="https://developer.android.com/reference/kotlin/android/view/animation/Animation?hl=en#start()">Animation#start</a>。</p>
+
+<p>假如没有把Animation塞给某一个具体的View对象，光是startAnimation，是不会有任何影响和效果的。这说明动画的渲染是在View对象draw时做的，没有与具体View对象建立关联的动画是没有任何效果的。所以动画的渲染主要还要看View本身的逻辑。</p>
+
+<p>可以从View#setAnimation和View#startAnimation入手来看，这两个方法只是把外部传进来的Animation对象保存在了一个叫做mCurrentAnimation成员里面，其他的什么也没做。查询索引，关键的地方有两个，一个是View#applyLegacyAnimation方法，另外一个就是View#draw方法。</p>
+
+<p>先来看View#applyLegacyAnimation方法：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'>   <span class="cm">/**</span>
+</span><span class='line'><span class="cm">     * Utility function, called by draw(canvas, parent, drawingTime) to handle the less common</span>
+</span><span class='line'><span class="cm">     * case of an active Animation being run on the view.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kt">boolean</span> <span class="nf">applyLegacyAnimation</span><span class="o">(</span><span class="n">ViewGroup</span> <span class="n">parent</span><span class="o">,</span> <span class="kt">long</span> <span class="n">drawingTime</span><span class="o">,</span>
+</span><span class='line'>            <span class="n">Animation</span> <span class="n">a</span><span class="o">,</span> <span class="kt">boolean</span> <span class="n">scalingRequired</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Transformation</span> <span class="n">invalidationTransform</span><span class="o">;</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">int</span> <span class="n">flags</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">mGroupFlags</span><span class="o">;</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">boolean</span> <span class="n">initialized</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="na">isInitialized</span><span class="o">();</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">initialized</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">a</span><span class="o">.</span><span class="na">initialize</span><span class="o">(</span><span class="n">mRight</span> <span class="o">-</span> <span class="n">mLeft</span><span class="o">,</span> <span class="n">mBottom</span> <span class="o">-</span> <span class="n">mTop</span><span class="o">,</span> <span class="n">parent</span><span class="o">.</span><span class="na">getWidth</span><span class="o">(),</span> <span class="n">parent</span><span class="o">.</span><span class="na">getHeight</span><span class="o">());</span>
+</span><span class='line'>            <span class="n">a</span><span class="o">.</span><span class="na">initializeInvalidateRegion</span><span class="o">(</span><span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">mRight</span> <span class="o">-</span> <span class="n">mLeft</span><span class="o">,</span> <span class="n">mBottom</span> <span class="o">-</span> <span class="n">mTop</span><span class="o">);</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">mAttachInfo</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="n">a</span><span class="o">.</span><span class="na">setListenerHandler</span><span class="o">(</span><span class="n">mAttachInfo</span><span class="o">.</span><span class="na">mHandler</span><span class="o">);</span>
+</span><span class='line'>            <span class="n">onAnimationStart</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="kd">final</span> <span class="n">Transformation</span> <span class="n">t</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">getChildTransformation</span><span class="o">();</span>
+</span><span class='line'>        <span class="kt">boolean</span> <span class="n">more</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="na">getTransformation</span><span class="o">(</span><span class="n">drawingTime</span><span class="o">,</span> <span class="n">t</span><span class="o">,</span> <span class="mi">1</span><span class="n">f</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">scalingRequired</span> <span class="o">&amp;&amp;</span> <span class="n">mAttachInfo</span><span class="o">.</span><span class="na">mApplicationScale</span> <span class="o">!=</span> <span class="mi">1</span><span class="n">f</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">parent</span><span class="o">.</span><span class="na">mInvalidationTransformation</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="n">parent</span><span class="o">.</span><span class="na">mInvalidationTransformation</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">Transformation</span><span class="o">();</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>            <span class="n">invalidationTransform</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">mInvalidationTransformation</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">a</span><span class="o">.</span><span class="na">getTransformation</span><span class="o">(</span><span class="n">drawingTime</span><span class="o">,</span> <span class="n">invalidationTransform</span><span class="o">,</span> <span class="mi">1</span><span class="n">f</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">invalidationTransform</span> <span class="o">=</span> <span class="n">t</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">more</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(!</span><span class="n">a</span><span class="o">.</span><span class="na">willChangeBounds</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">((</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="o">(</span><span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_OPTIMIZE_INVALIDATE</span> <span class="o">|</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_ANIMATION_DONE</span><span class="o">))</span> <span class="o">==</span>
+</span><span class='line'>                        <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_OPTIMIZE_INVALIDATE</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">parent</span><span class="o">.</span><span class="na">mGroupFlags</span> <span class="o">|=</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_INVALIDATE_REQUIRED</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">((</span><span class="n">flags</span> <span class="o">&amp;</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_INVALIDATE_REQUIRED</span><span class="o">)</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="c1">// The child need to draw an animation, potentially offscreen, so</span>
+</span><span class='line'>                    <span class="c1">// make sure we do not cancel invalidate requests</span>
+</span><span class='line'>                    <span class="n">parent</span><span class="o">.</span><span class="na">mPrivateFlags</span> <span class="o">|=</span> <span class="n">PFLAG_DRAW_ANIMATION</span><span class="o">;</span>
+</span><span class='line'>                    <span class="n">parent</span><span class="o">.</span><span class="na">invalidate</span><span class="o">(</span><span class="n">mLeft</span><span class="o">,</span> <span class="n">mTop</span><span class="o">,</span> <span class="n">mRight</span><span class="o">,</span> <span class="n">mBottom</span><span class="o">);</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>            <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">parent</span><span class="o">.</span><span class="na">mInvalidateRegion</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">parent</span><span class="o">.</span><span class="na">mInvalidateRegion</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">RectF</span><span class="o">();</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>                <span class="kd">final</span> <span class="n">RectF</span> <span class="n">region</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">mInvalidateRegion</span><span class="o">;</span>
+</span><span class='line'>                <span class="n">a</span><span class="o">.</span><span class="na">getInvalidateRegion</span><span class="o">(</span><span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">mRight</span> <span class="o">-</span> <span class="n">mLeft</span><span class="o">,</span> <span class="n">mBottom</span> <span class="o">-</span> <span class="n">mTop</span><span class="o">,</span> <span class="n">region</span><span class="o">,</span>
+</span><span class='line'>                        <span class="n">invalidationTransform</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="c1">// The child need to draw an animation, potentially offscreen, so</span>
+</span><span class='line'>                <span class="c1">// make sure we do not cancel invalidate requests</span>
+</span><span class='line'>                <span class="n">parent</span><span class="o">.</span><span class="na">mPrivateFlags</span> <span class="o">|=</span> <span class="n">PFLAG_DRAW_ANIMATION</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="kd">final</span> <span class="kt">int</span> <span class="n">left</span> <span class="o">=</span> <span class="n">mLeft</span> <span class="o">+</span> <span class="o">(</span><span class="kt">int</span><span class="o">)</span> <span class="n">region</span><span class="o">.</span><span class="na">left</span><span class="o">;</span>
+</span><span class='line'>                <span class="kd">final</span> <span class="kt">int</span> <span class="n">top</span> <span class="o">=</span> <span class="n">mTop</span> <span class="o">+</span> <span class="o">(</span><span class="kt">int</span><span class="o">)</span> <span class="n">region</span><span class="o">.</span><span class="na">top</span><span class="o">;</span>
+</span><span class='line'>                <span class="n">parent</span><span class="o">.</span><span class="na">invalidate</span><span class="o">(</span><span class="n">left</span><span class="o">,</span> <span class="n">top</span><span class="o">,</span> <span class="n">left</span> <span class="o">+</span> <span class="o">(</span><span class="kt">int</span><span class="o">)</span> <span class="o">(</span><span class="n">region</span><span class="o">.</span><span class="na">width</span><span class="o">()</span> <span class="o">+</span> <span class="o">.</span><span class="mi">5</span><span class="n">f</span><span class="o">),</span>
+</span><span class='line'>                        <span class="n">top</span> <span class="o">+</span> <span class="o">(</span><span class="kt">int</span><span class="o">)</span> <span class="o">(</span><span class="n">region</span><span class="o">.</span><span class="na">height</span><span class="o">()</span> <span class="o">+</span> <span class="o">.</span><span class="mi">5</span><span class="n">f</span><span class="o">));</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">more</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个方法看着比较长，但它就做了三件事情：1）初始化动画；2）获取当前时刻的Transformation；3）如果动画还没有完（还有下一帧），那就得调用View的invalidate，得重绘。</p>
+
+<p>再看使用此方法的地方，是在draw，需要注意是带有三个参数的那个draw，在<a href="http://toughcoder.net/blog/2020/07/26/android-view-render-flow/">前面的文章里面</a>介绍过，这个draw方法是由ViewGroup#dispatchDraw中drawChild时调用的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+<span class='line-number'>66</span>
+<span class='line-number'>67</span>
+<span class='line-number'>68</span>
+<span class='line-number'>69</span>
+<span class='line-number'>70</span>
+<span class='line-number'>71</span>
+<span class='line-number'>72</span>
+<span class='line-number'>73</span>
+<span class='line-number'>74</span>
+<span class='line-number'>75</span>
+<span class='line-number'>76</span>
+<span class='line-number'>77</span>
+<span class='line-number'>78</span>
+<span class='line-number'>79</span>
+<span class='line-number'>80</span>
+<span class='line-number'>81</span>
+<span class='line-number'>82</span>
+<span class='line-number'>83</span>
+<span class='line-number'>84</span>
+<span class='line-number'>85</span>
+<span class='line-number'>86</span>
+<span class='line-number'>87</span>
+<span class='line-number'>88</span>
+<span class='line-number'>89</span>
+<span class='line-number'>90</span>
+<span class='line-number'>91</span>
+<span class='line-number'>92</span>
+<span class='line-number'>93</span>
+<span class='line-number'>94</span>
+<span class='line-number'>95</span>
+<span class='line-number'>96</span>
+<span class='line-number'>97</span>
+<span class='line-number'>98</span>
+<span class='line-number'>99</span>
+<span class='line-number'>100</span>
+<span class='line-number'>101</span>
+<span class='line-number'>102</span>
+<span class='line-number'>103</span>
+<span class='line-number'>104</span>
+<span class='line-number'>105</span>
+<span class='line-number'>106</span>
+<span class='line-number'>107</span>
+<span class='line-number'>108</span>
+<span class='line-number'>109</span>
+<span class='line-number'>110</span>
+<span class='line-number'>111</span>
+<span class='line-number'>112</span>
+<span class='line-number'>113</span>
+<span class='line-number'>114</span>
+<span class='line-number'>115</span>
+<span class='line-number'>116</span>
+<span class='line-number'>117</span>
+<span class='line-number'>118</span>
+<span class='line-number'>119</span>
+<span class='line-number'>120</span>
+<span class='line-number'>121</span>
+<span class='line-number'>122</span>
+<span class='line-number'>123</span>
+<span class='line-number'>124</span>
+<span class='line-number'>125</span>
+<span class='line-number'>126</span>
+<span class='line-number'>127</span>
+<span class='line-number'>128</span>
+<span class='line-number'>129</span>
+<span class='line-number'>130</span>
+<span class='line-number'>131</span>
+<span class='line-number'>132</span>
+<span class='line-number'>133</span>
+<span class='line-number'>134</span>
+<span class='line-number'>135</span>
+<span class='line-number'>136</span>
+<span class='line-number'>137</span>
+<span class='line-number'>138</span>
+<span class='line-number'>139</span>
+<span class='line-number'>140</span>
+<span class='line-number'>141</span>
+<span class='line-number'>142</span>
+<span class='line-number'>143</span>
+<span class='line-number'>144</span>
+<span class='line-number'>145</span>
+<span class='line-number'>146</span>
+<span class='line-number'>147</span>
+<span class='line-number'>148</span>
+<span class='line-number'>149</span>
+<span class='line-number'>150</span>
+<span class='line-number'>151</span>
+<span class='line-number'>152</span>
+<span class='line-number'>153</span>
+<span class='line-number'>154</span>
+<span class='line-number'>155</span>
+<span class='line-number'>156</span>
+<span class='line-number'>157</span>
+<span class='line-number'>158</span>
+<span class='line-number'>159</span>
+<span class='line-number'>160</span>
+<span class='line-number'>161</span>
+<span class='line-number'>162</span>
+<span class='line-number'>163</span>
+<span class='line-number'>164</span>
+<span class='line-number'>165</span>
+<span class='line-number'>166</span>
+<span class='line-number'>167</span>
+<span class='line-number'>168</span>
+<span class='line-number'>169</span>
+<span class='line-number'>170</span>
+<span class='line-number'>171</span>
+<span class='line-number'>172</span>
+<span class='line-number'>173</span>
+<span class='line-number'>174</span>
+<span class='line-number'>175</span>
+<span class='line-number'>176</span>
+<span class='line-number'>177</span>
+<span class='line-number'>178</span>
+<span class='line-number'>179</span>
+<span class='line-number'>180</span>
+<span class='line-number'>181</span>
+<span class='line-number'>182</span>
+<span class='line-number'>183</span>
+<span class='line-number'>184</span>
+<span class='line-number'>185</span>
+<span class='line-number'>186</span>
+<span class='line-number'>187</span>
+<span class='line-number'>188</span>
+<span class='line-number'>189</span>
+<span class='line-number'>190</span>
+<span class='line-number'>191</span>
+<span class='line-number'>192</span>
+<span class='line-number'>193</span>
+<span class='line-number'>194</span>
+<span class='line-number'>195</span>
+<span class='line-number'>196</span>
+<span class='line-number'>197</span>
+<span class='line-number'>198</span>
+<span class='line-number'>199</span>
+<span class='line-number'>200</span>
+<span class='line-number'>201</span>
+<span class='line-number'>202</span>
+<span class='line-number'>203</span>
+<span class='line-number'>204</span>
+<span class='line-number'>205</span>
+<span class='line-number'>206</span>
+<span class='line-number'>207</span>
+<span class='line-number'>208</span>
+<span class='line-number'>209</span>
+<span class='line-number'>210</span>
+<span class='line-number'>211</span>
+<span class='line-number'>212</span>
+<span class='line-number'>213</span>
+<span class='line-number'>214</span>
+<span class='line-number'>215</span>
+<span class='line-number'>216</span>
+<span class='line-number'>217</span>
+<span class='line-number'>218</span>
+<span class='line-number'>219</span>
+<span class='line-number'>220</span>
+<span class='line-number'>221</span>
+<span class='line-number'>222</span>
+<span class='line-number'>223</span>
+<span class='line-number'>224</span>
+<span class='line-number'>225</span>
+<span class='line-number'>226</span>
+<span class='line-number'>227</span>
+<span class='line-number'>228</span>
+<span class='line-number'>229</span>
+<span class='line-number'>230</span>
+<span class='line-number'>231</span>
+<span class='line-number'>232</span>
+<span class='line-number'>233</span>
+<span class='line-number'>234</span>
+<span class='line-number'>235</span>
+<span class='line-number'>236</span>
+<span class='line-number'>237</span>
+<span class='line-number'>238</span>
+<span class='line-number'>239</span>
+<span class='line-number'>240</span>
+<span class='line-number'>241</span>
+<span class='line-number'>242</span>
+<span class='line-number'>243</span>
+<span class='line-number'>244</span>
+<span class='line-number'>245</span>
+<span class='line-number'>246</span>
+<span class='line-number'>247</span>
+<span class='line-number'>248</span>
+<span class='line-number'>249</span>
+<span class='line-number'>250</span>
+<span class='line-number'>251</span>
+<span class='line-number'>252</span>
+<span class='line-number'>253</span>
+<span class='line-number'>254</span>
+<span class='line-number'>255</span>
+<span class='line-number'>256</span>
+<span class='line-number'>257</span>
+<span class='line-number'>258</span>
+<span class='line-number'>259</span>
+<span class='line-number'>260</span>
+<span class='line-number'>261</span>
+<span class='line-number'>262</span>
+<span class='line-number'>263</span>
+<span class='line-number'>264</span>
+<span class='line-number'>265</span>
+<span class='line-number'>266</span>
+<span class='line-number'>267</span>
+<span class='line-number'>268</span>
+<span class='line-number'>269</span>
+<span class='line-number'>270</span>
+<span class='line-number'>271</span>
+<span class='line-number'>272</span>
+<span class='line-number'>273</span>
+<span class='line-number'>274</span>
+<span class='line-number'>275</span>
+<span class='line-number'>276</span>
+<span class='line-number'>277</span>
+<span class='line-number'>278</span>
+<span class='line-number'>279</span>
+<span class='line-number'>280</span>
+<span class='line-number'>281</span>
+<span class='line-number'>282</span>
+<span class='line-number'>283</span>
+<span class='line-number'>284</span>
+<span class='line-number'>285</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'>   <span class="cm">/**</span>
+</span><span class='line'><span class="cm">     * This method is called by ViewGroup.drawChild() to have each child view draw itself.</span>
+</span><span class='line'><span class="cm">     *</span>
+</span><span class='line'><span class="cm">     * This is where the View specializes rendering behavior based on layer type,</span>
+</span><span class='line'><span class="cm">     * and hardware acceleration.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="kt">boolean</span> <span class="nf">draw</span><span class="o">(</span><span class="n">Canvas</span> <span class="n">canvas</span><span class="o">,</span> <span class="n">ViewGroup</span> <span class="n">parent</span><span class="o">,</span> <span class="kt">long</span> <span class="n">drawingTime</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">boolean</span> <span class="n">hardwareAcceleratedCanvas</span> <span class="o">=</span> <span class="n">canvas</span><span class="o">.</span><span class="na">isHardwareAccelerated</span><span class="o">();</span>
+</span><span class='line'>        <span class="cm">/* If an attached view draws to a HW canvas, it may use its RenderNode + DisplayList.</span>
+</span><span class='line'><span class="cm">         *</span>
+</span><span class='line'><span class="cm">         * If a view is dettached, its DisplayList shouldn&#39;t exist. If the canvas isn&#39;t</span>
+</span><span class='line'><span class="cm">         * HW accelerated, it can&#39;t handle drawing RenderNodes.</span>
+</span><span class='line'><span class="cm">         */</span>
+</span><span class='line'>        <span class="kt">boolean</span> <span class="n">drawingWithRenderNode</span> <span class="o">=</span> <span class="n">mAttachInfo</span> <span class="o">!=</span> <span class="kc">null</span>
+</span><span class='line'>                <span class="o">&amp;&amp;</span> <span class="n">mAttachInfo</span><span class="o">.</span><span class="na">mHardwareAccelerated</span>
+</span><span class='line'>                <span class="o">&amp;&amp;</span> <span class="n">hardwareAcceleratedCanvas</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="kt">boolean</span> <span class="n">more</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">boolean</span> <span class="n">childHasIdentityMatrix</span> <span class="o">=</span> <span class="n">hasIdentityMatrix</span><span class="o">();</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">int</span> <span class="n">parentFlags</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">mGroupFlags</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">((</span><span class="n">parentFlags</span> <span class="o">&amp;</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLEAR_TRANSFORMATION</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">parent</span><span class="o">.</span><span class="na">getChildTransformation</span><span class="o">().</span><span class="na">clear</span><span class="o">();</span>
+</span><span class='line'>            <span class="n">parent</span><span class="o">.</span><span class="na">mGroupFlags</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLEAR_TRANSFORMATION</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">Transformation</span> <span class="n">transformToApply</span> <span class="o">=</span> <span class="kc">null</span><span class="o">;</span>
+</span><span class='line'>        <span class="kt">boolean</span> <span class="n">concatMatrix</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">boolean</span> <span class="n">scalingRequired</span> <span class="o">=</span> <span class="n">mAttachInfo</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="n">mAttachInfo</span><span class="o">.</span><span class="na">mScalingRequired</span><span class="o">;</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="n">Animation</span> <span class="n">a</span> <span class="o">=</span> <span class="n">getAnimation</span><span class="o">();</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">a</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">more</span> <span class="o">=</span> <span class="n">applyLegacyAnimation</span><span class="o">(</span><span class="n">parent</span><span class="o">,</span> <span class="n">drawingTime</span><span class="o">,</span> <span class="n">a</span><span class="o">,</span> <span class="n">scalingRequired</span><span class="o">);</span>
+</span><span class='line'>            <span class="n">concatMatrix</span> <span class="o">=</span> <span class="n">a</span><span class="o">.</span><span class="na">willChangeTransformationMatrix</span><span class="o">();</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">concatMatrix</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="n">mPrivateFlags3</span> <span class="o">|=</span> <span class="n">PFLAG3_VIEW_IS_ANIMATING_TRANSFORM</span><span class="o">;</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>            <span class="n">transformToApply</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">getChildTransformation</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">((</span><span class="n">mPrivateFlags3</span> <span class="o">&amp;</span> <span class="n">PFLAG3_VIEW_IS_ANIMATING_TRANSFORM</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="c1">// No longer animating: clear out old animation matrix</span>
+</span><span class='line'>                <span class="n">mRenderNode</span><span class="o">.</span><span class="na">setAnimationMatrix</span><span class="o">(</span><span class="kc">null</span><span class="o">);</span>
+</span><span class='line'>                <span class="n">mPrivateFlags3</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG3_VIEW_IS_ANIMATING_TRANSFORM</span><span class="o">;</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(!</span><span class="n">drawingWithRenderNode</span>
+</span><span class='line'>                    <span class="o">&amp;&amp;</span> <span class="o">(</span><span class="n">parentFlags</span> <span class="o">&amp;</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_SUPPORT_STATIC_TRANSFORMATIONS</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="kd">final</span> <span class="n">Transformation</span> <span class="n">t</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">getChildTransformation</span><span class="o">();</span>
+</span><span class='line'>                <span class="kd">final</span> <span class="kt">boolean</span> <span class="n">hasTransform</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">getChildStaticTransformation</span><span class="o">(</span><span class="k">this</span><span class="o">,</span> <span class="n">t</span><span class="o">);</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">hasTransform</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="kd">final</span> <span class="kt">int</span> <span class="n">transformType</span> <span class="o">=</span> <span class="n">t</span><span class="o">.</span><span class="na">getTransformationType</span><span class="o">();</span>
+</span><span class='line'>                    <span class="n">transformToApply</span> <span class="o">=</span> <span class="n">transformType</span> <span class="o">!=</span> <span class="n">Transformation</span><span class="o">.</span><span class="na">TYPE_IDENTITY</span> <span class="o">?</span> <span class="n">t</span> <span class="o">:</span> <span class="kc">null</span><span class="o">;</span>
+</span><span class='line'>                    <span class="n">concatMatrix</span> <span class="o">=</span> <span class="o">(</span><span class="n">transformType</span> <span class="o">&amp;</span> <span class="n">Transformation</span><span class="o">.</span><span class="na">TYPE_MATRIX</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">concatMatrix</span> <span class="o">|=</span> <span class="o">!</span><span class="n">childHasIdentityMatrix</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// Sets the flag as early as possible to allow draw() implementations</span>
+</span><span class='line'>        <span class="c1">// to call invalidate() successfully when doing animations</span>
+</span><span class='line'>        <span class="n">mPrivateFlags</span> <span class="o">|=</span> <span class="n">PFLAG_DRAWN</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">concatMatrix</span> <span class="o">&amp;&amp;</span>
+</span><span class='line'>                <span class="o">(</span><span class="n">parentFlags</span> <span class="o">&amp;</span> <span class="o">(</span><span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_SUPPORT_STATIC_TRANSFORMATIONS</span> <span class="o">|</span>
+</span><span class='line'>                        <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLIP_CHILDREN</span><span class="o">))</span> <span class="o">==</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLIP_CHILDREN</span> <span class="o">&amp;&amp;</span>
+</span><span class='line'>                <span class="n">canvas</span><span class="o">.</span><span class="na">quickReject</span><span class="o">(</span><span class="n">mLeft</span><span class="o">,</span> <span class="n">mTop</span><span class="o">,</span> <span class="n">mRight</span><span class="o">,</span> <span class="n">mBottom</span><span class="o">)</span> <span class="o">&amp;&amp;</span>
+</span><span class='line'>                <span class="o">(</span><span class="n">mPrivateFlags</span> <span class="o">&amp;</span> <span class="n">PFLAG_DRAW_ANIMATION</span><span class="o">)</span> <span class="o">==</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">mPrivateFlags2</span> <span class="o">|=</span> <span class="n">PFLAG2_VIEW_QUICK_REJECTED</span><span class="o">;</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">more</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="n">mPrivateFlags2</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG2_VIEW_QUICK_REJECTED</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">hardwareAcceleratedCanvas</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Clear INVALIDATED flag to allow invalidation to occur during rendering, but</span>
+</span><span class='line'>            <span class="c1">// retain the flag&#39;s value temporarily in the mRecreateDisplayList flag</span>
+</span><span class='line'>            <span class="n">mRecreateDisplayList</span> <span class="o">=</span> <span class="o">(</span><span class="n">mPrivateFlags</span> <span class="o">&amp;</span> <span class="n">PFLAG_INVALIDATED</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">mPrivateFlags</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG_INVALIDATED</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">RenderNode</span> <span class="n">renderNode</span> <span class="o">=</span> <span class="kc">null</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">Bitmap</span> <span class="n">cache</span> <span class="o">=</span> <span class="kc">null</span><span class="o">;</span>
+</span><span class='line'>        <span class="kt">int</span> <span class="n">layerType</span> <span class="o">=</span> <span class="n">getLayerType</span><span class="o">();</span> <span class="c1">// TODO: signify cache state with just &#39;cache&#39; local</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">layerType</span> <span class="o">==</span> <span class="n">LAYER_TYPE_SOFTWARE</span> <span class="o">||</span> <span class="o">!</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>             <span class="k">if</span> <span class="o">(</span><span class="n">layerType</span> <span class="o">!=</span> <span class="n">LAYER_TYPE_NONE</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                 <span class="c1">// If not drawing with RenderNode, treat HW layers as SW</span>
+</span><span class='line'>                 <span class="n">layerType</span> <span class="o">=</span> <span class="n">LAYER_TYPE_SOFTWARE</span><span class="o">;</span>
+</span><span class='line'>                 <span class="n">buildDrawingCache</span><span class="o">(</span><span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>            <span class="n">cache</span> <span class="o">=</span> <span class="n">getDrawingCache</span><span class="o">(</span><span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// Delay getting the display list until animation-driven alpha values are</span>
+</span><span class='line'>            <span class="c1">// set up and possibly passed on to the view</span>
+</span><span class='line'>            <span class="n">renderNode</span> <span class="o">=</span> <span class="n">updateDisplayListIfDirty</span><span class="o">();</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(!</span><span class="n">renderNode</span><span class="o">.</span><span class="na">hasDisplayList</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>                <span class="c1">// Uncommon, but possible. If a view is removed from the hierarchy during the call</span>
+</span><span class='line'>                <span class="c1">// to getDisplayList(), the display list will be marked invalid and we should not</span>
+</span><span class='line'>                <span class="c1">// try to use it again.</span>
+</span><span class='line'>                <span class="n">renderNode</span> <span class="o">=</span> <span class="kc">null</span><span class="o">;</span>
+</span><span class='line'>                <span class="n">drawingWithRenderNode</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="kt">int</span> <span class="n">sx</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>        <span class="kt">int</span> <span class="n">sy</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">computeScroll</span><span class="o">();</span>
+</span><span class='line'>            <span class="n">sx</span> <span class="o">=</span> <span class="n">mScrollX</span><span class="o">;</span>
+</span><span class='line'>            <span class="n">sy</span> <span class="o">=</span> <span class="n">mScrollY</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">boolean</span> <span class="n">drawingWithDrawingCache</span> <span class="o">=</span> <span class="n">cache</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">drawingWithRenderNode</span><span class="o">;</span>
+</span><span class='line'>        <span class="kd">final</span> <span class="kt">boolean</span> <span class="n">offsetForScroll</span> <span class="o">=</span> <span class="n">cache</span> <span class="o">==</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">drawingWithRenderNode</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="kt">int</span> <span class="n">restoreTo</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">drawingWithRenderNode</span> <span class="o">||</span> <span class="n">transformToApply</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">restoreTo</span> <span class="o">=</span> <span class="n">canvas</span><span class="o">.</span><span class="na">save</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">offsetForScroll</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">canvas</span><span class="o">.</span><span class="na">translate</span><span class="o">(</span><span class="n">mLeft</span> <span class="o">-</span> <span class="n">sx</span><span class="o">,</span> <span class="n">mTop</span> <span class="o">-</span> <span class="n">sy</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(!</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="n">canvas</span><span class="o">.</span><span class="na">translate</span><span class="o">(</span><span class="n">mLeft</span><span class="o">,</span> <span class="n">mTop</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">scalingRequired</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="c1">// TODO: Might not need this if we put everything inside the DL</span>
+</span><span class='line'>                    <span class="n">restoreTo</span> <span class="o">=</span> <span class="n">canvas</span><span class="o">.</span><span class="na">save</span><span class="o">();</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>                <span class="c1">// mAttachInfo cannot be null, otherwise scalingRequired == false</span>
+</span><span class='line'>                <span class="kd">final</span> <span class="kt">float</span> <span class="n">scale</span> <span class="o">=</span> <span class="mf">1.0f</span> <span class="o">/</span> <span class="n">mAttachInfo</span><span class="o">.</span><span class="na">mApplicationScale</span><span class="o">;</span>
+</span><span class='line'>                <span class="n">canvas</span><span class="o">.</span><span class="na">scale</span><span class="o">(</span><span class="n">scale</span><span class="o">,</span> <span class="n">scale</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="kt">float</span> <span class="n">alpha</span> <span class="o">=</span> <span class="n">drawingWithRenderNode</span> <span class="o">?</span> <span class="mi">1</span> <span class="o">:</span> <span class="o">(</span><span class="n">getAlpha</span><span class="o">()</span> <span class="o">*</span> <span class="n">getTransitionAlpha</span><span class="o">());</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">transformToApply</span> <span class="o">!=</span> <span class="kc">null</span>
+</span><span class='line'>                <span class="o">||</span> <span class="n">alpha</span> <span class="o">&lt;</span> <span class="mi">1</span>
+</span><span class='line'>                <span class="o">||</span> <span class="o">!</span><span class="n">hasIdentityMatrix</span><span class="o">()</span>
+</span><span class='line'>                <span class="o">||</span> <span class="o">(</span><span class="n">mPrivateFlags3</span> <span class="o">&amp;</span> <span class="n">PFLAG3_VIEW_IS_ANIMATING_ALPHA</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">transformToApply</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">||</span> <span class="o">!</span><span class="n">childHasIdentityMatrix</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="kt">int</span> <span class="n">transX</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>                <span class="kt">int</span> <span class="n">transY</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">offsetForScroll</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">transX</span> <span class="o">=</span> <span class="o">-</span><span class="n">sx</span><span class="o">;</span>
+</span><span class='line'>                    <span class="n">transY</span> <span class="o">=</span> <span class="o">-</span><span class="n">sy</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">transformToApply</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="k">if</span> <span class="o">(</span><span class="n">concatMatrix</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                        <span class="k">if</span> <span class="o">(</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                            <span class="n">renderNode</span><span class="o">.</span><span class="na">setAnimationMatrix</span><span class="o">(</span><span class="n">transformToApply</span><span class="o">.</span><span class="na">getMatrix</span><span class="o">());</span>
+</span><span class='line'>                        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                            <span class="c1">// Undo the scroll translation, apply the transformation matrix,</span>
+</span><span class='line'>                            <span class="c1">// then redo the scroll translate to get the correct result.</span>
+</span><span class='line'>                            <span class="n">canvas</span><span class="o">.</span><span class="na">translate</span><span class="o">(-</span><span class="n">transX</span><span class="o">,</span> <span class="o">-</span><span class="n">transY</span><span class="o">);</span>
+</span><span class='line'>                            <span class="n">canvas</span><span class="o">.</span><span class="na">concat</span><span class="o">(</span><span class="n">transformToApply</span><span class="o">.</span><span class="na">getMatrix</span><span class="o">());</span>
+</span><span class='line'>                            <span class="n">canvas</span><span class="o">.</span><span class="na">translate</span><span class="o">(</span><span class="n">transX</span><span class="o">,</span> <span class="n">transY</span><span class="o">);</span>
+</span><span class='line'>                        <span class="o">}</span>
+</span><span class='line'>                        <span class="n">parent</span><span class="o">.</span><span class="na">mGroupFlags</span> <span class="o">|=</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLEAR_TRANSFORMATION</span><span class="o">;</span>
+</span><span class='line'>                    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>                    <span class="kt">float</span> <span class="n">transformAlpha</span> <span class="o">=</span> <span class="n">transformToApply</span><span class="o">.</span><span class="na">getAlpha</span><span class="o">();</span>
+</span><span class='line'>                    <span class="k">if</span> <span class="o">(</span><span class="n">transformAlpha</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                        <span class="n">alpha</span> <span class="o">*=</span> <span class="n">transformAlpha</span><span class="o">;</span>
+</span><span class='line'>                        <span class="n">parent</span><span class="o">.</span><span class="na">mGroupFlags</span> <span class="o">|=</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLEAR_TRANSFORMATION</span><span class="o">;</span>
+</span><span class='line'>                    <span class="o">}</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(!</span><span class="n">childHasIdentityMatrix</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">canvas</span><span class="o">.</span><span class="na">translate</span><span class="o">(-</span><span class="n">transX</span><span class="o">,</span> <span class="o">-</span><span class="n">transY</span><span class="o">);</span>
+</span><span class='line'>                    <span class="n">canvas</span><span class="o">.</span><span class="na">concat</span><span class="o">(</span><span class="n">getMatrix</span><span class="o">());</span>
+</span><span class='line'>                    <span class="n">canvas</span><span class="o">.</span><span class="na">translate</span><span class="o">(</span><span class="n">transX</span><span class="o">,</span> <span class="n">transY</span><span class="o">);</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="c1">// Deal with alpha if it is or used to be &lt;1</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">alpha</span> <span class="o">&lt;</span> <span class="mi">1</span> <span class="o">||</span> <span class="o">(</span><span class="n">mPrivateFlags3</span> <span class="o">&amp;</span> <span class="n">PFLAG3_VIEW_IS_ANIMATING_ALPHA</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">alpha</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">mPrivateFlags3</span> <span class="o">|=</span> <span class="n">PFLAG3_VIEW_IS_ANIMATING_ALPHA</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">mPrivateFlags3</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG3_VIEW_IS_ANIMATING_ALPHA</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>                <span class="n">parent</span><span class="o">.</span><span class="na">mGroupFlags</span> <span class="o">|=</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLEAR_TRANSFORMATION</span><span class="o">;</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(!</span><span class="n">drawingWithDrawingCache</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="kd">final</span> <span class="kt">int</span> <span class="n">multipliedAlpha</span> <span class="o">=</span> <span class="o">(</span><span class="kt">int</span><span class="o">)</span> <span class="o">(</span><span class="mi">255</span> <span class="o">*</span> <span class="n">alpha</span><span class="o">);</span>
+</span><span class='line'>                    <span class="k">if</span> <span class="o">(!</span><span class="n">onSetAlpha</span><span class="o">(</span><span class="n">multipliedAlpha</span><span class="o">))</span> <span class="o">{</span>
+</span><span class='line'>                        <span class="k">if</span> <span class="o">(</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                            <span class="n">renderNode</span><span class="o">.</span><span class="na">setAlpha</span><span class="o">(</span><span class="n">alpha</span> <span class="o">*</span> <span class="n">getAlpha</span><span class="o">()</span> <span class="o">*</span> <span class="n">getTransitionAlpha</span><span class="o">());</span>
+</span><span class='line'>                        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">layerType</span> <span class="o">==</span> <span class="n">LAYER_TYPE_NONE</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                            <span class="n">canvas</span><span class="o">.</span><span class="na">saveLayerAlpha</span><span class="o">(</span><span class="n">sx</span><span class="o">,</span> <span class="n">sy</span><span class="o">,</span> <span class="n">sx</span> <span class="o">+</span> <span class="n">getWidth</span><span class="o">(),</span> <span class="n">sy</span> <span class="o">+</span> <span class="n">getHeight</span><span class="o">(),</span>
+</span><span class='line'>                                    <span class="n">multipliedAlpha</span><span class="o">);</span>
+</span><span class='line'>                        <span class="o">}</span>
+</span><span class='line'>                    <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                        <span class="c1">// Alpha is handled by the child directly, clobber the layer&#39;s alpha</span>
+</span><span class='line'>                        <span class="n">mPrivateFlags</span> <span class="o">|=</span> <span class="n">PFLAG_ALPHA_SET</span><span class="o">;</span>
+</span><span class='line'>                    <span class="o">}</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">((</span><span class="n">mPrivateFlags</span> <span class="o">&amp;</span> <span class="n">PFLAG_ALPHA_SET</span><span class="o">)</span> <span class="o">==</span> <span class="n">PFLAG_ALPHA_SET</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">onSetAlpha</span><span class="o">(</span><span class="mi">255</span><span class="o">);</span>
+</span><span class='line'>            <span class="n">mPrivateFlags</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG_ALPHA_SET</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="c1">// apply clips directly, since RenderNode won&#39;t do it for this draw</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">((</span><span class="n">parentFlags</span> <span class="o">&amp;</span> <span class="n">ViewGroup</span><span class="o">.</span><span class="na">FLAG_CLIP_CHILDREN</span><span class="o">)</span> <span class="o">!=</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">cache</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">offsetForScroll</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">canvas</span><span class="o">.</span><span class="na">clipRect</span><span class="o">(</span><span class="n">sx</span><span class="o">,</span> <span class="n">sy</span><span class="o">,</span> <span class="n">sx</span> <span class="o">+</span> <span class="n">getWidth</span><span class="o">(),</span> <span class="n">sy</span> <span class="o">+</span> <span class="n">getHeight</span><span class="o">());</span>
+</span><span class='line'>                <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="k">if</span> <span class="o">(!</span><span class="n">scalingRequired</span> <span class="o">||</span> <span class="n">cache</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                        <span class="n">canvas</span><span class="o">.</span><span class="na">clipRect</span><span class="o">(</span><span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">getWidth</span><span class="o">(),</span> <span class="n">getHeight</span><span class="o">());</span>
+</span><span class='line'>                    <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                        <span class="n">canvas</span><span class="o">.</span><span class="na">clipRect</span><span class="o">(</span><span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">cache</span><span class="o">.</span><span class="na">getWidth</span><span class="o">(),</span> <span class="n">cache</span><span class="o">.</span><span class="na">getHeight</span><span class="o">());</span>
+</span><span class='line'>                    <span class="o">}</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">mClipBounds</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="c1">// clip bounds ignore scroll</span>
+</span><span class='line'>                <span class="n">canvas</span><span class="o">.</span><span class="na">clipRect</span><span class="o">(</span><span class="n">mClipBounds</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(!</span><span class="n">drawingWithDrawingCache</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">drawingWithRenderNode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="n">mPrivateFlags</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG_DIRTY_MASK</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">((</span><span class="n">RecordingCanvas</span><span class="o">)</span> <span class="n">canvas</span><span class="o">).</span><span class="na">drawRenderNode</span><span class="o">(</span><span class="n">renderNode</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                <span class="c1">// Fast path for layouts with no backgrounds</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">((</span><span class="n">mPrivateFlags</span> <span class="o">&amp;</span> <span class="n">PFLAG_SKIP_DRAW</span><span class="o">)</span> <span class="o">==</span> <span class="n">PFLAG_SKIP_DRAW</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">mPrivateFlags</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG_DIRTY_MASK</span><span class="o">;</span>
+</span><span class='line'>                    <span class="n">dispatchDraw</span><span class="o">(</span><span class="n">canvas</span><span class="o">);</span>
+</span><span class='line'>                <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">draw</span><span class="o">(</span><span class="n">canvas</span><span class="o">);</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">cache</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">mPrivateFlags</span> <span class="o">&amp;=</span> <span class="o">~</span><span class="n">PFLAG_DIRTY_MASK</span><span class="o">;</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">layerType</span> <span class="o">==</span> <span class="n">LAYER_TYPE_NONE</span> <span class="o">||</span> <span class="n">mLayerPaint</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="c1">// no layer paint, use temporary paint to draw bitmap</span>
+</span><span class='line'>                <span class="n">Paint</span> <span class="n">cachePaint</span> <span class="o">=</span> <span class="n">parent</span><span class="o">.</span><span class="na">mCachePaint</span><span class="o">;</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">cachePaint</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">cachePaint</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">Paint</span><span class="o">();</span>
+</span><span class='line'>                    <span class="n">cachePaint</span><span class="o">.</span><span class="na">setDither</span><span class="o">(</span><span class="kc">false</span><span class="o">);</span>
+</span><span class='line'>                    <span class="n">parent</span><span class="o">.</span><span class="na">mCachePaint</span> <span class="o">=</span> <span class="n">cachePaint</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>                <span class="n">cachePaint</span><span class="o">.</span><span class="na">setAlpha</span><span class="o">((</span><span class="kt">int</span><span class="o">)</span> <span class="o">(</span><span class="n">alpha</span> <span class="o">*</span> <span class="mi">255</span><span class="o">));</span>
+</span><span class='line'>                <span class="n">canvas</span><span class="o">.</span><span class="na">drawBitmap</span><span class="o">(</span><span class="n">cache</span><span class="o">,</span> <span class="mf">0.0f</span><span class="o">,</span> <span class="mf">0.0f</span><span class="o">,</span> <span class="n">cachePaint</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>                <span class="c1">// use layer paint to draw the bitmap, merging the two alphas, but also restore</span>
+</span><span class='line'>                <span class="kt">int</span> <span class="n">layerPaintAlpha</span> <span class="o">=</span> <span class="n">mLayerPaint</span><span class="o">.</span><span class="na">getAlpha</span><span class="o">();</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">alpha</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">mLayerPaint</span><span class="o">.</span><span class="na">setAlpha</span><span class="o">((</span><span class="kt">int</span><span class="o">)</span> <span class="o">(</span><span class="n">alpha</span> <span class="o">*</span> <span class="n">layerPaintAlpha</span><span class="o">));</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>                <span class="n">canvas</span><span class="o">.</span><span class="na">drawBitmap</span><span class="o">(</span><span class="n">cache</span><span class="o">,</span> <span class="mf">0.0f</span><span class="o">,</span> <span class="mf">0.0f</span><span class="o">,</span> <span class="n">mLayerPaint</span><span class="o">);</span>
+</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="n">alpha</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">mLayerPaint</span><span class="o">.</span><span class="na">setAlpha</span><span class="o">(</span><span class="n">layerPaintAlpha</span><span class="o">);</span>
+</span><span class='line'>                <span class="o">}</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">restoreTo</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">canvas</span><span class="o">.</span><span class="na">restoreToCount</span><span class="o">(</span><span class="n">restoreTo</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">a</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">more</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(!</span><span class="n">hardwareAcceleratedCanvas</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">a</span><span class="o">.</span><span class="na">getFillAfter</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>                <span class="n">onSetAlpha</span><span class="o">(</span><span class="mi">255</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>            <span class="n">parent</span><span class="o">.</span><span class="na">finishAnimatingView</span><span class="o">(</span><span class="k">this</span><span class="o">,</span> <span class="n">a</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">more</span> <span class="o">&amp;&amp;</span> <span class="n">hardwareAcceleratedCanvas</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="o">(</span><span class="n">a</span><span class="o">.</span><span class="na">hasAlpha</span><span class="o">()</span> <span class="o">&amp;&amp;</span> <span class="o">(</span><span class="n">mPrivateFlags</span> <span class="o">&amp;</span> <span class="n">PFLAG_ALPHA_SET</span><span class="o">)</span> <span class="o">==</span> <span class="n">PFLAG_ALPHA_SET</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>                <span class="c1">// alpha animations should cause the child to recreate its display list</span>
+</span><span class='line'>                <span class="n">invalidate</span><span class="o">(</span><span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">mRecreateDisplayList</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">return</span> <span class="n">more</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个方法更长，主要就看transformToApply这个变量就好了，这个变量是在调用了applyLegacyAnimation后被赋值的。之后，可以看到它其中的Matrix被作用于Canvas，而alpha值被用于setAlpha了。好了，这里就是动画的最核心的逻辑。前面说了Transformation对象就是包了一个Matrix和alpha，然后被用在了这里，Matrix作用于<a href="https://developer.android.com/reference/android/graphics/Canvas">Canvas</a>对象，以产生视觉变幻（位移，缩放和旋转），而渐变则是通过setAlpha实现的。</p>
+
+<p>所以View Animation是View tree每次draw的时候去做的，用当前的Animation对象获取到Transformation，然后把Matrix和alpha应用到draw时的Canvas，这就产生了视觉变幻效果。因此，View animation只是放一遍电影，因为这一过程中变化 的只有Transformation对象，也即只有Matrix和alpha在变化，在View draw的时候应用一下就完了，它并没有对View的真实属性产生影响，仅是对渲染的结果Canvas产生影响。而每次View draw的时候，都是会重新生成一个Canvas对象，并且View的属性本身并没有变，所以新生成的Canvas对象并不会体现之前一次draw（也即上一帧）的变幻结果，它只是继续应用Transformation对象，假如动画结束了就没有了Transformation对象，那就没有Matrix和alpha可作用于Canvas，也就没有了动画效果，一切又恢复到了最初原始的样子。</p>
+
+<h2>Property Animation的原理</h2>
+
+<p>属性动画的实现主要是在<a href="https://developer.android.com/reference/kotlin/android/animation/package-summary?hl=en">android.animation</a>里面，它有独立的一级包名，可以看出它在平台中的位置，是要高于View animation的。</p>
+
+<h3>Animator的源码解析</h3>
+
+<p>先从<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/Animator.java">Animator</a>对象看起，它是一个抽象类，只定义了关于动画的基本接口，如duration/start/end/cancel等，以及设置Listener以外，再无其他东西。</p>
+
+<p>最为核心的对象是ValueAnimator，它是属性动画的核心，它主要有两部分，一是管理各种数值，前面的文章说过属性动画的核心原理就是在一定时间内，用一定速率把某个值变成另外一个值；另外一部分就涉及渲染原理，后面再详细说。</p>
+
+<p>再有就是ObjectAnimator，它是ValueAnimator的子类，连同<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/PropertyValuesHolder.java">PropertyValuesHolder</a>一起，针对某个对象的属性进行管理，主要涉及两方面，一个是属性值的管理，也即把对象的属性名字和其要设置的值都暂存起来，另外一部分就是通过反射来把要修改的值作用于目标对象。</p>
+
+<h3>Animator的时间驱动器</h3>
+
+<p>动画要让数值随时间而变化，当start了以后，最重要的事情 就是以一定的时间速率来刷新数值，也即是用一个时间驱动器来刷新每一帧。前面讨论了View animation，是在View tree渲染时去刷新动画的每一帧。</p>
+
+<p>属性动画的核心在ValueAnimator里面，连同一个AnimatorHandler对象，一起实现了时间驱动。AnimatorHanndler是属性动画的时间驱动器，它从<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/Choreographer.java;drc=master;l=82">Choreographer</a>中接收脉冲信号，然后再回调给所有的ValueAnimator，令其doAnimationFrame。它是一个单例，也就是说同一个进程里所有的属性动画用的是内一个时间驱动器，同一个AnimatorHandler。</p>
+
+<p><strong>注意</strong>：关于Choreographer的解释可以看<a href="http://toughcoder.net/blog/2020/07/26/android-view-render-flow/">另外的文章</a>。</p>
+
+<p>当调用ValueAnimator#start时便会往<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/AnimationHandler.java">AnimatorHandler</a>对象添加一个回调，用以接收do frame的脉冲事件，然后从时间插值器mInterpolator中获取当前的时间速率，再调用animateValue进行数值的改变，其子类可以override此方法以实现属性的具体变化。这里还有一个变量mSelfPulsing用以控制是否使用AnimatorHandler，默认是true，也就是让ValueAnimator使用AnimatorHandler接收来自Choreographer的脉冲信号做动画。此外，也可以自己实现一个时间驱动器。</p>
+
+<p>由此，便可以让在duration之内，渲染动画的每一帧。</p>
+
+<h3>Animator的渲染原理</h3>
+
+<p><a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/ValueAnimator.java">ValueAnimator</a>仅是让一个数值在一定时间内发生特定的变化，它没有实际的视觉效果。常常使用的是ObjectAnimator，并作用于View的属性以产生视觉效果，如前面文章中的例子。那么这个又是如何实现的呢？</p>
+
+<p><a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/ObjectAnimator.java">ObjectAnimator</a>是可能改变某个对象（内部称之为Target对象）的某个属性值，让其随时间变化，当应用到View对象时，比如translationY属性，ObjectAniamtor所做的也仅仅是让translationY的值随时间变化 而已，仅在animateValue时去调用View#setTranslationY把变化的数值传进去。是View自己在做重绘，View的setTranslationY方法中，有做invalidate以进行重绘。由此，便产生了视觉效果。</p>
+
+<p><a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewPropertyAnimator.java">ViewPropertyAnimator</a>是另一个常用的对象，但发现它并不是Animator的子类，是封装出来的专门针对View对象做属性动画的一个工具类，它本质上与ObjectAnimator一样，只不过做了一些集成与封装，可以同时方便的操作多个属性，另外它会把所有属性的值变更 过后统一调一次invalidate，效率上会略高一筹。ObjectAnimator一次只能操作一个属性，并且每个属性变化 时都会调一次invalidate。</p>
+
+<p>它是把支持的属性都先放进一个map里面暂存起来，当调用startAnimation时，创建一个ValueAnimator，并设置一个AnimatorListener，在onAnimationUpdate时，把前面暂存的属性都设置到mView对象中去，然后调用一次invalidate让mView重绘。这里还需要注意，在设置属性这一块与ObjectAnimator也不一样，前面说了ObjectAniamtor是通过属性的settter来实现的，但View的属性的settter都会触发invalidate。所以，ViewPropertyAnimator为了避免每次设置属性时都触发invalidate，它是直接把属性塞给View的mRenderNode对象，然后在所有变化 的属性都设置完以后，再统一做一次重绘(invalidate)。</p>
+
+<p>另外的区别就是，ViewPropertyAnimator仅支持一些特定的属性，而ObjectAnimator可以支持任意属性（只要有setter/getter，就可以）。</p>
+
+<h2>关于动画的常见问题</h2>
+
+<p>通过上面的论述，就搞清楚了动画原理了，下面来看一些比较有意思的问题。</p>
+
+<h3>动画是在主线程里做的么</h3>
+
+<p>动画主要是通过View对象来呈现视觉效果，View是在主线程中渲染的，所以动画也是在主线程里面完成的。这话呢，只对了一半，或者这么说是不够严谨的。</p>
+
+<p>通过上面的讨论，View animation，都是在主线程中实现的，因为它的时间驱动器是View tree的渲染，也即在draw的时候，去计算当前的Transformation，然后应用到View的Canvas上面。这一切都是在主线程中完成的。</p>
+
+<p>但对于属性动画，就不是这个样子，属性动画分两部分，一部分是让数值随时间变化 ，这个其实可以在任意线程中去做。通过上面的讨论，默认的情况下，确实也是在主线程中做的（从Choreographer得到时间脉冲，这是在主线程里面），但是留 有接口，可以改变的，虽然很少这样做，但确实是可行的，并且数值随时间变化，这个事情也是可以在任意线程中完成的。另外一部分，就是让变化 的数值对目标对象生效，这个要看具体的对象了，如果View，肯定 还是要在主线程里搞。</p>
+
+<h3>动画的帧率（FPS）是多少</h3>
+
+<p>从上面的讨论来看，无论是View animation还是属性动画，时间脉冲都是Choreographer，并且对View来说视觉要生效是通过重绘来做的，所以最高帧率都会是60FPS。</p>
+
+<p>所以，其实动画的帧率是固定的，也就是说其doAnimationFrame是固定频率在回调。</p>
+
+<p>这里要与动画的时间插值器区别开来，动画的真实帧率是固定的，时间插值器的作用是让动画的变化变成非线性的。比如说某个属性x从0变到100，ValueAnimator的doAnimationFrame以及animateValue会是以固定的频率，从Choreographer每隔16ms接收一次脉冲，就会调用一次animateValue，时间插值器的作用，能让x值的变化是非线性的：</p>
+
+<p>时间脉冲：0 1 2 3 4 5 6 7 8 9 10
+线性变化：0 10 20 30 40 50 60 70 80 90 100
+加速减速：0 13 25 37 57 71 79 85 89 95 100</p>
+
+<p>时间插值器并没有让动画的帧率发生变化 ，而是让动画的结果非线性变化。</p>
+
+<h3>动画过程中如何处理MotionEvent事件</h3>
+
+<p>没有任何影响，view animation是发生在draw的时候，而属性动画是设置属性后再re-draw。从逻辑 上来讲动画与事件不冲突，两者之间没有任何影响。</p>
+
+<p>不过呢，View animation是对Canvas做变幻，View对象仍在原来的位置，原来的状态，所以点击动画过程中的View可能会没有效果，特别是对于有位移的时候。但属性动画就没有问题，View就是真实的在移动。</p>
+
+<p>但对于业务逻辑来说，通常动画都用于某个View的入场和出场，所以入场动画做完之前，以及出场动画开始之后，不响应点击事件要好一些，当然，这个就要靠开发者自己去实现了。</p>
+
+<h3>动画可以取消么</h3>
+
+<p>当然可以，都有cancel接口可以调用，但具体影响不太一样。</p>
+
+<p>对于View animation，<a href="https://developer.android.com/reference/android/view/animation/Animation#cancel()">Animation#cancel</a>是会调用onAnimationEnd的，因为它的回调接口没有专门用于cancel的。</p>
+
+<p>但属性动画的回调接口要丰富一些，它有cancel，所以是会回调onAimationCancel的，但不会回调onAnimationEnd。</p>
+
+<h3>动画需要注意的事项</h3>
+
+<p>一定要实现onAnimationCancel，以及onAnimationEnd，如果有涉及状态变更，或者关联其他动画时。要知道动画除了常规结束还会有被cancel掉的可能。</p>
+
+<p>另外，就是对于属性动画，取消有两种方式，一是直接调用<a href="https://developer.android.com/reference/android/animation/Animator#cancel()">Animator#cancel</a>另外一种是调用<a href="https://developer.android.com/reference/android/animation/Animator#end()">Animator#end</a>，两个方法在处理最后的状态时略有差异。end方法会把属性的最终状态设置给属性，然后回调onAnimationEnd，但cancel就直接终止动画了，属性当前啥状态那就啥状态，然后回调onAnimationCancel。其实，大多数情况下，end更为合理，但end可能会造成视觉上的跳跃，属性的状态会突然变化。</p>
+
+<p>再有就是，如果对于View，有多个属性同时做动画时，用ViewPropertyAnimator更好一些。语法上面也更简洁，性能上也略优一些。</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2021-09-14T21:07:00+08:00'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>14</span><span class='date-suffix'>th</span>, <span class='date-year'>2021</span></span> <span class='time'>9:07 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2021/09/04/android-animation-advanced-tricks/" title="Previous Post: Android Animation Advanced Tricks">&laquo; Android Animation Advanced Tricks</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2021 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+    var _hmt = _hmt || [];
+    (function() {
+         var hm = document.createElement("script");
+         hm.src = "//hm.baidu.com/hm.js?3b8ca71d801a2f5af0a456e0b4635bae";
+         var s = document.getElementsByTagName("script")[0];
+         s.parentNode.insertBefore(hm, s);
+    })();
+</script>
+
+
+</body>
+</html>

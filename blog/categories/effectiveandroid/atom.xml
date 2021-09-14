@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2021-09-04T11:57:48+08:00</updated>
+  <updated>2021-09-14T22:43:45+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,500 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Android Animation Internal Secrets]]></title>
+    <link href="http://toughcoder.net/blog/2021/09/14/android-animation-internal-secrets/"/>
+    <updated>2021-09-14T21:07:00+08:00</updated>
+    <id>http://toughcoder.net/blog/2021/09/14/android-animation-internal-secrets</id>
+    <content type="html"><![CDATA[<p>前面的文章重点讲了如何使用安卓平台提供的能力来做好一个动画。为了更深入的理解，需要去了解一下动画框架的内部机理，这样能够帮助我们做出更优雅的动画实现。</p>
+
+<p><a href=""><img src="https://miro.medium.com/max/2732/1*u5Fiyt4kb0RyYF_J-8CmwA.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2><a href="https://developer.android.com/guide/topics/graphics/view-animation">View Animation</a>的原理</h2>
+
+<h3>View Animation源码解析</h3>
+
+<p>View animation的代码都是在<a href="https://developer.android.com/reference/android/view/animation/package-summary">android.view.animation</a>包下面。</p>
+
+<p>这里面主要有三个东西，下面来分别仔细说说</p>
+
+<h4><a href=".https://developer.android.com/reference/android/view/animation/Animation">Animation</a></h4>
+
+<p>主要是抽象类<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/Animation.java">Animation</a>以及它的四大子类，也是View animation中的四大变幻对象&ndash;位移变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/TranslateAnimation.java">TranslateAnimation</a>，缩放变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/ScaleAnimation.java">ScaleAnimation</a>，旋转变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/RotateAnimation.java">RotateAnimation</a>和渐变变幻<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/AlphaAnimation.java">AlphaAnimation</a>。</p>
+
+<p>以及一些工具对象，如<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/AnimationSet.java">AnimationSet</a>和<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/AnimationUtils.java">AnimationUtils</a>。</p>
+
+<p>仔细看这些类的源码可以发现，其实它们不复杂，里面也没啥东西，主要是用于各种参数管理，相当于封装出来的工具和原料，具体内部的原理并不在这里。仔细看四大变幻的<a href="https://developer.android.com/reference/android/view/animation/Animation#applyTransformation(float,%20android.view.animation.Transformation)">applyTransformation</a>方法，可以发现这一坨把最接近『原理』的东西都放在了一个叫做Transformation的对象中去了。</p>
+
+<h4><a href="https://developer.android.com/reference/android/view/animation/Transformation">Transformation</a></h4>
+
+<p>直译变幻，但文档中的定义是动画过程中某一时刻应该做的变幻，此为<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/animation/Transformation.java">Transformation</a>。</p>
+
+<p>这货的实现也不复杂，它也就是个中间商，只是一个存储从Animation传过来的参数 的中间变量，它里面有一个Alpha成员参数用以保存当前的渐变参数值，以及一个<a href="https://developer.android.com/reference/android/graphics/Matrix">Matrix</a>，Matrix可以保存当前的位移，旋转和缩放。Matrix应该不算太陌生，处理过<a href="https://developer.android.com/reference/android/graphics/Bitmap">Bitmap</a>变幻的同学，对它应该会有了解，都是通过Matrix来设置参数的。</p>
+
+<h4><a href="https://developer.android.com/reference/android/view/animation/Interpolator">Interpolator</a></h4>
+
+<p>动画是随时间变化的一系列视觉变幻，因人眼视觉残留，连在一起就是动画，跟电影是一个道理。这里就有一个非常关键的参数就是时间。时间对于动画来说体现在两方面一是时长，就是整个动画持续 的时间，另外一个就是变幻变化的速率，也就是说动画播放速度的变化率。其实，这里变化的并不是时间，时间是永恒的以固定速度在流逝，对于动画来说，帧率是固定的，后面会谈到，动画的帧率是由时间驱动器驱动的，它是以固定的时间脉冲来回调渲染动画的每一帧。这里的时间变化其实是做动画的每一帧时用到的参数 的变化，它并不是线性的，假设动画一共有10帧，要把View向右移动100px，默认是线性的，匀速的，也即每一帧都向前移动10px，但如果使用加速插值器，那么可能就是一个变加速运动，第1帧可能在0px，第2帧在5px，第3帧25px，第4帧到36px，以此类推。</p>
+
+<p>时间插值器，就是用来调整播放速度的，用以实现时间变化。</p>
+
+<h3>View Animation的渲染原理</h3>
+
+<p>从前面的讨论来看，动画的渲染跟那几个对象都没有关系，使用View animation的时候，只有两种方法可以让动画生效，一是调用<a href="https://developer.android.com/reference/android/view/View?hl=en#startAnimation(android.view.animation.Animation)">View#startAnimation</a>，另外一个是<a href="https://developer.android.com/reference/android/view/View?hl=en#setAnimation(android.view.animation.Animation)">View#setAnimation</a>，然后再<a href="https://developer.android.com/reference/kotlin/android/view/animation/Animation?hl=en#start()">Animation#start</a>。</p>
+
+<p>假如没有把Animation塞给某一个具体的View对象，光是startAnimation，是不会有任何影响和效果的。这说明动画的渲染是在View对象draw时做的，没有与具体View对象建立关联的动画是没有任何效果的。所以动画的渲染主要还要看View本身的逻辑。</p>
+
+<p>可以从View#setAnimation和View#startAnimation入手来看，这两个方法只是把外部传进来的Animation对象保存在了一个叫做mCurrentAnimation成员里面，其他的什么也没做。查询索引，关键的地方有两个，一个是View#applyLegacyAnimation方法，另外一个就是View#draw方法。</p>
+
+<p>先来看View#applyLegacyAnimation方法：</p>
+
+<pre><code class="java">   /**
+     * Utility function, called by draw(canvas, parent, drawingTime) to handle the less common
+     * case of an active Animation being run on the view.
+     */
+    private boolean applyLegacyAnimation(ViewGroup parent, long drawingTime,
+            Animation a, boolean scalingRequired) {
+        Transformation invalidationTransform;
+        final int flags = parent.mGroupFlags;
+        final boolean initialized = a.isInitialized();
+        if (!initialized) {
+            a.initialize(mRight - mLeft, mBottom - mTop, parent.getWidth(), parent.getHeight());
+            a.initializeInvalidateRegion(0, 0, mRight - mLeft, mBottom - mTop);
+            if (mAttachInfo != null) a.setListenerHandler(mAttachInfo.mHandler);
+            onAnimationStart();
+        }
+
+        final Transformation t = parent.getChildTransformation();
+        boolean more = a.getTransformation(drawingTime, t, 1f);
+        if (scalingRequired &amp;&amp; mAttachInfo.mApplicationScale != 1f) {
+            if (parent.mInvalidationTransformation == null) {
+                parent.mInvalidationTransformation = new Transformation();
+            }
+            invalidationTransform = parent.mInvalidationTransformation;
+            a.getTransformation(drawingTime, invalidationTransform, 1f);
+        } else {
+            invalidationTransform = t;
+        }
+
+        if (more) {
+            if (!a.willChangeBounds()) {
+                if ((flags &amp; (ViewGroup.FLAG_OPTIMIZE_INVALIDATE | ViewGroup.FLAG_ANIMATION_DONE)) ==
+                        ViewGroup.FLAG_OPTIMIZE_INVALIDATE) {
+                    parent.mGroupFlags |= ViewGroup.FLAG_INVALIDATE_REQUIRED;
+                } else if ((flags &amp; ViewGroup.FLAG_INVALIDATE_REQUIRED) == 0) {
+                    // The child need to draw an animation, potentially offscreen, so
+                    // make sure we do not cancel invalidate requests
+                    parent.mPrivateFlags |= PFLAG_DRAW_ANIMATION;
+                    parent.invalidate(mLeft, mTop, mRight, mBottom);
+                }
+            } else {
+                if (parent.mInvalidateRegion == null) {
+                    parent.mInvalidateRegion = new RectF();
+                }
+                final RectF region = parent.mInvalidateRegion;
+                a.getInvalidateRegion(0, 0, mRight - mLeft, mBottom - mTop, region,
+                        invalidationTransform);
+
+                // The child need to draw an animation, potentially offscreen, so
+                // make sure we do not cancel invalidate requests
+                parent.mPrivateFlags |= PFLAG_DRAW_ANIMATION;
+
+                final int left = mLeft + (int) region.left;
+                final int top = mTop + (int) region.top;
+                parent.invalidate(left, top, left + (int) (region.width() + .5f),
+                        top + (int) (region.height() + .5f));
+            }
+        }
+        return more;
+    }
+</code></pre>
+
+<p>这个方法看着比较长，但它就做了三件事情：1）初始化动画；2）获取当前时刻的Transformation；3）如果动画还没有完（还有下一帧），那就得调用View的invalidate，得重绘。</p>
+
+<p>再看使用此方法的地方，是在draw，需要注意是带有三个参数的那个draw，在<a href="http://toughcoder.net/blog/2020/07/26/android-view-render-flow/">前面的文章里面</a>介绍过，这个draw方法是由ViewGroup#dispatchDraw中drawChild时调用的：</p>
+
+<pre><code class="java">   /**
+     * This method is called by ViewGroup.drawChild() to have each child view draw itself.
+     *
+     * This is where the View specializes rendering behavior based on layer type,
+     * and hardware acceleration.
+     */
+    boolean draw(Canvas canvas, ViewGroup parent, long drawingTime) {
+        final boolean hardwareAcceleratedCanvas = canvas.isHardwareAccelerated();
+        /* If an attached view draws to a HW canvas, it may use its RenderNode + DisplayList.
+         *
+         * If a view is dettached, its DisplayList shouldn't exist. If the canvas isn't
+         * HW accelerated, it can't handle drawing RenderNodes.
+         */
+        boolean drawingWithRenderNode = mAttachInfo != null
+                &amp;&amp; mAttachInfo.mHardwareAccelerated
+                &amp;&amp; hardwareAcceleratedCanvas;
+
+        boolean more = false;
+        final boolean childHasIdentityMatrix = hasIdentityMatrix();
+        final int parentFlags = parent.mGroupFlags;
+
+        if ((parentFlags &amp; ViewGroup.FLAG_CLEAR_TRANSFORMATION) != 0) {
+            parent.getChildTransformation().clear();
+            parent.mGroupFlags &amp;= ~ViewGroup.FLAG_CLEAR_TRANSFORMATION;
+        }
+
+        Transformation transformToApply = null;
+        boolean concatMatrix = false;
+        final boolean scalingRequired = mAttachInfo != null &amp;&amp; mAttachInfo.mScalingRequired;
+        final Animation a = getAnimation();
+        if (a != null) {
+            more = applyLegacyAnimation(parent, drawingTime, a, scalingRequired);
+            concatMatrix = a.willChangeTransformationMatrix();
+            if (concatMatrix) {
+                mPrivateFlags3 |= PFLAG3_VIEW_IS_ANIMATING_TRANSFORM;
+            }
+            transformToApply = parent.getChildTransformation();
+        } else {
+            if ((mPrivateFlags3 &amp; PFLAG3_VIEW_IS_ANIMATING_TRANSFORM) != 0) {
+                // No longer animating: clear out old animation matrix
+                mRenderNode.setAnimationMatrix(null);
+                mPrivateFlags3 &amp;= ~PFLAG3_VIEW_IS_ANIMATING_TRANSFORM;
+            }
+            if (!drawingWithRenderNode
+                    &amp;&amp; (parentFlags &amp; ViewGroup.FLAG_SUPPORT_STATIC_TRANSFORMATIONS) != 0) {
+                final Transformation t = parent.getChildTransformation();
+                final boolean hasTransform = parent.getChildStaticTransformation(this, t);
+                if (hasTransform) {
+                    final int transformType = t.getTransformationType();
+                    transformToApply = transformType != Transformation.TYPE_IDENTITY ? t : null;
+                    concatMatrix = (transformType &amp; Transformation.TYPE_MATRIX) != 0;
+                }
+            }
+        }
+
+        concatMatrix |= !childHasIdentityMatrix;
+
+        // Sets the flag as early as possible to allow draw() implementations
+        // to call invalidate() successfully when doing animations
+        mPrivateFlags |= PFLAG_DRAWN;
+
+        if (!concatMatrix &amp;&amp;
+                (parentFlags &amp; (ViewGroup.FLAG_SUPPORT_STATIC_TRANSFORMATIONS |
+                        ViewGroup.FLAG_CLIP_CHILDREN)) == ViewGroup.FLAG_CLIP_CHILDREN &amp;&amp;
+                canvas.quickReject(mLeft, mTop, mRight, mBottom) &amp;&amp;
+                (mPrivateFlags &amp; PFLAG_DRAW_ANIMATION) == 0) {
+            mPrivateFlags2 |= PFLAG2_VIEW_QUICK_REJECTED;
+            return more;
+        }
+        mPrivateFlags2 &amp;= ~PFLAG2_VIEW_QUICK_REJECTED;
+
+        if (hardwareAcceleratedCanvas) {
+            // Clear INVALIDATED flag to allow invalidation to occur during rendering, but
+            // retain the flag's value temporarily in the mRecreateDisplayList flag
+            mRecreateDisplayList = (mPrivateFlags &amp; PFLAG_INVALIDATED) != 0;
+            mPrivateFlags &amp;= ~PFLAG_INVALIDATED;
+        }
+
+        RenderNode renderNode = null;
+        Bitmap cache = null;
+        int layerType = getLayerType(); // TODO: signify cache state with just 'cache' local
+        if (layerType == LAYER_TYPE_SOFTWARE || !drawingWithRenderNode) {
+             if (layerType != LAYER_TYPE_NONE) {
+                 // If not drawing with RenderNode, treat HW layers as SW
+                 layerType = LAYER_TYPE_SOFTWARE;
+                 buildDrawingCache(true);
+            }
+            cache = getDrawingCache(true);
+        }
+
+        if (drawingWithRenderNode) {
+            // Delay getting the display list until animation-driven alpha values are
+            // set up and possibly passed on to the view
+            renderNode = updateDisplayListIfDirty();
+            if (!renderNode.hasDisplayList()) {
+                // Uncommon, but possible. If a view is removed from the hierarchy during the call
+                // to getDisplayList(), the display list will be marked invalid and we should not
+                // try to use it again.
+                renderNode = null;
+                drawingWithRenderNode = false;
+            }
+        }
+
+        int sx = 0;
+        int sy = 0;
+        if (!drawingWithRenderNode) {
+            computeScroll();
+            sx = mScrollX;
+            sy = mScrollY;
+        }
+
+        final boolean drawingWithDrawingCache = cache != null &amp;&amp; !drawingWithRenderNode;
+        final boolean offsetForScroll = cache == null &amp;&amp; !drawingWithRenderNode;
+
+        int restoreTo = -1;
+        if (!drawingWithRenderNode || transformToApply != null) {
+            restoreTo = canvas.save();
+        }
+        if (offsetForScroll) {
+            canvas.translate(mLeft - sx, mTop - sy);
+        } else {
+            if (!drawingWithRenderNode) {
+                canvas.translate(mLeft, mTop);
+            }
+            if (scalingRequired) {
+                if (drawingWithRenderNode) {
+                    // TODO: Might not need this if we put everything inside the DL
+                    restoreTo = canvas.save();
+                }
+                // mAttachInfo cannot be null, otherwise scalingRequired == false
+                final float scale = 1.0f / mAttachInfo.mApplicationScale;
+                canvas.scale(scale, scale);
+            }
+        }
+
+        float alpha = drawingWithRenderNode ? 1 : (getAlpha() * getTransitionAlpha());
+        if (transformToApply != null
+                || alpha &lt; 1
+                || !hasIdentityMatrix()
+                || (mPrivateFlags3 &amp; PFLAG3_VIEW_IS_ANIMATING_ALPHA) != 0) {
+            if (transformToApply != null || !childHasIdentityMatrix) {
+                int transX = 0;
+                int transY = 0;
+
+                if (offsetForScroll) {
+                    transX = -sx;
+                    transY = -sy;
+                }
+
+                if (transformToApply != null) {
+                    if (concatMatrix) {
+                        if (drawingWithRenderNode) {
+                            renderNode.setAnimationMatrix(transformToApply.getMatrix());
+                        } else {
+                            // Undo the scroll translation, apply the transformation matrix,
+                            // then redo the scroll translate to get the correct result.
+                            canvas.translate(-transX, -transY);
+                            canvas.concat(transformToApply.getMatrix());
+                            canvas.translate(transX, transY);
+                        }
+                        parent.mGroupFlags |= ViewGroup.FLAG_CLEAR_TRANSFORMATION;
+                    }
+
+                    float transformAlpha = transformToApply.getAlpha();
+                    if (transformAlpha &lt; 1) {
+                        alpha *= transformAlpha;
+                        parent.mGroupFlags |= ViewGroup.FLAG_CLEAR_TRANSFORMATION;
+                    }
+                }
+
+                if (!childHasIdentityMatrix &amp;&amp; !drawingWithRenderNode) {
+                    canvas.translate(-transX, -transY);
+                    canvas.concat(getMatrix());
+                    canvas.translate(transX, transY);
+                }
+            }
+
+            // Deal with alpha if it is or used to be &lt;1
+            if (alpha &lt; 1 || (mPrivateFlags3 &amp; PFLAG3_VIEW_IS_ANIMATING_ALPHA) != 0) {
+                if (alpha &lt; 1) {
+                    mPrivateFlags3 |= PFLAG3_VIEW_IS_ANIMATING_ALPHA;
+                } else {
+                    mPrivateFlags3 &amp;= ~PFLAG3_VIEW_IS_ANIMATING_ALPHA;
+                }
+                parent.mGroupFlags |= ViewGroup.FLAG_CLEAR_TRANSFORMATION;
+                if (!drawingWithDrawingCache) {
+                    final int multipliedAlpha = (int) (255 * alpha);
+                    if (!onSetAlpha(multipliedAlpha)) {
+                        if (drawingWithRenderNode) {
+                            renderNode.setAlpha(alpha * getAlpha() * getTransitionAlpha());
+                        } else if (layerType == LAYER_TYPE_NONE) {
+                            canvas.saveLayerAlpha(sx, sy, sx + getWidth(), sy + getHeight(),
+                                    multipliedAlpha);
+                        }
+                    } else {
+                        // Alpha is handled by the child directly, clobber the layer's alpha
+                        mPrivateFlags |= PFLAG_ALPHA_SET;
+                    }
+                }
+            }
+        } else if ((mPrivateFlags &amp; PFLAG_ALPHA_SET) == PFLAG_ALPHA_SET) {
+            onSetAlpha(255);
+            mPrivateFlags &amp;= ~PFLAG_ALPHA_SET;
+        }
+
+        if (!drawingWithRenderNode) {
+            // apply clips directly, since RenderNode won't do it for this draw
+            if ((parentFlags &amp; ViewGroup.FLAG_CLIP_CHILDREN) != 0 &amp;&amp; cache == null) {
+                if (offsetForScroll) {
+                    canvas.clipRect(sx, sy, sx + getWidth(), sy + getHeight());
+                } else {
+                    if (!scalingRequired || cache == null) {
+                        canvas.clipRect(0, 0, getWidth(), getHeight());
+                    } else {
+                        canvas.clipRect(0, 0, cache.getWidth(), cache.getHeight());
+                    }
+                }
+            }
+
+            if (mClipBounds != null) {
+                // clip bounds ignore scroll
+                canvas.clipRect(mClipBounds);
+            }
+        }
+
+        if (!drawingWithDrawingCache) {
+            if (drawingWithRenderNode) {
+                mPrivateFlags &amp;= ~PFLAG_DIRTY_MASK;
+                ((RecordingCanvas) canvas).drawRenderNode(renderNode);
+            } else {
+                // Fast path for layouts with no backgrounds
+                if ((mPrivateFlags &amp; PFLAG_SKIP_DRAW) == PFLAG_SKIP_DRAW) {
+                    mPrivateFlags &amp;= ~PFLAG_DIRTY_MASK;
+                    dispatchDraw(canvas);
+                } else {
+                    draw(canvas);
+                }
+            }
+        } else if (cache != null) {
+            mPrivateFlags &amp;= ~PFLAG_DIRTY_MASK;
+            if (layerType == LAYER_TYPE_NONE || mLayerPaint == null) {
+                // no layer paint, use temporary paint to draw bitmap
+                Paint cachePaint = parent.mCachePaint;
+                if (cachePaint == null) {
+                    cachePaint = new Paint();
+                    cachePaint.setDither(false);
+                    parent.mCachePaint = cachePaint;
+                }
+                cachePaint.setAlpha((int) (alpha * 255));
+                canvas.drawBitmap(cache, 0.0f, 0.0f, cachePaint);
+            } else {
+                // use layer paint to draw the bitmap, merging the two alphas, but also restore
+                int layerPaintAlpha = mLayerPaint.getAlpha();
+                if (alpha &lt; 1) {
+                    mLayerPaint.setAlpha((int) (alpha * layerPaintAlpha));
+                }
+                canvas.drawBitmap(cache, 0.0f, 0.0f, mLayerPaint);
+                if (alpha &lt; 1) {
+                    mLayerPaint.setAlpha(layerPaintAlpha);
+                }
+            }
+        }
+
+        if (restoreTo &gt;= 0) {
+            canvas.restoreToCount(restoreTo);
+        }
+
+        if (a != null &amp;&amp; !more) {
+            if (!hardwareAcceleratedCanvas &amp;&amp; !a.getFillAfter()) {
+                onSetAlpha(255);
+            }
+            parent.finishAnimatingView(this, a);
+        }
+
+        if (more &amp;&amp; hardwareAcceleratedCanvas) {
+            if (a.hasAlpha() &amp;&amp; (mPrivateFlags &amp; PFLAG_ALPHA_SET) == PFLAG_ALPHA_SET) {
+                // alpha animations should cause the child to recreate its display list
+                invalidate(true);
+            }
+        }
+
+        mRecreateDisplayList = false;
+
+        return more;
+    }
+</code></pre>
+
+<p>这个方法更长，主要就看transformToApply这个变量就好了，这个变量是在调用了applyLegacyAnimation后被赋值的。之后，可以看到它其中的Matrix被作用于Canvas，而alpha值被用于setAlpha了。好了，这里就是动画的最核心的逻辑。前面说了Transformation对象就是包了一个Matrix和alpha，然后被用在了这里，Matrix作用于<a href="https://developer.android.com/reference/android/graphics/Canvas">Canvas</a>对象，以产生视觉变幻（位移，缩放和旋转），而渐变则是通过setAlpha实现的。</p>
+
+<p>所以View Animation是View tree每次draw的时候去做的，用当前的Animation对象获取到Transformation，然后把Matrix和alpha应用到draw时的Canvas，这就产生了视觉变幻效果。因此，View animation只是放一遍电影，因为这一过程中变化 的只有Transformation对象，也即只有Matrix和alpha在变化，在View draw的时候应用一下就完了，它并没有对View的真实属性产生影响，仅是对渲染的结果Canvas产生影响。而每次View draw的时候，都是会重新生成一个Canvas对象，并且View的属性本身并没有变，所以新生成的Canvas对象并不会体现之前一次draw（也即上一帧）的变幻结果，它只是继续应用Transformation对象，假如动画结束了就没有了Transformation对象，那就没有Matrix和alpha可作用于Canvas，也就没有了动画效果，一切又恢复到了最初原始的样子。</p>
+
+<h2>Property Animation的原理</h2>
+
+<p>属性动画的实现主要是在<a href="https://developer.android.com/reference/kotlin/android/animation/package-summary?hl=en">android.animation</a>里面，它有独立的一级包名，可以看出它在平台中的位置，是要高于View animation的。</p>
+
+<h3>Animator的源码解析</h3>
+
+<p>先从<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/Animator.java">Animator</a>对象看起，它是一个抽象类，只定义了关于动画的基本接口，如duration/start/end/cancel等，以及设置Listener以外，再无其他东西。</p>
+
+<p>最为核心的对象是ValueAnimator，它是属性动画的核心，它主要有两部分，一是管理各种数值，前面的文章说过属性动画的核心原理就是在一定时间内，用一定速率把某个值变成另外一个值；另外一部分就涉及渲染原理，后面再详细说。</p>
+
+<p>再有就是ObjectAnimator，它是ValueAnimator的子类，连同<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/PropertyValuesHolder.java">PropertyValuesHolder</a>一起，针对某个对象的属性进行管理，主要涉及两方面，一个是属性值的管理，也即把对象的属性名字和其要设置的值都暂存起来，另外一部分就是通过反射来把要修改的值作用于目标对象。</p>
+
+<h3>Animator的时间驱动器</h3>
+
+<p>动画要让数值随时间而变化，当start了以后，最重要的事情 就是以一定的时间速率来刷新数值，也即是用一个时间驱动器来刷新每一帧。前面讨论了View animation，是在View tree渲染时去刷新动画的每一帧。</p>
+
+<p>属性动画的核心在ValueAnimator里面，连同一个AnimatorHandler对象，一起实现了时间驱动。AnimatorHanndler是属性动画的时间驱动器，它从<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/Choreographer.java;drc=master;l=82">Choreographer</a>中接收脉冲信号，然后再回调给所有的ValueAnimator，令其doAnimationFrame。它是一个单例，也就是说同一个进程里所有的属性动画用的是内一个时间驱动器，同一个AnimatorHandler。</p>
+
+<p><strong>注意</strong>：关于Choreographer的解释可以看<a href="http://toughcoder.net/blog/2020/07/26/android-view-render-flow/">另外的文章</a>。</p>
+
+<p>当调用ValueAnimator#start时便会往<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/AnimationHandler.java">AnimatorHandler</a>对象添加一个回调，用以接收do frame的脉冲事件，然后从时间插值器mInterpolator中获取当前的时间速率，再调用animateValue进行数值的改变，其子类可以override此方法以实现属性的具体变化。这里还有一个变量mSelfPulsing用以控制是否使用AnimatorHandler，默认是true，也就是让ValueAnimator使用AnimatorHandler接收来自Choreographer的脉冲信号做动画。此外，也可以自己实现一个时间驱动器。</p>
+
+<p>由此，便可以让在duration之内，渲染动画的每一帧。</p>
+
+<h3>Animator的渲染原理</h3>
+
+<p><a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/ValueAnimator.java">ValueAnimator</a>仅是让一个数值在一定时间内发生特定的变化，它没有实际的视觉效果。常常使用的是ObjectAnimator，并作用于View的属性以产生视觉效果，如前面文章中的例子。那么这个又是如何实现的呢？</p>
+
+<p><a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/animation/ObjectAnimator.java">ObjectAnimator</a>是可能改变某个对象（内部称之为Target对象）的某个属性值，让其随时间变化，当应用到View对象时，比如translationY属性，ObjectAniamtor所做的也仅仅是让translationY的值随时间变化 而已，仅在animateValue时去调用View#setTranslationY把变化的数值传进去。是View自己在做重绘，View的setTranslationY方法中，有做invalidate以进行重绘。由此，便产生了视觉效果。</p>
+
+<p><a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/view/ViewPropertyAnimator.java">ViewPropertyAnimator</a>是另一个常用的对象，但发现它并不是Animator的子类，是封装出来的专门针对View对象做属性动画的一个工具类，它本质上与ObjectAnimator一样，只不过做了一些集成与封装，可以同时方便的操作多个属性，另外它会把所有属性的值变更 过后统一调一次invalidate，效率上会略高一筹。ObjectAnimator一次只能操作一个属性，并且每个属性变化 时都会调一次invalidate。</p>
+
+<p>它是把支持的属性都先放进一个map里面暂存起来，当调用startAnimation时，创建一个ValueAnimator，并设置一个AnimatorListener，在onAnimationUpdate时，把前面暂存的属性都设置到mView对象中去，然后调用一次invalidate让mView重绘。这里还需要注意，在设置属性这一块与ObjectAnimator也不一样，前面说了ObjectAniamtor是通过属性的settter来实现的，但View的属性的settter都会触发invalidate。所以，ViewPropertyAnimator为了避免每次设置属性时都触发invalidate，它是直接把属性塞给View的mRenderNode对象，然后在所有变化 的属性都设置完以后，再统一做一次重绘(invalidate)。</p>
+
+<p>另外的区别就是，ViewPropertyAnimator仅支持一些特定的属性，而ObjectAnimator可以支持任意属性（只要有setter/getter，就可以）。</p>
+
+<h2>关于动画的常见问题</h2>
+
+<p>通过上面的论述，就搞清楚了动画原理了，下面来看一些比较有意思的问题。</p>
+
+<h3>动画是在主线程里做的么</h3>
+
+<p>动画主要是通过View对象来呈现视觉效果，View是在主线程中渲染的，所以动画也是在主线程里面完成的。这话呢，只对了一半，或者这么说是不够严谨的。</p>
+
+<p>通过上面的讨论，View animation，都是在主线程中实现的，因为它的时间驱动器是View tree的渲染，也即在draw的时候，去计算当前的Transformation，然后应用到View的Canvas上面。这一切都是在主线程中完成的。</p>
+
+<p>但对于属性动画，就不是这个样子，属性动画分两部分，一部分是让数值随时间变化 ，这个其实可以在任意线程中去做。通过上面的讨论，默认的情况下，确实也是在主线程中做的（从Choreographer得到时间脉冲，这是在主线程里面），但是留 有接口，可以改变的，虽然很少这样做，但确实是可行的，并且数值随时间变化，这个事情也是可以在任意线程中完成的。另外一部分，就是让变化 的数值对目标对象生效，这个要看具体的对象了，如果View，肯定 还是要在主线程里搞。</p>
+
+<h3>动画的帧率（FPS）是多少</h3>
+
+<p>从上面的讨论来看，无论是View animation还是属性动画，时间脉冲都是Choreographer，并且对View来说视觉要生效是通过重绘来做的，所以最高帧率都会是60FPS。</p>
+
+<p>所以，其实动画的帧率是固定的，也就是说其doAnimationFrame是固定频率在回调。</p>
+
+<p>这里要与动画的时间插值器区别开来，动画的真实帧率是固定的，时间插值器的作用是让动画的变化变成非线性的。比如说某个属性x从0变到100，ValueAnimator的doAnimationFrame以及animateValue会是以固定的频率，从Choreographer每隔16ms接收一次脉冲，就会调用一次animateValue，时间插值器的作用，能让x值的变化是非线性的：</p>
+
+<p>时间脉冲：0 1 2 3 4 5 6 7 8 9 10
+线性变化：0 10 20 30 40 50 60 70 80 90 100
+加速减速：0 13 25 37 57 71 79 85 89 95 100</p>
+
+<p>时间插值器并没有让动画的帧率发生变化 ，而是让动画的结果非线性变化。</p>
+
+<h3>动画过程中如何处理MotionEvent事件</h3>
+
+<p>没有任何影响，view animation是发生在draw的时候，而属性动画是设置属性后再re-draw。从逻辑 上来讲动画与事件不冲突，两者之间没有任何影响。</p>
+
+<p>不过呢，View animation是对Canvas做变幻，View对象仍在原来的位置，原来的状态，所以点击动画过程中的View可能会没有效果，特别是对于有位移的时候。但属性动画就没有问题，View就是真实的在移动。</p>
+
+<p>但对于业务逻辑来说，通常动画都用于某个View的入场和出场，所以入场动画做完之前，以及出场动画开始之后，不响应点击事件要好一些，当然，这个就要靠开发者自己去实现了。</p>
+
+<h3>动画可以取消么</h3>
+
+<p>当然可以，都有cancel接口可以调用，但具体影响不太一样。</p>
+
+<p>对于View animation，<a href="https://developer.android.com/reference/android/view/animation/Animation#cancel()">Animation#cancel</a>是会调用onAnimationEnd的，因为它的回调接口没有专门用于cancel的。</p>
+
+<p>但属性动画的回调接口要丰富一些，它有cancel，所以是会回调onAimationCancel的，但不会回调onAnimationEnd。</p>
+
+<h3>动画需要注意的事项</h3>
+
+<p>一定要实现onAnimationCancel，以及onAnimationEnd，如果有涉及状态变更，或者关联其他动画时。要知道动画除了常规结束还会有被cancel掉的可能。</p>
+
+<p>另外，就是对于属性动画，取消有两种方式，一是直接调用<a href="https://developer.android.com/reference/android/animation/Animator#cancel()">Animator#cancel</a>另外一种是调用<a href="https://developer.android.com/reference/android/animation/Animator#end()">Animator#end</a>，两个方法在处理最后的状态时略有差异。end方法会把属性的最终状态设置给属性，然后回调onAnimationEnd，但cancel就直接终止动画了，属性当前啥状态那就啥状态，然后回调onAnimationCancel。其实，大多数情况下，end更为合理，但end可能会造成视觉上的跳跃，属性的状态会突然变化。</p>
+
+<p>再有就是，如果对于View，有多个属性同时做动画时，用ViewPropertyAnimator更好一些。语法上面也更简洁，性能上也略优一些。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Android Animation Advanced Tricks]]></title>
@@ -802,206 +1296,6 @@ xmlAnimator.start();
 <li><a href="https://www.raywenderlich.com/9475-constraintlayout-tutorial-for-android-complex-layouts">ConstraintLayout Tutorial for Android: Complex Layouts</a></li>
 <li><a href="https://abhiandroid.com/ui/constraintlayout">Constraint Layout Tutorial With Example In Android Studio</a></li>
 <li><a href="https://blog.csdn.net/guolin_blog/article/details/53122387">Android新特性介绍，ConstraintLayout完全解析</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android事件高级手势处理]]></title>
-    <link href="http://toughcoder.net/blog/2021/08/03/advanced-event-gesture-tricks/"/>
-    <updated>2021-08-03T21:26:02+08:00</updated>
-    <id>http://toughcoder.net/blog/2021/08/03/advanced-event-gesture-tricks</id>
-    <content type="html"><![CDATA[<p>GestureDetector只能帮我们处理并识别一些常用的简单的手势，如点击，双击，长按，滑动（Scroll）和快速滑动（Fling）等，一般情况下，这些足够我们使用了，但有些时候需要一些更为复杂的手势操作，如Translate，Zoom，Scale和Rotate，以及像处理一些多点触控（MultiTouch），这就需要开发人猿自己处理了，本文将讨论一下这些内容。</p>
-
-<p><a href=""><img src="http://en.proft.me/media/android/android_gestures.jpg"></a></p>
-
-<!-- more -->
-
-
-<h2>高级手势识别</h2>
-
-<h3>移动（Translate/Drag）</h3>
-
-<p>这里的移动的意思是让物体随着手指在屏幕上移动，或者叫作拖拽。而且这个只需要一个手指就可以办到，不涉及多点触控。</p>
-
-<p>其实，这个实现起来并不复杂，从onTouchEvent处获得事件后，不断的用MotionEvent的坐标来刷新目标View即可，甚至都不用管具体的事件类型，因为无论是ACTION_DOWN，ACTION_UP或者ACTION_MOVE，都可以提供新的坐标，只管从事件处取坐标然后刷新就可以了。</p>
-
-<pre><code class="java">   draw at (x0, y0);
-
-   onTouchEvent(event) {
-      x = event.getRawX();
-      y = event.getRawY();
-      invalidate with (x, y); // will draw at (x, y);
-   }
-</code></pre>
-
-<h3>旋转（Rotate）</h3>
-
-<p>同样，对于旋转用单个手指也可以办到，以目标View当前的位置为圆心，以手指划过的曲线作为圆弧，由此便可让目标View旋转起来，而且这个手势由单个手指也可以实现，不用管多点触控。</p>
-
-<p>其实可以进一步的做简化，认定屏幕中央为圆心，来计算手势划过的角度，并且为了连惯性，要以事件ACTION_MOVE过程中的增量角度来对View进行旋转，这样会让旋转看起来更顺滑一些，额外的工作是要把事件的坐标进行一下转化，转化为以屏幕中心为原点的坐标。</p>
-
-<p>具体的流程是：</p>
-
-<pre><code class="java">   lastTheta = -1;
-
-   onTouchEvent(event) {
-   switch (action) {
-   case ACTION_DOWN:
-      lastX = normalize(event.getX());
-      lastY = normalize(event.getY());
-      lastTheta = angle(lastX, lastY);
-      break;
-   case ACTION_MOVE:
-     newX = normalize(event.getX());
-     newY = normalize(event.getY());
-     theta = angle(newX, newY);
-     deltaTheta = alpha - beta;
-     invalidate to rotate with deltaTheta;
-     lastTheta = theta;
-     break;
-   case ACTION_CANCEL:
-   case ACTION_UP:
-      we are done.
-   }
-
-   normalizeX(x) {
-      return 2 * x / screenWidth;
-   }
-
-   normalizeY(y) {
-     return 2 * y / screenHeight;
-   }
-
-   angle(x, y) {
-      return atan(y / x);
-   }
-</code></pre>
-
-<p>至于缩放，单个手指无法完成，必须要用两个手指才可以，就涉及到多点触控，所以需要先介绍一下多点触控。</p>
-
-<h2>多点触控（MultiTouch）</h2>
-
-<p>这个并不复杂，虽然听起来像个神秘高科技，但其实，处理流程并不复杂，主体流程仍然是在onTouchEvent方法中，并且主要的对象仍是<a href="https://developer.android.com/reference/android/view/MotionEvent?hl=en">MotionEvent</a>，文档里面基本上都说清楚了，要点就是：</p>
-
-<ol>
-<li>MotionEvent对象，会用pointerId和pointerIndex来区分不同的触控点（术语是Pointer）</li>
-<li>事件流是：ACTION_DOWN 称为主触控点(Primary Pointer），然后是ACTION_POINTER_DOWN 另外一个触控点来了（非Primary Pointer），然后是ACTION_MOVE 这里没有显示 区分不同的pointer，需要开发人猿自己去区分，然后是ACTION_POINTER_UP 非主触控点 离开了，最后是ACTION_UP 主触控点离开了。需要注意的是，这是处理事件的逻辑上的顺序 ，真实的事件流，不一定是这样的（ACTION_DOWN肯定是第一个，ACTION_UP肯定 肯定最后一个，但中间的几个有顺序 不定）。</li>
-<li>注意的要点，每次事件来了后，不同的触控点（Pointer）的index并不是固定的，比如上一次MOVE时它在index 0，但下次可能就在index 1，而其Pointer Id是固定的。所以在处理的整个流程中要记录不同Pointer的id，然后获得其index，再用index去取坐标啊之类的数据。</li>
-<li>多点触控，天生就支持，所以即使你不识别多点触控手势（如scale），只关心单个手指手势，在处理的时候，仍要考虑到多点的逻辑。比如说translate时，如果不考虑多点，那么当另外一个手指触摸了屏幕，产生了ACTION_MOVE事件，但它的坐标跟最初产生事件的Pointer差距很远，那么如果不做排除，就可能产生瞬间漂移。</li>
-</ol>
-
-
-<h3>加强版的单触控点手势</h3>
-
-<p>对于前面提到的单触控点手势（单手指就能识别的手势）如Translate和Rotate，其实都需要加强一下逻辑，以防止多触控点产生的干扰。</p>
-
-<p>加强版本的单触控点手势处理：</p>
-
-<pre><code class="java">   primaryPointerId = INVALIDE_POINTER_ID;
-
-   onTouchEvent(event) {
-      switch (event.getActionMasked()) {
-         case ACTION_DOWN:
-              primaryPointer = event.getPointerId(event.getActionIndex());
-              break;
-         case ACTION_MOVE:
-              pointerIndex = event.findPointerIndex(primaryPointerId);
-              x = event.getX(pointerIndex);
-              y = event.getY(pointerIndex);
-              be happy with x and y;
-              break;
-          case ACTION_UP:
-          case ACTION_CANCEL:
-            primaryIndex = INVALIDE_POINTER_ID;
-            break;
-      }
-   }
-</code></pre>
-
-<p>当然，这里也取决于具体的使用场景，假如允许切换触控点，比如先一个手指拖动，然后另外一个手指点进来，这时第一个手指离开了，如果想继续 拖动的话，就需要更换已保存的primaryPointer。这时会收到ACTION_POINTER_UP，需要在此做切换处理，继续 上面的代码片段，</p>
-
-<pre><code class="java">      secondPointer = INVALIDE_POINTER_ID;
-      case ACTION_POINTER_DOWN:
-         secondPointer = event.getPointerId(event.getActionIndex());
-         break;
-      case ACTION_POINTER_UP:
-         thisPointer = event.getPointerId(event.getActionIndex());
-         if (thisPointer == primaryPointer) {
-              primaryPointer = secondPointer;
-         }
-         secondPointer = INVALIDE_POINTER_ID;
-         break;
-</code></pre>
-
-<p>还有一点需要注意的是，不能简单的只用<a href="https://developer.android.com/reference/android/view/MotionEvent#getPointerCount()">getPointerCount</a>来作判断，就比如pointer 1先来，然后pointer 2来了，pointer 1又离开了，这时pointerCount仍是1，但是pointer已变化 了，事件的位置就变了，如果不按上述方法处理，将会发生跳变。</p>
-
-<h3>缩放（Zoom/Scale）</h3>
-
-<p>缩放手势是多点触控的一个非常典型的应用，因为单手无法做出比较合理的手势判断。SDK当中提供了一个用于识别缩放的手势识别器<a href="https://developer.android.com/reference/android/view/ScaleGestureDetector">ScaleGestureDetector</a>，它的使用方法与GestureDetector一样，创建对象，塞MotionEvent进去，然后注册listener即可。</p>
-
-<p>但如果，用单独的detector不是很方便，比如已经自己实现了一套手势识别逻辑，现在只想加上Scale，或者其他原因不方便引入ScaleGestureDetector，那么就得自己去做了，也并不是很复杂。</p>
-
-<p>主要思路就是，收集齐两个触控点，记录它们初始的位置，计算它们之间初始的距离，在ACTION_MOVE时，再计算新的距离，新旧距离之比既可当作缩放的比例：</p>
-
-<pre><code class="java">   primaryPointer = INVALIDE_POINTER_ID;
-   secondPointer = INVALIDE_POINTER_ID;
-   initialSpan = -1;
-   startPoint = null;
-   onTouchEvent(event) {
-         case ACTION_DOWN:
-              index = event.getActionIndex();
-              primaryPointer = event.getPointerId(index);
-              startPoint = Point(event.getX(index), event.getY(index));
-              break;
-         case ACTION_POINTER_DOWN:
-              index = event.getActionIndex();
-              secondPointer = event.getPointerId(index);
-              sp = Point(event.getX(index), event.getY(index));
-              initialSpan = distance(startPoint, sp);
-             break;
-         case ACTION_MOVE:
-              if (event.getPointerCount() &gt; 1) {
-                  primaryIndex = event.findPointerIndex(primaryPointer);
-                  pp = Point(event.getX(primaryIndex), event.getY(primaryIndex));
-                  secondIndex = event.findPointerIndex(secondPointer);
-                  sp = Point(event.getX(secondIndex), event.getY(secondIndex));
-                  thisDistance = distance(pp, sp);
-                  if (thisDistance &gt; ScaledSpan) {
-                    scale = thisDistance / initialSpan;
-                    be happy with scale;
-                  }
-              }
-              break;
-         case ACTION_UP:
-         case ACTION_CANCEL:
-         case ACTION_POINTER_UP:
-             thisPointer = event.getPointerId(event.getActionIndex());
-             if (thisPointer == primaryPointer) {
-                primaryPointer = INVALIDE_POINTER_ID;
-             } else if (thisPointer == seocndPointer) {
-                secondPointer = INVALIDE_POINTER_ID;
-             }
-            break;
-   }
-</code></pre>
-
-<p>当然 ，还可以加一些阈值判断，比如当distance大于<a href="https://developer.android.com/reference/android/view/ViewConfiguration?hl=en#getScaledTouchSlop()">getScaledTouchSlop</a>，才触发使用scale的逻辑。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://en.proft.me/2017/06/25/detecting-gestures-android-gesturedetector/">Detecting gestures on Android via GestureDetector</a></li>
-<li><a href="https://developer.android.com/training/gestures/multi">Handle multi-touch gestures</a></li>
-<li><a href="https://developer.android.com/training/gestures/scale">Drag and scale</a></li>
-<li><a href="https://developer.android.com/guide/topics/ui/drag-drop">Drag and drop</a></li>
-<li><a href="https://developer.android.com/reference/android/view/MotionEvent?hl=en">MotionEvent</a></li>
-<li><a href="https://guides.codepath.com/android/gestures-and-touch-events">Gestures and Touch Events</a></li>
-<li><a href="https://github.com/Almeros/android-gesture-detectors">android-gesture-detectors</a></li>
-<li><a href="https://github.com/ikew0ng/SwipeBackLayout">SwipeBackLayout</a></li>
-<li><a href="https://github.com/alexvasilkov/GestureViews">GestureViews</a></li>
-<li><a href="https://github.com/nisrulz/Sensey">Sensey</a></li>
 </ul>
 
 ]]></content>
