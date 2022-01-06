@@ -1,0 +1,497 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Android Sync Barrier机制 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="深入浅出的解释Android Sync Barrier机制，它引发的问题以及如何解决问题">
+  <meta name="keywords" content="message, handler, sync barrier">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://toughcoder.net/blog/2022/01/07/android-sync-barrier-mechanism">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="http://libs.baidu.com/jquery/1.9.1/jquery.min.js"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:toughcoder.net" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Android Sync Barrier机制</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2022-01-07T00:06:33+08:00'><span class='date'><span class='date-month'>Jan</span> <span class='date-day'>7</span><span class='date-suffix'>th</span>, <span class='date-year'>2022</span></span> <span class='time'>12:06 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><h2>诡异的假死问题</h2>
+
+<p>前段时间，项目上遇到了一个假死问题，随机出现，无固定复现规律，大量频繁随机操作后，便会出现假死，整个应用无法操作，不会响应事件，会发生各种奇怪的ANR，且trace不固定。非常之诡异。</p>
+
+<p>经过大量的复现研究和分析， 以及大神的指点后，发现与同步屏障（Sync Barrier）有关系，于是发现有必要研究一下这个东西。</p>
+
+<p><a href="/blog/2022/01/07/android-sync-barrier-mechanism/"><img src="http://www.cse.chalmers.se/edu/year/2016/course/course/TDA383_LP1/assets/img/barrier.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>什么是Sync Barrier机制</h2>
+
+<p>这是安卓线程消息队列里面的一个新增加的东西，这么说还是太抽象，我们从头说起这件事情：</p>
+
+<h4>安卓的消息队列机制</h4>
+
+<p>消息队列，或者叫做Event Loop，通常在任何一个GUI应用程序里面都会有的，应用大部分时间处于Idle状态，当有事件发生时，比如用户点了一个button，然后开始响应此事件。安卓也是一个GUI应用程序，绝大多数都是带有GUI的应用程序，那么安卓 里面是如何实现这个EventLoop的呢，它是用Looper和MessageQueue，以及Handler，以一种消息队列的方式来实现loop。</p>
+
+<p>有一定经验的同学对这些东西肯定不陌生，因为它们在实际的开发过程中相当常见，比如说对于UI的操作只能放在主线程里面，那么当工作线程想要更新UI时就需要用Handler发一个消息，或者post一个Runnable。或者当你想延后一段时间执行某种操作，就可以用postDelayed。这些都是非常常规的操作了。对于工作线程，如果想启用消息队列，就用Looper#prepare就可以了，当然了，要记得quit。</p>
+
+<p>内部原理上面也不是很复杂，就是Looper会给线程绑定一个消息队列，即是MessageQueue，这是一个无限循环的队列，不断的轮询队列，当有新的消息时就去处理，否则就等待。主线程，安卓框架层在创建应用进程的时候就会给主线程默认创建好MessageQueue，所以就可以向其发消息（sendMessage）或者postDelayed，它们本质上都是一样的，都是向MessageQueue中入队一个消息，稍后它便会得到处理。</p>
+
+<p><img src="https://blog.ycshao.com/2020/08/30/event-loop-and-concurrency/Event%20Loop%20With%20Single%20Worker.png" alt="" /></p>
+
+<h4>同步消息与异步消息</h4>
+
+<p>这个MessageQueue机制，就是队列，也就是说符合队列的特点，先进先出（FIFO，First-In First Out），就是说你先post的消息，肯定是先被处理，后post的后处理，即使有delay时候，也是看谁先到，谁先到谁先被处理。因此，这里面的消息全是同步，也就是说所有消息都是顺序处理，这就是同步消息。</p>
+
+<p>异步消息，也就是说某个消息，想被最高优先级处理，无视发送消息的时机，比如说队列里面有8个消息，如何想让某个消息最先被处理？这时队列就变成了优先队列，有优先级的队列。那么具有高优先级的消息也是异步消息（Asynchronous Message）。即使是最后加入队列的，但因为是异步消息，它会被先处理，并不是FIFO，此可理解 为异步。</p>
+
+<h4>Sync Barrier用以实现优先队列</h4>
+
+<p>说了这么多，Sync Barrier就是安卓 内部用以实现优先级队列的一种方式。</p>
+
+<p>当队列中出现Sync barrier（具体实现上就是Message#target为null）时，就会忽略所有同步消息，寻找异步消息（isAsynchrouns为true）的消息，然后优先处理它。</p>
+
+<p>需要注意的是，把消息标记为异步，以及向消息队列中发送Sync barrier，这些API全部都是hide的，也就是说app中是无法使用的，通过反射也许能调用成功，但风险也较大，后续会被谷歌限制调用。换言之，这东西只能在Frameworks层内部自己使用。</p>
+
+<h2>为什么要有Sync Barrier</h2>
+
+<p>说了这么多，其实本质上，这东西就是一个优先队列，给要处理的消息加一个优先级机制，那这有什么实际用途呢？</p>
+
+<p>消息队列这东西是在安卓一诞生就有了的东西，大部分时候它也没有什么问题。但有一个事情，就是安卓操作系统的UI流畅度远不及水果平台（iOS），原因就是在于水果平台的UI渲染是整个系统中最高优先执行。</p>
+
+<p>有同学会说安卓里面也是这样啊，你想UI都只能在主线程里面操作（因此主线程也叫UI线程）。只能在主线程中操作UI，就能保证UI渲染是最高优先级吗？当然不是了。因为整个应用程序的默认线程就是主线程，换句话说，如果你不明显的去做线程切换，或者启用工作线程，那么所有事情都发生在主线程里面，当然 也包括了UI渲染，因此UI的渲染与你在主线程时面post一个消息的优先级是一样的。</p>
+
+<p>如何让UI渲染在主线程中以最高优先级运行？于是就有了Sync barrier机制，这东西就是为了让消息队列有优先级，并且没有开放给app使用。可以去看一下ViewRootImpl（这货是专门负责ViewTree渲染的，也即可以理解为负责UI渲染的）的几个perform，它都是异步消息，也即会开启Sync barrier，它发送的消息将会是最高优先级的，会被优先处理。</p>
+
+<h2>主要在哪里用Sync barrier</h2>
+
+<p>前面提到了，Sync barrier这玩意儿并不是给app开发同学用的，很多相关的接口并没有开放出来，这是为了提高UI渲染而设计的东西。因此这东西主要是用在了UI渲染过程中。</p>
+
+<p>仔细查看ViewRootImpl的源码可以发现，每次渲染View tree之前都会先给主线程插入一个Sync barrier，以挡住同步消息，以保证渲染被主线程优先执行到。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="nd">@UnsupportedAppUsage</span><span class="o">(</span><span class="n">maxTargetSdk</span> <span class="o">=</span> <span class="n">Build</span><span class="o">.</span><span class="na">VERSION_CODES</span><span class="o">.</span><span class="na">R</span><span class="o">,</span> <span class="n">trackingBug</span> <span class="o">=</span> <span class="mi">170729553</span><span class="o">)</span>
+</span><span class='line'><span class="kt">void</span> <span class="nf">scheduleTraversals</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(!</span><span class="n">mTraversalScheduled</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">mTraversalScheduled</span> <span class="o">=</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">mTraversalBarrier</span> <span class="o">=</span> <span class="n">mHandler</span><span class="o">.</span><span class="na">getLooper</span><span class="o">().</span><span class="na">getQueue</span><span class="o">().</span><span class="na">postSyncBarrier</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">mChoreographer</span><span class="o">.</span><span class="na">postCallback</span><span class="o">(</span>
+</span><span class='line'>                <span class="n">Choreographer</span><span class="o">.</span><span class="na">CALLBACK_TRAVERSAL</span><span class="o">,</span> <span class="n">mTraversalRunnable</span><span class="o">,</span> <span class="kc">null</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">notifyRendererOfFramePending</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">pokeDrawLockIfNeeded</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="kt">void</span> <span class="nf">unscheduleTraversals</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">mTraversalScheduled</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">mTraversalScheduled</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">mHandler</span><span class="o">.</span><span class="na">getLooper</span><span class="o">().</span><span class="na">getQueue</span><span class="o">().</span><span class="na">removeSyncBarrier</span><span class="o">(</span><span class="n">mTraversalBarrier</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">mChoreographer</span><span class="o">.</span><span class="na">removeCallbacks</span><span class="o">(</span>
+</span><span class='line'>                <span class="n">Choreographer</span><span class="o">.</span><span class="na">CALLBACK_TRAVERSAL</span><span class="o">,</span> <span class="n">mTraversalRunnable</span><span class="o">,</span> <span class="kc">null</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="kt">void</span> <span class="nf">doTraversal</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">mTraversalScheduled</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">mTraversalScheduled</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">mHandler</span><span class="o">.</span><span class="na">getLooper</span><span class="o">().</span><span class="na">getQueue</span><span class="o">().</span><span class="na">removeSyncBarrier</span><span class="o">(</span><span class="n">mTraversalBarrier</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">performTraversals</span><span class="o">();</span>
+</span><span class='line'>   <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里的逻辑略复杂一些，View tree本身的处理过程，也即三大步measure, layout和draw，也就是performTraversal本身并没有异步消息，它是在准备渲染的时候放一个sync barrier，而在具体处理每一帧前就移除了sync barrier，这里为何要这样，还没有完全想清楚。通过搜索ViewRootImpl可以发现只有input event，keyevent 以及与用户输入相关的消息被设置为了asynchronous，也就是说用户事件响应被提高了优先级，而view tree的渲染，即UI的每一帧，其实并没有被提升优先级。因为UI刷的每一帧是以固定频率刷新的，Choreographer 从硬件得到vsync脉冲信号，然后回调给ViewRootImpl让其渲染每一帧（也即是performTraversal）。</p>
+
+<h2>Sync Barrier会引发什么问题</h2>
+
+<p>说实话，这套机制，实现的并不怎么优雅，因为，毕竟它并不是在最初的设计之初就考虑到的东西，它的整体运行机制并不完善，非常依赖于调用者的使用，所以它的相关API并未有开放出来。</p>
+
+<p>它有三步，先发一个Sync barrier，然后发送异步消息，然后再移除Sync barrier。</p>
+
+<p>只有UI渲染（ViewTree的相关操作，才需要这样做），大部分其他的消息都是同步的，并不需要这样搞。当有Sync barrier时，消息队列在处理消息的时候会忽略掉所有的同步消息（也即是常规消息），优先处理异步消息，直到Sync barrier移除，也是需要手动移除的。Sync barrier需要手动移除是最坑的。</p>
+
+<p>因此，假如要处理的异步特别多，或者逻辑出错Sync barrier没有被移除，那就悲剧 了，就会导致消息队列中的大量常规消息无法得到处理，队列就会停止工作，应用会出现随机的ANR，以及假死。</p>
+
+<h2>如何调试</h2>
+
+<p>很不幸，Sync barrier导致的问题很难调试，甚至很难被发现，通常都是ANR或者说卡死问题。</p>
+
+<p>那么首先可以按照ANR和卡死的常规分析方式去分析，假如都未发现明显的问题时，比如没有明显的耗时的操作，也没有死锁，也没有被硬件和IO阻塞，也没有进入死循环。</p>
+
+<p>这些常规的分析，都没有发现问题。这时就可以考虑是不是Sync barrier在搞鬼。特别当涉及一些诡异的UI状态时，比如某个View只显示 了一半，比如某一个View没有显示 完全，比如只有背景没有前景，等等，当排除了其他常规问题时，就很可能是Sync barrier有异常导致的。</p>
+
+<p>另外，如果有能力修改Frameworks的话，可以给MessageQueue增加dump信息，把队列中的所有消息都打印出来，以及把Sycn barrier也都打印出来，这样能够比较清楚看到，队列内部的情况，自然也能够发现异常的Sync barrier。</p>
+
+<h2>如何避免Sync Barrier搞鬼</h2>
+
+<p>前面提到过，这套东西都是Frameworks层内部的机制，并没有开放给app使用，而Frameworks内部的逻辑一般来说还是相当健壮的，绝大多数时候并不会出问题。当然了，各个厂商内部搞的各种所谓优化，倒是有可能会引发问题。</p>
+
+<p>在实际开发过程中，引发Sync barrier的最多场景就是自定义View。对于自定义View，是能够在非主线程调用其invalidate的，当有大量的非主线程调用invalidate时，就有可能恰好与主线程的渲染发生交互，具体case非常corner要刚巧非主线程在postInvalide，然后主线程也刚巧在发送异步消息，就可能使得Sync barrier没有被移除，从而导致问题。</p>
+
+<p>这就需要我们在编码阶段做好封装，对于自定义View的刷新触发逻辑做好封装，做一下线程切换，以保证是在主线程里面执行invalidate。因为暴露出去的接口，是没有办法控制的，你没有办法让所有调用者都在主线程里面调用你的接口。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://blog.csdn.net/jdsjlzx/article/details/110563162">Handler sync barrier（同步屏障）</a></li>
+<li><a href="https://hningoba.github.io/2019/12/06/Android%20%E5%90%8C%E6%AD%A5%E5%B1%8F%E9%9A%9C%E6%9C%BA%E5%88%B6(Sync%20Barrier">Android 同步屏障机制(Sync Barrier)</a>/)</li>
+<li><a href="https://xiaozhuanlan.com/topic/0843791256">同步屏障？阻塞唤醒？和我一起重读 Handler 源码</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=MzAxMTI4MTkwNQ==&amp;mid=2650839366&amp;idx=2&amp;sn=94536e87f552314acd1e4620109c3c9b&amp;chksm=80b74dd8b7c0c4ce3d4945d690d50feae9b7c2d7009ce113b90cc99712703521c31c75fe2026&amp;mpshare=1&amp;scene=1&amp;srcid=1230rTWKhDHdFQTcru6ohx67&amp;sharer_sharetime=1640838623088&amp;sharer_shareid=80824a30f91a8c144cac1fea148f525a#rd">同步屏障与异步消息，从入门到放弃</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=MzAxMTI4MTkwNQ==&amp;mid=2650837028&amp;idx=2&amp;sn=b37f149f3ade5f8cf1bebb49487ed1df&amp;chksm=80b744bab7c0cdaca13a90022b4e8b949c1003a9b606c81ee8ac159377e328b358457d79a3b7&amp;scene=21#wechat_redirect">面试官：如何提高Message的优先级</a></li>
+<li><a href="https://juejin.cn/post/6947986170135445535">今日头条 ANR 优化实践系列 - Barrier 导致主线程假死</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2022-01-07T00:06:33+08:00'><span class='date'><span class='date-month'>Jan</span> <span class='date-day'>7</span><span class='date-suffix'>th</span>, <span class='date-year'>2022</span></span> <span class='time'>12:06 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2021/09/14/android-animation-internal-secrets/" title="Previous Post: Android Animation Internal Secrets">&laquo; Android Animation Internal Secrets</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2022 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+    var _hmt = _hmt || [];
+    (function() {
+         var hm = document.createElement("script");
+         hm.src = "//hm.baidu.com/hm.js?3b8ca71d801a2f5af0a456e0b4635bae";
+         var s = document.getElementsByTagName("script")[0];
+         s.parentNode.insertBefore(hm, s);
+    })();
+</script>
+
+
+</body>
+</html>

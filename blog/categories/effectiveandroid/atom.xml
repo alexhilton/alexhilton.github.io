@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2021-12-30T21:29:58+08:00</updated>
+  <updated>2022-01-07T00:17:30+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,141 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Android Sync Barrier机制]]></title>
+    <link href="http://toughcoder.net/blog/2022/01/07/android-sync-barrier-mechanism/"/>
+    <updated>2022-01-07T00:06:33+08:00</updated>
+    <id>http://toughcoder.net/blog/2022/01/07/android-sync-barrier-mechanism</id>
+    <content type="html"><![CDATA[<h2>诡异的假死问题</h2>
+
+<p>前段时间，项目上遇到了一个假死问题，随机出现，无固定复现规律，大量频繁随机操作后，便会出现假死，整个应用无法操作，不会响应事件，会发生各种奇怪的ANR，且trace不固定。非常之诡异。</p>
+
+<p>经过大量的复现研究和分析， 以及大神的指点后，发现与同步屏障（Sync Barrier）有关系，于是发现有必要研究一下这个东西。</p>
+
+<p><a href=""><img src="http://www.cse.chalmers.se/edu/year/2016/course/course/TDA383_LP1/assets/img/barrier.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>什么是Sync Barrier机制</h2>
+
+<p>这是安卓线程消息队列里面的一个新增加的东西，这么说还是太抽象，我们从头说起这件事情：</p>
+
+<h4>安卓的消息队列机制</h4>
+
+<p>消息队列，或者叫做Event Loop，通常在任何一个GUI应用程序里面都会有的，应用大部分时间处于Idle状态，当有事件发生时，比如用户点了一个button，然后开始响应此事件。安卓也是一个GUI应用程序，绝大多数都是带有GUI的应用程序，那么安卓 里面是如何实现这个EventLoop的呢，它是用Looper和MessageQueue，以及Handler，以一种消息队列的方式来实现loop。</p>
+
+<p>有一定经验的同学对这些东西肯定不陌生，因为它们在实际的开发过程中相当常见，比如说对于UI的操作只能放在主线程里面，那么当工作线程想要更新UI时就需要用Handler发一个消息，或者post一个Runnable。或者当你想延后一段时间执行某种操作，就可以用postDelayed。这些都是非常常规的操作了。对于工作线程，如果想启用消息队列，就用Looper#prepare就可以了，当然了，要记得quit。</p>
+
+<p>内部原理上面也不是很复杂，就是Looper会给线程绑定一个消息队列，即是MessageQueue，这是一个无限循环的队列，不断的轮询队列，当有新的消息时就去处理，否则就等待。主线程，安卓框架层在创建应用进程的时候就会给主线程默认创建好MessageQueue，所以就可以向其发消息（sendMessage）或者postDelayed，它们本质上都是一样的，都是向MessageQueue中入队一个消息，稍后它便会得到处理。</p>
+
+<p><img src="https://blog.ycshao.com/2020/08/30/event-loop-and-concurrency/Event%20Loop%20With%20Single%20Worker.png" alt="" /></p>
+
+<h4>同步消息与异步消息</h4>
+
+<p>这个MessageQueue机制，就是队列，也就是说符合队列的特点，先进先出（FIFO，First-In First Out），就是说你先post的消息，肯定是先被处理，后post的后处理，即使有delay时候，也是看谁先到，谁先到谁先被处理。因此，这里面的消息全是同步，也就是说所有消息都是顺序处理，这就是同步消息。</p>
+
+<p>异步消息，也就是说某个消息，想被最高优先级处理，无视发送消息的时机，比如说队列里面有8个消息，如何想让某个消息最先被处理？这时队列就变成了优先队列，有优先级的队列。那么具有高优先级的消息也是异步消息（Asynchronous Message）。即使是最后加入队列的，但因为是异步消息，它会被先处理，并不是FIFO，此可理解 为异步。</p>
+
+<h4>Sync Barrier用以实现优先队列</h4>
+
+<p>说了这么多，Sync Barrier就是安卓 内部用以实现优先级队列的一种方式。</p>
+
+<p>当队列中出现Sync barrier（具体实现上就是Message#target为null）时，就会忽略所有同步消息，寻找异步消息（isAsynchrouns为true）的消息，然后优先处理它。</p>
+
+<p>需要注意的是，把消息标记为异步，以及向消息队列中发送Sync barrier，这些API全部都是hide的，也就是说app中是无法使用的，通过反射也许能调用成功，但风险也较大，后续会被谷歌限制调用。换言之，这东西只能在Frameworks层内部自己使用。</p>
+
+<h2>为什么要有Sync Barrier</h2>
+
+<p>说了这么多，其实本质上，这东西就是一个优先队列，给要处理的消息加一个优先级机制，那这有什么实际用途呢？</p>
+
+<p>消息队列这东西是在安卓一诞生就有了的东西，大部分时候它也没有什么问题。但有一个事情，就是安卓操作系统的UI流畅度远不及水果平台（iOS），原因就是在于水果平台的UI渲染是整个系统中最高优先执行。</p>
+
+<p>有同学会说安卓里面也是这样啊，你想UI都只能在主线程里面操作（因此主线程也叫UI线程）。只能在主线程中操作UI，就能保证UI渲染是最高优先级吗？当然不是了。因为整个应用程序的默认线程就是主线程，换句话说，如果你不明显的去做线程切换，或者启用工作线程，那么所有事情都发生在主线程里面，当然 也包括了UI渲染，因此UI的渲染与你在主线程时面post一个消息的优先级是一样的。</p>
+
+<p>如何让UI渲染在主线程中以最高优先级运行？于是就有了Sync barrier机制，这东西就是为了让消息队列有优先级，并且没有开放给app使用。可以去看一下ViewRootImpl（这货是专门负责ViewTree渲染的，也即可以理解为负责UI渲染的）的几个perform，它都是异步消息，也即会开启Sync barrier，它发送的消息将会是最高优先级的，会被优先处理。</p>
+
+<h2>主要在哪里用Sync barrier</h2>
+
+<p>前面提到了，Sync barrier这玩意儿并不是给app开发同学用的，很多相关的接口并没有开放出来，这是为了提高UI渲染而设计的东西。因此这东西主要是用在了UI渲染过程中。</p>
+
+<p>仔细查看ViewRootImpl的源码可以发现，每次渲染View tree之前都会先给主线程插入一个Sync barrier，以挡住同步消息，以保证渲染被主线程优先执行到。</p>
+
+<pre><code class="java">    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+    void scheduleTraversals() {
+        if (!mTraversalScheduled) {
+            mTraversalScheduled = true;
+            mTraversalBarrier = mHandler.getLooper().getQueue().postSyncBarrier();
+            mChoreographer.postCallback(
+                    Choreographer.CALLBACK_TRAVERSAL, mTraversalRunnable, null);
+            notifyRendererOfFramePending();
+            pokeDrawLockIfNeeded();
+        }
+    }
+
+    void unscheduleTraversals() {
+        if (mTraversalScheduled) {
+            mTraversalScheduled = false;
+            mHandler.getLooper().getQueue().removeSyncBarrier(mTraversalBarrier);
+            mChoreographer.removeCallbacks(
+                    Choreographer.CALLBACK_TRAVERSAL, mTraversalRunnable, null);
+        }
+    }
+
+    void doTraversal() {
+        if (mTraversalScheduled) {
+            mTraversalScheduled = false;
+            mHandler.getLooper().getQueue().removeSyncBarrier(mTraversalBarrier);
+
+            performTraversals();
+       }
+    }
+</code></pre>
+
+<p>这里的逻辑略复杂一些，View tree本身的处理过程，也即三大步measure, layout和draw，也就是performTraversal本身并没有异步消息，它是在准备渲染的时候放一个sync barrier，而在具体处理每一帧前就移除了sync barrier，这里为何要这样，还没有完全想清楚。通过搜索ViewRootImpl可以发现只有input event，keyevent 以及与用户输入相关的消息被设置为了asynchronous，也就是说用户事件响应被提高了优先级，而view tree的渲染，即UI的每一帧，其实并没有被提升优先级。因为UI刷的每一帧是以固定频率刷新的，Choreographer 从硬件得到vsync脉冲信号，然后回调给ViewRootImpl让其渲染每一帧（也即是performTraversal）。</p>
+
+<h2>Sync Barrier会引发什么问题</h2>
+
+<p>说实话，这套机制，实现的并不怎么优雅，因为，毕竟它并不是在最初的设计之初就考虑到的东西，它的整体运行机制并不完善，非常依赖于调用者的使用，所以它的相关API并未有开放出来。</p>
+
+<p>它有三步，先发一个Sync barrier，然后发送异步消息，然后再移除Sync barrier。</p>
+
+<p>只有UI渲染（ViewTree的相关操作，才需要这样做），大部分其他的消息都是同步的，并不需要这样搞。当有Sync barrier时，消息队列在处理消息的时候会忽略掉所有的同步消息（也即是常规消息），优先处理异步消息，直到Sync barrier移除，也是需要手动移除的。Sync barrier需要手动移除是最坑的。</p>
+
+<p>因此，假如要处理的异步特别多，或者逻辑出错Sync barrier没有被移除，那就悲剧 了，就会导致消息队列中的大量常规消息无法得到处理，队列就会停止工作，应用会出现随机的ANR，以及假死。</p>
+
+<h2>如何调试</h2>
+
+<p>很不幸，Sync barrier导致的问题很难调试，甚至很难被发现，通常都是ANR或者说卡死问题。</p>
+
+<p>那么首先可以按照ANR和卡死的常规分析方式去分析，假如都未发现明显的问题时，比如没有明显的耗时的操作，也没有死锁，也没有被硬件和IO阻塞，也没有进入死循环。</p>
+
+<p>这些常规的分析，都没有发现问题。这时就可以考虑是不是Sync barrier在搞鬼。特别当涉及一些诡异的UI状态时，比如某个View只显示 了一半，比如某一个View没有显示 完全，比如只有背景没有前景，等等，当排除了其他常规问题时，就很可能是Sync barrier有异常导致的。</p>
+
+<p>另外，如果有能力修改Frameworks的话，可以给MessageQueue增加dump信息，把队列中的所有消息都打印出来，以及把Sycn barrier也都打印出来，这样能够比较清楚看到，队列内部的情况，自然也能够发现异常的Sync barrier。</p>
+
+<h2>如何避免Sync Barrier搞鬼</h2>
+
+<p>前面提到过，这套东西都是Frameworks层内部的机制，并没有开放给app使用，而Frameworks内部的逻辑一般来说还是相当健壮的，绝大多数时候并不会出问题。当然了，各个厂商内部搞的各种所谓优化，倒是有可能会引发问题。</p>
+
+<p>在实际开发过程中，引发Sync barrier的最多场景就是自定义View。对于自定义View，是能够在非主线程调用其invalidate的，当有大量的非主线程调用invalidate时，就有可能恰好与主线程的渲染发生交互，具体case非常corner要刚巧非主线程在postInvalide，然后主线程也刚巧在发送异步消息，就可能使得Sync barrier没有被移除，从而导致问题。</p>
+
+<p>这就需要我们在编码阶段做好封装，对于自定义View的刷新触发逻辑做好封装，做一下线程切换，以保证是在主线程里面执行invalidate。因为暴露出去的接口，是没有办法控制的，你没有办法让所有调用者都在主线程里面调用你的接口。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://blog.csdn.net/jdsjlzx/article/details/110563162">Handler sync barrier（同步屏障）</a></li>
+<li><a href="https://hningoba.github.io/2019/12/06/Android%20%E5%90%8C%E6%AD%A5%E5%B1%8F%E9%9A%9C%E6%9C%BA%E5%88%B6(Sync%20Barrier">Android 同步屏障机制(Sync Barrier)</a>/)</li>
+<li><a href="https://xiaozhuanlan.com/topic/0843791256">同步屏障？阻塞唤醒？和我一起重读 Handler 源码</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=MzAxMTI4MTkwNQ==&amp;mid=2650839366&amp;idx=2&amp;sn=94536e87f552314acd1e4620109c3c9b&amp;chksm=80b74dd8b7c0c4ce3d4945d690d50feae9b7c2d7009ce113b90cc99712703521c31c75fe2026&amp;mpshare=1&amp;scene=1&amp;srcid=1230rTWKhDHdFQTcru6ohx67&amp;sharer_sharetime=1640838623088&amp;sharer_shareid=80824a30f91a8c144cac1fea148f525a#rd">同步屏障与异步消息，从入门到放弃</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=MzAxMTI4MTkwNQ==&amp;mid=2650837028&amp;idx=2&amp;sn=b37f149f3ade5f8cf1bebb49487ed1df&amp;chksm=80b744bab7c0cdaca13a90022b4e8b949c1003a9b606c81ee8ac159377e328b358457d79a3b7&amp;scene=21#wechat_redirect">面试官：如何提高Message的优先级</a></li>
+<li><a href="https://juejin.cn/post/6947986170135445535">今日头条 ANR 优化实践系列 - Barrier 导致主线程假死</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Android Animation Internal Secrets]]></title>
@@ -1069,237 +1204,6 @@ xmlAnimator.start();
 <li><a href="https://developer.android.com/training/constraint-layout">Build a Responsive UI with ConstraintLayout</a></li>
 <li><a href="https://developer.android.com/guide/topics/ui/layout/recyclerview">Create dynamic lists with RecyclerView</a></li>
 <li><a href="https://developer.android.com/guide/topics/ui/binding">AdapterView</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android ConstraintLayout使用攻略]]></title>
-    <link href="http://toughcoder.net/blog/2021/08/10/android-constraintlayout-made-easy/"/>
-    <updated>2021-08-10T22:49:20+08:00</updated>
-    <id>http://toughcoder.net/blog/2021/08/10/android-constraintlayout-made-easy</id>
-    <content type="html"><![CDATA[<p>ConstraintLayout是新一代的布局，它汲取了众家之长，把布局的概念进行了大统一，灵活且强大，基本上可以干掉以前所有的常用布局（LinearLayout, RelativeLayout和FrameLayout）。自从Android Studio 2.3（大约在2017年）后，它就变成了Android Studio的默认模板的布局控件，可以看出谷歌对它的钟爱程度。今天就来学习一下如何使用这个新布局神器。</p>
-
-<p><a href=""><img src="https://abhiandroid.com/ui/wp-content/uploads/2018/07/Constraint-Layout-Example-In-Android-Studio-1.png"></a></p>
-
-<!-- more -->
-
-
-<h2>简述</h2>
-
-<p><a href="(https://developer.android.com/reference/androidx/constraintlayout/widget/ConstraintLayout">ConstraintLayout</a>)与RelativeLayout有些类似，是一个布局管理器（ViewGroup），但要强大许多，它可以以各种方式排列子View，以及按比例伸缩。最重要的改变就是它对于『Drag and drop』拖拽式制作GUI页面支持的相当的好。当然了这个取决于个人喜好，很多人仍然喜欢用写代码的方式直接去写xml文件，包括我在内。拖拽式虽然直观，但是不方便精准控制，对于一般性的布局来说尚可，但稍复杂了后，以及有了一些可滑动的view时，就不是那么的方便了。对于喜欢拖拽的同学可以查看<a href="https://developer.android.google.cn/training/constraint-layout">官方的一个教程</a>，以及<a href="https://blog.csdn.net/guolin_blog/article/details/53122387">郭大婶的一篇文章</a>，这两篇专注于拖拽式，且讲的都比较详细。</p>
-
-<h3>添加依赖</h3>
-
-<p>因为ConstraintLayout并不是在标准的SDK中，而是被放在了support SDK中，现在统一叫androidx了，所以要单独添加依赖：</p>
-
-<pre><code class="groovy">     dependencies {
-          implementation 'com.android.support.constraint:constraint-layout:2.1.0'
-     }
-</code></pre>
-
-<h3>概念与术语</h3>
-
-<p>ContraintLayout中把一切有关布局的参数都称之为Constraint（约束），长和宽，对齐，居中，margin和padding都是constraint。布局中的属性均以&#8221;layout_constraint&#8221;为前缀。
-约束（Constrain）的意思是指用另外一个View（包括父布局即ContraintLayout）对当前View的某一布局参数施加影响。具体的影响叫做Constraint，另外一个View称作约束对象（Constraining Object)，当前View称作被约束对象（Constrainted Object）。</p>
-
-<p><img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/relative-positioning.png" alt="" /></p>
-
-<pre><code class="xml">         &lt;Button android:id="@+id/buttonA" ... /&gt;         &lt;Button android:id="@+id/buttonB" ...                 app:layout_constraintLeft_toRightOf="@id/buttonA" /&gt;
-</code></pre>
-
-<h3>排列方式</h3>
-
-<p>对子View的排列方式是一个ViewGroup的最基础的功能，它也体现了不同的布局管理器的作用，如线性布局（LinearLayout）是以水平或者垂直方向平铺方式来排列子View的。ConstraintLayout是以类似RelativeLayout的方式，需要针对每个子View指定如何排列。</p>
-
-<p><img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/relative-positioning-constraints.png" alt="" /></p>
-
-<h4>基础排列方式</h4>
-
-<p>最为基础的排列方式就是针对每个子View，指定它相对于另外一个View或者父布局（也就是ConstraintLayout本身）的相对位置，从而确定该View的具体方位。具体就是[left, top, right, bottom]四个关键的排列元素相对于另外一个View或者父布局的位置关系。</p>
-
-<p>如，layout_constraintLeft_toLeftOf=&ldquo;parent&#8221;，这就是左边与父布局左边对齐；layout_constraintTop_toBottomOf=&#8221;id/header&#8221;，这是把这个View放在id为header的下面。以此类推，因为与RelativeLayout的布局参数比较类似，就不细说了，详情可参阅文档。</p>
-
-<p>还有一个非常实用的Constraint叫做baseline，它是专门针对TextView的，baseline也即文本的基线，可以简单理解为文字的底部，当有两个TextiView不一样大，文字大小也不一样时，却需要对齐文本，这个属于就相当的有用。</p>
-
-<p><img src="https://upload-images.jianshu.io/upload_images/2787721-aebcad66710f4d48.png?imageMogr2/auto-orient/strip|imageView2/2/w/213/format/webp" alt="" /></p>
-
-<pre><code class="xml">    &lt;TextView android:id="@+id/TextView1"/&gt;
-
-    &lt;TextView
-        android:id="@+id/TextView2"
-        app:layout_constraintLeft_toRightOf="@+id/TextView1"
-        app:layout_constraintBaseline_toBaselineOf="@+id/TextView1"/&gt;
-</code></pre>
-
-<h3>margin</h3>
-
-<p>常规使用与其他布局是一样的，通过layout_margin[Start,End,Left,Right,Bottom,Top]来指定与约束对象之间的margin，这个不细说了。</p>
-
-<p>需要说一下，ConstraintLayout有一个goneMargin，可以用于当一个约束对象的Visibility被设置为GONE时，使用。用layout_goneMargin[Start,End,Left,Top,Right,Bottom]来设置。</p>
-
-<p>比如A约束B，B在A的右边，它俩挨着，但如果A的Visibility设置为GONE时，正常情况下B就会挨到原来A的左边了，跑到了左边界上，这时可能就会变得比较丑了，如果使用margin，比如在A和B中间加一个margin，可以解决问题，但是也会影响当A可见的时候。而用goneMargin就可以完美的解决此种场景。layout_goneMarginStart=&ldquo;10dip&#8221;，那么这个margin只有当约束对象A的Visibility被置为GONE时，才会生效，这时B虽然跑到了左边界上，但是还有margin，就不会那么丑了。（其实goneMargin应用的场景也比较有限，前面说的case，也可以用A和B的父布局的leftPadding来解决）</p>
-
-<p><img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/visibility-behavior.png" alt="" /></p>
-
-<h4>相当骚气的环状排列方式</h4>
-
-<p>除了常规的行列式排列以外，这货还非常骚气的可以环状排列，以约束对象为圆心，通过角度和半径来约束位置：</p>
-
-<ul>
-<li>layout_constraintCircle 用以指定作为圆心的约束对象（其他view的id）</li>
-<li>layout_constraintCircleRadius 被约束对象与圆心的距离</li>
-<li>layout_constraintCircleAngle 被约束对象与横轴的角度（0~360度之间）</li>
-</ul>
-
-
-<p><img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/circle1.png" alt="" />
-<img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/circle2.png" alt="" /></p>
-
-<pre><code class="xml">  &lt;Button android:id="@+id/buttonA" ... /&gt;  &lt;Button android:id="@+id/buttonB" ...      app:layout_constraintCircle="@+id/buttonA"      app:layout_constraintCircleRadius="100dp"      app:layout_constraintCircleAngle="45" /&gt;
-</code></pre>
-
-<h4>环状排列实例</h4>
-
-<p>环状排列虽然骚气，但是现实中似乎应用场景不多。</p>
-
-<h3>居中与对齐</h3>
-
-<p>对齐不是大问题，前面讲的如何排列其实就是对齐，选定一个约束对象后，其他对象都受其约束，就自然对齐了。</p>
-
-<p>比较常见的问题，以及大部分时候比较麻烦的是居中，平衡与中庸中符合绝大多数审美的，因此布局时，绝大多数情况下都是需要居中的。居中的实现的方式就是两边都约束于父布局（也即ConstraintLayout），如：</p>
-
-<p><img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/centering-positioning.png" alt="" /></p>
-
-<pre><code class="xml">         &lt;androidx.constraintlayout.widget.ConstraintLayout ...&gt;
-             &lt;Button android:id="@+id/button" ...
-                 app:layout_constraintLeft_toLeftOf="parent"
-                 app:layout_constraintRight_toRightOf="parent"/&gt;
-         &lt;/&gt;
-</code></pre>
-
-<p>居中，其实就是两边的约束边距各占空余空间的50%，扩展开来，想要实现不完全居中，两边边距呈一定比例关系，也是可以办到的。比如说黄金比例0.618就比居中好看，这也好办：
-<img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/centering-positioning-bias.png" alt="" /></p>
-
-<pre><code class="xml">       &lt;androidx.constraintlayout.widget.ConstraintLayout ...&gt;
-             &lt;Button android:id="@+id/button" ...
-                 app:layout_constraintHorizontal_bias="0.382"
-                 app:layout_constraintLeft_toLeftOf="parent"
-                 app:layout_constraintRight_toRightOf="parent"/&gt;
-      &lt;/&gt;
-</code></pre>
-
-<p>这个比例控制叫bias，可以有Horizontal和Vertical两个方向。</p>
-
-<h3>尺寸</h3>
-
-<p>尺寸也就是针对子View的宽与高的约束，其实大部分时候一些具体的子View的宽与高要么指定大小，要么是WRAP_CONTENT的，但有些时候可能就是需要更加的灵活一些，这时就可以考虑用ConstraintLayout里面的一些特性。宽与高设置为固定大小或者WRAP_CONTENT时与其他ViewGroup是一样的，不用多说，要想特别一点的就是设置为『0dip』或者MATCH_CONSTRAINT时，就会用其他约束来决定该View的宽或者高。后面重点讨论有约束的情况。</p>
-
-<h4>默认行为</h4>
-
-<p>如果子View的宽或者高设置为了MATCH_CONSTRAINT（或者『0dip』）时，默认的行为是它会占满剩余的可用空间。</p>
-
-<h4>Max与Min</h4>
-
-<p>还可以加上最大最小的限制：</p>
-
-<ul>
-<li>layout_constraintWidth_min and layout_constraintHeight_min : will set the minimum size for this dimension</li>
-<li>layout_constraintWidth_max and layout_constraintHeight_max : will set the maximum size for this dimension</li>
-<li>layout_constraintWidth_percent and layout_constraintHeight_percent : will set the size of this dimension as a percentage of the parent</li>
-</ul>
-
-
-<h4>按约束对象的比例来设置（Percent）</h4>
-
-<p>前面的默认行为或者最大最小还算不上啥，其他ViewGroup也有类似参数。最为变态与强大的是可以按约束对象的比例来作为此View的宽或者高：</p>
-
-<ul>
-<li>The dimension should be set to MATCH_CONSTRAINT (0dp)</li>
-<li>The default should be set to percent app:layout_constraintWidth_default=&ldquo;percent&rdquo; or app:layout_constraintHeight_default=&ldquo;percent&rdquo;</li>
-<li>Then set the layout_constraintWidth_percent or layout_constraintHeight_percent attributes to a value between 0 and 1</li>
-</ul>
-
-
-<h4>自身宽高比（Ratio）</h4>
-
-<p>这个是最变态的约束方式，可以设置一个自身的宽高比，以确定子View的尺寸，当然了具体的宽或者高还要以其他约束方式确定具体尺寸，然后再按照设置的宽高比对另外一个进行约束。比如，实现一个方形的按扭，宽是其自身要求的宽度值（WRAP_CONTENT），设置的宽高比是1：1，所以高度也会跟宽度一样，就是一个方形的按扭了：</p>
-
-<pre><code class="xml">        &lt;Button android:layout_width="wrap_content"
-                   android:layout_height="0dp"
-                   app:layout_constraintDimensionRatio="1:1" /&gt;
-</code></pre>
-
-<h2>高级特性</h2>
-
-<p>前面讲的是一些基础使用方式，但是这货远不止这些，还有一些非常强大的功能，下面简单介绍两个。</p>
-
-<h3>链（Chains）</h3>
-
-<p>在某一个方向上（横着或者竖着）有着相互约束的一组子View，会被视为一个链，第一个称作头部（Head），可以应用一些样式以对整个链内的子View都产生影响。
-<img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/chains.png" alt="" />
-<img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/chains-head.png" alt="" /></p>
-
-<p>这里的相互约束的意思是，比如有上面A，B，C三个子View，那么它们要相互约束，也即：</p>
-
-<pre><code class="xml">  &lt;ConstraintLayout&gt;
-      &lt;A layout_constraintLeft_toLeftOf="parent"
-           layout_constraintRight_toRightOf="B" /&gt;
-      &lt;B layout_constraintLeft_toLeftOf="A"
-           layout_constraintRight_toRightOf="C" /&gt;
-      &lt;C layout_constraintLeft_toLeftOf="B"
-           layout_constraintRight_toRightOf="parent" /&gt;
-  &lt;/ConstraintLayout&gt;
-</code></pre>
-
-<p>就可以，对头部子View  A进行样式（Chain style），通过layout_constraintHorizontal_chainStyle来设置：</p>
-
-<ul>
-<li>CHAIN_SPREAD &ndash; the elements will be spread out (default style)<em> Weighted chain &ndash; in CHAIN_SPREAD mode, if some widgets are set to MATCH_CONSTRAINT, they will split the available space</em> CHAIN_SPREAD_INSIDE &ndash; similar, but the endpoints of the chain will not be spread out* CHAIN_PACKED &ndash; the elements of the chain will be packed together. The horizontal or vertical bias attribute of the child will then affect the positioning of the packed elements</li>
-</ul>
-
-
-<p><img src="https://developer.android.com/reference/androidx/constraintlayout/widget/resources/images/chains-styles.png" alt="" /></p>
-
-<p>链中的权重（Weighted chains）</p>
-
-<p>默认情况下，子View会均分并占满可用的空间。可以用权重来按比例分配，给子View加上layout_constraintHorizontal_weight后，就会按比例分配，这个与LinearLayout的layoutWeight用法是一样的。</p>
-
-<h3>组（Groups）</h3>
-
-<p>为了View的渲染性能，各路大神告诉我们要尽可能的让布局扁平化，但是，如果太扁平了，全都放在一个ViewGroup下面，就会混乱，特别是像RelativeLayout和ConstraintLayout，子View的排列方式会产生相互依赖，会有牵一发动全身的情况出现。为了避免这种情况，就需要对子View进行分组，对页面进行区域划分，把紧密相关的视为一个组。以往，会用一个子ViewGroup把一个组包起来，虽然会加深View的层次，但这样能避免牵一发动全身。</p>
-
-<p>而对于ConstraintLayout来说，有更先进的方式了，它有一个类叫Group，就是专门用来干这件事儿的，但Group对象并不是一个真的子View，这里的意思是它并不会在View tree中进行渲染，它是专门用于管理属于它的子View的，比如方便对整个组进行Visibility的设置。</p>
-
-<h2>神器要如何使用</h2>
-
-<p>前面的介绍就差不多了，ConstraintLayout还是相当的强大的，如有可能还是尽可能的多用它吧。它的实现上面确实挺复杂的，毕竟功能比较强大，但它的效率并不差。对于常用的几大布局都可以直接用它来替代。</p>
-
-<h3>当线性布局使用（as LinearLayout）</h3>
-
-<p>线性布局最大的优势就在于可以用weight的方式来按比例排放，而这个用前面提到的Chain就可以完美的解决。所以，LinearLayout可以完全放弃。</p>
-
-<h3>当层叠布局使用（as FrameLayout）</h3>
-
-<p>FrameLayout的全用场景一般是作为整个应用的根布局，特别是HomeActivity+Fragment这种架构。从纯的功能角度来讲，ConstraintLayout可以完全实现FrameLayout的所有功能，所以，FrameLayout也可以放弃。</p>
-
-<p>但从简单方便角度来讲，假如是HomeActivity的根布局，子View都是MATCH_PARENT的Fragement的话，也没有必要换成ConstraintLayout，这种场景FrameLayout完全够用，而且非常适合它。换成ConstraintLayout反倒有些浪费，有些杀鸡用牛刀。</p>
-
-<h3>当相对布局使用（as RelativeLayout）</h3>
-
-<p>从前面的讲述可以看出，ConstraintLayout几乎就是RelativeLayout的加强版。所以，凡是用到RelativeLayout的地方都<strong>应该换成ConstaintLayout</strong>。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://developer.android.google.cn/training/constraint-layout">Build a Responsive UI with ConstraintLayout</a></li>
-<li><a href="https://developer.android.com/reference/androidx/constraintlayout/widget/ConstraintLayout">ConstraintLayout</a></li>
-<li><a href="https://www.jianshu.com/p/17ec9bd6ca8a">约束布局ConstraintLayout看这一篇就够了</a></li>
-<li><a href="https://developer.android.com/codelabs/constraint-layout#0">Use ConstraintLayout to design your Android views</a></li>
-<li><a href="https://www.raywenderlich.com/9475-constraintlayout-tutorial-for-android-complex-layouts">ConstraintLayout Tutorial for Android: Complex Layouts</a></li>
-<li><a href="https://abhiandroid.com/ui/constraintlayout">Constraint Layout Tutorial With Example In Android Studio</a></li>
-<li><a href="https://blog.csdn.net/guolin_blog/article/details/53122387">Android新特性介绍，ConstraintLayout完全解析</a></li>
 </ul>
 
 ]]></content>
