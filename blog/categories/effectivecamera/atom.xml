@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectivecamera | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectivecamera/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2022-02-28T23:48:22+08:00</updated>
+  <updated>2022-03-01T20:20:59+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -18,7 +18,9 @@
     <link href="http://toughcoder.net/blog/2022/02/28/camera2-api-made-easy/"/>
     <updated>2022-02-28T23:42:34+08:00</updated>
     <id>http://toughcoder.net/blog/2022/02/28/camera2-api-made-easy</id>
-    <content type="html"><![CDATA[<p><a href=""><img src="https://www.upphone.com/wp-content/uploads/2020/07/android-camera-settings.jpg" title="auto auto" ></a></p>
+    <content type="html"><![CDATA[<p>从Android 5.0 （API 21）开始谷歌废弃了<a href="https://developer.android.com/reference/android/hardware/Camera">Camera</a>，并提供了一套新的API，称之为<a href="https://developer.android.com/reference/android/hardware/camera2/package-summary">Camera 2</a>，虽然异步化了，且更加的灵活，但也变得更加的复杂了，今天就来学习一下这套新API的使用方法。</p>
+
+<p><a href=""><img src="https://www.upphone.com/wp-content/uploads/2020/07/android-camera-settings.jpg" title="auto auto" ></a></p>
 
 <!-- more -->
 
@@ -36,17 +38,256 @@
 <pre><code class="xml">&lt;uses-permission android:name="android.permission.CAMERA" /&gt;
 </code></pre>
 
-<p>但这还不够，还需要在运行时动态检查，如果未授权，则去申请，如仍拒绝，则可直接退出，因为相机应用嘛，没有相机权限啥也做不了。一般来说，这个过程放在onCreate中做就可以了。</p>
+<p><strong>注意</strong>：官方还建议在manifest中声明<a href="https://developer.android.com/guide/topics/manifest/uses-feature-element?hl=en">use camera feature</a>，但用处不大，这主要是给Google Play用的，Google Play可以方便精准投递你的app，就国内的市场来说基本用不到。</p>
 
-<p>权限申请是必须要做，且要处理好，在应用的入口做好处理，保证后面的流程权限是有的，这样可以为业务逻辑减轻复担，里面就可以不用管权限，要么权限已授予，要么就不会走进来（已退出）。</p>
+<p>但这还不够，还需要在运行时动态检查，如果未授权，则去申请，如仍拒绝，则可直接退出，因为相机应用嘛，没有相机权限啥也做不了。一般来说，这个过程放在onCreate中做就可以了：</p>
+
+<pre><code class="java">@Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_camera);
+
+        if (ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED) {
+            setupCamera();
+        } else {
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CODE_PERM);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_CODE_PERM) {
+            if (grantResults.length &gt; 0 &amp;&amp; grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                setupCamera();
+            } else {
+                Toast.makeText(getApplicationContext(),
+                        "To use this app you must grant CAMERA permission.",
+                        Toast.LENGTH_LONG).show();
+                finish();
+            }
+        }
+    }
+</code></pre>
+
+<p>权限申请是必须要做，且要处理好，在应用的入口做好处理，保证后面的流程权限是有的，这样可以为业务逻辑减轻复担，里面就可以不用管权限了，要么权限已授予，要么就不会走进来（无权限时应该直接退出）。</p>
 
 <h3>Step 2: 获取相机的配置情况</h3>
 
+<p>处理好了权限以后，就要真正开始搞了，无论你的use case是什么，第一步肯定 是获取相机的配置信息情况，也就是说要搞清楚有几个硬件camera可以用，它的能力是什么（输出能满足什么样的需求），它的特点是什么（前置还是后置）。这里最主要用到的是就是<a href="https://developer.android.com/reference/android/hardware/camera2/CameraManager">CameraManager</a>对象，它是一个注册在ServiceManager里面的独立service，所以可以通过Context来获取：</p>
+
+<pre><code class="java">cameraManager = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
+</code></pre>
+
+<p>然后就是获取当前有多少可用的摄像头：</p>
+
+<pre><code class="java">String[] ids = cameraManager.getCameraIdList();
+</code></pre>
+
+<p>这个列表就是当前可用的camera，用一个String形式的id来标识，查询具体的摄像头的能力和配置都需要传入对应的id，比如说简单的dump一下信息：</p>
+
+<pre><code class="java">    public void enumerateCameras(Consumer&lt;String&gt; consumer) {
+            final List&lt;String&gt; cameraIds = cameraManager.getCameraIdList();
+            List&lt;String&gt; status = cameraIds.stream()
+                    .map(cameraManager::getCameraCharacteristics)
+                    .map(CameraContext::dumpCameraInfo)
+                    .collect(Collectors.toList());
+    }
+
+    private static String dumpCameraInfo(CameraCharacteristics characteristics) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{Physical Id: ");
+        sb.append(characteristics.getPhysicalCameraIds());
+        sb.append(", Facing: ");
+        int facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+        sb.append(facing == CameraMetadata.LENS_FACING_FRONT ? "FRONT" : "BACK");
+        sb.append("}");
+        return sb.toString();
+    }
+</code></pre>
+
+<p>因为大多数场景都是默认使用后摄，但要先把找出来：</p>
+
+<pre><code class="java">            final List&lt;String&gt; cameraIds = cameraManager.getCameraIdList();
+            cameraIds.stream()
+                    .forEach(id -&gt; {
+                        CameraCharacteristics cc = cameraManager.getCameraCharacteristics(id);
+                        if (cc.get(CameraCharacteristics.LENS_FACING) == CameraMetadata.LENS_FACING_BACK) {
+                            currentCamera = new CameraAgent(id, cc, cameraThreadHandler);
+                            return;
+                        }
+                    });
+</code></pre>
+
+<p>因为官方的CameraManager封装略差一些，以及它的每一个方法都要检查权限异常，所以做一下简单的进一步封装：</p>
+
+<pre><code class="java">class CameraManagerWrapper {
+    private final CameraManager cameraManager;
+
+    public CameraManagerWrapper(Context context) {
+        cameraManager = (CameraManager) context.getSystemService(Context.CAMERA_SERVICE);
+    }
+
+    public List&lt;String&gt; getCameraIdList() {
+        try {
+            return Arrays.asList(cameraManager.getCameraIdList());
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+        return new ArrayList&lt;&gt;();
+    }
+
+    public CameraCharacteristics getCameraCharacteristics(String id) {
+        try {
+            return cameraManager.getCameraCharacteristics(id);
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+}
+</code></pre>
+
 <h3>Step 3：打开相机</h3>
 
-<h3>Step 4： 创建会话</h3>
+<p>找到了摄像头，下一步就可以尝试打开并使用了。通过<a href="https://developer.android.com/reference/android/hardware/camera2/CameraManager#openCamera(java.lang.String,%20android.hardware.camera2.CameraDevice.StateCallback,%20android.os.Handler">CameraManager#openCamera</a>)来获取<a href="https://developer.android.com/reference/android/hardware/camera2/CameraDevice">CameraDevice</a>对象，这里的CameraDevice就是一个摄像头的封装，后面所有的操作都要在它上面进行。还需要提供一个<a href="https://developer.android.com/reference/android/hardware/camera2/CameraDevice.StateCallback">CameraDevice.StateCallback</a>，以及一个Handler，它是用于StateCallback运行的线程，也就是说StateCallback的几个方法都是在Handler所在的线程中运行的。</p>
+
+<p>因为打开摄像头是需要去操作硬件的，所以可能会耗时，因此，在这里引入了异步的回调，用以通知打开的结果CameraManager#openCamera是没有任何返回值的，结果 是通过StateCallback来通知给应用程序，且是运行在指定的<a href="https://developer.android.com/reference/android/os/Handler">Handler</a>中的，如果不传Handler，那么StateCallback就会运行在主线程中。</p>
+
+<pre><code class="java">     private CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
+        @Override
+        public void onOpened(@NonNull CameraDevice camera) {
+            Log.d(LOG_TAG, "Device Status: onOpened");
+            cameraDevice = Optional.of(camera);
+        }
+
+        @Override
+        public void onDisconnected(@NonNull CameraDevice camera) {
+            Log.d(LOG_TAG, "Device Status: onDisconnected");
+            cameraDevice = Optional.empty();
+            errorCode = 0;
+        }
+
+        @Override
+        public void onError(@NonNull CameraDevice camera, int error) {
+            cameraDevice = Optional.empty();
+            errorCode = error;
+        }
+    };
+
+    cameraManager.openCamera(backId, stateCallback, handler);
+</code></pre>
+
+<p>打开操作仅是一个开端，本身也没有特别复杂的，就是需要在StateCallback中做好处理就可以了。</p>
+
+<h3>Step 4： 创建拍照会话</h3>
+
+<p>下一步就是要创建拍照会话，对于每一个CameraDevice，打开了以后，要想使用必须创建一个<a href="https://developer.android.com/reference/android/hardware/camera2/CameraCaptureSession">CameraCaptureSession</a>，所有的use case都需要通过有效的CameraCaptureSeesion对象来实现（如预览和拍照），CameraDevice对象本身提供的功能并不多。与打开类似，也需要提供一个<a href="https://developer.android.com/reference/android/hardware/camera2/CameraCaptureSession.StateCallback">CameraCaptureSession.StateCallback</a>以接收创建session的结果，同时也要提供一个StateCallback使用的线程Handler：</p>
+
+<pre><code class="java">    private CameraCaptureSession.StateCallback regularSessionCallback = new CameraCaptureSession.StateCallback() {
+        @Override
+        public void onConfigured(@NonNull CameraCaptureSession session) {
+            Log.d(LOG_TAG, "Session State: onConfigured");
+            captureSession = Optional.of(session);
+        }
+
+        @Override
+        public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+            captureSession = Optional.empty();
+        }
+
+        @Override
+        public void onClosed(@NonNull CameraCaptureSession session) {
+            Log.d(LOG_TAG, "Session State: onClosed");
+            super.onClosed(session);
+            captureSession = Optional.empty();
+        }
+    };
+
+    private void createCaptureSession(Surface surface) {
+        SessionConfiguration sessionConfig = new SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                Arrays.asList(new OutputConfiguration(surface)),
+                executor,
+                regularSessionCallback);
+        try {
+            cameraDevice.get().createCaptureSession(sessionConfig);
+        } catch (CameraAccessException ignored) {
+        }
+    }
+</code></pre>
+
+<p>需要注意，同时需要提供一个camera的输出目标，比如预览的Surface。另外就是，创建CaptureSession是有2个API的，以前常用的是<a href="https://developer.android.com/reference/android/hardware/camera2/CameraDevice#createCaptureSession(java.util.List%3Candroid.view.Surface%3E,%20android.hardware.camera2.CameraCaptureSession.StateCallback,%20android.os.Handler">createCaptureSession(List<Surface> outputs, CameraCaptureSession.StateCallback callback, Handler handler)</a>)，但这个方法已被标记为Deprecated的了，推荐使用<a href="https://developer.android.com/reference/android/hardware/camera2/CameraDevice#createCaptureSession(android.hardware.camera2.params.SessionConfiguration">createCaptureSession(SessionConfiguration config)</a>)。这两者基本没区别，所需要传入的参数 都差不多，唯一不同的就是供回调所使用的线程，旧的API是用Handler，新的这个要求是<a href="https://developer.android.com/reference/java/util/concurrent/Executor">Executor</a>，这里有些不太一致，但容易解决，通过Handler可以很容易的创建出来一个Executor：</p>
+
+<pre><code class="java">executor = command -&gt; handler.post(command);
+</code></pre>
 
 <h3>Step 5：请求预览</h3>
+
+<p>有了CameraCaptureSession对象以后，就可以启动预览了，这个是相机类应用的最为基础的一个use case。</p>
+
+<p>主要是通过<a href="https://developer.android.com/reference/android/hardware/camera2/CameraCaptureSession#setRepeatingRequest(android.hardware.camera2.CaptureRequest,%20android.hardware.camera2.CameraCaptureSession.CaptureCallback,%20android.os.Handler">setRepeatingRequest</a>)这个方法，需要提供一个<a href="https://developer.android.com/reference/android/hardware/camera2/CaptureRequest">CaptureRequest</a>，一个<a href="https://developer.android.com/reference/android/hardware/camera2/CameraCaptureSession.CaptureCallback">CaptureCallback</a>以及一个供回调使用的Handler，其实，这一步通常与Step 4融合在一起：</p>
+
+<pre><code class="java">        // 省略的代码
+        @Override
+        public void onConfigured(@NonNull CameraCaptureSession session) {
+            Log.d(LOG_TAG, "Session State: onConfigured");
+            captureSession = Optional.of(session);
+            // In session state callback
+            try {
+                captureSession.get().setRepeatingRequest(requestBuilder.build(), captureCallback, cameraHandler);
+            } catch (CameraAccessException ignored) {
+            }
+        }
+       // 省略的代码
+
+    private CameraCaptureSession.CaptureCallback captureCallback = new CameraCaptureSession.CaptureCallback() {
+        @Override
+        public void onCaptureStarted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, long timestamp, long frameNumber) {
+            super.onCaptureStarted(session, request, timestamp, frameNumber);
+        }
+    };
+
+    private void doStartPreview(Surface surface) {
+        SessionConfiguration sessionConfig = new SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                Arrays.asList(new OutputConfiguration(surface)),
+                executor,
+                regularSessionCallback);
+        try {
+            requestBuilder = cameraDevice.get().createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            requestBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+            requestBuilder.addTarget(surface);
+            sessionConfig.setSessionParameters(requestBuilder.build());
+
+            cameraDevice.get().createCaptureSession(sessionConfig);
+        } catch (CameraAccessException ignored) {
+        }
+    }
+</code></pre>
+
+<h2>总结</h2>
+
+<p>前面说了这么多，其实关键的就是三个对象和三个回调，三个对象分别是</p>
+
+<ul>
+<li>CameraManager &ndash; 用以获取静态的配置信息</li>
+<li>CameraDevice &ndash; 用以创建拍照会话</li>
+<li>CameraCaptureSession &ndash; 用以启动预览和进行拍照</li>
+</ul>
+
+
+<p>三大回调分别是：</p>
+
+<ul>
+<li>CameraDevice.StateCallback &ndash; 用于获取CameraDevice</li>
+<li>CameraCaptureSession.StateCallback &ndash; 用于获取拍照会话</li>
+<li>CameraCaptureSession.CaptureCallback &ndash; 用于获取预览和拍照的结果</li>
+</ul>
+
+
+<p>再有就是，提供回调的时候要提供一个回调发生的线程，通过Handler或者Executor来指定。因为硬件操作可能会耗时甚至完全卡死，所以回调和线程是用来实现异步的。</p>
 
 <h2>参考资料</h2>
 
