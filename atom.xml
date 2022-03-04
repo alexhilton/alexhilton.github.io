@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2022-03-02T22:10:19+08:00</updated>
+  <updated>2022-03-04T19:37:07+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,414 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Camera 2教程之预览与加强]]></title>
+    <link href="http://toughcoder.net/blog/2022/03/04/camera-2-preview-and-improvement/"/>
+    <updated>2022-03-04T19:27:56+08:00</updated>
+    <id>http://toughcoder.net/blog/2022/03/04/camera-2-preview-and-improvement</id>
+    <content type="html"><![CDATA[<p><a href="http://toughcoder.net/blog/2022/02/28/camera2-api-made-easy/">前一篇文章</a>讲解了如何使用这套新的API，但仍有很多可以提升的空间，这篇重点来讲讲，如何提升预览画质和做一些加强。</p>
+
+<p><a href="http://toughcoder.net/blog/2022/03/04/camera-2-preview-and-improvement/"><img src="https://www.edumobile.org/wp-content/uploads/2015/05/Camera-Preview-Example-in-Android-Programming.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>线程模型</h2>
+
+<p>因为相机是属于硬件，操作起来可能会耗时，这套新的API也特别注意，因此加了很多异步化处理，所有的请求结果全是通过回调来进行的，并且需要调用者来指定一个回调所使用的线程。因此，我们需要一个专门用于camera操作的线程，用HandlerThread就可以，并把它控制在Activity的生命周期之中，比如在onCreate时启动此线程，在onDestroy时关闭。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onCreate</span><span class="o">(</span><span class="n">Bundle</span> <span class="n">savedInstanceState</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onCreate</span><span class="o">(</span><span class="n">savedInstanceState</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">attachCameraThread</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">onDestroy</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">onDestroy</span><span class="o">();</span>
+</span><span class='line'>    <span class="n">detachCameraThread</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>所有与camera相关的操作，均要在相机专属的HandlerThread中调用，与其他线程（如主线程）的交互均通过回调处理。</p>
+
+<h2>关键对象</h2>
+
+<p>为了进一步的封装和方便管理，需要两个关键对象的封装。</p>
+
+<h3>CameraContext</h3>
+
+<p>一个是CameraContext，负责管理相机的线程，外部所有的方法调用均应该通过它来进行，我们的目的是要把所有的相机相关操作封装在自己的线程里面，因此，暴露给外面的接口，必须统一，并且在开放的方法中加入线程检查，如果还没有启动HandlerThread，就报错，调用者需要先attachThread：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">CameraContext</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">static</span> <span class="kd">final</span> <span class="n">String</span> <span class="n">LOG_TAG</span> <span class="o">=</span> <span class="n">CameraContext</span><span class="o">.</span><span class="na">class</span><span class="o">.</span><span class="na">getSimpleName</span><span class="o">();</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">CameraManagerWrapper</span> <span class="n">cameraManager</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">volatile</span> <span class="n">HandlerThread</span> <span class="n">cameraManageThread</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">volatile</span> <span class="n">CameraThreadHandler</span> <span class="n">cameraThreadHandler</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">volatile</span> <span class="n">CameraAgent</span> <span class="n">currentCamera</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="nf">CameraContext</span><span class="o">(</span><span class="n">Context</span> <span class="n">context</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">cameraManager</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">CameraManagerWrapper</span><span class="o">(</span><span class="n">context</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">attachThread</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;attachThread&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">cameraThreadHandler</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">cameraThreadHandler</span><span class="o">.</span><span class="na">removeCallbacksAndMessages</span><span class="o">(</span><span class="kc">null</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">cameraManageThread</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="n">cameraManageThread</span><span class="o">.</span><span class="na">isAlive</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">cameraManageThread</span><span class="o">.</span><span class="na">quitSafely</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="n">cameraManageThread</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">HandlerThread</span><span class="o">(</span><span class="s">&quot;Camera Management Thread&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">cameraManageThread</span><span class="o">.</span><span class="na">start</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">cameraThreadHandler</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">CameraThreadHandler</span><span class="o">(</span><span class="n">cameraManageThread</span><span class="o">.</span><span class="na">getLooper</span><span class="o">());</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">detachThread</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;detachThread&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">cameraManageThread</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="n">cameraManageThread</span><span class="o">.</span><span class="na">isAlive</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>             <span class="n">cameraManageThread</span><span class="o">.</span><span class="na">quitSafely</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="kt">void</span> <span class="nf">checkThread</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">cameraManageThread</span> <span class="o">==</span> <span class="kc">null</span> <span class="o">||</span> <span class="o">!</span><span class="n">cameraManageThread</span><span class="o">.</span><span class="na">isAlive</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">throw</span> <span class="k">new</span> <span class="nf">CameraSetupException</span><span class="o">(</span><span class="s">&quot;attachThread must be called before any other method invocations.&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">openCamera</span><span class="o">(</span><span class="n">Consumer</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span> <span class="n">consumer</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">checkThread</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">Runnable</span> <span class="n">actionOpen</span> <span class="o">=</span> <span class="o">()</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>              <span class="c1">// ...</span>
+</span><span class='line'>        <span class="o">};</span>
+</span><span class='line'>        <span class="n">Message</span> <span class="n">msg</span> <span class="o">=</span> <span class="n">Message</span><span class="o">.</span><span class="na">obtain</span><span class="o">(</span><span class="n">cameraThreadHandler</span><span class="o">,</span> <span class="n">actionOpen</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">msg</span><span class="o">.</span><span class="na">what</span> <span class="o">=</span> <span class="n">CameraThreadHandler</span><span class="o">.</span><span class="na">MSG_OPEN_CAMERA</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">msg</span><span class="o">.</span><span class="na">sendToTarget</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">closeCamera</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">checkThread</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">Runnable</span> <span class="n">actionClose</span> <span class="o">=</span> <span class="kc">null</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">Message</span> <span class="n">msgClose</span> <span class="o">=</span> <span class="n">Message</span><span class="o">.</span><span class="na">obtain</span><span class="o">(</span><span class="n">cameraThreadHandler</span><span class="o">,</span> <span class="n">actionClose</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">msgClose</span><span class="o">.</span><span class="na">what</span> <span class="o">=</span> <span class="n">CameraThreadHandler</span><span class="o">.</span><span class="na">MSG_CLOSE_CAMERA</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">msgClose</span><span class="o">.</span><span class="na">sendToTarget</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>CameraAgent</h3>
+
+<p>还需要对CameraDevice进行封装，把CameraCaptureSession，以及RequestBuilder，封装在内，并且在三大回调Device State Callback，Session State Callback以及Session Capture Callback也都封装在内，因此这些东西的生命周期全都是在CameraDevice内部的。</p>
+
+<p>设计要点：</p>
+
+<ul>
+<li>CameraAgent不开放接口给外部，它只能开放给CameraContext使用</li>
+<li>对象是对camera device的完整封装，对象本身一直可用，与CameraDevice是否打开无直接关系</li>
+<li>随时可以查询静态配置属性，创建对象时就要传入id和CameraCharacteristics</li>
+<li>有连接状态，也即打开对应的CameraDevice，动态配置属性查询，以及像启动预览，必须要是连接状态</li>
+<li>拍照应该在预览状态内</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+<span class='line-number'>66</span>
+<span class='line-number'>67</span>
+<span class='line-number'>68</span>
+<span class='line-number'>69</span>
+<span class='line-number'>70</span>
+<span class='line-number'>71</span>
+<span class='line-number'>72</span>
+<span class='line-number'>73</span>
+<span class='line-number'>74</span>
+<span class='line-number'>75</span>
+<span class='line-number'>76</span>
+<span class='line-number'>77</span>
+<span class='line-number'>78</span>
+<span class='line-number'>79</span>
+<span class='line-number'>80</span>
+<span class='line-number'>81</span>
+<span class='line-number'>82</span>
+<span class='line-number'>83</span>
+<span class='line-number'>84</span>
+<span class='line-number'>85</span>
+<span class='line-number'>86</span>
+<span class='line-number'>87</span>
+<span class='line-number'>88</span>
+<span class='line-number'>89</span>
+<span class='line-number'>90</span>
+<span class='line-number'>91</span>
+<span class='line-number'>92</span>
+<span class='line-number'>93</span>
+<span class='line-number'>94</span>
+<span class='line-number'>95</span>
+<span class='line-number'>96</span>
+<span class='line-number'>97</span>
+<span class='line-number'>98</span>
+<span class='line-number'>99</span>
+<span class='line-number'>100</span>
+<span class='line-number'>101</span>
+<span class='line-number'>102</span>
+<span class='line-number'>103</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">class</span> <span class="nc">CameraAgent</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">static</span> <span class="n">String</span> <span class="n">LOG_TAG</span> <span class="o">=</span> <span class="n">CameraAgent</span><span class="o">.</span><span class="na">class</span><span class="o">.</span><span class="na">getSimpleName</span><span class="o">();</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">String</span> <span class="n">id</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">CameraCharacteristics</span> <span class="n">characteristics</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">CameraContext</span><span class="o">.</span><span class="na">CameraThreadHandler</span> <span class="n">cameraHandler</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">Executor</span> <span class="n">executor</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">Optional</span><span class="o">&lt;</span><span class="n">CameraDevice</span><span class="o">&gt;</span> <span class="n">cameraDevice</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">Optional</span><span class="o">&lt;</span><span class="n">CameraCaptureSession</span><span class="o">&gt;</span> <span class="n">captureSession</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">CameraDevice</span><span class="o">.</span><span class="na">StateCallback</span> <span class="n">stateCallback</span> <span class="o">=</span> <span class="k">new</span> <span class="n">CameraDevice</span><span class="o">.</span><span class="na">StateCallback</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="nd">@Override</span>
+</span><span class='line'>        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onOpened</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraDevice</span> <span class="n">camera</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;Device Status: onOpened&quot;</span><span class="o">);</span>
+</span><span class='line'>            <span class="n">cameraDevice</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="n">camera</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="nd">@Override</span>
+</span><span class='line'>        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onDisconnected</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraDevice</span> <span class="n">camera</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;Device Status: onDisconnected&quot;</span><span class="o">);</span>
+</span><span class='line'>            <span class="n">cameraDevice</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">empty</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="nd">@Override</span>
+</span><span class='line'>        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onError</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraDevice</span> <span class="n">camera</span><span class="o">,</span> <span class="kt">int</span> <span class="n">error</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">cameraDevice</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">empty</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">};</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">CameraCaptureSession</span><span class="o">.</span><span class="na">StateCallback</span> <span class="n">regularSessionCallback</span> <span class="o">=</span> <span class="k">new</span> <span class="n">CameraCaptureSession</span><span class="o">.</span><span class="na">StateCallback</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="nd">@Override</span>
+</span><span class='line'>        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onConfigured</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraCaptureSession</span> <span class="n">session</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;Session State: onConfigured&quot;</span><span class="o">);</span>
+</span><span class='line'>            <span class="n">captureSession</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">of</span><span class="o">(</span><span class="n">session</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="nd">@Override</span>
+</span><span class='line'>        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onConfigureFailed</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraCaptureSession</span> <span class="n">session</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">captureSession</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">empty</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="nd">@Override</span>
+</span><span class='line'>        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onClosed</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraCaptureSession</span> <span class="n">session</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;Session State: onClosed&quot;</span><span class="o">);</span>
+</span><span class='line'>            <span class="kd">super</span><span class="o">.</span><span class="na">onClosed</span><span class="o">(</span><span class="n">session</span><span class="o">);</span>
+</span><span class='line'>            <span class="n">captureSession</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">empty</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">};</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">CameraCaptureSession</span><span class="o">.</span><span class="na">CaptureCallback</span> <span class="n">captureCallback</span> <span class="o">=</span> <span class="k">new</span> <span class="n">CameraCaptureSession</span><span class="o">.</span><span class="na">CaptureCallback</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="nd">@Override</span>
+</span><span class='line'>        <span class="kd">public</span> <span class="kt">void</span> <span class="nf">onCaptureStarted</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraCaptureSession</span> <span class="n">session</span><span class="o">,</span> <span class="nd">@NonNull</span> <span class="n">CaptureRequest</span> <span class="n">request</span><span class="o">,</span> <span class="kt">long</span> <span class="n">timestamp</span><span class="o">,</span> <span class="kt">long</span> <span class="n">frameNumber</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="kd">super</span><span class="o">.</span><span class="na">onCaptureStarted</span><span class="o">(</span><span class="n">session</span><span class="o">,</span> <span class="n">request</span><span class="o">,</span> <span class="n">timestamp</span><span class="o">,</span> <span class="n">frameNumber</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">};</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">CaptureRequest</span><span class="o">.</span><span class="na">Builder</span> <span class="n">requestBuilder</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">CameraAgent</span><span class="o">(</span><span class="n">String</span> <span class="n">id</span><span class="o">,</span> <span class="n">CameraCharacteristics</span> <span class="n">cameraCharacteristics</span><span class="o">,</span> <span class="n">CameraContext</span><span class="o">.</span><span class="na">CameraThreadHandler</span> <span class="n">handler</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">id</span> <span class="o">=</span> <span class="n">id</span><span class="o">;</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">characteristics</span> <span class="o">=</span> <span class="n">cameraCharacteristics</span><span class="o">;</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">cameraHandler</span> <span class="o">=</span> <span class="n">handler</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">executor</span> <span class="o">=</span> <span class="n">command</span> <span class="o">-&gt;</span> <span class="n">handler</span><span class="o">.</span><span class="na">post</span><span class="o">(</span><span class="n">command</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">cameraDevice</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">empty</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">captureSession</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">empty</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">previewSize</span> <span class="o">=</span> <span class="n">Optional</span><span class="o">.</span><span class="na">empty</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">errorCode</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">String</span> <span class="nf">getId</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">id</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kt">boolean</span> <span class="nf">connected</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">cameraDevice</span><span class="o">.</span><span class="na">isPresent</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">CameraDevice</span><span class="o">.</span><span class="na">StateCallback</span> <span class="nf">getDeviceStateCallback</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">stateCallback</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kt">void</span> <span class="nf">connect</span><span class="o">(</span><span class="nd">@NonNull</span> <span class="n">CameraManagerWrapper</span> <span class="n">wrapper</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;connect&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">wrapper</span><span class="o">.</span><span class="na">openCamera</span><span class="o">(</span><span class="k">this</span><span class="o">,</span> <span class="n">cameraHandler</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kt">void</span> <span class="nf">disconnect</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;disconnect&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">captureSession</span><span class="o">.</span><span class="na">isPresent</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">captureSession</span><span class="o">.</span><span class="na">get</span><span class="o">().</span><span class="na">close</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">cameraDevice</span><span class="o">.</span><span class="na">isPresent</span><span class="o">())</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">cameraDevice</span><span class="o">.</span><span class="na">get</span><span class="o">().</span><span class="na">close</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kt">void</span> <span class="nf">startPreview</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kt">void</span> <span class="nf">stopPreview</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>启动预览</h2>
+
+<h3>用SurfaceView就可以</h3>
+
+<h3>如何选择预览尺寸</h3>
+
+<h3>具体实现</h3>
+
+<h2>确保关闭</h2>
+
+<p>相机是一种硬件资源，当退出的时候要能确保它是关闭状态的，也就是说要确保CameraAgent#disconnect能执行，且要执行完成，执行完成的意思是，你需要收到onDisconnected的回调。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Camera2 API Made Easy]]></title>
@@ -1644,14 +2052,14 @@
 
 <p>输出：</p>
 
-<blockquote><p><a href="&#109;&#x61;&#105;&#108;&#116;&#111;&#x3a;&#x48;&#97;&#x72;&#x64;&#x65;&#x6e;&#64;&#x62;&#x72;&#111;&#x6f;&#107;&#108;&#x79;&#110;&#x2e;&#110;&#x65;&#116;&#115;">&#x48;&#x61;&#114;&#100;&#x65;&#x6e;&#64;&#98;&#114;&#111;&#x6f;&#x6b;&#108;&#121;&#110;&#46;&#x6e;&#x65;&#x74;&#115;</a> <br />
-<a href="&#x6d;&#97;&#x69;&#x6c;&#x74;&#x6f;&#58;&#68;&#117;&#114;&#97;&#x6e;&#116;&#x40;&#x62;&#x72;&#111;&#111;&#x6b;&#108;&#121;&#x6e;&#46;&#x6e;&#x65;&#116;&#x73;">&#x44;&#x75;&#114;&#x61;&#x6e;&#116;&#64;&#98;&#x72;&#x6f;&#x6f;&#x6b;&#108;&#x79;&#110;&#x2e;&#x6e;&#x65;&#x74;&#x73;</a> <br />
-<a href="&#x6d;&#x61;&#105;&#108;&#x74;&#x6f;&#58;&#73;&#x72;&#118;&#x69;&#110;&#103;&#x40;&#x62;&#x72;&#x6f;&#111;&#x6b;&#x6c;&#x79;&#110;&#46;&#x6e;&#101;&#116;&#x73;">&#x49;&#x72;&#118;&#105;&#x6e;&#x67;&#x40;&#x62;&#114;&#111;&#x6f;&#x6b;&#x6c;&#x79;&#110;&#x2e;&#x6e;&#101;&#x74;&#115;</a> <br />
-<a href="&#x6d;&#x61;&#105;&#108;&#116;&#111;&#x3a;&#67;&#108;&#x79;&#x78;&#116;&#x6f;&#x6e;&#64;&#98;&#114;&#x6f;&#x6f;&#107;&#108;&#121;&#x6e;&#x2e;&#x6e;&#101;&#x74;&#x73;">&#67;&#108;&#x79;&#x78;&#x74;&#x6f;&#110;&#x40;&#98;&#x72;&#x6f;&#111;&#107;&#108;&#121;&#x6e;&#x2e;&#x6e;&#x65;&#x74;&#115;</a> <br />
-<a href="&#109;&#97;&#105;&#108;&#x74;&#111;&#58;&#x45;&#x64;&#x77;&#x61;&#x72;&#100;&#x73;&#64;&#98;&#x72;&#x6f;&#111;&#107;&#x6c;&#121;&#110;&#x2e;&#x6e;&#101;&#x74;&#115;">&#x45;&#100;&#119;&#97;&#114;&#x64;&#115;&#64;&#x62;&#114;&#x6f;&#111;&#x6b;&#x6c;&#x79;&#110;&#46;&#x6e;&#101;&#x74;&#115;</a> <br />
-<a href="&#109;&#x61;&#x69;&#108;&#x74;&#x6f;&#x3a;&#x42;&#114;&#x6f;&#x77;&#110;&#64;&#x62;&#x72;&#x6f;&#x6f;&#x6b;&#108;&#121;&#110;&#46;&#x6e;&#x65;&#x74;&#x73;">&#x42;&#114;&#x6f;&#119;&#110;&#x40;&#x62;&#114;&#111;&#x6f;&#x6b;&#x6c;&#121;&#x6e;&#x2e;&#x6e;&#x65;&#x74;&#115;</a> <br />
-<a href="&#109;&#97;&#105;&#x6c;&#116;&#111;&#58;&#65;&#x6c;&#x64;&#x72;&#x69;&#x64;&#x67;&#101;&#x40;&#x62;&#114;&#x6f;&#x6f;&#107;&#108;&#121;&#x6e;&#46;&#x6e;&#101;&#116;&#x73;">&#x41;&#108;&#x64;&#x72;&#105;&#x64;&#x67;&#101;&#x40;&#x62;&#114;&#111;&#111;&#x6b;&#x6c;&#x79;&#x6e;&#x2e;&#x6e;&#x65;&#116;&#115;</a> <br />
-<a href="&#x6d;&#97;&#x69;&#x6c;&#116;&#111;&#x3a;&#71;&#x72;&#x69;&#x66;&#x66;&#105;&#x6e;&#64;&#98;&#114;&#x6f;&#x6f;&#107;&#x6c;&#121;&#x6e;&#x2e;&#x6e;&#101;&#116;&#115;">&#71;&#114;&#x69;&#x66;&#102;&#105;&#110;&#64;&#98;&#114;&#x6f;&#111;&#x6b;&#108;&#x79;&#x6e;&#x2e;&#x6e;&#x65;&#x74;&#115;</a> <br /></p></blockquote>
+<blockquote><p><a href="&#109;&#x61;&#105;&#108;&#116;&#x6f;&#58;&#72;&#x61;&#114;&#100;&#x65;&#110;&#64;&#x62;&#x72;&#111;&#111;&#107;&#108;&#x79;&#110;&#46;&#110;&#x65;&#116;&#x73;">&#72;&#97;&#x72;&#x64;&#101;&#110;&#x40;&#98;&#114;&#111;&#111;&#x6b;&#x6c;&#121;&#x6e;&#46;&#110;&#101;&#116;&#115;</a> <br />
+<a href="&#109;&#97;&#105;&#108;&#x74;&#111;&#x3a;&#x44;&#117;&#x72;&#97;&#110;&#x74;&#x40;&#x62;&#x72;&#x6f;&#111;&#x6b;&#108;&#121;&#110;&#x2e;&#x6e;&#101;&#116;&#x73;">&#x44;&#117;&#x72;&#x61;&#110;&#x74;&#x40;&#x62;&#114;&#x6f;&#111;&#x6b;&#x6c;&#x79;&#x6e;&#x2e;&#x6e;&#101;&#116;&#115;</a> <br />
+<a href="&#109;&#97;&#105;&#108;&#116;&#111;&#x3a;&#x49;&#114;&#x76;&#x69;&#x6e;&#103;&#64;&#98;&#114;&#111;&#x6f;&#x6b;&#108;&#x79;&#x6e;&#46;&#110;&#x65;&#x74;&#115;">&#73;&#114;&#118;&#105;&#110;&#x67;&#64;&#98;&#x72;&#111;&#x6f;&#x6b;&#x6c;&#121;&#110;&#46;&#110;&#101;&#x74;&#x73;</a> <br />
+<a href="&#109;&#97;&#105;&#x6c;&#x74;&#111;&#x3a;&#67;&#x6c;&#121;&#120;&#x74;&#111;&#110;&#x40;&#98;&#x72;&#111;&#111;&#x6b;&#108;&#x79;&#110;&#x2e;&#110;&#101;&#116;&#115;">&#67;&#x6c;&#x79;&#x78;&#x74;&#111;&#110;&#x40;&#98;&#x72;&#x6f;&#x6f;&#x6b;&#x6c;&#121;&#110;&#x2e;&#x6e;&#101;&#x74;&#x73;</a> <br />
+<a href="&#x6d;&#97;&#105;&#108;&#116;&#x6f;&#58;&#69;&#x64;&#x77;&#97;&#114;&#100;&#x73;&#64;&#98;&#x72;&#x6f;&#111;&#107;&#108;&#x79;&#110;&#x2e;&#x6e;&#101;&#116;&#x73;">&#69;&#x64;&#119;&#x61;&#x72;&#100;&#115;&#x40;&#98;&#114;&#x6f;&#x6f;&#x6b;&#108;&#121;&#110;&#x2e;&#110;&#101;&#x74;&#x73;</a> <br />
+<a href="&#x6d;&#x61;&#x69;&#108;&#x74;&#111;&#58;&#x42;&#114;&#x6f;&#119;&#110;&#x40;&#x62;&#x72;&#111;&#x6f;&#x6b;&#108;&#121;&#110;&#x2e;&#x6e;&#101;&#x74;&#x73;">&#66;&#x72;&#111;&#x77;&#110;&#x40;&#98;&#x72;&#x6f;&#111;&#x6b;&#x6c;&#x79;&#110;&#46;&#x6e;&#101;&#116;&#x73;</a> <br />
+<a href="&#x6d;&#97;&#105;&#108;&#116;&#111;&#x3a;&#x41;&#108;&#x64;&#x72;&#x69;&#x64;&#103;&#x65;&#64;&#x62;&#114;&#x6f;&#111;&#107;&#x6c;&#121;&#x6e;&#46;&#110;&#101;&#116;&#115;">&#65;&#x6c;&#x64;&#114;&#x69;&#100;&#103;&#101;&#x40;&#x62;&#114;&#111;&#111;&#x6b;&#108;&#x79;&#x6e;&#46;&#110;&#x65;&#x74;&#115;</a> <br />
+<a href="&#x6d;&#97;&#105;&#x6c;&#x74;&#111;&#x3a;&#x47;&#114;&#x69;&#102;&#102;&#x69;&#x6e;&#64;&#x62;&#x72;&#x6f;&#111;&#x6b;&#x6c;&#x79;&#x6e;&#x2e;&#110;&#101;&#116;&#115;">&#x47;&#x72;&#105;&#x66;&#102;&#x69;&#110;&#x40;&#x62;&#x72;&#111;&#111;&#107;&#108;&#121;&#x6e;&#x2e;&#110;&#101;&#x74;&#x73;</a> <br /></p></blockquote>
 
 <p>这里的获取到的Email是另外一个Stream，所以这里必须用flatMap，也即当把player转换为Email后，必须要再flat，变成最初的链中的对象。</p>
 
@@ -5899,132 +6307,6 @@
 <h2>拓展资源</h2>
 
 <p>除了安卓源代码以外，还有一坨资源可以看，像芯片厂商也会发布<a href="https://source.codeaurora.org/">相当多的源码</a>，比如像高通就有安卓源码相在的一坨源码，高通芯片的手机基本上也都有基于这些代码进行二次开发，所以也非常值得一看。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Python字符串编码答疑]]></title>
-    <link href="http://toughcoder.net/blog/2020/03/06/understanding-python-string-encoding/"/>
-    <updated>2020-03-06T22:21:49+08:00</updated>
-    <id>http://toughcoder.net/blog/2020/03/06/understanding-python-string-encoding</id>
-    <content type="html"><![CDATA[<h2>Python 2中的字符串分类</h2>
-
-<p>在Python 2中字符串，有两个类型，一个是str，一个是unicode。str可以理解为ASCII的字符列表，说白了，只能存储ASCII字符，如果赋个中文值，会报错；而unicode是支持非ASCII字符的。这个与C语言中的字符非常类似char[]只能存ASCII字符串，而wchar[]才可以存储Unidcode字符串。</p>
-
-<p><a href="http://toughcoder.net/blog/2020/03/06/understanding-python-string-encoding/"><img src="https://www.kodefork.com/media/uploads/articles/2019/06/23/python-strings.png"></a></p>
-
-<!-- more -->
-
-
-<p>可以用如下方式来安全的转换两种字符串：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="k">def</span> <span class="nf">to_str</span><span class="p">(</span><span class="n">foo</span><span class="p">):</span>
-</span><span class='line'>   <span class="k">if</span> <span class="n">foo</span> <span class="n">instanceof</span> <span class="nb">unicode</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">foo</span><span class="p">)</span>
-</span><span class='line'>   <span class="k">else</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="n">foo</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">def</span> <span class="nf">to_unicode</span><span class="p">(</span><span class="n">bar</span><span class="p">):</span>
-</span><span class='line'>   <span class="k">if</span> <span class="n">bar</span> <span class="n">instanceof</span> <span class="nb">str</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="nb">unicode</span><span class="p">(</span><span class="n">bar</span><span class="p">)</span>
-</span><span class='line'>   <span class="k">else</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="n">bar</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>对于字面字符串，前面加上u来标识是一个unicode，否则会当成str：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="n">a</span> <span class="o">=</span> <span class="s">&#39;this is a string&#39;</span>
-</span><span class='line'><span class="n">b</span> <span class="o">=</span> <span class="s">u&#39;nah, I am a unicode&#39;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>Python 3中的字符串分类</h2>
-
-<p>由于Python 2中的混乱，所以到了Python 3里面，有了新的定义，字符串类型是str，支持Unicode，另外多了一个类型bytes，可以理解为byte的列表，也即是0&lt;=且&lt;=256的无符号整数，或者说是ASCII字符，简单来理解意思是一样的。这个就与Java语言类似了，如同Java中一样，String支持unicode，另专门有byte类型。另外，对于字面字符串也无需要再要标识了。</p>
-
-<p>str与bytes之间的关系与区别是，str是给人看的，而bytes是给机器看的，bytes是str的底层实现。所以，bytes处理起来更快，效率更高，一些底层的IO库以及像网络IO，用的数据 一般都是bytes。它们之间是可以互转的：</p>
-
-<ul>
-<li>str转为bytes叫encode</li>
-<li>bytes转为str叫decode</li>
-</ul>
-
-
-<p>在转换的时候还需要指定编码格式，这个编码格式就是unicode的编码方式，默认是&#8217;utf-8&#8217;，这里就涉及Unicode编码解码的相关知识了，常见的就是&#8217;utf-8&#8217;，&#8217;unicode&#8217;，以及&#8217;gbk&#8217;等。可以用如下方法来安全的转换：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="k">def</span> <span class="nf">to_bytes</span><span class="p">(</span><span class="n">foo</span><span class="p">):</span>
-</span><span class='line'>   <span class="k">if</span> <span class="n">foo</span> <span class="n">instanceof</span> <span class="nb">str</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="n">foo</span><span class="o">.</span><span class="n">encode</span><span class="p">()</span>
-</span><span class='line'>   <span class="k">else</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="n">foo</span>
-</span><span class='line'><span class="k">def</span> <span class="nf">to_str</span><span class="p">(</span><span class="n">bar</span><span class="p">):</span>
-</span><span class='line'>   <span class="k">if</span> <span class="n">bar</span> <span class="n">intanceof</span> <span class="nb">bytes</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="n">bar</span><span class="o">.</span><span class="n">decode</span><span class="p">()</span>
-</span><span class='line'>   <span class="k">else</span><span class="p">:</span>
-</span><span class='line'>      <span class="k">return</span> <span class="n">bar</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>注意区分两个编码格式</h2>
-
-<p>需要注意区分两个编码格式的设置，一个是指定程序里面字符串的编码，如在encode()和decode()时指定编码格式。</p>
-
-<p>另外，一个就是程序源文件的编码格式，这个容易被忽略，要详细说下：程序的源码，其实就是一个文本文件，对吧，那么这个文本文件也是要指定编码格式的，常规来说，Python程序应该都是ASCII字符，所以默认的呢Python解释器，是按照ASCII文本的方式来处理代码源文件，但我们代码里面是会出现Unicode字符的，比如字面字符串，或者写的注释，如果 不进行特殊的设置解释器会报错的，因为出现了它不认识的字符。这时就需要对源码文件设置一下编码格式，把这句加在代码源文件的最上面，就好了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="c"># -*- coding: utf-8 -*-</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>如何解决未知编码格式</h2>
-
-<p>关于编码最容易遇到的就是UnicodeDecodeError，后面跟着一坨详细信息，这个错误就是告诉你编码时出问题了，通常有两类错误：</p>
-
-<ul>
-<li><p>UnicodeDecodeError: &lsquo;ascii&rsquo; codec can&rsquo;t decode byte 0xe4 in position 0: ordinal not in range(128)</p>
-
-<p>这个通常是在Python 2时会遇到，原因简单的来说就是把unicode当成了string，或者源码文件的编码格式不对。解决的办法就是按照 上面介绍的安全转换方法，另外要设置一下源码文件的编码格式，这个问题自然可解。</p></li>
-<li><p>Python3.6 UnicodeDecodeError: &lsquo;utf8&rsquo; codec can&rsquo;t decode byte 0xb2 in position 24137: invalid start byte</p>
-
-<p>这个通常是在Python 3时面遇到的，后面的具体信息会不一样，这个问题会发生在bytes转化为string，decode时会报出，原因就是指定的解码方式与真实的不匹配，无法成功decode，比如，bytes是「gtk」的，但是用&#8217;utf-8&#8217;去decode肯定会失败。这个问题，在写爬虫或者一些文本处理时经常遇到，因为来源的编码方式不固定。</p>
-
-<p>这个问题，如果想要根解，必须预知来源bytes的编码格式，但这通常不可能，所以可行的一条方案是，用一坨编码方式来不停的尝试：</p>
-
-<pre><code class="python">def safe_decode(source):
-   encodeings = ['utf-8', 'gbk', 'utf-16']
-   for en in encodeings:
-      try:
-         return source.decode(en)
-      except UnicodeDecodeError as e:
-         print('Failed: ', e)
-   return source
-</code></pre></li>
-</ul>
-
 ]]></content>
   </entry>
   

@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectivecamera | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectivecamera/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2022-03-02T22:10:19+08:00</updated>
+  <updated>2022-03-04T19:37:07+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,239 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Camera 2教程之预览与加强]]></title>
+    <link href="http://toughcoder.net/blog/2022/03/04/camera-2-preview-and-improvement/"/>
+    <updated>2022-03-04T19:27:56+08:00</updated>
+    <id>http://toughcoder.net/blog/2022/03/04/camera-2-preview-and-improvement</id>
+    <content type="html"><![CDATA[<p><a href="http://toughcoder.net/blog/2022/02/28/camera2-api-made-easy/">前一篇文章</a>讲解了如何使用这套新的API，但仍有很多可以提升的空间，这篇重点来讲讲，如何提升预览画质和做一些加强。</p>
+
+<p><a href=""><img src="https://www.edumobile.org/wp-content/uploads/2015/05/Camera-Preview-Example-in-Android-Programming.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>线程模型</h2>
+
+<p>因为相机是属于硬件，操作起来可能会耗时，这套新的API也特别注意，因此加了很多异步化处理，所有的请求结果全是通过回调来进行的，并且需要调用者来指定一个回调所使用的线程。因此，我们需要一个专门用于camera操作的线程，用HandlerThread就可以，并把它控制在Activity的生命周期之中，比如在onCreate时启动此线程，在onDestroy时关闭。</p>
+
+<pre><code class="java">@Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        attachCameraThread();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+      detachCameraThread();
+    }
+</code></pre>
+
+<p>所有与camera相关的操作，均要在相机专属的HandlerThread中调用，与其他线程（如主线程）的交互均通过回调处理。</p>
+
+<h2>关键对象</h2>
+
+<p>为了进一步的封装和方便管理，需要两个关键对象的封装。</p>
+
+<h3>CameraContext</h3>
+
+<p>一个是CameraContext，负责管理相机的线程，外部所有的方法调用均应该通过它来进行，我们的目的是要把所有的相机相关操作封装在自己的线程里面，因此，暴露给外面的接口，必须统一，并且在开放的方法中加入线程检查，如果还没有启动HandlerThread，就报错，调用者需要先attachThread：</p>
+
+<pre><code class="java">public class CameraContext {
+    private static final String LOG_TAG = CameraContext.class.getSimpleName();
+
+    private final CameraManagerWrapper cameraManager;
+    private volatile HandlerThread cameraManageThread;
+    private volatile CameraThreadHandler cameraThreadHandler;
+
+    private volatile CameraAgent currentCamera;
+
+    public CameraContext(Context context) {
+        cameraManager = new CameraManagerWrapper(context);
+    }
+
+    public void attachThread() {
+        Log.d(LOG_TAG, "attachThread");
+        if (cameraThreadHandler != null) {
+            cameraThreadHandler.removeCallbacksAndMessages(null);
+        }
+        if (cameraManageThread != null &amp;&amp; cameraManageThread.isAlive()) {
+            cameraManageThread.quitSafely();
+        }
+        cameraManageThread = new HandlerThread("Camera Management Thread");
+        cameraManageThread.start();
+        cameraThreadHandler = new CameraThreadHandler(cameraManageThread.getLooper());
+    }
+
+    public void detachThread() {
+        Log.d(LOG_TAG, "detachThread");
+        if (cameraManageThread != null &amp;&amp; cameraManageThread.isAlive()) {
+             cameraManageThread.quitSafely();
+        }
+    }
+
+    private void checkThread() {
+        if (cameraManageThread == null || !cameraManageThread.isAlive()) {
+            throw new CameraSetupException("attachThread must be called before any other method invocations.");
+        }
+    }
+
+    public void openCamera(Consumer&lt;String&gt; consumer) {
+        checkThread();
+        Runnable actionOpen = () -&gt; {
+              // ...
+        };
+        Message msg = Message.obtain(cameraThreadHandler, actionOpen);
+        msg.what = CameraThreadHandler.MSG_OPEN_CAMERA;
+        msg.sendToTarget();
+    }
+
+    public void closeCamera() {
+        checkThread();
+        Runnable actionClose = null;
+        Message msgClose = Message.obtain(cameraThreadHandler, actionClose);
+        msgClose.what = CameraThreadHandler.MSG_CLOSE_CAMERA;
+        msgClose.sendToTarget();
+    }
+}
+</code></pre>
+
+<h3>CameraAgent</h3>
+
+<p>还需要对CameraDevice进行封装，把CameraCaptureSession，以及RequestBuilder，封装在内，并且在三大回调Device State Callback，Session State Callback以及Session Capture Callback也都封装在内，因此这些东西的生命周期全都是在CameraDevice内部的。</p>
+
+<p>设计要点：</p>
+
+<ul>
+<li>CameraAgent不开放接口给外部，它只能开放给CameraContext使用</li>
+<li>对象是对camera device的完整封装，对象本身一直可用，与CameraDevice是否打开无直接关系</li>
+<li>随时可以查询静态配置属性，创建对象时就要传入id和CameraCharacteristics</li>
+<li>有连接状态，也即打开对应的CameraDevice，动态配置属性查询，以及像启动预览，必须要是连接状态</li>
+<li>拍照应该在预览状态内</li>
+</ul>
+
+
+<pre><code class="java">class CameraAgent {
+    private static String LOG_TAG = CameraAgent.class.getSimpleName();
+    private final String id;
+    private final CameraCharacteristics characteristics;
+    private final CameraContext.CameraThreadHandler cameraHandler;
+    private final Executor executor;
+
+    private Optional&lt;CameraDevice&gt; cameraDevice;
+    private Optional&lt;CameraCaptureSession&gt; captureSession;
+
+    private CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
+        @Override
+        public void onOpened(@NonNull CameraDevice camera) {
+            Log.d(LOG_TAG, "Device Status: onOpened");
+            cameraDevice = Optional.of(camera);
+        }
+
+        @Override
+        public void onDisconnected(@NonNull CameraDevice camera) {
+            Log.d(LOG_TAG, "Device Status: onDisconnected");
+            cameraDevice = Optional.empty();
+        }
+
+        @Override
+        public void onError(@NonNull CameraDevice camera, int error) {
+            cameraDevice = Optional.empty();
+        }
+    };
+
+    private CameraCaptureSession.StateCallback regularSessionCallback = new CameraCaptureSession.StateCallback() {
+        @Override
+        public void onConfigured(@NonNull CameraCaptureSession session) {
+            Log.d(LOG_TAG, "Session State: onConfigured");
+            captureSession = Optional.of(session);
+        }
+
+        @Override
+        public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+            captureSession = Optional.empty();
+        }
+
+        @Override
+        public void onClosed(@NonNull CameraCaptureSession session) {
+            Log.d(LOG_TAG, "Session State: onClosed");
+            super.onClosed(session);
+            captureSession = Optional.empty();
+        }
+    };
+
+    private CameraCaptureSession.CaptureCallback captureCallback = new CameraCaptureSession.CaptureCallback() {
+        @Override
+        public void onCaptureStarted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, long timestamp, long frameNumber) {
+            super.onCaptureStarted(session, request, timestamp, frameNumber);
+        }
+    };
+
+    private CaptureRequest.Builder requestBuilder;
+
+    CameraAgent(String id, CameraCharacteristics cameraCharacteristics, CameraContext.CameraThreadHandler handler) {
+        this.id = id;
+        this.characteristics = cameraCharacteristics;
+        this.cameraHandler = handler;
+        executor = command -&gt; handler.post(command);
+
+        cameraDevice = Optional.empty();
+        captureSession = Optional.empty();
+        previewSize = Optional.empty();
+        errorCode = 0;
+    }
+
+    String getId() {
+        return id;
+    }
+
+    boolean connected() {
+        return cameraDevice.isPresent();
+    }
+
+    CameraDevice.StateCallback getDeviceStateCallback() {
+        return stateCallback;
+    }
+
+    void connect(@NonNull CameraManagerWrapper wrapper) {
+        Log.d(LOG_TAG, "connect");
+        wrapper.openCamera(this, cameraHandler);
+    }
+
+    void disconnect() {
+        Log.d(LOG_TAG, "disconnect");
+        if (captureSession.isPresent()) {
+            captureSession.get().close();
+        }
+        if (cameraDevice.isPresent()) {
+            cameraDevice.get().close();
+        }
+    }
+
+    void startPreview() {
+    }
+
+    void stopPreview() {
+    }
+}
+</code></pre>
+
+<h2>启动预览</h2>
+
+<h3>用SurfaceView就可以</h3>
+
+<h3>如何选择预览尺寸</h3>
+
+<h3>具体实现</h3>
+
+<h2>确保关闭</h2>
+
+<p>相机是一种硬件资源，当退出的时候要能确保它是关闭状态的，也就是说要确保CameraAgent#disconnect能执行，且要执行完成，执行完成的意思是，你需要收到onDisconnected的回调。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Camera2 API Made Easy]]></title>
