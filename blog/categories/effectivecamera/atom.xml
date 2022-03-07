@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectivecamera | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectivecamera/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2022-03-04T19:49:40+08:00</updated>
+  <updated>2022-03-07T22:17:09+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -32,14 +32,13 @@
 <pre><code class="java">    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         attachCameraThread();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-      detachCameraThread();
+         detachCameraThread();
     }
 </code></pre>
 
@@ -234,15 +233,111 @@
 
 <h2>启动预览</h2>
 
+<p>新的这套API并没有直接设置预览大小或者图片大小的地方，camera的输出都是Surface，底层是通过Surface的大小来做具体的尺寸。本质上都是数据在流动，其实都是buffer，Surface也是buffer，设定了Surface的大小，也就确定了输出buffer的大小，camera硬件也就知道了大小。</p>
+
 <h3>用SurfaceView就可以</h3>
+
+<p>预览是camera的输出，是另外一些组件的输入，API设计已做好了衔接，Surface就是中间的桥梁，Surface作为SurfaceView（可理解为屏幕）的输入，它可以作为camera的输出，由此便把camera的预览显示了出来。在布局文件中用SurfaceView来充当Activity的布局，由此便能得到Surface，再把它塞给camera即可。</p>
+
+<p>需要重点说一下尺寸的约束，想让预览的Surface反应camera预览的尺寸，因此SurfaceView要是wrap_content的。</p>
+
+<pre><code class="xml">&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    tools:context=".CameraActivity"&gt;
+
+    &lt;net.toughcoder.effectivecamera.AutoFitSurfaceView
+        android:id="@+id/view_finder"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintLeft_toRightOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent" /&gt;
+&lt;/androidx.constraintlayout.widget.ConstraintLayout&gt;
+</code></pre>
 
 <h3>如何选择预览尺寸</h3>
 
-<h3>具体实现</h3>
+<p>输入的约束条件是一个比例，比如流行的预览比例是4：3，16：9或者全屏，这个比例是长边与短边的比值，这个可以作为用户体验层面的一个约束，或者叫做设置，尺寸的选择应该遵守此约束。</p>
+
+<p>另外一个约束就是屏幕尺寸，预览的大小应该能刚好满足屏幕尺寸即可，超出屏幕其实就浪费了，没有必要。</p>
+
+<p>所以，选择预览尺寸的策略就是保证比例和刚好满足屏幕。</p>
+
+<p>每个camera都有支持的一组预览尺寸，按照 我们的策略从其中选择一个就可以了。预览尺寸从静态配置中就可以读得到，不需要连接状态，因此，可以在创建好CameraAgent对象后就可以进行尺寸选择，屏幕尺寸随时可获利，比例约束是一个设置随时可读取，因此这是可行的。</p>
+
+<p>当选择好了预览尺寸后，要把它设置到SurfaceView中去，以让SurfaceView调整自身的大小。</p>
+
+<pre><code class="java">    /*
+     * Strategies:
+     *  1) preview size should not be bigger than screen, which is not necessary.
+     *  2) ratio should match.
+     *  3) pick the largest one.
+     *  4) if not found, use screen size.
+     */
+    private Optional&lt;CameraSize&gt; calculatePreviewSize(Point screenSize, float ratio) {
+        int width = Math.min(screenSize.x, screenSize.y);
+        int height = Math.min(Math.round(width * ratio), screenSize.y);
+        final int limit = screenSize.x * screenSize.y;
+        Log.d(LOG_TAG, "screen size " + screenSize.x + " x " + screenSize.y +
+                ", ratio " + ratio + ", desired width-&gt;" + width + ", height-&gt;" + height);
+
+        StreamConfigurationMap streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        Size[] surfaceSizes = streamMap.getOutputSizes(Surface.class);
+        if (surfaceSizes == null) {
+            surfaceSizes = streamMap.getOutputSizes(ImageFormat.PRIVATE);
+        }
+        List&lt;CameraSize&gt; supportedSize = Arrays.asList(surfaceSizes)
+                .stream()
+                .map(CameraSize::new)
+                .filter(size -&gt; size.height * size.width &lt;= limit)
+                .sorted(CameraSize::compare)
+                .collect(Collectors.toList());
+        Log.d(LOG_TAG, "supportedSize " + supportedSize);
+        return supportedSize.stream().filter(size -&gt; size.matchRatio(ratio)).findFirst();
+</code></pre>
 
 <h2>确保关闭</h2>
 
 <p>相机是一种硬件资源，当退出的时候要能确保它是关闭状态的，也就是说要确保CameraAgent#disconnect能执行，且要执行完成，执行完成的意思是，你需要收到onDisconnected的回调。</p>
+
+<p>这就要求我们在detachThread，即退出相机线程的时候，要小心处理好尚未来得及执行（如有）的操作，因为所有的操作都会转到相机线程中去，是通过消息队列，所以操作可能还在排队中尚未真正执行。</p>
+
+<p>具体做法是，直接移除掉未得到执行的open和其他操作。如果有pending状态的关闭，则要先让其执行，并且把关闭线程的操作放到CameraDevice State Callcback的onDisconnect中，也就是说待CameraDevice完全关闭完成后，才可以终止相机线程：</p>
+
+<pre><code class="java">    public void detachThread() {
+        Log.d(LOG_TAG, "detachThread");
+        if (cameraThreadHandler != null) {
+            // Drop all pending open actions
+            cameraThreadHandler.removeMessages(CameraThreadHandler.MSG_OPEN_CAMERA);
+            if (cameraThreadHandler.hasMessages(CameraThreadHandler.MSG_CLOSE_CAMERA)) {
+                // Ensure close actions are dispatched.
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            // Drop all other messages.
+            cameraThreadHandler.removeCallbacksAndMessages(null);
+        }
+        // TODO: technically speaking, should do this in handler thread
+        // since all connect/disconnect are done inside handler thread
+        // status might not be synced with caller's thread.
+        if (cameraManageThread != null &amp;&amp; cameraManageThread.isAlive()) {
+            if (currentCamera != null &amp;&amp; currentCamera.connected()) {
+                currentCamera.addDisconnectedAction(() -&gt; cameraManageThread.quitSafely());
+            } else {
+                cameraManageThread.quitSafely();
+            }
+        }
+    }
+</code></pre>
 ]]></content>
   </entry>
   
