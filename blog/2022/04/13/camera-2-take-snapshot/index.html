@@ -99,9 +99,17 @@
   </header>
 
 
-<div class="entry-content"><p>前面<a href="http://toughcoder.net/blog/2022/03/04/camera-2-preview-and-improvement/">一篇文章</a>讲解了如何建立预览，下一步就是进行拍照了。</p>
+<div class="entry-content"><p>前面<a href="http://toughcoder.net/blog/2022/03/04/camera-2-preview-and-improvement/">一篇文章</a>讲解了如何建立预览，下一步就是进行拍照了，这是相机类的核心业务，TL;DR。</p>
 
 <p><a href="/blog/2022/04/13/camera-2-take-snapshot/"><img src="https://tse4-mm.cn.bing.net/th/id/OIP-C.teE5837-ZJPLgV6e410swAHaFN?pid=ImgDet&rs=1" title="auto auto" ></a></p>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+
+
+<script>mermaid.initialize({startOnLoad:true});</script>
+
+
+
 
 <!-- more -->
 
@@ -117,9 +125,89 @@
 </ol>
 
 
+<p>整体架构图：</p>
+
+<div class="mermaid">
+classDiagram
+    OnImageAvailableListener  <|-- PhotoSaveAgent
+    PhotoWriteTask --|> Runnable
+    PhotoResultObserver <|-- PhotoSaveAgent
+    PhotoSaveAgent ..|> PhotoWriteTask
+    CaptureCallback  <|-- PhotoStillCapture
+    PhotoSaveAgent *-- PhotoResult
+    PhotoWriteTask *-- PhotoResult
+    PhotoResultObserver --* PhotoStillCapture   
+    class PhotoSaveAgent {
+        imageReader
+        photoQueue
+        executor
+        +config(int width, int height, int format)
+        +Surface getOutputTarget()
+        onImageAvailable()
+        onCaptureStart()
+        onCaptureComplete()
+    }
+    
+    class OnImageAvailableListener {
+        &lt;&lt;interface&gt;&gt;
+        onImageAvailable(Image image)
+    }
+    
+    class Runnable {
+        &lt;&lt;interface&gt;&gt;
+        run()
+    }
+    
+    class PhotoWriteTask {
+        &lt;&lt;interface&gt;&gt;
+        run()
+    }
+    
+    class PhotoResultObserver {
+        &lt;&lt;interface&gt;&gt;
+        onCaptureStart(CaptureRequest request, long timestamp, long frame, String filename)
+        onCaptureComplete(CaptureRequest request, CaptureResult result)
+    }
+    
+    class PhotoResult {
+        CaptureRequest captureRequest
+        long timestamp
+        long frameNumber
+        String filename
+        CaptureResult captureResult
+        Image image
+    }
+    
+    class CaptureCallback {
+        &lt;&lt;interface&gt;&gt;
+        onCaptureStarted()
+        onCaptureProgressed()
+        onCaptureCompleted()
+        onCaptureFailed()
+    }
+    
+    class PhotoStillCapture {
+        Date dateTaken
+        String filename
+        Consumer consumer
+        PhotoResultObserver resultObserver
+        +generateRequest()
+        +generateCaptureCallback()
+    }
+</div>
+
+
 <h2>存储模块</h2>
 
 <p>存储模块的主要职责是提供目标输出给CameraAgent，收集拍照结果，并做后续的保存工作。它与CameraAgent是独立开来的，并没有直接的关系。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>save
+</span><span class='line'>  |-- PhotoSaveAgent
+</span><span class='line'>  |-- PhotoWriteTask</span></code></pre></td></tr></table></div></figure>
+
 
 <h3>关键的组件</h3>
 
@@ -165,13 +253,482 @@
 
 <p>之后是创建ImageReader，这个需要外部输入尺寸，一旦ImageReader创建完成，就会处于ready状态。</p>
 
+<p>PhotoSaveAgent是对外交互的对象，在CameraContext中会使用此对象，主要是：</p>
+
+<ol>
+<li>当CameraAgent对象创建好了后，计算出来了picture size后，通知camera size给PhotoSaveAgent，PhotoSaveAgent知道此size后便可以创建ImageReader</li>
+<li>拍照时，获取目标输出Surface，来源是第1步创建好后的ImageReader</li>
+<li>拍照时接收拍照状态</li>
+</ol>
+
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] &#45;&#45;> Setup
+    Setup &#45;&#45;> Config
+    Config &#45;&#45;> ReadyForImage
+    ReadyForImage &#45;&#45;> CollectPhotoResult
+    CollectPhotoResult &#45;&#45;> SavePhoto
+    SavePhoto &#45;&#45;> ReadyForImage
+    SavePhoto &#45;&#45;> TearDown
+    TearDown &#45;&#45;> [*]
+</div>
+
+
 <h4>拍照结果收集</h4>
+
+<p>一旦PhotoSaveAgent处于ready状态后，就可以随时收集拍照结果，拍照的结果全部是以回调的形式被动通知的，二个是来自于拍照模块，一个是ImageReader：</p>
+
+<ol>
+<li>拍照开始</li>
+<li>拍照结束</li>
+<li>ImageReader通知onImageAvailable</li>
+</ol>
+
+
+<p>需要注意，前面的三个回调拍照开始肯定 最先来，但后面的拍照结束和onImageAvailable谁先谁后真不一定，理论上来说是拍照结束来的早一些，但也不绝对，因此在逻辑处理上不能强依赖这两者的午后顺序。</p>
+
+<p>主要的流程是：</p>
+
+<ol>
+<li>拍照开始时，在结果队列中添加记录，以CaptureRequest为key，并创建PhotoResult对象；</li>
+<li>拍照结束回调中，以CaptureRequest为key，查询结果，向PhotoResult对象添加CaptureResult，并检查PhotoResult的状态，如果PhotoResult的CaptureResult和Image对象都齐全了，就说明拍照结果已集齐，这时就可以移除队列并进行保存了；</li>
+<li>在onImageAvailable中，流程稍复杂些，因为这个回调只有一个Image对象，需要与队列中的PhotoResult对象进行匹配，就是通过拍照时的timestamp进行匹配，这是唯一的标识了，遍历队列，如果找到了就更新PhotoResult，并检查是否集齐，如已集齐则移除队列并进行结果保存。</li>
+</ol>
+
+
+<p>另外需要注意的是，拍照开始和拍照结束两个回调的调用线程不确定，所以需要进行转换，先转到PhotoSaveAgent的工作线程中再去处理，这样可以保证PhotoSaveAgent的所有操作都在自己的线程中，不需要再做额外的线程安全性保护。</p>
 
 <h4>拍照结果保存</h4>
 
+<p>在拍照结果回调中，以及onImageAvailable回调中检查PhotoResult是否集齐，集齐后，就可以进行结果保存。</p>
+
+<p>主要流程如下：</p>
+
+<ol>
+<li>创建PhotoWriteTask，它实现了Runnable接口，以方便在线程池中使用</li>
+<li>向线程池提交任务</li>
+<li>在创建任务的时候，要把需要的信息都保存下来。特别需要注意的是，需要从Image中把jpeg byte array拷贝出来。因为ImageReader内部会用Image池子去不断的接收从外部输入（拍照时就是camera sensor）的结果，所以onImageAvailable中传过来的Image需要尽快的释放（即Image#close），以保证ImageReader能正常工作。PhotoWriteTask虽然是单独的线程池，但文件的I/O过程不可控，可能长也可能短，假如简单的持有Image对象，可能会导致Image对象无法及时被释放，从而导致ImageReader不能正常工作。因此需要在创建任务的时候就赶紧把jpeg bytes从Image中拷贝出来。</li>
+<li>具体的写入过程比较清晰，向MediaProvider中写入文件即可。</li>
+</ol>
+
+
 <h2>拍照模块</h2>
 
+<p>这是最为核心的一部分。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>snapshot
+</span><span class='line'>    |-- PhotoCaptureStatus
+</span><span class='line'>    |-- PhotoResult
+</span><span class='line'>    |-- PhotoResultObserver
+</span><span class='line'>    |-- PhotoStillCapture</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>关键组件</h3>
+
+<ol>
+<li>PhotoResultObserver，拍照结果观察者接口，用于向外部通知拍照结果，两个方法，一个是拍照开始，一个是拍照结束。注意拍照失败也是调用拍照结束，只不过没有CaptureResult。</li>
+<li>PhotoResult，这是合成后的拍照结果对象，里面包含着拍照结果的一切信息，如文件名，参数，CaptureRequest，CaptureResult和Image。是一个POJO，仅做状态和数据的保存，无逻辑。</li>
+<li>PhotoStillCapture，可理解为拍照对象，用以封装拍照参数，生成CaptureRequest和处理CaptureCallback。</li>
+</ol>
+
+
+<h3>线程模型</h3>
+
+<p>这属于核心业务，所以它是在CameraContext的工作线程中的。</p>
+
+<h3>对外交互</h3>
+
+<p>通过PhotoResultObserver来通知外部拍照的结果状态。</p>
+
+<h3>工作流程</h3>
+
+<p>CameraContext中拉回拍照接口，并转入到自己的工作线程中。CameraAgent增加拍照接口，这是主要的功能入口。</p>
+
+<div class="mermaid">
+sequenceDiagram
+    CameraActivity ->> CameraAgent: takePhoto
+    CameraAgent ->> PhotoSaveAgent: getOutputTarget
+    CameraAgent -&#45;>> CameraActivity: started
+    CameraAgent -&#45;>> CameraActivity: ongoing
+    CameraAgent -&#45;>> PhotoSaveAgent: onCaptureStart
+    CameraAgent -&#45;>> CameraActivity: completed
+    CameraAgent -&#45;>> PhotoSaveAgent: onCaptureComplete
+    PhotoSaveAgent ->> PhotoWriteTask: savePhoto
+    PhotoWriteTask -&#45;>> CameraActivity: thumbnailArrived
+</div>
+
+
+<p>CameraAgent会在其capturePhoto方法，创建一个PhotoStillCapture对象，然后调用CameraCaptureSession#capture方法进行拍照。拍照请求由PhotoStillCapture生成，CaptureCallback亦由PhotoStillCapture对象处理。</p>
+
+<p>创建PhotoStillCapture对象是会锁定一些参数，如当前的旋转，文件名字（通常以时间戳为文件名字）， 以及PhotoResultObserver。</p>
+
+<p>生成拍照请求CaptureRequest时，会传入一些拍照需要的参数，如旋转，如图片质量等等。</p>
+
+<p>在CatpureCallback中，做一些简单处理，然后回调PhotoResultObserver。</p>
+
+<p>到此，拍照模块的事情 就做完，它就要是拍照的前期工作，与外部做连接，下发请求就基本上完整了。拍照结果的收集则是存储模块的事情 了。</p>
+
 <h2>状态反馈</h2>
+
+<p>从整个拍照交互来说，也是需要状态反馈的，最为基础的交互逻辑是，为了保证拍照的成功率，当下发拍照请求后，到拍照结束前，也就是CaptureCallback#onCaptureCompleted或者CaptureCallback#onCaptureFailed这两个回调回来之前，是不可以下发新的拍照请求的。</p>
+
+<div class="mermaid">
+classDiagram
+    CameraActivity &#45;&#45;|> Consumer
+    Consumer &#45;&#45;&ast; PhotoStillCapture
+    CaptureCallback <|&#45;&#45; PhotoStillCapture
+    
+    class Consumer {
+        &lt;&lt;interface&gt;&gt;
+        +accept(PhotoCaptureStatus status)
+    }
+    
+    class CameraActivity {
+    }
+    
+    class PhotoStillCapture {
+        consumer
+    }
+    
+    class CaptureCallback {
+        &lt;&lt;interface&gt;&gt;
+        onCaptureStarted()
+        onCaptureProgressed()
+        onCaptureCompleted()
+        onCaptureFailed()
+    }
+</div>
+
+
+<p>那么交互 层面也需要知道拍照状态，以方便进行UI管控，比如说当下发了拍照请求后，就把快门shutter设置为disabled，在拍照结束后再恢复为enabled的；此外还有拍照动画，也需要知道状态。</p>
+
+<p>但UI交互层只知道状态就可以了，并不需要特别的数据，所以 这一路的状态通过简单的Consumer即可实现，仅在拍照模块中定义一些简单的状态就可以了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kd">enum</span> <span class="n">PhotoCaptureStatus</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">STARTED</span><span class="o">,</span>
+</span><span class='line'>    <span class="n">ONGOING</span><span class="o">,</span>
+</span><span class='line'>    <span class="n">FAILED</span><span class="o">,</span>
+</span><span class='line'>    <span class="n">COMPLETED</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>因为拍照是由UI层触发的，所以在调用CameraContext时，就提供一个接收状态的Consumer就可以了，这样就把UI层和逻辑层分离开了，逻辑层接收Consumer作为参数，在关键的节点就回报状态；UI层负责处理感兴趣的状态就可以了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">takePhoto</span><span class="o">(</span><span class="n">View</span> <span class="n">view</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">shutterView</span><span class="o">.</span><span class="na">setEnabled</span><span class="o">(</span><span class="kc">false</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">cameraFactory</span><span class="o">.</span><span class="na">takePhoto</span><span class="o">(</span><span class="n">status</span> <span class="o">-&gt;</span> <span class="n">mainHandler</span><span class="o">.</span><span class="na">post</span><span class="o">(()</span> <span class="o">-&gt;</span> <span class="n">captureStatusListener</span><span class="o">.</span><span class="na">accept</span><span class="o">(</span><span class="n">status</span><span class="o">)));</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>当然别忘记了，在Consumer中要做线程切换，UI的处理只以在主线程中。</p>
+
+<h2>缩略图处理</h2>
+
+<p>缩短略图是一个非常重要的拍照结果展示，用以告诉用户拍照成功了，并且是预览结果成片的入口，因此需要做二个事情：</p>
+
+<ol>
+<li>监听拍照结果，注意这里并不是说要监听拍照状态，而是要监听拍照结果，因为只有得到最终结果jpeg array后，才可以从这里创建缩略图，并展示 出来。</li>
+<li>点击缩略图时要能够进行结果成片的展示，所以，还需要知道拍照结果的文件路径，或者说Uri</li>
+</ol>
+
+
+<p>以上两个信息，都在PhotoSaveAgent里面，因此需要建立UI层与存储模块之间的连接，但其实存储层只是一个数据来源，它并不负责缩略图的业务，而且缩略图的来源可能的不止存储模块，还能来源于直接的数据库查询。</p>
+
+<div class="mermaid">
+classDiagram
+    ThumbnailObserver <|-- CameraActivity
+    CameraActivity --* Thumbnail
+    ThumbnailObserver --* PhotoSaveAgent
+    
+    class CameraActivity {
+        thumbnailArrived(Thumbnail thumbnaill)
+    }
+    
+    class PhotoSaveAgent {
+        +addThumbnailObserver()
+    }
+    
+    class Thumbnail {
+        bitmap
+        uri
+    }
+    
+    class ThumbnailObserver {
+        &lt;&lt;interface&gt;&gt;
+        thumbnailArrived(Thumbnail thumbnail)
+    }
+</div>
+
+
+<p>为此，新建一个缩略图模块，里面有一个Thumbnail对象，是一个POJO用以代表缩略图的相关信息，如Bitmap和Uri；还有一个ThumbnailObserver的接口，用以让数据源告诉观察者，一个新的缩略图对象生成了。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">Thumbnail</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">Uri</span> <span class="n">uri</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">String</span> <span class="n">mime</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">Bitmap</span> <span class="n">bitmap</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="nf">Thumbnail</span><span class="o">(</span><span class="n">Uri</span> <span class="n">uri</span><span class="o">,</span> <span class="n">String</span> <span class="n">mime</span><span class="o">,</span> <span class="n">Bitmap</span> <span class="n">bitmap</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">uri</span> <span class="o">=</span> <span class="n">uri</span><span class="o">;</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">mime</span> <span class="o">=</span> <span class="n">mime</span><span class="o">;</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">bitmap</span> <span class="o">=</span> <span class="n">bitmap</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="n">Bitmap</span> <span class="nf">getBitmap</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">bitmap</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="n">Intent</span> <span class="nf">generateAction</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Intent</span> <span class="n">intent</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">Intent</span><span class="o">(</span><span class="n">Intent</span><span class="o">.</span><span class="na">ACTION_VIEW</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">intent</span><span class="o">.</span><span class="na">setDataAndType</span><span class="o">(</span><span class="n">uri</span><span class="o">,</span> <span class="n">mime</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">intent</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kd">interface</span> <span class="nc">ThumbnailObserver</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kt">void</span> <span class="nf">thumbnailArrived</span><span class="o">(</span><span class="n">Thumbnail</span> <span class="n">thumbnail</span><span class="o">);</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如此，UI层与PhotoSaveAgent就分离开来了，它们之间的联系只有ThumbnailObserver接口，UI层就实现接口，负责收到缩略图后的展示工作：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'>   <span class="kd">private</span> <span class="kd">final</span> <span class="n">ThumbnailObserver</span> <span class="n">thumbnailObserver</span> <span class="o">=</span> <span class="n">thumbnail</span> <span class="o">-&gt;</span> <span class="n">mainHandler</span><span class="o">.</span><span class="na">post</span><span class="o">(()</span> <span class="o">-&gt;</span> <span class="n">updateThumbnail</span><span class="o">(</span><span class="n">thumbnail</span><span class="o">));</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="kt">void</span> <span class="nf">updateThumbnail</span><span class="o">(</span><span class="n">Thumbnail</span> <span class="n">thumbnail</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">thumbnailSwitcher</span><span class="o">.</span><span class="na">setEnabled</span><span class="o">(</span><span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">thumbnailSwitcher</span><span class="o">.</span><span class="na">setTag</span><span class="o">(</span><span class="n">thumbnail</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="o">((</span><span class="n">ImageView</span><span class="o">)</span> <span class="n">thumbnailSwitcher</span><span class="o">.</span><span class="na">getNextView</span><span class="o">()).</span><span class="na">setImageBitmap</span><span class="o">(</span><span class="n">thumbnail</span><span class="o">.</span><span class="na">getBitmap</span><span class="o">());</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">thumbnailSwitcher</span><span class="o">.</span><span class="na">showNext</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// when init PhotoSaveAgent, register the thumbnail observer</span>
+</span><span class='line'>    <span class="n">imageSaveAgent</span><span class="o">.</span><span class="na">addThumbnailObserver</span><span class="o">(</span><span class="n">thumbnailObserver</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">viewLastPhoto</span><span class="o">(</span><span class="n">View</span> <span class="n">view</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">thumbnailSwitcher</span><span class="o">.</span><span class="na">getTag</span><span class="o">()</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;No thumbnail, you should take photo first.&quot;</span><span class="o">);</span>
+</span><span class='line'>            <span class="k">return</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="n">Thumbnail</span> <span class="n">thumbnail</span> <span class="o">=</span> <span class="o">(</span><span class="n">Thumbnail</span><span class="o">)</span> <span class="n">thumbnailSwitcher</span><span class="o">.</span><span class="na">getTag</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">Intent</span> <span class="n">action</span> <span class="o">=</span> <span class="n">thumbnail</span><span class="o">.</span><span class="na">generateAction</span><span class="o">();</span>
+</span><span class='line'>        <span class="k">try</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">startActivity</span><span class="o">(</span><span class="n">action</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">catch</span> <span class="o">(</span><span class="n">ActivityNotFoundException</span> <span class="n">e</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;Unfortunately, we cannot view the photo.&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>而对于PhotoSaveAgent则需要在PhotoWriteTask里面，最后一步，也即文件保存完毕后，生成缩略图，因为是需要Uri的，所以必须是要在最后才能生成缩略图，并通过ThumbnailObserver回调：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'>   <span class="c1">// in PhotoWriteTask</span>
+</span><span class='line'>   <span class="kd">public</span> <span class="kt">void</span> <span class="nf">run</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="c1">///// other codes</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">Thumbnail</span> <span class="n">t</span> <span class="o">=</span> <span class="n">generateThumbnail</span><span class="o">(</span><span class="n">fileUri</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">for</span> <span class="o">(</span><span class="n">ThumbnailObserver</span> <span class="n">to</span> <span class="o">:</span> <span class="n">thumbnailObservers</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">to</span><span class="o">.</span><span class="na">thumbnailArrived</span><span class="o">(</span><span class="n">t</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">Thumbnail</span> <span class="nf">generateThumbnail</span><span class="o">(</span><span class="n">Uri</span> <span class="n">uri</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="k">new</span> <span class="nf">Thumbnail</span><span class="o">(</span><span class="n">uri</span><span class="o">,</span> <span class="n">mime</span><span class="o">,</span> <span class="n">extractThumbnailBitmap</span><span class="o">(</span><span class="n">jpeg</span><span class="o">));</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">Bitmap</span> <span class="nf">extractThumbnailBitmap</span><span class="o">(</span><span class="kt">byte</span><span class="o">[]</span> <span class="n">jpegArray</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="kt">int</span> <span class="n">target</span> <span class="o">=</span> <span class="mi">480</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">BitmapFactory</span><span class="o">.</span><span class="na">Options</span> <span class="n">options</span> <span class="o">=</span> <span class="k">new</span> <span class="n">BitmapFactory</span><span class="o">.</span><span class="na">Options</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">options</span><span class="o">.</span><span class="na">inJustDecodeBounds</span> <span class="o">=</span> <span class="kc">true</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">BitmapFactory</span><span class="o">.</span><span class="na">decodeByteArray</span><span class="o">(</span><span class="n">jpegArray</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">jpegArray</span><span class="o">.</span><span class="na">length</span><span class="o">,</span> <span class="n">options</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">options</span><span class="o">.</span><span class="na">inSampleSize</span> <span class="o">=</span> <span class="n">Math</span><span class="o">.</span><span class="na">min</span><span class="o">(</span><span class="n">options</span><span class="o">.</span><span class="na">outWidth</span><span class="o">,</span> <span class="n">options</span><span class="o">.</span><span class="na">outHeight</span><span class="o">)</span> <span class="o">/</span> <span class="n">target</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">options</span><span class="o">.</span><span class="na">inJustDecodeBounds</span> <span class="o">=</span> <span class="kc">false</span><span class="o">;</span>
+</span><span class='line'>        <span class="n">Bitmap</span> <span class="n">bitmap</span> <span class="o">=</span> <span class="n">BitmapFactory</span><span class="o">.</span><span class="na">decodeByteArray</span><span class="o">(</span><span class="n">jpegArray</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">jpegArray</span><span class="o">.</span><span class="na">length</span><span class="o">,</span> <span class="n">options</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">Matrix</span> <span class="n">matrix</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">Matrix</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">matrix</span><span class="o">.</span><span class="na">postRotate</span><span class="o">(</span><span class="n">jpegOrientation</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">Bitmap</span> <span class="n">rotated</span> <span class="o">=</span> <span class="n">Bitmap</span><span class="o">.</span><span class="na">createBitmap</span><span class="o">(</span><span class="n">bitmap</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="mi">0</span><span class="o">,</span> <span class="n">bitmap</span><span class="o">.</span><span class="na">getWidth</span><span class="o">(),</span> <span class="n">bitmap</span><span class="o">.</span><span class="na">getHeight</span><span class="o">(),</span> <span class="n">matrix</span><span class="o">,</span> <span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">rotated</span> <span class="o">!=</span> <span class="n">bitmap</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">bitmap</span><span class="o">.</span><span class="na">recycle</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">rotated</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>拍照动画</h2>
+
+<p>拍照动画的目的就在于给用户一个直观 的感觉，特别是拍照开始了，至于拍照结束倒是不用特别的，这人一般在缩略图那里体现。</p>
+
+<p>主要做两个动画，一个是快门shutter的动画，这个是在快门点击时就可以去做了，主要是一个缩放的动画，把缩放的动画正着放一遍（缩小0.75倍），再reverse（放大到正常大小）即可：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">takePhoto</span><span class="o">(</span><span class="n">View</span> <span class="n">view</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">shutterView</span><span class="o">.</span><span class="na">setEnabled</span><span class="o">(</span><span class="kc">false</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">ScaleAnimation</span> <span class="n">anim</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">ScaleAnimation</span><span class="o">(</span><span class="mi">1</span><span class="n">f</span><span class="o">,</span> <span class="mf">0.75f</span><span class="o">,</span> <span class="mi">1</span><span class="n">f</span><span class="o">,</span> <span class="mf">0.75f</span><span class="o">,</span>
+</span><span class='line'>                <span class="n">Animation</span><span class="o">.</span><span class="na">RELATIVE_TO_SELF</span><span class="o">,</span> <span class="mf">0.5f</span><span class="o">,</span> <span class="n">Animation</span><span class="o">.</span><span class="na">RELATIVE_TO_SELF</span><span class="o">,</span> <span class="mf">0.5f</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">anim</span><span class="o">.</span><span class="na">setDuration</span><span class="o">(</span><span class="n">Config</span><span class="o">.</span><span class="na">CAPTURE_ANIM_DURATION</span> <span class="o">/</span> <span class="mi">2</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">anim</span><span class="o">.</span><span class="na">setInterpolator</span><span class="o">(</span><span class="k">new</span> <span class="nf">AccelerateDecelerateInterpolator</span><span class="o">());</span>
+</span><span class='line'>        <span class="n">anim</span><span class="o">.</span><span class="na">setFillAfter</span><span class="o">(</span><span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">anim</span><span class="o">.</span><span class="na">setRepeatMode</span><span class="o">(</span><span class="n">Animation</span><span class="o">.</span><span class="na">REVERSE</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">anim</span><span class="o">.</span><span class="na">setRepeatCount</span><span class="o">(</span><span class="mi">1</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">shutterView</span><span class="o">.</span><span class="na">startAnimation</span><span class="o">(</span><span class="n">anim</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">cameraFactory</span><span class="o">.</span><span class="na">takePhoto</span><span class="o">(</span><span class="n">status</span> <span class="o">-&gt;</span> <span class="n">mainHandler</span><span class="o">.</span><span class="na">post</span><span class="o">(()</span> <span class="o">-&gt;</span> <span class="n">captureStatusListener</span><span class="o">.</span><span class="na">accept</span><span class="o">(</span><span class="n">status</span><span class="o">)));</span>
+</span><span class='line'>    <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>另外一个就是在拍照开始时的动画，这个动画的时机是在硬件真的开始拍照时做，也即是要在CaptureCallback#onCaptureStarted时去做，需要特别注意的是，这个时间是由硬件决定的，所以只有在onCaptureStarted回调时去做才是最恰当的。</p>
+
+<p>至于动画的形式，一般是通过预览区域的闪动实现，比如可以用一个与预览Surface一样大小的View，改变它的颜色，给用户一种预览闪动的效果即可。这里的overlayView是一个盖在预览上面的透明的View，在做动画时给它设置为半透明的白色：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'> <span class="kd">private</span> <span class="kd">final</span> <span class="n">Consumer</span><span class="o">&lt;</span><span class="n">PhotoCaptureStatus</span><span class="o">&gt;</span> <span class="n">captureStatusListener</span> <span class="o">=</span> <span class="n">status</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">Log</span><span class="o">.</span><span class="na">d</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;capture status &quot;</span> <span class="o">+</span> <span class="n">status</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">statusView</span><span class="o">.</span><span class="na">setText</span><span class="o">(</span><span class="s">&quot;Capture Status: &quot;</span> <span class="o">+</span> <span class="n">status</span><span class="o">);</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">status</span> <span class="o">==</span> <span class="n">PhotoCaptureStatus</span><span class="o">.</span><span class="na">STARTED</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">overlayView</span><span class="o">.</span><span class="na">setBackground</span><span class="o">(</span><span class="k">new</span> <span class="nf">ColorDrawable</span><span class="o">(</span><span class="n">Color</span><span class="o">.</span><span class="na">argb</span><span class="o">(</span><span class="mi">150</span><span class="o">,</span> <span class="mi">255</span><span class="o">,</span> <span class="mi">255</span><span class="o">,</span> <span class="mi">255</span><span class="o">)));</span>
+</span><span class='line'>        <span class="n">mainHandler</span><span class="o">.</span><span class="na">postDelayed</span><span class="o">(()</span> <span class="o">-&gt;</span> <span class="n">overlayView</span><span class="o">.</span><span class="na">setBackground</span><span class="o">(</span><span class="kc">null</span><span class="o">),</span> <span class="n">Config</span><span class="o">.</span><span class="na">CAPTURE_ANIM_DURATION</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">status</span> <span class="o">==</span> <span class="n">PhotoCaptureStatus</span><span class="o">.</span><span class="na">COMPLETED</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">shutterView</span><span class="o">.</span><span class="na">setEnabled</span><span class="o">(</span><span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span> <span class="k">else</span> <span class="nf">if</span> <span class="o">(</span><span class="n">status</span> <span class="o">==</span> <span class="n">PhotoCaptureStatus</span><span class="o">.</span><span class="na">FAILED</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">shutterView</span><span class="o">.</span><span class="na">setEnabled</span><span class="o">(</span><span class="kc">true</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">};</span>
+</span></code></pre></td></tr></table></div></figure>
+
 </div>
 
 
