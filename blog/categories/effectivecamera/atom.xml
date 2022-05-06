@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectivecamera | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectivecamera/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2022-05-01T19:57:37+08:00</updated>
+  <updated>2022-05-06T22:55:21+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,121 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Camera2之录像]]></title>
+    <link href="http://toughcoder.net/blog/2022/05/06/camera-2-record-video/"/>
+    <updated>2022-05-06T22:38:03+08:00</updated>
+    <id>http://toughcoder.net/blog/2022/05/06/camera-2-record-video</id>
+    <content type="html"><![CDATA[<p><a href="http://toughcoder.net/blog/2022/04/24/camera-2-handling-3a-parameters/">前面的文章</a>都是集中在拍照模式，对于相机来说拍照与录像是两个最为基础的功能，这篇文章来看一下使用Camera2如何实现一个简单的录像功能。</p>
+
+<p><a href=""><img src="https://tse1-mm.cn.bing.net/th/id/R-C.d5e9195041cc351bd041464e996c1333?rik=kBPfq9at8eScog&amp;riu=http%3a%2f%2fpublic.hudl.com%2fassets%2f562f9fbbd4c96106101813f7%2fbball_record.jpg&amp;ehk=eigfVMaCv6ym1Sx4NimQfPnoJ%2frkdPMPlQrVoR9uFm8%3d&amp;risl=&amp;pid=ImgRaw&amp;r=0" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>录像原理和流程</h2>
+
+<p>录像相较于拍照来说，业务逻辑要稍简单一些，因为大部分功能的实现要靠<a href="https://developer.android.com/reference/android/media/MediaRecorder">MediaRecorder</a>。Camera2的API界线划分比较清楚，camera只负责输出图像帧，至于如何编码成为视频则是多媒体部分（也即MediaRecorder）的事情。</p>
+
+<p>所以，实现录像功能，需要提供一个MediaRecorder，把其Surface作为camera的目标输出，同时作为MediaRecorder的输入，这就建立了它们的连接。</p>
+
+<h3>录像的主要流程</h3>
+
+<p>有以下几个关键的步骤需要做：</p>
+
+<h4>1. 选择要使用的分辨率</h4>
+
+<p>从CameraAgent中读取支持的分辨率。简单起见，可以用全高清来当默认值width=1920，height=1080，fps=30。</p>
+
+<h4>2. 准备目标Surface</h4>
+
+<p>可以用<a href="https://developer.android.com/reference/android/media/MediaCodec">MediaCodec</a>来创建一个Surface，用<a href="https://developer.android.com/reference/android/media/MediaCodec#createPersistentInputSurface(">createPersistentInputSurface</a>)方法，这个会传给CameraAgent用作配置session。</p>
+
+<h4>3. 准备MediaRecorder</h4>
+
+<p>创建实例，用步骤1作为video配置，步骤2 的Surface当作input surface，然后还要prepare，否则一些资源不会生效如Surface的buffer。</p>
+
+<pre><code class="java">    private void setupMediaRecorder(VideoOutputConfig mode) {
+            recorderSurface = MediaCodec.createPersistentInputSurface();
+
+            mediaRecorder = createRecorder(mode.width, mode.height, mode.fps);
+            try {
+                mediaRecorder.prepare();
+            } catch (IOException e) {
+                Log.w(LOG_TAG, "failed to prepare MediaRecorder: " + e.getMessage());
+            }
+        }
+    }
+
+    private MediaRecorder createRecorder(int width, int height, int fps) {
+        MediaRecorder recorder;
+        if (Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.S) {
+            recorder = new MediaRecorder(context);
+        } else {
+            recorder = new MediaRecorder();
+        }
+
+        recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+        recorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+        recorder.setOutputFile(emptyVideoFile(context));
+        recorder.setVideoEncodingBitRate(1_0_000_000);
+        recorder.setVideoSize(width, height);
+        recorder.setVideoFrameRate(fps);
+        recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+        recorder.setInputSurface(recorderSurface);
+
+        recorder.setOnErrorListener(this);
+        recorder.setOnErrorListener(this);
+        return recorder;
+    }
+</code></pre>
+
+<p>到此，Surface和MediaRecorder就处于ready状态了</p>
+
+<h4>4. 使用常规view finder的Surface和第2步的Surface来启动预览</h4>
+
+<p>就是启动常规的预览即可：</p>
+
+<pre><code class="java">cameraAgent.startPreview(Arrays.asList(previewSurface, recorderSurface));
+</code></pre>
+
+<h4>5. 现在就处于Ready状态了，可以随时录像</h4>
+
+<h4>6. 调用MediaRecorder#start/stop/pause/resume来录像</h4>
+
+<h2>录像的分辨率选择</h2>
+
+<p>尺寸比例可以固定在16：9，因为这是较为通用的比例尺寸：</p>
+
+<pre><code class="java">    public List&lt;VideoOutputConfig&gt; calculateVideoRecordMode() {
+        StreamConfigurationMap configurationMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        List&lt;Size&gt; supportedSizes = Arrays.asList(configurationMap.getOutputSizes(MediaRecorder.class));
+        return supportedSizes.stream()
+                .filter(size -&gt; {
+                    final float ratio = (float) size.getWidth() / (float) size.getHeight();
+                    return Math.abs(ratio - Config.PictureRatio.WIDE.ratio) &lt;= CameraSize.EPS;
+                })
+                .map(size -&gt; {
+                    float rfps = (float) configurationMap.getOutputMinFrameDuration(MediaRecorder.class, size) / 1_000_000_000.0f;
+                    int fps = rfps &gt; 0f ? (int) (1.0f / rfps) : 0;
+                    return new VideoOutputConfig(size.getWidth(), size.getHeight(), fps);
+                }).filter(vrm -&gt; vrm.fps &gt; 0)
+                .collect(Collectors.toList());
+    }
+</code></pre>
+
+<h2>录像之闪光灯</h2>
+
+<p>闪光灯主要是用于拍照，但录像也是支持闪光灯的，当然还是要看硬件的配置，如果characteristics.get(<a href="https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics#FLASH_INFO_AVAILABLE">CameraCharacteristics.FLASH_INFO_AVAILABLE</a>)为true，那就可以在录像中使用闪光灯，不过一般情况下，只有OFF和TORCH两种模式，因为录像是一个持续的输出帧的过程，其余的模式没有意义。</p>
+
+<h2>开始录像之后的流程</h2>
+
+<p>录像准备妥当后，准备目标文件，监听用户事件，按下快门后开始录像，再次点击后结束录像，然后释放MediaRecorder，最后把文件写入媒体数据库。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Camera2拍照之3A处理]]></title>
@@ -1451,107 +1566,6 @@ classDiagram
 <li><a href="https://www.jianshu.com/p/cad777db008e">Camera2开发(2)之CameraDevice类</a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android Camera App开发学习路线]]></title>
-    <link href="http://toughcoder.net/blog/2022/02/11/android-camera-app-ramp-up/"/>
-    <updated>2022-02-11T20:59:14+08:00</updated>
-    <id>http://toughcoder.net/blog/2022/02/11/android-camera-app-ramp-up</id>
-    <content type="html"><![CDATA[<p>对于智能手机来说相机是非常重要的一个功能，它是影像的生产者，是新时代社交（图片，视频）内容的基础。后面我们将重点学习 一下安卓平台的Camera app开发。</p>
-
-<p><a href=""><img src="https://www.xda-developers.com/files/2018/09/best-android-camera.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2><a href="https://developer.android.com/reference/android/hardware/camera2/package-summary">Camera 2 API</a></h2>
-
-<p>学习如何使用新的API，以实例的方式来学习新一套API如何使用，最终成果将会是一个简单的，具有基础功能的Camera App。</p>
-
-<p>有以下文档可供参考：</p>
-
-<ul>
-<li><a href="https://developer.android.com/training/camera2">Official training docs</a></li>
-<li><a href="https://developer.android.com/training/camera">Camera</a></li>
-</ul>
-
-
-<p>同时谷歌也有一些官方的样例可供参考：</p>
-
-<ul>
-<li><a href="https://github.com/googlearchive/android-Camera2Basic">android-Camera2Basic</a></li>
-<li><a href="https://github.com/googlearchive/android-Camera2Video">android-Camera2Video</a></li>
-<li><a href="https://github.com/googlearchive/android-Camera2Raw">android-Camera2Raw</a></li>
-<li><a href="https://github.com/android/camera-samples">Camera Samples Repository</a></li>
-</ul>
-
-
-<p>AOSP源码中的<a href="https://cs.android.com/android/platform/superproject/+/master:packages/apps/Camera2/">Camera2</a>也是值得学习和参考 的。</p>
-
-<h2>Frameworks</h2>
-
-<p>在学习完API如何使用以后，还需要深入学习一下API下面的框架层。正所谓知其然，更要知其所以然，看了Demo以及文档后谁都会有API，要想加深理解，就必须继续深挖。</p>
-
-<p>这部分没有什么捷径，只能去啃<a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/base/core/java/android/hardware/camera2/">AOSP的源码</a>了。</p>
-
-<h2><a href="https://cs.android.com/android/platform/superproject/+/master:frameworks/av/services/camera/libcameraservice/CameraService.cpp?q=cameraservice">CameraService</a></h2>
-
-<p>这是Frameworks层的最后一环，它连接着Java层和HAL层，主要负责camera device的管理，如权限，打开与关闭的管理，在Android M之前并不是独立的进程，是放在media.server一起的，后来独立成为一个单独的系统级别的进程cameraserver，在ServiceManager中的名字是media.camera，可以通过如下命令查看它的状态：</p>
-
-<pre><code>adb shell dumpsys media.camera
-</code></pre>
-
-<h2><a href="https://developer.android.com/jetpack">Jetpack</a>中的<a href="https://developer.android.com/training/camerax">CameraX</a></h2>
-
-<p>这是谷歌封装的库，用以简化API的调用，加快app开发进度。</p>
-
-<h2>深入了解业务架构与技术栈</h2>
-
-<p><a href="https://source.android.google.cn/devices/camera">AOSP中的文档也值得学习</a></p>
-
-<h2><a href="https://source.codeaurora.org/quic/la/platform/packages/apps/SnapdragonCamera/tree/">SnapdragonCamera</a></h2>
-
-<p>相机是技术栈当中最为复杂的一个，SoC平台是至关重要的，所以Qcom的SnapdragonCamera也是值得深入学习的。</p>
-
-<h2>相机业务知识学习</h2>
-
-<h2>封装</h2>
-
-<p>相机是非常受硬件限制的，不同的SoC平台，不同的OEM厂商，以及不同的Android版本，API以及具体细节差异巨大，这给Camera app开发带来非常大的适配工作，那么可以把Camera app核心的业务封装成一个库，这样可以简化开发。</p>
-
-<h2>架构</h2>
-
-<p>如何架构一个Camera app。</p>
-
-<h2>扩展功能</h2>
-
-<p>除基本的拍照录像功能以外，可以扩展一些功能。</p>
-
-<h2>优秀开源项目</h2>
-
-<h3><a href="https://github.com/react-native-camera/react-native-camera">react-native-camera</a></h3>
-
-<h3><a href="https://github.com/CameraKit/camerakit-android">camerakit-android</a></h3>
-
-<h3><a href="https://github.com/google/cameraview">cameraview</a></h3>
-
-<h3><a href="https://github.com/natario1/CameraView">CameraView</a></h3>
-
-<h3><a href="https://github.com/RedApparat/Fotoapparat">Fotoapparat</a></h3>
-
-<h3><a href="https://github.com/Skykai521/StickerCamera">StickerCamera</a></h3>
-
-<h3><a href="https://github.com/CJT2325/CameraView">CameraView</a></h3>
-
-<h3><a href="https://github.com/CainKernel/CainCamera">CainCamera</a></h3>
-
-<h3><a href="https://github.com/aserbao/AndroidCamera">AndroidCamera</a></h3>
-
-<h3><a href="https://github.com/nekocode/CameraFilter">CameraFilter</a></h3>
-
-<h3><a href="https://github.com/florent37/CameraFragment">CameraFragment</a></h3>
 ]]></content>
   </entry>
   

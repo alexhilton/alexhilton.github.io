@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2022-05-01T19:57:37+08:00</updated>
+  <updated>2022-05-06T22:55:21+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,175 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Camera2之录像]]></title>
+    <link href="http://toughcoder.net/blog/2022/05/06/camera-2-record-video/"/>
+    <updated>2022-05-06T22:38:03+08:00</updated>
+    <id>http://toughcoder.net/blog/2022/05/06/camera-2-record-video</id>
+    <content type="html"><![CDATA[<p><a href="http://toughcoder.net/blog/2022/04/24/camera-2-handling-3a-parameters/">前面的文章</a>都是集中在拍照模式，对于相机来说拍照与录像是两个最为基础的功能，这篇文章来看一下使用Camera2如何实现一个简单的录像功能。</p>
+
+<p><a href="http://toughcoder.net/blog/2022/05/06/camera-2-record-video/"><img src="https://tse1-mm.cn.bing.net/th/id/R-C.d5e9195041cc351bd041464e996c1333?rik=kBPfq9at8eScog&riu=http%3a%2f%2fpublic.hudl.com%2fassets%2f562f9fbbd4c96106101813f7%2fbball_record.jpg&ehk=eigfVMaCv6ym1Sx4NimQfPnoJ%2frkdPMPlQrVoR9uFm8%3d&risl=&pid=ImgRaw&r=0" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>录像原理和流程</h2>
+
+<p>录像相较于拍照来说，业务逻辑要稍简单一些，因为大部分功能的实现要靠<a href="https://developer.android.com/reference/android/media/MediaRecorder">MediaRecorder</a>。Camera2的API界线划分比较清楚，camera只负责输出图像帧，至于如何编码成为视频则是多媒体部分（也即MediaRecorder）的事情。</p>
+
+<p>所以，实现录像功能，需要提供一个MediaRecorder，把其Surface作为camera的目标输出，同时作为MediaRecorder的输入，这就建立了它们的连接。</p>
+
+<h3>录像的主要流程</h3>
+
+<p>有以下几个关键的步骤需要做：</p>
+
+<h4>1. 选择要使用的分辨率</h4>
+
+<p>从CameraAgent中读取支持的分辨率。简单起见，可以用全高清来当默认值width=1920，height=1080，fps=30。</p>
+
+<h4>2. 准备目标Surface</h4>
+
+<p>可以用<a href="https://developer.android.com/reference/android/media/MediaCodec">MediaCodec</a>来创建一个Surface，用<a href="https://developer.android.com/reference/android/media/MediaCodec#createPersistentInputSurface(">createPersistentInputSurface</a>)方法，这个会传给CameraAgent用作配置session。</p>
+
+<h4>3. 准备MediaRecorder</h4>
+
+<p>创建实例，用步骤1作为video配置，步骤2 的Surface当作input surface，然后还要prepare，否则一些资源不会生效如Surface的buffer。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">private</span> <span class="kt">void</span> <span class="nf">setupMediaRecorder</span><span class="o">(</span><span class="n">VideoOutputConfig</span> <span class="n">mode</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">recorderSurface</span> <span class="o">=</span> <span class="n">MediaCodec</span><span class="o">.</span><span class="na">createPersistentInputSurface</span><span class="o">();</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">mediaRecorder</span> <span class="o">=</span> <span class="n">createRecorder</span><span class="o">(</span><span class="n">mode</span><span class="o">.</span><span class="na">width</span><span class="o">,</span> <span class="n">mode</span><span class="o">.</span><span class="na">height</span><span class="o">,</span> <span class="n">mode</span><span class="o">.</span><span class="na">fps</span><span class="o">);</span>
+</span><span class='line'>        <span class="k">try</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">mediaRecorder</span><span class="o">.</span><span class="na">prepare</span><span class="o">();</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">catch</span> <span class="o">(</span><span class="n">IOException</span> <span class="n">e</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="o">.</span><span class="na">w</span><span class="o">(</span><span class="n">LOG_TAG</span><span class="o">,</span> <span class="s">&quot;failed to prepare MediaRecorder: &quot;</span> <span class="o">+</span> <span class="n">e</span><span class="o">.</span><span class="na">getMessage</span><span class="o">());</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="kd">private</span> <span class="n">MediaRecorder</span> <span class="nf">createRecorder</span><span class="o">(</span><span class="kt">int</span> <span class="n">width</span><span class="o">,</span> <span class="kt">int</span> <span class="n">height</span><span class="o">,</span> <span class="kt">int</span> <span class="n">fps</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">MediaRecorder</span> <span class="n">recorder</span><span class="o">;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="o">(</span><span class="n">Build</span><span class="o">.</span><span class="na">VERSION</span><span class="o">.</span><span class="na">SDK_INT</span> <span class="o">&gt;=</span> <span class="n">Build</span><span class="o">.</span><span class="na">VERSION_CODES</span><span class="o">.</span><span class="na">S</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">recorder</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">MediaRecorder</span><span class="o">(</span><span class="n">context</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">recorder</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">MediaRecorder</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setAudioSource</span><span class="o">(</span><span class="n">MediaRecorder</span><span class="o">.</span><span class="na">AudioSource</span><span class="o">.</span><span class="na">MIC</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setVideoSource</span><span class="o">(</span><span class="n">MediaRecorder</span><span class="o">.</span><span class="na">VideoSource</span><span class="o">.</span><span class="na">SURFACE</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setOutputFormat</span><span class="o">(</span><span class="n">MediaRecorder</span><span class="o">.</span><span class="na">OutputFormat</span><span class="o">.</span><span class="na">MPEG_4</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setOutputFile</span><span class="o">(</span><span class="n">emptyVideoFile</span><span class="o">(</span><span class="n">context</span><span class="o">));</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setVideoEncodingBitRate</span><span class="o">(</span><span class="mi">1_0_000_000</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setVideoSize</span><span class="o">(</span><span class="n">width</span><span class="o">,</span> <span class="n">height</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setVideoFrameRate</span><span class="o">(</span><span class="n">fps</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setVideoEncoder</span><span class="o">(</span><span class="n">MediaRecorder</span><span class="o">.</span><span class="na">VideoEncoder</span><span class="o">.</span><span class="na">H264</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setAudioEncoder</span><span class="o">(</span><span class="n">MediaRecorder</span><span class="o">.</span><span class="na">AudioEncoder</span><span class="o">.</span><span class="na">AAC</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setInputSurface</span><span class="o">(</span><span class="n">recorderSurface</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setOnErrorListener</span><span class="o">(</span><span class="k">this</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">recorder</span><span class="o">.</span><span class="na">setOnErrorListener</span><span class="o">(</span><span class="k">this</span><span class="o">);</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">recorder</span><span class="o">;</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>到此，Surface和MediaRecorder就处于ready状态了</p>
+
+<h4>4. 使用常规view finder的Surface和第2步的Surface来启动预览</h4>
+
+<p>就是启动常规的预览即可：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="n">cameraAgent</span><span class="o">.</span><span class="na">startPreview</span><span class="o">(</span><span class="n">Arrays</span><span class="o">.</span><span class="na">asList</span><span class="o">(</span><span class="n">previewSurface</span><span class="o">,</span> <span class="n">recorderSurface</span><span class="o">));</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h4>5. 现在就处于Ready状态了，可以随时录像</h4>
+
+<h4>6. 调用MediaRecorder#start/stop/pause/resume来录像</h4>
+
+<h2>录像的分辨率选择</h2>
+
+<p>尺寸比例可以固定在16：9，因为这是较为通用的比例尺寸：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="n">List</span><span class="o">&lt;</span><span class="n">VideoOutputConfig</span><span class="o">&gt;</span> <span class="nf">calculateVideoRecordMode</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>    <span class="n">StreamConfigurationMap</span> <span class="n">configurationMap</span> <span class="o">=</span> <span class="n">characteristics</span><span class="o">.</span><span class="na">get</span><span class="o">(</span><span class="n">CameraCharacteristics</span><span class="o">.</span><span class="na">SCALER_STREAM_CONFIGURATION_MAP</span><span class="o">);</span>
+</span><span class='line'>    <span class="n">List</span><span class="o">&lt;</span><span class="n">Size</span><span class="o">&gt;</span> <span class="n">supportedSizes</span> <span class="o">=</span> <span class="n">Arrays</span><span class="o">.</span><span class="na">asList</span><span class="o">(</span><span class="n">configurationMap</span><span class="o">.</span><span class="na">getOutputSizes</span><span class="o">(</span><span class="n">MediaRecorder</span><span class="o">.</span><span class="na">class</span><span class="o">));</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">supportedSizes</span><span class="o">.</span><span class="na">stream</span><span class="o">()</span>
+</span><span class='line'>            <span class="o">.</span><span class="na">filter</span><span class="o">(</span><span class="n">size</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>                <span class="kd">final</span> <span class="kt">float</span> <span class="n">ratio</span> <span class="o">=</span> <span class="o">(</span><span class="kt">float</span><span class="o">)</span> <span class="n">size</span><span class="o">.</span><span class="na">getWidth</span><span class="o">()</span> <span class="o">/</span> <span class="o">(</span><span class="kt">float</span><span class="o">)</span> <span class="n">size</span><span class="o">.</span><span class="na">getHeight</span><span class="o">();</span>
+</span><span class='line'>                <span class="k">return</span> <span class="n">Math</span><span class="o">.</span><span class="na">abs</span><span class="o">(</span><span class="n">ratio</span> <span class="o">-</span> <span class="n">Config</span><span class="o">.</span><span class="na">PictureRatio</span><span class="o">.</span><span class="na">WIDE</span><span class="o">.</span><span class="na">ratio</span><span class="o">)</span> <span class="o">&lt;=</span> <span class="n">CameraSize</span><span class="o">.</span><span class="na">EPS</span><span class="o">;</span>
+</span><span class='line'>            <span class="o">})</span>
+</span><span class='line'>            <span class="o">.</span><span class="na">map</span><span class="o">(</span><span class="n">size</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>                <span class="kt">float</span> <span class="n">rfps</span> <span class="o">=</span> <span class="o">(</span><span class="kt">float</span><span class="o">)</span> <span class="n">configurationMap</span><span class="o">.</span><span class="na">getOutputMinFrameDuration</span><span class="o">(</span><span class="n">MediaRecorder</span><span class="o">.</span><span class="na">class</span><span class="o">,</span> <span class="n">size</span><span class="o">)</span> <span class="o">/</span> <span class="mi">1_000_000_000</span><span class="o">.</span><span class="mi">0</span><span class="n">f</span><span class="o">;</span>
+</span><span class='line'>                <span class="kt">int</span> <span class="n">fps</span> <span class="o">=</span> <span class="n">rfps</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="n">f</span> <span class="o">?</span> <span class="o">(</span><span class="kt">int</span><span class="o">)</span> <span class="o">(</span><span class="mf">1.0f</span> <span class="o">/</span> <span class="n">rfps</span><span class="o">)</span> <span class="o">:</span> <span class="mi">0</span><span class="o">;</span>
+</span><span class='line'>                <span class="k">return</span> <span class="k">new</span> <span class="nf">VideoOutputConfig</span><span class="o">(</span><span class="n">size</span><span class="o">.</span><span class="na">getWidth</span><span class="o">(),</span> <span class="n">size</span><span class="o">.</span><span class="na">getHeight</span><span class="o">(),</span> <span class="n">fps</span><span class="o">);</span>
+</span><span class='line'>            <span class="o">}).</span><span class="na">filter</span><span class="o">(</span><span class="n">vrm</span> <span class="o">-&gt;</span> <span class="n">vrm</span><span class="o">.</span><span class="na">fps</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="o">)</span>
+</span><span class='line'>            <span class="o">.</span><span class="na">collect</span><span class="o">(</span><span class="n">Collectors</span><span class="o">.</span><span class="na">toList</span><span class="o">());</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>录像之闪光灯</h2>
+
+<p>闪光灯主要是用于拍照，但录像也是支持闪光灯的，当然还是要看硬件的配置，如果characteristics.get(<a href="https://developer.android.com/reference/android/hardware/camera2/CameraCharacteristics#FLASH_INFO_AVAILABLE">CameraCharacteristics.FLASH_INFO_AVAILABLE</a>)为true，那就可以在录像中使用闪光灯，不过一般情况下，只有OFF和TORCH两种模式，因为录像是一个持续的输出帧的过程，其余的模式没有意义。</p>
+
+<h2>开始录像之后的流程</h2>
+
+<p>录像准备妥当后，准备目标文件，监听用户事件，按下快门后开始录像，再次点击后结束录像，然后释放MediaRecorder，最后把文件写入媒体数据库。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Camera2拍照之3A处理]]></title>
@@ -4157,14 +4326,14 @@ graph TD;    A&#45;&#45;>B;    A&#45;&#45;>C;    B&#45;&#45;>D;    C&#45;&#45;>D
 
 <p>输出：</p>
 
-<blockquote><p><a href="&#x6d;&#97;&#105;&#x6c;&#116;&#111;&#58;&#x48;&#97;&#x72;&#x64;&#101;&#x6e;&#64;&#98;&#114;&#x6f;&#111;&#x6b;&#x6c;&#x79;&#110;&#x2e;&#x6e;&#101;&#x74;&#x73;">&#72;&#97;&#114;&#x64;&#x65;&#110;&#64;&#98;&#114;&#111;&#111;&#107;&#108;&#x79;&#x6e;&#x2e;&#x6e;&#101;&#x74;&#x73;</a> <br />
-<a href="&#x6d;&#x61;&#105;&#x6c;&#116;&#111;&#58;&#68;&#117;&#114;&#x61;&#110;&#116;&#x40;&#x62;&#114;&#x6f;&#x6f;&#107;&#108;&#x79;&#x6e;&#46;&#110;&#101;&#x74;&#x73;">&#x44;&#x75;&#114;&#97;&#x6e;&#x74;&#64;&#98;&#114;&#111;&#111;&#107;&#108;&#121;&#x6e;&#46;&#x6e;&#x65;&#116;&#x73;</a> <br />
-<a href="&#109;&#x61;&#x69;&#108;&#x74;&#111;&#58;&#x49;&#x72;&#118;&#105;&#110;&#x67;&#64;&#x62;&#114;&#x6f;&#x6f;&#107;&#x6c;&#121;&#x6e;&#x2e;&#110;&#x65;&#x74;&#x73;">&#73;&#114;&#x76;&#x69;&#110;&#103;&#x40;&#x62;&#x72;&#x6f;&#x6f;&#107;&#108;&#x79;&#110;&#x2e;&#x6e;&#101;&#116;&#x73;</a> <br />
-<a href="&#109;&#x61;&#105;&#x6c;&#x74;&#x6f;&#x3a;&#67;&#108;&#121;&#x78;&#x74;&#111;&#110;&#64;&#98;&#114;&#x6f;&#x6f;&#107;&#x6c;&#x79;&#110;&#x2e;&#110;&#x65;&#116;&#x73;">&#x43;&#108;&#x79;&#x78;&#116;&#x6f;&#x6e;&#x40;&#98;&#114;&#x6f;&#111;&#107;&#108;&#x79;&#110;&#46;&#110;&#101;&#x74;&#x73;</a> <br />
-<a href="&#109;&#x61;&#105;&#x6c;&#x74;&#111;&#x3a;&#69;&#100;&#x77;&#97;&#x72;&#100;&#x73;&#x40;&#x62;&#114;&#111;&#x6f;&#107;&#108;&#x79;&#110;&#46;&#x6e;&#101;&#x74;&#x73;">&#x45;&#100;&#119;&#x61;&#x72;&#x64;&#115;&#64;&#x62;&#x72;&#x6f;&#x6f;&#107;&#x6c;&#121;&#110;&#46;&#x6e;&#x65;&#x74;&#115;</a> <br />
-<a href="&#109;&#x61;&#105;&#108;&#116;&#111;&#x3a;&#66;&#x72;&#111;&#x77;&#x6e;&#64;&#98;&#114;&#x6f;&#111;&#x6b;&#108;&#121;&#110;&#46;&#110;&#x65;&#116;&#x73;">&#x42;&#114;&#111;&#119;&#110;&#x40;&#98;&#114;&#x6f;&#111;&#107;&#108;&#121;&#110;&#46;&#110;&#x65;&#116;&#115;</a> <br />
-<a href="&#109;&#97;&#x69;&#x6c;&#116;&#x6f;&#x3a;&#65;&#x6c;&#100;&#x72;&#105;&#x64;&#x67;&#x65;&#64;&#x62;&#114;&#111;&#x6f;&#x6b;&#108;&#x79;&#x6e;&#46;&#x6e;&#x65;&#116;&#x73;">&#x41;&#x6c;&#x64;&#x72;&#105;&#100;&#103;&#x65;&#x40;&#98;&#114;&#x6f;&#x6f;&#x6b;&#108;&#121;&#110;&#46;&#x6e;&#101;&#116;&#115;</a> <br />
-<a href="&#x6d;&#97;&#105;&#108;&#x74;&#x6f;&#x3a;&#x47;&#114;&#105;&#102;&#x66;&#105;&#110;&#x40;&#98;&#x72;&#111;&#111;&#107;&#x6c;&#121;&#x6e;&#46;&#110;&#x65;&#116;&#115;">&#x47;&#x72;&#105;&#102;&#x66;&#105;&#110;&#64;&#98;&#x72;&#111;&#111;&#x6b;&#108;&#121;&#x6e;&#x2e;&#x6e;&#x65;&#116;&#115;</a> <br /></p></blockquote>
+<blockquote><p><a href="&#109;&#97;&#x69;&#108;&#116;&#x6f;&#58;&#72;&#x61;&#114;&#x64;&#101;&#110;&#x40;&#x62;&#114;&#111;&#111;&#107;&#108;&#x79;&#110;&#x2e;&#x6e;&#x65;&#116;&#x73;">&#x48;&#97;&#x72;&#x64;&#101;&#110;&#64;&#98;&#114;&#x6f;&#111;&#107;&#108;&#121;&#x6e;&#46;&#110;&#x65;&#116;&#x73;</a> <br />
+<a href="&#x6d;&#97;&#x69;&#108;&#x74;&#x6f;&#x3a;&#x44;&#117;&#x72;&#97;&#x6e;&#x74;&#x40;&#x62;&#x72;&#x6f;&#x6f;&#x6b;&#x6c;&#x79;&#x6e;&#46;&#x6e;&#101;&#x74;&#115;">&#68;&#117;&#114;&#x61;&#110;&#116;&#x40;&#98;&#x72;&#111;&#x6f;&#107;&#x6c;&#x79;&#110;&#46;&#110;&#101;&#x74;&#115;</a> <br />
+<a href="&#x6d;&#x61;&#x69;&#x6c;&#116;&#x6f;&#x3a;&#x49;&#x72;&#118;&#x69;&#x6e;&#x67;&#x40;&#x62;&#x72;&#x6f;&#111;&#x6b;&#x6c;&#121;&#110;&#x2e;&#x6e;&#x65;&#116;&#115;">&#73;&#114;&#x76;&#105;&#x6e;&#103;&#x40;&#98;&#114;&#111;&#x6f;&#107;&#x6c;&#121;&#x6e;&#x2e;&#x6e;&#x65;&#116;&#115;</a> <br />
+<a href="&#109;&#97;&#x69;&#x6c;&#116;&#x6f;&#x3a;&#67;&#x6c;&#x79;&#120;&#x74;&#x6f;&#x6e;&#x40;&#98;&#114;&#111;&#x6f;&#107;&#x6c;&#121;&#110;&#46;&#110;&#101;&#x74;&#x73;">&#x43;&#x6c;&#x79;&#x78;&#x74;&#111;&#x6e;&#64;&#98;&#114;&#111;&#x6f;&#x6b;&#108;&#121;&#110;&#x2e;&#x6e;&#101;&#x74;&#x73;</a> <br />
+<a href="&#x6d;&#97;&#105;&#108;&#116;&#x6f;&#58;&#69;&#100;&#119;&#x61;&#114;&#x64;&#x73;&#x40;&#98;&#114;&#x6f;&#111;&#107;&#x6c;&#x79;&#x6e;&#x2e;&#x6e;&#x65;&#x74;&#115;">&#x45;&#100;&#x77;&#x61;&#114;&#100;&#x73;&#x40;&#x62;&#x72;&#x6f;&#x6f;&#x6b;&#x6c;&#x79;&#x6e;&#46;&#x6e;&#x65;&#116;&#115;</a> <br />
+<a href="&#x6d;&#97;&#105;&#108;&#x74;&#x6f;&#x3a;&#66;&#114;&#x6f;&#x77;&#x6e;&#64;&#98;&#x72;&#111;&#x6f;&#107;&#x6c;&#x79;&#110;&#x2e;&#110;&#x65;&#116;&#x73;">&#x42;&#x72;&#111;&#x77;&#110;&#x40;&#x62;&#114;&#x6f;&#111;&#x6b;&#108;&#121;&#110;&#x2e;&#x6e;&#x65;&#116;&#115;</a> <br />
+<a href="&#109;&#97;&#x69;&#x6c;&#116;&#111;&#x3a;&#x41;&#x6c;&#100;&#x72;&#105;&#x64;&#x67;&#x65;&#64;&#x62;&#114;&#x6f;&#x6f;&#107;&#x6c;&#121;&#110;&#x2e;&#110;&#101;&#116;&#x73;">&#65;&#108;&#100;&#114;&#105;&#x64;&#103;&#101;&#64;&#x62;&#x72;&#111;&#x6f;&#107;&#x6c;&#121;&#x6e;&#x2e;&#x6e;&#x65;&#116;&#115;</a> <br />
+<a href="&#x6d;&#x61;&#105;&#108;&#116;&#x6f;&#58;&#71;&#114;&#105;&#x66;&#102;&#105;&#x6e;&#x40;&#x62;&#x72;&#x6f;&#111;&#x6b;&#x6c;&#x79;&#x6e;&#46;&#x6e;&#101;&#x74;&#115;">&#x47;&#x72;&#105;&#x66;&#102;&#x69;&#x6e;&#64;&#98;&#x72;&#x6f;&#111;&#x6b;&#108;&#x79;&#x6e;&#x2e;&#110;&#101;&#116;&#115;</a> <br /></p></blockquote>
 
 <p>这里的获取到的Email是另外一个Stream，所以这里必须用flatMap，也即当把player转换为Email后，必须要再flat，变成最初的链中的对象。</p>
 
@@ -5781,124 +5950,6 @@ graph TD;    A&#45;&#45;>B;    A&#45;&#45;>C;    B&#45;&#45;>D;    C&#45;&#45;>D
 <p>另外，就是对于属性动画，取消有两种方式，一是直接调用<a href="https://developer.android.com/reference/android/animation/Animator#cancel()">Animator#cancel</a>另外一种是调用<a href="https://developer.android.com/reference/android/animation/Animator#end()">Animator#end</a>，两个方法在处理最后的状态时略有差异。end方法会把属性的最终状态设置给属性，然后回调onAnimationEnd，但cancel就直接终止动画了，属性当前啥状态那就啥状态，然后回调onAnimationCancel。其实，大多数情况下，end更为合理，但end可能会造成视觉上的跳跃，属性的状态会突然变化。</p>
 
 <p>再有就是，如果对于View，有多个属性同时做动画时，用ViewPropertyAnimator更好一些。语法上面也更简洁，性能上也略优一些。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android Animation Advanced Tricks]]></title>
-    <link href="http://toughcoder.net/blog/2021/09/04/android-animation-advanced-tricks/"/>
-    <updated>2021-09-04T11:45:13+08:00</updated>
-    <id>http://toughcoder.net/blog/2021/09/04/android-animation-advanced-tricks</id>
-    <content type="html"><![CDATA[<p><a href="http://toughcoder.net/blog/2021/08/19/android-animation-made-easy/">前面的文章</a>介绍了动画的基本使用方法，本文来聊一聊涉及到动画的高级技巧，以及一些非常优质的学习资源和动画三方库和框架。</p>
-
-<p><a href="http://toughcoder.net/blog/2021/09/04/android-animation-advanced-tricks/"><img src="https://cdn.wccftech.com/wp-content/uploads/2020/04/Animations.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>页面之间的过渡动画</h2>
-
-<p>常规的动画都是针对某一页面上的某个元素做动画，这个相对简单，<a href="http://toughcoder.net/blog/2021/08/19/android-animation-made-easy/">之前的文章</a>讲了很多。但有时候页面与页面之间也是需要过渡动画的，这个可以加强切换的视觉体验，但最好要注意整个应用内的风格统一，不能A到B是一种切换样式，B到C却是另外一种。</p>
-
-<p>主要有两类，一是Activity之间的切换，二是布局之间的切换。</p>
-
-<h3>Activity之间的切换动画</h3>
-
-<p>因为Activity的创建与启动以及它的Window的创建和显示都是由Frameworks来控制的，甚至于Activity里面的布局何时加载也是由系统决定的，所以对于Activity之间的切换严重依赖于Frameworks，而不同版本的安卓，支持的情况还不一样。</p>
-
-<h4>传统的做法</h4>
-
-<p>这个是针对 于所有安卓 版本都可以使用的方法，也是最简单的方式，就是使用<a href="https://developer.android.com/reference/android/app/Activity#overridePendingTransition(int,%20int)">Activity#overridePendingTransition</a>方法。</p>
-
-<p>这个方法并不难，具体如何使用可以参考其文档，以及<a href="https://blog.csdn.net/ccpat/article/details/84883418">这篇文章</a>，讲的都比较清楚。</p>
-
-<h4>使用Transition</h4>
-
-<p>在Android 4.4时，系统中加入了一个叫做Transition的东西，专门用于页面之间的切换的，但也仅是限于同一个窗口（也即同一个Activity内）的ViewGroup。在Android 5.0时又把Activity之间的切换提供了支持，对于5.0以上的版本可以使用这个框架来实现切换，会比传统的做法都要专业一些。</p>
-
-<p>具体可以参看<a href="https://developer.android.com/training/transitions/start-activity">官方教程</a>，以及<a href="https://www.jianshu.com/p/a43daa1e3d6e">这篇教程</a>和<a href="https://guides.codepath.com/android/shared-element-activity-transition">这篇文章</a>，讲解的都相当好。</p>
-
-<h3>布局之间的过渡切换</h3>
-
-<p>这里的布局就是指除Activity以外的，比如从一个ViewGroup切换到另外一个ViewGroup。其实Fragment本质上就是一个ViewGroup，所以也包含在内。</p>
-
-<p>在Android 4.4 (Kikat API 19)，加入了<a href="https://developer.android.com/reference/android/transition/Transition">Transition frameworks</a>，专门用于解决场景切换，主要是通过Scene对象和Transition对象。Transition对象定义具体针对 哪个ViewGroup做什么样的动画，而Scene对象定义了ViewGroup的某一种状态，如渐变进入，那么渐变前是一个Scene，完全可见后又是一个Scene，而渐变的过程则叫Transition。</p>
-
-<p><img src="https://developer.android.com/images/transitions/transitions_diagram.png" alt="" /></p>
-
-<p>可以参看<a href="https://developer.android.com/training/transitions">官方文档</a>，以详细了解如何使用transition。</p>
-
-<h2>复杂动画的实现逻辑</h2>
-
-<p>动画是一个非常复杂且精深的领域，千万不要说做个UI很容易，或者说写个动画很容易，要想做好动画需要很深的功底，不但需要对动画框架有深入的了解，也要对整个视觉GUI有深入的理解，并且需要良好的数学与物理知识。</p>
-
-<p>复杂的动画的复杂度体现在两个方面，一个是整体上看起来复杂，也就是是很多不同的动画的组合；另外一个是具体的某个属性复杂，如复杂的路径，复杂的时间变化或者复杂的形变。分开说。</p>
-
-<h4>看起来复杂的动画</h4>
-
-<p>这一般是涉及众多的动画的组合，整体表现上看起来特别复杂。就比如说电商可能会有一个购物筐，里面往外飞各种商品的动画。对于这种就是要把它拆解，拆解开来后，其实并不复杂。</p>
-
-<p><img src="http://pic.90sjimg.com/design/03/61/36/24/5d71ce10b36d1.png" alt="" /></p>
-
-<ul>
-<li>购物车：可以是渐变，不断的从透明变到不透明。或者干脆不做动画</li>
-<li>商品：预定义一组商品，每次随机选择一个，再选择随机的位置，然后从底下往上飞（或者从上往下飞），再设置一个随机的速度，也可以加上旋转</li>
-</ul>
-
-
-<p>这样拆解开来就不复杂了。</p>
-
-<h4>复杂的变幻</h4>
-
-<p>这里就要涉及一些数学 和物理知识了，比如用一些特别的曲线，特殊的曲面，特殊的形变等。</p>
-
-<h2>优秀的动画的设计范例</h2>
-
-<p>这里就不得不得提到大名顶顶的<a href="https://dribbble.com/">Dribbble</a>了，这里有相当优秀的设计资源，其中也有很多<a href="https://dribbble.com/shots/popular/animation">动画设计</a>，可以尝试着去实现一下，都很有挑战。</p>
-
-<h2>优秀的动画相关资源</h2>
-
-<p>还有一些资源，特别是开源的库，也非常值得学习和研究和使用。</p>
-
-<h4><a href="https://developer.android.com/reference/androidx/constraintlayout/motion/widget/MotionLayout">MotionLayout</a></h4>
-
-<p>这个并不是三方的，而是官方AndroidX中的，相当的强大，当然使用起来也略复杂。具体使用方法可以参考 <a href="https://developer.android.com/training/constraint-layout/motionlayout">官方教程</a>和<a href="https://www.nomtek.com/blog/motionlayout">这篇文章</a>。</p>
-
-<h4><a href="https://awesomeopensource.com/projects/android-animation">The Top 27 Android Animation Open Source Projects</a></h4>
-
-<p>这里是一个集合，里面列出一些优秀的动画相关的开源库，都相当的棒。</p>
-
-<h4><a href="https://github.com/daimajia/AndroidViewAnimations">Android View Animations</a></h4>
-
-<p>有一些针对View的非常炫酷的特效，如抖动，缩放和旋转等。它是受一个<a href="https://github.com/ArtFeel/AFViewShaker">水果上面的动画库</a>的激发。</p>
-
-<h4><a href="https://github.com/lgvalle/Material-Animations">Material-Animations</a></h4>
-
-<p>主要是介绍如何使用Transition frameworks的。</p>
-
-<h4><a href="https://github.com/airbnb/lottie-android">Lottie</a></h4>
-
-<p>可以把设计软件Adobe After Effects直接转成动画。</p>
-
-<h4>一些插值器</h4>
-
-<p>可看<a href="https://github.com/daimajia/AnimationEasingFunctions">这个</a>和<a href="https://easings.net/">这个</a></p>
-
-<h4><a href="https://github.com/ybq/Android-SpinKit">专门用于加载动画</a></h4>
-
-<p>里面有各种神奇的加载特效，非常棒。是一个<a href="https://github.com/tobiasahlin/SpinKit">前端CSS加载特效</a>的Android上的实现。</p>
-
-<h4><a href="https://github.com/OCNYang/Android-Animation-Set">教程的示例</a></h4>
-
-<p>这是一个教程集锦，里面也包含各种示例，是一个相当不错的学习资源。</p>
-
-<h4><a href="https://github.com/REBOOTERS/AndroidAnimationExercise">另外一个教程和示例</a></h4>
-
-<p>与上面的类似，也是一个集教程与实例在一起的项目。</p>
-
-<h4><a href="https://awesomeopensource.com/project/OCNYang/Android-Animation-Set">Android Animation Detailed Tutorials</a></h4>
-
-<p>一个项目的合集。</p>
 ]]></content>
   </entry>
   
