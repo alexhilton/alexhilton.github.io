@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Algorithm | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/algorithm/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2023-02-08T21:08:37+08:00</updated>
+  <updated>2023-02-08T23:29:24+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -455,21 +455,200 @@
 
 <p>需要注意，一个节点的层数在创建节点时就确定了，在节点的生命周期过程中其层数不会变化。因为对跳表数据结构产生变化 的操作只有插入和删除，插入是生成新的节点，插入时层数已确定；删除是把节点移除，自然也没必要再去改变节点本身了。所以节点的数据类型是Immutable的。</p>
 
+<pre><code class="java">    private static final class Node {
+        final int value;
+        final Node[] next;
+
+        Node(int value, int level) {
+            this.value = value;
+            next = new Node[level];
+        }
+    }
+</code></pre>
+
 <h4>构造</h4>
 
 <p>跳表其实就是一个单链表表，所以整体数据结构也不复杂，一个哨兵入口的头节点head，还有当前的最大层数level，和两个阈值P_FACTOR是要不要增加层深的阈值以及最大层数MAX_LEVEL。</p>
+
+<pre><code class="java">    private static final int INF = 1000;
+    private static final int MAX_LEVEL = 32;
+    private static final double P_FACTOR = 0.25;
+    private final Node head;
+    private int level;
+    private final Random random;
+
+    public SkipList() {
+        head = new Node(-INF, MAX_LEVEL);
+        level = 0;
+        random = new Random();
+    }
+</code></pre>
 
 <h4>查询</h4>
 
 <p>从头节点入口，从其最高层开始查询，具体查询过程与单链表是一样的，持有当前指针，当前指针初化为head节点，不断向后遍历curr直到curr.next[level].val大于目标值，然后走到下一层，继续向后遍历。直到最底层，如果curr.next[0].val等于目标值则找到，否则就是没有，不存在。</p>
 
+<pre><code class="java">    public boolean search(int target) {
+        Node curr = head;
+        for (int i = level - 1; i &gt;= 0; i--) {
+            while (curr.next[i] != null &amp;&amp; curr.next[i].value &lt; target) {
+                curr = curr.next[i];
+            }
+        }
+
+        if (curr.next[0] != null &amp;&amp; curr.next[0].value == target) {
+            return true;
+        }
+
+        return false;
+    }
+</code></pre>
+
 <h4>删除</h4>
 
+<pre><code class="java">    public boolean delete(int target) {
+        Node[] updates = new Node[MAX_LEVEL];
+
+        Node curr = head;
+        for (int i = level - 1; i &gt;= 0; i--) {
+            while (curr.next[i] != null &amp;&amp; curr.next[i].value &lt; target) {
+                curr = curr.next[i];
+            }
+            updates[i] = curr;
+        }
+        curr = curr.next[0];
+        if (curr == null || curr.value != target) {
+            // target not exist
+            return false;
+        }
+
+        for (int i = 0; i &lt; level; i++) {
+            if (updates[i].next[i] != curr) {
+                break;
+            }
+            updates[i].next[i] = curr.next[i];
+        }
+        while (level &gt; 1 &amp;&amp; head.next[level - 1] == null) {
+            level--;
+        }
+        return true;
+    }
+</code></pre>
+
 <h4>插入</h4>
+
+<pre><code class="java">    public void insert(int value) {
+        Node[] updates = new Node[MAX_LEVEL];
+        Arrays.fill(updates, head);
+
+        Node curr = head;
+        for (int i = level - 1; i &gt;= 0; i--) {
+            while (curr.next[i] != null &amp;&amp; curr.next[i].value &lt; value) {
+                curr = curr.next[i];
+            }
+            updates[i] = curr;
+        }
+
+        int lv = randomLevel();
+        level = Math.max(level, lv);
+        Node newNode = new Node(value, lv);
+
+        for (int i = 0; i &lt; lv; i++) {
+            newNode.next[i] = updates[i].next[i];
+            updates[i].next[i] = newNode;
+        }
+    }
+</code></pre>
 
 <h4>修改</h4>
 
 <p>一般的实现中不会不回修改的接口，因为修改就是删除原节点，然后再插入新节点，所以用删除和插入就可以实现了，没必要再添加一个方法。</p>
+
+<h4>运行</h4>
+
+<p>为了方便加一个调试方法</p>
+
+<pre><code class="java">     public void dump() {
+        for (int i = level - 1; i &gt;= 0; i--) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("L #%3d [ ", i));
+            Node curr = head;
+            Node bottomCurr = head;
+            while (bottomCurr != null) {
+                if (curr != null &amp;&amp; curr.value == bottomCurr.value) {
+                    if (curr == head) {
+                        sb.append("-Inf -&gt; ");
+                    } else {
+                        sb.append(String.format("%5d -&gt; ", curr.value));
+                    }
+                    curr = curr.next[i];
+                } else {
+                    sb.append("         ");
+                }
+                bottomCurr = bottomCurr.next[0];
+            }
+            sb.append(" null ]");
+            System.out.println(sb);
+        }
+    }
+
+    public static void main(String[] args) {
+        SkipList sl = new SkipList();
+        int n = 100;
+        Random rand = new Random();
+        int[] values = new int[7];
+        for (int i = 0; i &lt; values.length; i++) {
+            values[i] = rand.nextInt(n);
+            sl.insert(values[i]);
+        }
+        System.out.println("After insertion.");
+        sl.dump();
+        for (int i = 0; i &lt; 3; i++) {
+            int target = values[i * 2];
+            System.out.println("Searching (true) " + target + " -&gt; " + sl.search(target));
+        }
+        System.out.println("Delete some.");
+        for (int i = 0; i &lt; 3; i++) {
+            int target = values[rand.nextInt(n) % values.length];
+            System.out.println("Deleting (true) " + target + " -&gt; " + sl.delete(target));
+        }
+        int target = rand.nextInt(n);
+        System.out.println("Deleting " + target + " -&gt; " + sl.delete(target));
+        target = rand.nextInt(n);
+        System.out.println("Deleting " + target + " -&gt; " + sl.delete(target));
+        sl.dump();
+        System.out.println("Insert some more.");
+        for (int i = 0; i &lt; 4; i++) {
+            sl.insert(rand.nextInt(n));
+        }
+        sl.dump();
+    }
+</code></pre>
+
+<p>运行结果，要用等宽字体看才有效果：</p>
+
+<pre><code class="bash">After insertion.
+L #  3 [ -Inf -&gt;                               29 -&gt;                             null ]
+L #  2 [ -Inf -&gt;             16 -&gt;             29 -&gt;                             null ]
+L #  1 [ -Inf -&gt;     7 -&gt;    16 -&gt;             29 -&gt;             57 -&gt;           null ]
+L #  0 [ -Inf -&gt;     7 -&gt;    16 -&gt;    21 -&gt;    29 -&gt;    44 -&gt;    57 -&gt;    88 -&gt;  null ]
+Searching (true) 16 -&gt; true
+Searching (true) 29 -&gt; true
+Searching (true) 57 -&gt; true
+Delete some.
+Deleting (true) 16 -&gt; true
+Deleting (true) 29 -&gt; true
+Deleting (true) 57 -&gt; true
+Deleting 75 -&gt; false
+Deleting 80 -&gt; false
+L #  1 [ -Inf -&gt;     7 -&gt;                             null ]
+L #  0 [ -Inf -&gt;     7 -&gt;    21 -&gt;    44 -&gt;    88 -&gt;  null ]
+Insert some more.
+L #  1 [ -Inf -&gt;     7 -&gt;                      37 -&gt;    41 -&gt;             82 -&gt;           null ]
+L #  0 [ -Inf -&gt;     7 -&gt;    17 -&gt;    21 -&gt;    37 -&gt;    41 -&gt;    44 -&gt;    82 -&gt;    88 -&gt;  null ]
+</code></pre>
+
+<p><a href="https://github.com/alexhilton/EffectiveAlgorithm/blob/main/datastructure/src/main/java/linkedlist/SkipList.java">完整代码在这里</a>。</p>
 
 <h3>相关题目</h3>
 
