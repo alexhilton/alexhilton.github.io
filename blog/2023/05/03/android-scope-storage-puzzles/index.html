@@ -1,0 +1,393 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Android Scope Storage Puzzles - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="Android Storage权限收紧及其适配方法">
+  <meta name="keywords" content="Android, Scope Storage, Permission">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="http://toughcoder.net/blog/2023/05/03/android-scope-storage-puzzles">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:toughcoder.net" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Android Scope Storage Puzzles</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2023-05-03T17:58:43+08:00'><span class='date'><span class='date-month'>May</span> <span class='date-day'>3</span><span class='date-suffix'>rd</span>, <span class='date-year'>2023</span></span> <span class='time'>5:58 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>安卓对于文件存储这块，其实是相当混乱的，在早期的版本中对存储甚至是没有所谓的管理的，有多种方法可以操作文件存储，比如通过Java原生的方式(File/InputStream/OutputStream)，以及通过ContentProvider的方式(openFile)。文件的路径也是相当混乱的，有公共存储区域，App的沙盒，外部存储中的App沙盒，但其实整个文件系统中的文件都是可读的，除了系统目录，其他应用的沙盒(内部和外部）以外也都是可写的。这就造成了，安卓的文件系统特别的混乱，加之应用使用不规范，对存储造成极大的滥用，外部存储空间产生大量的垃圾文件，应用卸载后仍然存在，这也催生了一系列的清理软件。</p>
+
+<p><a href="/blog/2023/05/03/android-scope-storage-puzzles/"><img src="https://co-well.vn/wp-content/uploads/2020/05/Android-01-2048x1280.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>但随着用户隐私问题越来越被重视，谷歌也开始收紧了存储权限管理。</p>
+
+<h2>存储权限的变化</h2>
+
+<h3>强制动态申请权限</h3>
+
+<p>从6.0（Android M）开始，存储权限除了在AndroidManifest中静态声明以外，还需要在运行时动态的申请，用户授权了后才可以使用。但这并没有本质的变化，只要用户授权了，就跟以前一样，所有文件可读，大量位置的文件也都可写，App依然可以随便乱搞。</p>
+
+<h3>Scope Storage</h3>
+
+<p>后来到了Android 10时提出了scope storage的概念，并把权限进一步的收紧，仅留下几个公共的文件夹可写，其他地方均不可写。并且写媒体文件时(Image/Video/Audio)，要用MediaStore API的方式，直接以Java的文件方式将不再可用。Android 10并未强制开启scope storage，通过在Manifest中设置requestLegacyStorageManage=true，依然可以像以往那样搞。
+<img src="https://koenig-media.raywenderlich.com/uploads/2020/06/PreparingScopedStorage-twitter.png" alt="" /></p>
+
+<h3>强制Score Storage</h3>
+
+<p>到了Android 11时，就强制了，只有应用自己的沙盒可自由读写。创建媒体文件必须 通过MediaStore API。只有少数区域可写（Documents/Downloads/Pictures）等，并且这些区域只有自己创建的文件是可读的。这就导致了，应用能乱搞的区间相当有限了。</p>
+
+<h3>细分文件种类权限</h3>
+
+<p>到了Android 13，更加变态了，把原来的WRITE_STORAGE/READ_STORAGE权限细分为对具体文件种类的操作，拆分为Image/Audio/Video三种媒体文件类型的读写。</p>
+
+<h2>存储问题的适配</h2>
+
+<p>前面简单的介绍了安卓存储权限的变化过程，重点还是要了解一下如何适配。因为现在已经是2023年了，Android 13(Android T)，targetSDK 33也快要普及了，所以就直接总结下现在应该怎么做。</p>
+
+<h3>动态申请存储权限</h3>
+
+<h3>在manifest中声明requestLegacy=true</h3>
+
+<h3>用MediaStore API来创建媒体文件(Image/Audio/Video)</h3>
+
+<h3>申请另外一个权限MANAGE_STORAGE</h3>
+
+<p>从Android 11开始，要想看到公共区域(Documents/Downloads)中的所有文件，还必须申请另外一个权限MANAGE_STORAGE。因为理论上来说，公共区域你只能看见你自己创建的文件就够了，想看所有文件就越权了。但对于有些应用来说，如文件浏览器，或者请记录阅读器来说，肯定要能看到所有的文件。这个权限需要再次单独申请，用户授权后即可以看到公共区域的所有的文件了。</p>
+
+<p>因为这个权限又会导致失控，只要申请了就可以在公共区域随意创建文件了，所以谷歌对这个权限管控也是比较严的。虽然你在研发测试阶段可以申请这个权限，但是在发布阶段，要给应用商店一个使用此权限的合理理由，否则Play store会拒绝上线的。</p>
+
+<h3>合理使用公共区域</h3>
+
+<p>作为App，最应该做的就是从业务上区分文件的属性，然后合理的选择存储空间进行存储。对于App本身运行相关的文件，如配置，如算法的模型，如数据库，缓存和日志等等应用本身运行密切相关的文件，一定不可以放在公共区域，一定要放在应用自己的沙盒内（通过context.getFileDir,context.openFile）等来读写，应用自己的沙盒也是属于App的自由空间，你可以随意玩。</p>
+
+<p>对于用户生成的文件则要放在公共区域，比如说相机产出的图片和视频，编辑软件产生的文档，这些属于用户生成文件，它的所有权是用户的，可能会通过其他软件再次编辑或者分享，这些肯定要放在公共区域的。对于媒体类Image/Audio/Video则要通过MediaStore API的方式来创建和管理。对于其他文档类型，在获得了WRITE权限 后也可以在（Documents/Downloads）中创建和管理的，绝大多数情况下，这就够了。</p>
+
+<p>总的来说，在用户隐私越来越被重视的今天，安卓现在存储管理策略在保护用户隐私的前提下是能够满足开发者使用的。</p>
+
+<h2>参考资料</h2>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2023-05-03T17:58:43+08:00'><span class='date'><span class='date-month'>May</span> <span class='date-day'>3</span><span class='date-suffix'>rd</span>, <span class='date-year'>2023</span></span> <span class='time'>5:58 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2023/04/12/understanding-kotlin-scope-functions/" title="Previous Post: Understanding Kotlin Scope Functions">&laquo; Understanding Kotlin Scope Functions</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2023 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+    var _hmt = _hmt || [];
+    (function() {
+         var hm = document.createElement("script");
+         hm.src = "//hm.baidu.com/hm.js?3b8ca71d801a2f5af0a456e0b4635bae";
+         var s = document.getElementsByTagName("script")[0];
+         s.parentNode.insertBefore(hm, s);
+    })();
+</script>
+
+
+</body>
+</html>

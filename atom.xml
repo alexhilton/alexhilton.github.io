@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2023-05-03T17:33:25+08:00</updated>
+  <updated>2023-05-03T19:12:26+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,67 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Android Scope Storage Puzzles]]></title>
+    <link href="http://toughcoder.net/blog/2023/05/03/android-scope-storage-puzzles/"/>
+    <updated>2023-05-03T17:58:43+08:00</updated>
+    <id>http://toughcoder.net/blog/2023/05/03/android-scope-storage-puzzles</id>
+    <content type="html"><![CDATA[<p>安卓对于文件存储这块，其实是相当混乱的，在早期的版本中对存储甚至是没有所谓的管理的，有多种方法可以操作文件存储，比如通过Java原生的方式(File/InputStream/OutputStream)，以及通过ContentProvider的方式(openFile)。文件的路径也是相当混乱的，有公共存储区域，App的沙盒，外部存储中的App沙盒，但其实整个文件系统中的文件都是可读的，除了系统目录，其他应用的沙盒(内部和外部）以外也都是可写的。这就造成了，安卓的文件系统特别的混乱，加之应用使用不规范，对存储造成极大的滥用，外部存储空间产生大量的垃圾文件，应用卸载后仍然存在，这也催生了一系列的清理软件。</p>
+
+<p><a href="http://toughcoder.net/blog/2023/05/03/android-scope-storage-puzzles/"><img src="https://co-well.vn/wp-content/uploads/2020/05/Android-01-2048x1280.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>但随着用户隐私问题越来越被重视，谷歌也开始收紧了存储权限管理。</p>
+
+<h2>存储权限的变化</h2>
+
+<h3>强制动态申请权限</h3>
+
+<p>从6.0（Android M）开始，存储权限除了在AndroidManifest中静态声明以外，还需要在运行时动态的申请，用户授权了后才可以使用。但这并没有本质的变化，只要用户授权了，就跟以前一样，所有文件可读，大量位置的文件也都可写，App依然可以随便乱搞。</p>
+
+<h3>Scope Storage</h3>
+
+<p>后来到了Android 10时提出了scope storage的概念，并把权限进一步的收紧，仅留下几个公共的文件夹可写，其他地方均不可写。并且写媒体文件时(Image/Video/Audio)，要用MediaStore API的方式，直接以Java的文件方式将不再可用。Android 10并未强制开启scope storage，通过在Manifest中设置requestLegacyStorageManage=true，依然可以像以往那样搞。
+<img src="https://koenig-media.raywenderlich.com/uploads/2020/06/PreparingScopedStorage-twitter.png" alt="" /></p>
+
+<h3>强制Score Storage</h3>
+
+<p>到了Android 11时，就强制了，只有应用自己的沙盒可自由读写。创建媒体文件必须 通过MediaStore API。只有少数区域可写（Documents/Downloads/Pictures）等，并且这些区域只有自己创建的文件是可读的。这就导致了，应用能乱搞的区间相当有限了。</p>
+
+<h3>细分文件种类权限</h3>
+
+<p>到了Android 13，更加变态了，把原来的WRITE_STORAGE/READ_STORAGE权限细分为对具体文件种类的操作，拆分为Image/Audio/Video三种媒体文件类型的读写。</p>
+
+<h2>存储问题的适配</h2>
+
+<p>前面简单的介绍了安卓存储权限的变化过程，重点还是要了解一下如何适配。因为现在已经是2023年了，Android 13(Android T)，targetSDK 33也快要普及了，所以就直接总结下现在应该怎么做。</p>
+
+<h3>动态申请存储权限</h3>
+
+<h3>在manifest中声明requestLegacy=true</h3>
+
+<h3>用MediaStore API来创建媒体文件(Image/Audio/Video)</h3>
+
+<h3>申请另外一个权限MANAGE_STORAGE</h3>
+
+<p>从Android 11开始，要想看到公共区域(Documents/Downloads)中的所有文件，还必须申请另外一个权限MANAGE_STORAGE。因为理论上来说，公共区域你只能看见你自己创建的文件就够了，想看所有文件就越权了。但对于有些应用来说，如文件浏览器，或者请记录阅读器来说，肯定要能看到所有的文件。这个权限需要再次单独申请，用户授权后即可以看到公共区域的所有的文件了。</p>
+
+<p>因为这个权限又会导致失控，只要申请了就可以在公共区域随意创建文件了，所以谷歌对这个权限管控也是比较严的。虽然你在研发测试阶段可以申请这个权限，但是在发布阶段，要给应用商店一个使用此权限的合理理由，否则Play store会拒绝上线的。</p>
+
+<h3>合理使用公共区域</h3>
+
+<p>作为App，最应该做的就是从业务上区分文件的属性，然后合理的选择存储空间进行存储。对于App本身运行相关的文件，如配置，如算法的模型，如数据库，缓存和日志等等应用本身运行密切相关的文件，一定不可以放在公共区域，一定要放在应用自己的沙盒内（通过context.getFileDir,context.openFile）等来读写，应用自己的沙盒也是属于App的自由空间，你可以随意玩。</p>
+
+<p>对于用户生成的文件则要放在公共区域，比如说相机产出的图片和视频，编辑软件产生的文档，这些属于用户生成文件，它的所有权是用户的，可能会通过其他软件再次编辑或者分享，这些肯定要放在公共区域的。对于媒体类Image/Audio/Video则要通过MediaStore API的方式来创建和管理。对于其他文档类型，在获得了WRITE权限 后也可以在（Documents/Downloads）中创建和管理的，绝大多数情况下，这就够了。</p>
+
+<p>总的来说，在用户隐私越来越被重视的今天，安卓现在存储管理策略在保护用户隐私的前提下是能够满足开发者使用的。</p>
+
+<h2>参考资料</h2>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Understanding Kotlin Scope Functions]]></title>
@@ -4616,160 +4677,6 @@
 <li><a href="https://www.raywenderlich.com/books/reactive-programming-with-kotlin">Reactive Programming with Kotlin</a></li>
 <li><a href="https://github.com/davidmoten/rxjava2-extras">Utilities for use with RxJava 2</a></li>
 <li><a href="https://github.com/davidmoten/rxjava-extras">Utilities for use with rxjava</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Introduction to RxJava]]></title>
-    <link href="http://toughcoder.net/blog/2023/01/05/introduction-to-rxjava/"/>
-    <updated>2023-01-05T22:57:44+08:00</updated>
-    <id>http://toughcoder.net/blog/2023/01/05/introduction-to-rxjava</id>
-    <content type="html"><![CDATA[<p><a href="https://github.com/ReactiveX/RxJava">RxJava</a>是一个异步数据流式的开源库，已流行于Android开发行业中多年，现在已经变成了Android开发的一个标配，几乎所有，是的几乎所有的项目都会使用它（即使大部分人并没有真的在用它）。也几乎每个开发人员的简历中都会写着熟悉RxJava，甚至是精通RxJava，可见它的流行程度，今天就来学习一下RxJava的基本使用。</p>
-
-<p><a href="http://toughcoder.net/blog/2023/01/05/introduction-to-rxjava/"><img src="https://ts1.cn.mm.bing.net/th/id/R-C.8bf825c83d71d679305006ad8877881f?rik=ntxCAiBD5wztvw&riu=http%3a%2f%2fwww.allaboutweb.biz%2fwp-content%2fuploads%2f2018%2f04%2fWhat-is-RxJava.jpg&ehk=K75BZ9hKVA%2bAu7Gjm9QXOAtzL3uOtKQeoRkvFi1KDAA%3d&risl=&pid=ImgRaw&r=0" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>理解基本的范式</h2>
-
-<p>RxJava是Reactive Extensions的Java实现，是基于数据流的响应式编程范式，同时结合了函数式编程，准确的来说它是函数式响应式编程范式FRP(Functional Reacive Programming)。核心思想是数据流和响应式。
-一个Observable就是一个会发出事件的机器，这里事件是一个数据的意思。就好比marble球，一个Observable就是一个可以不断发射出marble的机器，它就是一个数据流。
-<img src="https://ts1.cn.mm.bing.net/th/id/R-C.2f9fed625ff00e7f0cfa51632f7b9644?rik=8AI5UL%2fV%2bFQO2Q&amp;riu=http%3a%2f%2fwww.philosophicalhacker.com%2fwp-content%2fuploads%2f2015%2f06%2fwe_know_rxjava_is_observer_plus_iterator.jpg&amp;ehk=3KXNE20j2MAeyThqdNT%2bZX9DHY2wRHvlVLLrCeusLCc%3d&amp;risl=&amp;pid=ImgRaw&amp;r=0" alt="" />
-可以把它想像成一个无限列表，但并不是常规意义上的List，因为它是异步的，这里异步的意思是，同一个时间内，你看不到所有的元素，对于常规意义上的列表是同步的，意思是拿到列表时，里面的数据 全在。但Observable是异步的，拿到Observable时，可能还没有数据。数据是有时序的，有点类似于信号。如果你收集齐了Observable发出的所有数据，假设它是有限的（比如从一个真正列表创建的Observable），那么得到的就是一个列表。</p>
-
-<p>Observable最佳的类比就是一个物理信号，是有时域上的概念。</p>
-
-<p><img src="https://tse2-mm.cn.bing.net/th/id/OIP-C.L_gen2R661qqPG-UbhM2lAHaDl?pid=ImgDet&amp;rs=1" alt="" /></p>
-
-<p>Subscriber是数据的消费者，它是对数据的响应，由它来体现响应式Reactive。</p>
-
-<p>我们需要做的就是把数据封装成为一个Observable，然后定义好一个响应数据的Subscriber，这就是FRP了。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='java'><span class='line'> <span class="n">Observable</span><span class="o">.</span><span class="na">just</span><span class="o">(</span><span class="s">&quot;Hello, world of RxJava!&quot;</span><span class="o">)</span>
-</span><span class='line'>           <span class="o">.</span><span class="na">subscribe</span><span class="o">(</span><span class="nl">helloLabel:</span><span class="o">:</span><span class="n">setText</span><span class="o">);</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>常见的Operator</h2>
-
-<h3>Map</h3>
-
-<p>比较容易理解，把Observable发出的事件进行转换。提供一个单元函数（一个输入参数，一个输出参数），输入就是Observable发出的数据，输出就是转换后的结果。针对发出的事件每个都应用提供的函数。
-<img src="https://www.adictosaltrabajo.com/wp-content/uploads/2017/06/rxjava_android_map.png" alt="" /></p>
-
-<h3>concatMap</h3>
-
-<p>与flatMap类似，保证顺序。</p>
-
-<h3>flatMap</h3>
-
-<p>先做map，然后再做flat，把二维结构展平为一维，也即是把Observable of Observable展平为一个Observable。传入的map函数必须是返回一个Observable，也即是把常规数据转化为一个Observable。</p>
-
-<p>此外，它的每个map操作可以是并行的，不能保证先后顺序，如果想保证顺序要使用concatMap。</p>
-
-<h3>switchMap</h3>
-
-<h3>combineLatest</h3>
-
-<p>Operator就是数据的管道，用以把各种不同的数据发射器(Observable)连接起来，一起组成一个能够从源头数据，通过管道计算，最终生成符合预期的数据，流出到Subscriber那里。</p>
-
-<h2>常见的技巧</h2>
-
-<h3>感知冷热</h3>
-
-<p>Observable是一个数据流，可视为一个事件发射器，不断的向下游发送数据(emission)。但数据何时发送，以及发送多少，是有一些细微区别的，这就引出了Observable是有冷热之分(Cold vs Hot)。</p>
-
-<p>在《Learning RxJava》这本书中有一个非常形象的比喻，cold Observables就像音乐CD，每次播放都能得到相同的内容。对于所有Subscriber来说，无论你啥时候去subscribe，都能得到同样的数据流，这就是cold的。大多数以数据集为基础创建的Observable都是cold的，如Observable.just, Observable.fromIterable以及像从数据库或者文件存储中读取的数据。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='java'><span class='line'>     <span class="n">Observable</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span> <span class="n">source</span> <span class="o">=</span> <span class="n">Observable</span><span class="o">.</span><span class="na">just</span><span class="o">(</span><span class="s">&quot;alpha&quot;</span><span class="o">,</span> <span class="s">&quot;beta&quot;</span><span class="o">,</span> <span class="s">&quot;gamma&quot;</span><span class="o">);</span>
-</span><span class='line'>    <span class="n">source</span><span class="o">.</span><span class="na">subscribe</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">.</span><span class="na">println</span><span class="o">(</span><span class="s">&quot;Subscriber #1 received: &quot;</span> <span class="o">+</span> <span class="n">s</span><span class="o">));</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">source</span><span class="o">.</span><span class="na">subscribe</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">.</span><span class="na">println</span><span class="o">(</span><span class="s">&quot;Subscriber #2 received: &quot;</span> <span class="o">+</span> <span class="n">s</span><span class="o">));</span>
-</span><span class='line'>
-</span><span class='line'>     <span class="c1">//Subscriber #1 received: alpha</span>
-</span><span class='line'>    <span class="c1">//Subscriber #1 received: beta</span>
-</span><span class='line'>    <span class="c1">//Subscriber #1 received: gamma</span>
-</span><span class='line'>    <span class="c1">//Subscriber #2 received: alpha</span>
-</span><span class='line'>    <span class="c1">//Subscriber #2 received: beta</span>
-</span><span class='line'>    <span class="c1">//Subscriber #2 received: gamma</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>Hot Observables则是像一个音乐广播电台，你今天收听到的内容，跟昨天收听到的内容是不一样的。不同的时间去subscribe会得到不一样的数据流，晚些subscribe就会错失前面的数据，这便是hot Observables。像一些无限数据集（比如社交信息，或者新闻信息），与时间有关的数据（如interval），以及用户事件都属于hot Observables。</p>
-
-<h3>RxBinding只能被subscribe一次</h3>
-
-<p>一般来说一个Observable，只能被subscribe一次。</p>
-
-<p>但总的说 是分为冷和热，对于冷的，一般是有限集合的Observable，它可以被subscribe无限次，且每个Subscriber接收到的东西是一样的。</p>
-
-<p>但对于热的，就不一样，有些可以被subscribe多次，有些则不能。</p>
-
-<p>给一个Observable subscribe多个Subscriber的行为叫做multicast。
-对于cold的，可以通过ConnectableObesrver，通过connect，来让几个Subscriber同步接收来自Observable的emission。</p>
-
-<p>但是对于hot的Observable，如何 让 不同的Subscriber同步接收emission呢？
-就比如说RxBinding中的大部分来自于View的事件Observable，都是hot的，并且，它们默认情况下，不能被multicast，只有最后一个subscribe的Observer，才可以接收事件。</p>
-
-<p>这时就需要把Observable share一下。通过share()，之后就可以multicast了。</p>
-
-<h3>如何做Recursion</h3>
-
-<p>有一些场景是会出现循环，或者说Recursion的，比如说像文件遍历，对于文件夹的操作，是需要Recursion的。</p>
-
-<p>这里就有两种场景，一种会在某个节点停留，用户具体进一步操作才会深入的遍历的情况，比如像文件浏览器，展示的就是当前的文件夹，用户点子目录，才会更进一步。这种场景，需要Hold住当前的文件夹，但当有新的文件夹变成当前文件夹时，它需要更新数据，这种数据产生的闭环，可以用Subject来解决。</p>
-
-<p>但，如果是一个完整的遍历流程，从根节点开始，一直到所有的叶子为止，那么用subject可能就不太合适。这时就需要用一些Recursion来解决，可以看一些网络上的例子。需要用到常规的recursion方式，先要弄一个方法，在里面做出reactive chain，就是在Reactive链里面再调用这个方法，以此递归下去。不过，不知道这个当有一些耗时操作时，会不会造成堆积，以及会不会有资源释放的问题，有待考查。</p>
-
-<p>Reactive这玩意儿，确实难度较大，想写出符合Reactive规范，且正确的代码还是相当难的。而且它难以调试，有时候完全不知道错在哪里。</p>
-
-<h2>书籍推荐</h2>
-
-<p>RxJava的学习曲线 非常之陡峭，它融合了异步，多线程，函数式编程和响应式编程，集多种编程范式于一体，要想真正的用好RxJava需要深度理解RxJava本身，更需要函数式和响应式编程的一些思维。必须要以Reactive的方式来架构你的应用程序，这才能真正算得上使用了RxJava。比如仅是用了几个Observable，用了几个operator，但是整体项目的代码仍是状态变量散落一大堆，这根本不叫用了RxJava，这仅仅是把RxJava当成工具来用了，并没真正践行它的精髓思想。</p>
-
-<p>要想学好RxJava必须要啃书，它的学习曲线陡峭，并不是看了文档就能用（那根本不叫Reactive，仅是把RxJava当成工具类了），通过啃书达到一定的理解深度，然后再在项目中去实践。</p>
-
-<h3>《Learning RxJava》</h3>
-
-<p>这本书对于深入的理解RxJava本身非常有帮助，它比官方文档要详细得多，具体给你解释什么是Observable，什么是Observer以及各种operator，并且都带有实例。这本书，不建议从头读到尾，而是要像文档一样对待，需要深入理解哪个知点点的时候就去具体看那一章节就好。</p>
-
-<p>书中的示例非常短小精悍，但能非常好的帮助你理解对应的知识点。</p>
-
-<p>这本书的目的是让你更深入的了解RxJava这一库的本身，也就是说让你更好的了解工具本身。但这远远不够，即使把这本书看完，你仍旧会是把RxJava当成一个工具类来使用。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://mcxiaoke.gitbooks.io/rxdocs/content/">ReactiveX/RxJava文档中文版</a></li>
-<li><a href="https://reactivex.io/">ReactiveX</a></li>
-<li><a href="https://github.com/ReactiveX/RxJava">RxJava</a></li>
-<li><a href="https://www.journaldev.com/19300/rxjava-flatmap-switchmap-concatmap">RxJava flatMap, switchMap, concatMap</a></li>
-<li><a href="https://www.androidhive.info/RxJava/map-flatmap-switchmap-concatmap/">RxJava Operators – Understanding Map, FlatMap, SwitchMap and ConcatMap</a></li>
-<li><a href="https://juejin.cn/post/6844903914022633486">从源码查看RxJava中的map和flatMap的用法与区别</a></li>
-<li><a href="https://www.jianshu.com/p/0cd258eecf60">这可能是最好的RxJava 2.x 教程（完结版）</a></li>
-<li><a href="https://gank.io/post/560e15be2dca930e00da1083">给 Android 开发者的 RxJava 详解</a></li>
-<li><a href="https://colobu.com/2016/07/25/understanding-rxjava-thread-model/">理解RxJava的线程模型</a></li>
-<li><a href="https://www.baeldung.com/rxjava-multiple-subscribers-observable">RxJava One Observable, Multiple Subscribers</a></li>
-<li><a href="https://www.baeldung.com/rx-java">Introduction to RxJava</a></li>
-<li><a href="https://medium.com/bystevenp/comment-trees-and-recursion-with-rxjava-d147a904610a">Comment Trees and Recursion with RxJava</a></li>
-<li><a href="https://stackoverflow.com/questions/31246088/how-to-do-recursive-observable-call-in-rxjava">How To Do Recursive Observable Call in RxJava?</a></li>
-<li><a href="https://medium.com/@stevenlow1983/rx-java-and-recursion-719f8ee1977a">RX Java and Recursion</a></li>
 </ul>
 
 ]]></content>
