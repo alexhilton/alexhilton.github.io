@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2023-12-08T22:47:28+08:00</updated>
+  <updated>2023-12-09T11:33:45+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -18,7 +18,12 @@
     <link href="http://toughcoder.net/blog/2023/12/08/android-anr-made-easy/"/>
     <updated>2023-12-08T22:12:55+08:00</updated>
     <id>http://toughcoder.net/blog/2023/12/08/android-anr-made-easy</id>
-    <content type="html"><![CDATA[<p>这篇文章是基于官方的<a href="https://developer.android.com/topic/performance/anrs/diagnose-and-fix-anrs">Diagnose and fix ANRs</a>翻译而来，但也不是严格的翻译，原文的内容都在，又加上了自己的理解以及自己的经验，以译注的形式对原文的作一些补充。当一个Android应用的UI线程被阻塞时间过长，系统就会发出一个臭名昭著的“应用程序未响应”(ANR, Application Not Responding&#8221;)错误。本文将讲述不同类型的ANR，如何分析以及如何解决。文中列出的所有的超时时间范围都是基于<a href="https://source.android.com/">AOSP</a>和Pixel设备；这些时间范围可能会依OEM厂商而不同。</p>
+    <content type="html"><![CDATA[<blockquote><p>这篇文章是基于官方的<a href="https://developer.android.com/topic/performance/anrs/diagnose-and-fix-anrs">Diagnose and fix ANRs</a>翻译而来，但也不是严格的翻译，原文的内容都在，又加上了自己的理解以及自己的经验，以译注的形式对原文的作一些补充。</p></blockquote>
+
+<hr />
+
+
+<p>当一个Android应用的UI线程被阻塞时间过长，系统就会发出一个臭名昭著的“应用程序未响应”(ANR, Application Not Responding&#8221;)错误。本文将讲述不同类型的ANR，如何分析以及如何解决。文中列出的所有的超时时间范围都是基于<a href="https://source.android.com/">AOSP</a>和Pixel设备；这些时间范围可能会依OEM厂商而不同。</p>
 
 <p><a href="http://toughcoder.net/blog/2023/12/08/android-anr-made-easy/"><img src="https://ts1.cn.mm.bing.net/th/id/R-C.b5cd953e9f33003456314ae6608fcecc?rik=pPBn5R3rPZ83ew&riu=http%3a%2f%2fiotts.com.cn%2fblog%2fimages%2fAndroid_a.jpg&ehk=qj91EEfUUgZ32njo8AfBJIdOoPJYInW%2b7chI6g6Jxqs%3d&risl=&pid=ImgRaw&r=0" title="auto auto" ></a></p>
 
@@ -26,42 +31,777 @@
 
 
 <p>需要注意的是，当分析ANR的根因时，区分<strong>系统原因</strong>和<strong>应用本身的原因</strong>是很有帮助的。
-当整个系统处于一个糟糕状态时，下面这些问题可能会引发ANR：
-* 系统服务内部的一些瞬时问题(Transient issues)就会导致通常很快的binder call变得非常慢。<em> 系统服务的问题以及较高的系统负载会导致应用程序的线程无法被正常的调度。<strong>译注：</strong><a href="https://learn.microsoft.com/en-us/azure/architecture/best-practices/transient-faults">瞬时问题Transient issue</a>是指一些服务运行时出现了一些瞬时的小错误比如服务器的网络抽风(闪断又闪连)，或者一个系统服务的I/O错误，但可能会导致客户无法正常的获得响应。这里要这样来理解，服务(servers)一般都是长时间运行的，它是有可能会发生一些小错误的，瞬时的很快就恢复了，但如果客户恰好在此时来请求就不会得到响应。尽管这对于服务来说是一个可以忽略的小错误，毕竟它是长时间运行的，几秒钟的小错误不影响它本身的运行，但对客户侧的影响却是较大，对客户侧来说就是请求得不到响应。如果可以的话，区分系统问题还是应用问题的好方法就是使用<a href="https://perfetto.dev/docs/">Perfetto traces</a>:
-* 通过查看在Perfetto跟踪的是运行中还是未运行的线程的状态来判断应用的主线程有没有被正常的调度。</em> 查看系统进程system_server的线程，看有没有锁竞争之类的问题。<em> 对于耗时的(跨进程调用)binder calls，查看一下是否存在应答进程，以及为何它会耗时。## 输入派发超时(Input dispatch timeout)输入派发无响应发生在应用的主线程无法及时地响应一个输入事件，如滑动手势或者物理按键。因为当输入派发超时发生时应用是在前台的，所以这类超时总是对用户可见的，所以想办法规避是很重要的。<strong>默认超时时间：5秒</strong>输入派发超时无响应通常是由于主线程的问题引起的。如果主线程因为等待获取某个锁而阻塞，锁的持有线程也包含在内。遵循以下最佳实践以防止输入派发未响应：
-* 主线程不要进行可能会阻塞或者耗时的操作。可以考虑使用<a href="https://developer.android.com/reference/android/os/StrictMode">严格模式StrictMode</a>来捕捉主线程的一些异常的行为。</em> 尽可能的减少主线程和其他线程之间的锁竞争。<em> 在主线程尽可能减少非UI相关的操作，比如当处理广播(Broadcasts)时或者处理服务时(Services)。### 常见的根因这里列出一些输入派发无响应常见的根因以及修复建议。| 根因 | 表象 | 修复建议 || :&ndash; | :&ndash; | :&ndash; || 耗时跨进程调用slow binder call | 主线程执行了一个耗时同步binder call | 把这个调用放到非主线程，或者优化一下这个调用，如果你负责这个API的话 || 很多连续的binder calls | 主线程执行了很多连续的跨进程调用 | 不要在一个密集的循环中执行binder call || 阻塞式的I/O | 主线程执行了阻塞式的I/O，如数据库操作或者网络请求 | 把所有阻塞式I/O调用放到非主线程里 || 锁竞争 | 主线程因为等待获取某个锁而阻塞 | 减少主线程与其他线程之间的锁竞争，优化其他线程中的耗时代码 || 耗时的帧 | 在一帧里面做太多的渲染，导致严重的丢帧 | 减少帧渲染的工作。不要用超过O(n<sup>2</sup>)的算法。用一些高效的组件来进行滑动和分页，比如<a href="https://developer.android.com/jetpack">Jetpack</a>中的<a href="https://developer.android.com/topic/libraries/architecture/paging/v3-overview">Paging library</a> || 被其他组件阻塞 | 其他的组件比如广播接收器(BroadcastReceiver)正在运行并阻塞着主线程 | 主线程尽量不要做非UI操作，另起一个线程运行broadcast receivers ｜| GPU挂起 | GPU挂起是一个系统问题或者硬件问题，会导致渲染被阻塞，因此也会引发输入派发ANR | 很不幸的是在应用程序侧是无法搞定这个问题的。唯一的可能就是联系对应厂商。|### 如何调试通过查看在Google Play Console和Firebase Crashlytics中的ANR簇标来开始调试。簇集会包含疑似引发ANR的最多的栈帧。<strong>注意：</strong>忽略簇集是&#8221;navivePollOnce&#8221;和&#8221;main thread idle&#8221;的输入派发ANR。这类标志通常是关联着栈帧转储太晚的ANRs，没有可操作的提示所以要忽略掉。一般来说，真正的ANR会在其他簇集里，所以问题并不会被掩盖。详细信息可参见<a href="">nativePollOnce部分</a>。<strong>译注：</strong>这篇文档是谷歌官方的，所以它自然会使用谷歌官方的应用后台(Google Play Console)和统计分析(Firebase Crashlytics)工具，对于大部分国内的开发者来说这两个东西可能比较陌生。但没关系，原理是相通的，国内也有很多应用异常统计工具和后台，或者一些本地工具抓取的日志，形式是不限的，只要能收集到类似的栈帧(stack traces)就可以用于分析调试ANR。栈帧(stack frame或者stack trace)就是线程里面的函数调用栈，比如a->b->c->d这样的函数调用，所有的异常统计工具或者日志工具都能抓取出来某一时刻每个线程的栈帧，这也称之为栈帧转储(stack frame dump)。下面的流程图展示如何确定一个输入派发超时ANR的根因：<img src="https://developer.android.com/static/topic/performance/images/debug-input-dispatch-anr.png" alt="" />图1. 如何调试一个输入派发无响应ANRPlay vitals能够探测并帮助调试这些常见ANRs原因中的一部分。比如说，如果vitals探测到一个ANR是因为锁竞争，它会总结这些问题并在ANR Insights部分给出建议的修复方法。<img src="https://developer.android.com/static/topic/performance/images/play-vitals-anr-detection.png" alt="" />
-图2. Google Play vitals ANR探测<strong>译注：</strong>输入派发超时ANR发生的时候应用一定是在前台的，并且用户正在交互。因此重点要看主线程里面的可能的耗时操作，对于系统侧的问题以及关键的生命周期方法则一般不太相干，因为这时生命周期一般都走完了，处理常规的交互阶段。## 找不到有焦点的窗口(No focused window)像触摸等的事件通过命中测试后会直接发送到相关窗口，而像硬件按键事件则需要一个目标（窗口）。这个目标就是指有焦点的窗口。每一个显示器每一时刻只有一个有焦点的窗口，并且常常就是用户当前正在使用的那个。如果找不到有焦点的窗口，输入服务会触发一个&#8221;No focused window ANR&#8221;。找不到焦点窗口ANR是输入派发无响应中的一种。
-<strong>默认超时时间：5秒。</strong>### 常见的原因无焦点窗口ANRs通常由以下原因导致：
-* 应用启动做了太多耗时操作，还没有渲染出来第一帧。</em> 应用的主窗口无法获取焦点。如果一个窗口被使用了标志位<a href="">FLAG_NOT_FOCUSABLE</a>，那么用户 就无法发送按键事件或者触摸事件到这个窗口上面。<code>Kotlinoverride fun onCreate(savedInstanceState: Bundle) {  super.onCreate(savedInstanceState)  setContentView(R.layout.activity_main)  window.addFlags(WindowManager.LayoutParams.FLAG_FLAG_NOT_FOCUSABLE)}</code><strong>译注：</strong>No focused window说明应用应在前台而未在前台，或者不应该在前台而在前台，这类ANR最容易发生在生命周期方法执行太慢导致input与window焦点状态不同步导致的。所以重点要看应用的关键生命周期回调方法是否有耗时操作，比如onCreate()/onDestroy()，onStart()/onStop()，以及特别的onResume()/onPause()。可以与上面的输入派发超时进行对比，可以发现这两类ANR分析的侧重点并不一样。## 广播接收器超时Broadcast receiver timeout广播接收器ANR发生在当一个广播接收器无法及时的响应一个广播。对于一个同步的接收器，或者没有调用<a href="https://developer.android.com/reference/android/content/BroadcastReceiver#goAsync(">goAsync</a>)的receivers，超时的意思是<a href="">onReceive()</a>方法未能及时的执行完。对于异步接收器，或者调用了goAsync的receivers，超时的意思是<a href="">PendingResult.finish</a>未能及时的被调用。广播接收器ANRs经常发生在这些线程中：
-* 主线程，问题会是应用启动太慢<em> 运行broadcast receiver的线程，问题会是onReceive执行太慢</em> 广播的后台线程，问题会是执行goAsync的代码太耗时了遵循这些最佳实践来避免广播接收器ANRs：
-* 保证快速应用启动，因为应用启动时间也会被计算在ANR的超时时间里，如果应用是被唤醒来处理广播。<em> 如果使用了goAsync，要确保PengingResult.finish早点被调用。这跟同步receivers一样都受超时时间影响。</em> 如果使用了goAsync，要确保工作线程没有开启耗时操作或者阻塞性的操作。<em> 考虑在非主线程里面调用<a href="">regisgerReceiver</a>以免阻塞主线程中的代码执行。<strong>译注：</strong>广播接收器是一个独立的组件，用于任何时候接收广播事件并进行处理，包括应用还未运行时。因此，如果应用还未有运行，那么要响应广播，必须先把应用唤起(创建进程，并创建Application实例)，然后才能创建receiver实例来处理广播。所以应用冷启动时间是会被计算在超时时限内的，从而慢的冷启动肯定会影响广播处理。通常开发者都会只关注应用启动后的情况，比如渲染性能或者用户体验，会忽略其他组件如BroadcastReceiver，Service以及ContentProvider是与Activity一样的平台级别的组件，它们都能单独的运行，但它们毕竟都是在同一个应用里面，要运行在同一进程和同一个Application实例下面，所以在运行这些组件前AMS是需要先唤起应用，应用的启动会影响着所有的四大组件。另外要注意，尽管可以用&#8221;android:process&#8221;给组件(通常是给Service和ContentProvider)指定单独的进程，但冷启动的影响也是存在的，同样需要创建进程和Application实例，并且其实主进程也是被会唤起的。### 超时时限(Broadcast receiver timeout)广播接收超时时限取决于前台Intent标志是否启用以及系统平台的版本：| Intent类型 | Android 13以及更低版本 | Android 14及更高的版本 || :&ndash; | :&ndash; | :&ndash; || 优先级是前台的Intent(启用了FLAG_RECEIVER_FOREGROUND) | 10秒 | 10~20秒，取决于进程是否是CPU挨饿 || 优先级是后台Intent(未启用FLAG_RECEIVER_FOREGROUND) | 60秒 | 60~120秒，取决于进程是否是CPU挨饿 |想要知道是否启用了FLAG_RECEIVER_FOREGROUND，可以通过在ANR标题中寻找&#8221;flg=&ldquo;然后查看是否存在<strong>0x10000000</strong>。如果这他二进制位是1就说明前台标志被启用了。受制于短时广播超时时间(10~20秒)的标题例子：<code>Broadcast of Intent { act=android.inent.action.SCREEN_ON flg=0x50200010 }</code>受制于长广播超时(60~120秒)的标题例子:<code>Broadcast of Intent { act=android.intent.action.TIME_SET flg=0x25200010 }</code>### 广播的超时时间是如何计算的广播耗时时长测量从system_server把广播派发给应用时开始，到当应用完成广播的处理时结束。如果应用程序的进程没在运行，还需要把应用冷启动时间计算在ANR的超时时间里面。因此，<a href="">缓慢的应用启动</a>也可能会导致广播接收超时ANR。下面这张图展示了广播接收器的时间线与应用进程的对齐关系：<img src="https://developer.android.com/static/topic/performance/images/broadcast-receiver-anr-timeline.png" alt="" />图3. 广播接收器时间线ANR超时时间测量当接收器处理完广播时就结束，具体这个什么时候算结束取决于是同步接收器还是异步接收器：
-* 对于同步接收器，当onReceive方法返回时测量就结束了。</em> 对于异步接收器，当PendingResult.finish被调用时就结束。<img src="https://developer.android.com/static/topic/performance/images/sync-async-measurement-end.png" alt="" />图4. 同步接收器和异步接收器的ANR超时测量结束时间点### 常见的根因这里列出广播接收超时ANR的一些常见根因以及修复建议。| 根因 | 适用于 | 表象 | 建议的修复方式 || :&ndash; | :&ndash; | :&ndash; | :&ndash; || 缓慢的应用启动 | 所有接收器 | 应用在冷启动耗时太多 | 优化应用的冷启动 || onReceive未被调度 | 所有接收器 | 广播接收器线程正忙于其他操作无法执行onReceive | 不要在接收器的线程里面做长时间的耗时操作(放到其他工作线程里去) || 缓慢的onReceive | 所有的接收器，主要是同步接收器 | 开始执行onReceive了，但因为被阻塞了或者执行的太慢，无法及时的完成并返回 | 优化缓慢的onReceive代码 || 异步接收器未被调度 | goAsync()接收器 | onReceive要在一个被阻塞的工作线程池中执行，所以始终得不到执行 | 优化阻塞的代码或者binder call，或者用不同的线程来当作广播的工作线程 || 工作线程太慢或者被阻塞 | goAsync()接收器 | 当处理广播时，在工作线程池中有耗时操作或者阻塞代码。因此，PendingResult.finish()无法及时被调用 | 优化缓慢的异步接收器代码 || 忘记调用PendingResult.finish() | goAsync()接收器 | 代码的逻辑中没有调用finish() | 保证finish()被调用到 |### 如何调试基于簇集标签(cluster signature)和ANR报告，可以定位到广播接收器运行的线程，然后再定位到未执行的代码或者运行缓慢的代码。
-<strong>注意：</strong>不要忽略&#8221;nativePollOnce&#8221;或者&#8221;main thread idle&#8221;的簇集标签。Google Play Console和Firebase Crashlytics的ANR标签里面的栈帧通常都是从主线程中获取生成的。但是，广播接收器可能运行在非主线程或者调用了goAsync()（也即转成了异步接收器&mdash;译注）。因此，这些簇集标签仍然有实际价值，可以查看一下栈帧里面的相关线程。下面的流程图展示了如何确定一个广播接收超时ANR的根因：<img src="https://developer.android.com/static/topic/performance/images/debug-broadcast-receiver-timeout-anr.png" alt="" />图5. 如何调试一个广播超时ANR### 找到接收器的代码Google Play Console会在ANR簇集标签里面显示接收器的类名和广播Intent。寻找以下信息：<em> cmp=<receiver class></em> act=<broadcast_intent>这里是一个广播超时ANR标签的例子：
-<code>com.example.app.MyClass.myMethodBroadcast of Intent { act=android.accounts.LOGIN_ACCOUNTS_CHANGEDcmp=com.example.app/com.example.app.MyAccountReceiver }</code>### 寻找运行onReceive方法的线程如果使用Context.registerReceiver()时指定了自定义的handler，那就会运行在此handler所依附的线程里。此外，就是在主线程里。### 实例：异步接收器未被调度这部分将逐步的演示如何调试一个广播接收超时ANR。比如说ANR标签是像酱紫的：
-<code>com.example.app.MyClass.myMethodBroadcast of Intent {act=android.accounts.LOG_ACCOUNTS_CHANGED cmp=com.example.app/com.example.app.MyReceiver }</code>从标签中可以看出，广播intent是android.accounts.LOG_ACCOUNTS_CHANGED，接收器类型是com.example.app.MyReceiver。从接收器的代码，可以发现线程池&#8221;BG Thread [0,1,2,3]&#8221;在主要负责处理这个广播。查看栈帧，可以发现所有四个后台线程(background threads)的模式是一样的：它们都执行了一个阻塞式的调用getDataSync。因为所有的后台线程都被占用着，这个广播无法被及时处理，最后发生了ANR。
-<code>BG Thread #0 (tid=26) Waitingat jdk.internal.misc.Unsafe.park(Native method:0)at java.util.concurrent.locks.LockSupport.park(LockSupport.java:211)at com.google.common.util.concurrent.AbstractFuture.get(AbstractFuture:563)at com.google.common.util.concurrent.ForwardingFuture.get(ForwardingFuture:68)at com.example.app.getDataSync(&lt;MyClass&gt;:152)...at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1145)at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:644)at com.google.android.libraries.concurrent.AndroidExecutorsModule.lambda$withStrictMode$5(AndroidExecutorsModule:451)at com.google.android.libraries.concurrent.AndroidExecutorsModule$$ExternalSyntheticLambda8.run(AndroidExecutorsModule:1)at java.lang.Thread.run(Thread.java:1012)at com.google.android.libraries.concurrent.ManagedPriorityThread.run(ManagedPriorityThread:34)</code>
-有几种方法可以修复这个问题：
-* 查出为何getDataSync会如此之慢，然后优化<em> 不要在四后台线程中都执行getDataSync</em> 更为通用的做法是，保证后台线程池中不要执行长时间的耗时操作<em> 为goAsync任务设计一个专用线程池</em> 使用一个无数量限制的线程池，而不是限量为4的后台线程池### 实例：应用启动缓慢应用启动缓慢可能会导致几个不同类型的ANR，以广播接收超时ANR和执行服务超时ANR最为显著。如果你在主线程的帧中看到了ActivityThread.handleBindApplication，那么这个ANR的根因很有可能就是启动慢造成的。</p>
+当整个系统处于一个糟糕状态时，下面这些问题可能会引发ANR：</p>
 
-<p><strong>译注：</strong>四大组件(Activity, Service, BroadcastReceiver和ContentProvidier)都是平台能直接识别的组件，均可由AMS直接启动运行，但它们都是应用的一部分，如果应用尚未运行，那么AMS必须先要创建进程，并创建Application实例，这都需要花费时间，会耗费更久，甚至引发ANR，如果冷启动过程中有耗时操作。所以优化应用启动是性能优化的基石。## 执行服务超时(Exceute service timeout)当应用程序的主线程无法及时的启动一个Service时就会发生执行服务超时ANR。具体来说，就是一个服务无法在一定时限范围内完成onCreate()或者onStartCommand()或者onBind()的执行。<strong>默认超时时间：</strong>前台服务(Foreground Service)是20秒; 后台服务(Background Service)是200秒。ANR超时时间包括应用冷启动，以及onCreate()，onBind()和onStartCommand的调用。遵循如下最佳实战来规避执行服务ANR：
-* 确保应用启动很快，因为如果一个应用被唤起来运行服务组件，启动时间也会被计算在超时时间内。<em> 确保服务的onCreate()，onBind()和onStartCommand()执行的都很快。</em> 不要在主线程里执行来自其他组件的耗时操作或者阻塞式操作，这些操作会阻碍服务的快速启动。### 常见的根因下表列出执行服务超时ANR的常见根因和修复建议：。| 根因 | 表象 | 建议的修复 || :&ndash; | :&ndash; | :&ndash; || 缓慢的应用启动 | 应用冷启动时间过长 | 优化应用启动速度 || 缓慢的onCreate()，onStartCommand和onBind | 服务组件的onCreate()，onStartCommand()和onBind()在主线程执行了耗时操作 | 优化代码，或者把耗时操作从这些关键的方法中移出去 || 未被调度(在执行onStart()之前主线程就被阻塞了) | 在服务启动之前，主线程就被其他组件级阻塞了 | 把其他组件的工作移出主线程。优化其他组件的阻塞代码 |### 如何调试从Google Play Console和Firebase Crashlytics中的簇集标签和ANR报告，基于主线程当时的运行状态，通常就能确定ANR的根因。
-<strong>注意：</strong>忽略标签是&#8221;nativePollOnce&#8221;和&#8221;main thread idle&#8221;的执行服务ANR簇集。这些簇集通常是栈帧捕获的太晚，无实际参考意义。真实的ANR栈帧可能会在其他的簇集里，所以问题并不会被掩藏。详细参见nativePollOnce部分。下面的流程图描述了如何调试一个执行服务超时ANR。<img src="https://developer.android.com/static/topic/performance/images/debug-execute-service-anr.png" alt="" />图6. 如何调试一个执行服务ANR如果发现某个执行报务ANR是有实际操作意义的，遵循以下步骤来解决问题：
-1. 找到ANR簇集标签中的服务组件。在Google Play Console里，服务组件类型会显示在ANR标签里。在后面的这个例子里，类型就是com.example.app/MyService。
-<code>com.google.common.util.concurrent.Uninterruptibles.awaitUninterruptiblyExecuting service com.example.app/com.example.app.MyService</code>
-2. 确定应用启动过程中，服务组件或者其他地方是否有耗时或者阻塞操作，通过检查主线程中的下面这些重要的方法调用| 主线程栈帧中的方法调用 | 背后的含义 || :&ndash; | :&ndash; || android.app.ActivityThread.handleBindApplication | 应用正在启动，ANR由启动太慢引起 || <ServiceClass>.onCreate()<br/>[&hellip;.]<br/>android.app.ActivityThread.handleCreateService | 服务正在被创建中，所以ANR是由缓慢的onCreate()引起的 || <ServiceClass>.onBind()<br/>[&hellip;.]<br/>android.app.ActivityThread.handleBindService | 服务正在被绑定中，所以ANR是由缓慢的onBind()引起的 || <ServiceClass>.onStartCommand()<br/>[&hellip;.]<br/>android.app.ActivityThread.handleServiceArgs | 服务正在被启动中，所以ANR是由缓慢的onStartCommand()引起的 |举个粟子，如果在类MyService里的onStartCommand执行缓慢，主线程栈帧会像酱婶儿的：
-<code>at com.example.app.MyService.onStartCommand(FooService.java:25)at android.app.ActivityThread.handleServiceArgs(ActivityThread.java:4820)at android.app.ActivityThread.-$$Nest$mhandleServiceArgs(unavailable:0)at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2289)at android.os.Handler.dispatchMessage(Handler.java:106)at android.os.Looper.loopOnce(Looper.java:205)at android.os.Looper.loop(Looper.java:294)at android.app.ActivityThread.main(ActivityThread.java:8176)at java.lang.reflect.Method.invoke(Native method:0)</code>如果没有发现重要的方法调用，还有其他一些可能：
-* 服务正在运行或者在关闭中，意思是说栈帧捕获的太晚了，可以忽略此类ANR或者视为假阳性。<em> 另外一个组件正在运行，比如广播接收器。这种情况下主线程可能被这个组件阻塞着，导致服务无法启动。3. 如果能看到关键的方法 调用并确定ANR发生的地点，检查主线程的栈帧以找到缓慢的操作并把它们从关键的方法中移出去。关于服务的更多信息，可以看下面这些链接：
-* <a href="https://developer.android.com/guide/components/services">服务概览</a></em> <a href="https://developer.android.com/guide/components/foreground-services">前台服务</a><em> <a href="https://developer.android.com/reference/android/app/Service">服务</a>## 内容提供程序无响应(Content Provider not responding)当一个远端内内容提供程序响应查询(query)时花费超过时限，内容提供程序ANR就会发生，且会被杀掉。
-<strong>默认超时时间：</strong>内容提供程序通过ContentProviderClient.setDetectNotResponding指定的。ANR超时时限包括远端内容提供程序执行查询的时间，以及如果远端应用还未启还包括它的冷启动时间，加在一起的总时间。遵循下面这些最佳实践来规避内容提供程序ANR：
-* 确保应用启动很快，因为如果应用未运行时会被唤起，冷启动时间也会被计算在超时时间内。</em> 确保内容提供程序的查询能很快执行完。<em> 不要执行大量的并发阻塞式的binder call，因为这会阻塞应用的所有的binder线程。<strong>译注：</strong>内容提供程序Content provider都是要经过跨进程调用(binder call)，尽管可能并没有真正的在另外一个进程里。因为我们使用ContentProvider的时候都是通过另一个API ContentResolver来完成，而ContentResolver是通过binder call来与ContentProvider通信的，无论是否真的跨进程。所以，ContentProvider就像一个服务器一样是远端的一侧提供内容，而应用程序(使用者)是客户端一侧需要内容。内容提供程序可能同时服务着不同的客户请求，比如像系统通用的内容提供程序ContactsProvider或者MediaProvider可能同时会有大量的应用请求查询，每一个请求都需要执行binder call，因此内容提供程序可能会同时执行着大量的binder call(它需要查询结果，并把结果以binder call的形式返回给请求方)。所以对于内容提供程序来说，查看binder call的运行状态对于解决ANR问题以及排查性能问题都是非常有帮助的。### 常见根因下表列出了内容提供程序ANR的常见根因和修复建议。| 根因 | 表象 | 信号 | 建议的修复方式 || :&ndash; | :&ndash; | :&ndash; | :&ndash; || 缓慢的查询 | 内容提供程序执行耗时太长或者被阻塞 | binder线程里有android.content.ContentProvider\$Transport.query栈帧 | 优化查询或者查出什么东西在阻塞着binder线程 || 应用启动太慢 | 内容提供程序启动耗时太久 | 主线程里有ActivityThread.handleBindApplication栈帧 | 优化应用启动 || Binder线程耗尽了，所有的binder线程都被占用着 | 所有的binder线程都被占用着服务着其他的同步请求，因此内容提供程序binder调用无法执行 | 应用未启动起来，所有的binder线程都被占用，内容提供程序也未能启动起来 | 减小binder线程的负载。也就是说执行更少一些的外发同步binder调用或者在处理到来的调用时少做一些操作。|### 如何调试要想调试一个内容提供程序ANR，使用Google Play Console或者Firebase Crashlytics中的簇集标签和ANR报告，并用来查看主线程以及binder线程都在做什么。下面的流程图描述如何调试一个内容提供程序ANR：
-<img src="https://developer.android.com/static/topic/performance/images/debug-content-provider-anr.png" alt="" />
-图7.如何调试一个内容提供程序ANR下面的代码块展示了当被一个缓慢的内容提供程序查询阻塞时，binder线程的状态。在这个例子里，内容提供程序的查询正在等待一个打开数据库的锁。
-<code>binder:11300_2 (tid=13) BlockedWaiting for osm (0x01ab5df9) held by at com.google.common.base.Suppliers$NonSerializableMemoizingSupplier.get(Suppliers:182)at com.example.app.MyClass.blockingGetOpenDatabase(FooClass:171)[...]at com.example.app.MyContentProvider.query(MyContentProvider.java:915)at android.content.ContentProvider$Transport.query(ContentProvider.java:292)at android.content.ContentProviderNative.onTransact(ContentProviderNative.java:107)at android.os.Binder.execTransactInternal(Binder.java:1339)at android.os.Binder.execTransact(Binder.java:1275)</code>下面的代码块展示了当被缓慢的应用启动阻塞时，binder线程的状态。在这个例子里，应用启动因为dagger初始化时的锁竞争而变得很慢。
-<code>main (tid=1) Blocked[...]at dagger.internal.DoubleCheck.get(DoubleCheck:51)- locked 0x0e33cd2c (a qsn)at dagger.internal.SetFactory.get(SetFactory:126)at com.myapp.Bar_Factory.get(Bar_Factory:38)[...]at com.example.app.MyApplication.onCreate(DocsApplication:203)at android.app.Instrumentation.callApplicationOnCreate(Instrumentation.java:1316)at android.app.ActivityThread.handleBindApplication(ActivityThread.java:6991)at android.app.ActivityThread.-$$Nest$mhandleBindApplication(unavailable:0)at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2235)at android.os.Handler.dispatchMessage(Handler.java:106)at android.os.Looper.loopOnce(Looper.java:205)at android.os.Looper.loop(Looper.java:294)at android.app.ActivityThread.main(ActivityThread.java:8170)at java.lang.reflect.Method.invoke(Native method:0)at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:552)at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:971)</code>## 缓慢的作业响应(Slow job response)当应用响应JobService.onStartJob()或者JobService.onStopJob耗时太久，或者用JobService.setNotification()提供通知时耗时太久，都会引发缓慢的作业响应ANR发生。这说明应用的主线程因为其他操作而被阻塞了。如果问题是与JobService.onStartJob()或者JobService.onStopJob()有关系，就要检查下主线程的情况。如果问题与JobService.setNotification()有关系，要保证它尽可能的快速的被调用到。在提供通知之前 不要做很多其他事情。<strong>译注：</strong><a href="https://developer.android.com/reference/android/app/job/JobService">JobService</a>是Android 5.0 API 21时增加的一个专门用于后台作业的一个Service的子类。上面提到的是都是它的一些回调，与一些其他的回调类似，这些回调必须快速执行完毕，因为<a href="https://developer.android.com/reference/android/app/job/JobScheduler">JobSchedule</a>内部需要做一些资源回收之类的工作，所以这些回调不允许被阻塞。## 隐秘的ANRs有时候搞不清楚为啥ANR会发生，或者在簇集标签和ANR报告中找不到足够的信息去调试。遇到这些情况，还是可以采取一些步骤以确定这些ANR是否是值得处理的。### 消息队列是空闲(Message queue idle)的或者正处理轮询中(nativePollOnce)如果你在栈帧信息中发现android.os.MessageQueue.nativePollOnce，这通常说明疑似无响应的线程实际上是空闲的或者在等待队列中的消息。在Google Play Console里面，ANR的细节是酱紫的：
-<code>Native method - android.os.MessageQueue.nativePollOnceExecuting service com.example.app/com.example.app.MyService</code>举个粟子，如果主线程是空闲的，栈帧是酱紫的：
-<code>"main" tid=1 NativeMain threadIdle#00  pc 0x00000000000d8b38  /apex/com.android.runtime/lib64/bionic/libc.so (__epoll_pwait+8)#01  pc 0x0000000000019d88  /system/lib64/libutils.so (android::Looper::pollInner(int)+184)#02  pc 0x0000000000019c68  /system/lib64/libutils.so (android::Looper::pollOnce(int, int*, int*, void**)+112)#03  pc 0x000000000011409c  /system/lib64/libandroid_runtime.so (android::android_os_MessageQueue_nativePollOnce(_JNIEnv*, _jobject*, long, int)+44)at android.os.MessageQueue.nativePollOnce (Native method)at android.os.MessageQueue.next (MessageQueue.java:339)  at android.os.Looper.loop (Looper.java:208)at android.app.ActivityThread.main (ActivityThread.java:8192)at java.lang.reflect.Method.invoke (Native method)at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run (RuntimeInit.java:626)at com.android.internal.os.ZygoteInit.main (ZygoteInit.java:1015)</code>疑似无响应线程可能是空闲的会有几个原因：
-* 延迟的栈转储：在ANR被 触发和栈帧转储之间的短时间内，线程状态恢复了。在Android 13版本的Pixels设备上这个延迟大约在100ms，但也可能超过1秒。Android 14版本的Pixels设备上这个延迟小于10ms。</em> 线程归因错误：用于构建ANR标签的线程并不是实际上触发ANR的无响应线程。这种情况下，尝试确定一下这个ANR是否是如下的类型：    * 广播接收超时    * 内容提供程序无响应    * 找不到带焦点的窗口<em> 系统侧问题：由于系统负载太重或者系统服务有问题而导致应用进程无法被调度。### 没有栈帧(No stack frames)有一些ANR报告里面没有包含与ANR相关的栈帧，这说明在生成ANR报告时栈帧转储失败了。有很多可能的原因会导致栈帧丢失：
-* 转储栈帧太耗时了，所以超时了</em> 在栈帧转储完成之前进程就挂了或者被杀掉了<code>[...]--- CriticalEventLog ---capacity: 20timestamp_ms: 1666030897753window_ms: 300000libdebuggerd_client: failed to read status response from tombstoned: timeout reached?----- Waiting Channels: pid 7068 at 2022-10-18 02:21:37.&lt;US_SOCIAL_SECURITY_NUMBER&gt;+0800 -----[...]</code>簇集标签或者ANR报告里面没有栈帧的ANR是没有实际分析意义的。如果要调试，可以去看其他的簇集信息，因为如果一个问题足够明显的话，那么它通常会有它自己的簇集标签存在。其他的可行方案就是查看<a href="https://perfetto.dev/docs/">Perfetto traces</a>.## 已知问题(Known issues)在应用的进程里用计时器来测量广播的处理时间或者ANR的触发是行不通的，因为系统是以异步的方式在监控着ANR。## 更多的官方资料<em> <a href="https://developer.android.com/topic/performance/anrs/find-unresponsive-thread">Find the unresponsive thread</a></em> <a href="https://developer.android.com/topic/performance/anrs/keep-your-app-responsive">Keep your app responsive</a><em> <a href="https://developer.android.com/guide/topics/resources/layout-resource">Layout resource</a></em> <a href="https://developer.android.com/topic/performance/vitals/anr">ANRs</a>## 其他优质博文<em> <a href="https://juejin.cn/post/7181731795439157306">钉钉 ANR 治理最佳实践 | 定位 ANR 不再雾里看花</a></em> <a href="https://juejin.cn/post/6940061649348853796">今日头条 ANR 优化实践系列 - 设计原理及影响因素</a>* <a href="https://juejin.cn/post/7053819042268151838">Android ANR全解析&amp;华为AGC性能管理解决ANR案例集</a></p>
+<ul>
+<li>系统服务内部的一些瞬时问题(Transient issues)就会导致通常很快的binder call变得非常慢。</li>
+<li>系统服务的问题以及较高的系统负载会导致应用程序的线程无法被正常的调度。</li>
+</ul>
+
+
+<p><strong>译注：</strong><a href="https://learn.microsoft.com/en-us/azure/architecture/best-practices/transient-faults">瞬时问题Transient issue</a>是指一些服务运行时出现了一些瞬时的小错误比如服务器的网络抽风(闪断又闪连)，或者一个系统服务的I/O错误，但可能会导致客户无法正常的获得响应。这里要这样来理解，服务(servers)一般都是长时间运行的，它是有可能会发生一些小错误的，瞬时的很快就恢复了，但如果客户恰好在此时来请求就不会得到响应。尽管这对于服务来说是一个可以忽略的小错误，毕竟它是长时间运行的，几秒钟的小错误不影响它本身的运行，但对客户侧的影响却是较大，对客户侧来说就是请求得不到响应。</p>
+
+<p>如果可以的话，区分系统问题还是应用问题的好方法就是使用<a href="https://perfetto.dev/docs/">Perfetto traces</a>:</p>
+
+<ul>
+<li>通过查看在Perfetto跟踪的是运行中还是未运行的线程的状态来判断应用的主线程有没有被正常的调度。</li>
+<li>查看系统进程system_server的线程，看有没有锁竞争之类的问题。</li>
+<li>对于耗时的(跨进程调用)binder calls，查看一下是否存在应答进程，以及为何它会耗时。</li>
+</ul>
+
+
+<h2>输入派发超时(Input dispatch timeout)</h2>
+
+<p>输入派发无响应发生在应用的主线程无法及时地响应一个输入事件，如滑动手势或者物理按键。因为当输入派发超时发生时应用是在前台的，所以这类超时总是对用户可见的，所以想办法规避是很重要的。</p>
+
+<p><strong>默认超时时间：5秒</strong></p>
+
+<p>输入派发超时无响应通常是由于主线程的问题引起的。如果主线程因为等待获取某个锁而阻塞，锁的持有线程也包含在内。遵循以下最佳实践以防止输入派发未响应：</p>
+
+<ul>
+<li><p>主线程不要进行可能会阻塞或者耗时的操作。可以考虑使用<a href="https://developer.android.com/reference/android/os/StrictMode">严格模式StrictMode</a>来捕捉主线程的一些异常的行为。</p></li>
+<li><p>尽可能的减少主线程和其他线程之间的锁竞争。</p></li>
+<li>在主线程尽可能减少非UI相关的操作，比如当处理广播(Broadcasts)时或者处理服务时(Services)。</li>
+</ul>
+
+
+<h3>常见的根因</h3>
+
+<p>这里列出一些输入派发无响应常见的根因以及修复建议。</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:left;"> 根因 </th>
+<th style="text-align:left;"> 表象 </th>
+<th style="text-align:left;"> 修复建议 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;"> 耗时跨进程调用slow binder call </td>
+<td style="text-align:left;"> 主线程执行了一个耗时同步binder call </td>
+<td style="text-align:left;"> 把这个调用放到非主线程，或者优化一下这个调用，如果你负责这个API的话 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 很多连续的binder calls </td>
+<td style="text-align:left;"> 主线程执行了很多连续的跨进程调用 </td>
+<td style="text-align:left;"> 不要在一个密集的循环中执行binder call </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 阻塞式的I/O </td>
+<td style="text-align:left;"> 主线程执行了阻塞式的I/O，如数据库操作或者网络请求 </td>
+<td style="text-align:left;"> 把所有阻塞式I/O调用放到非主线程里 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 锁竞争 </td>
+<td style="text-align:left;"> 主线程因为等待获取某个锁而阻塞 </td>
+<td style="text-align:left;"> 减少主线程与其他线程之间的锁竞争，优化其他线程中的耗时代码 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 耗时的帧 </td>
+<td style="text-align:left;"> 在一帧里面做太多的渲染，导致严重的丢帧 </td>
+<td style="text-align:left;"> 减少帧渲染的工作。不要用超过O(n<sup>2</sup>)的算法。用一些高效的组件来进行滑动和分页，比如<a href="https://developer.android.com/jetpack">Jetpack</a>中的<a href="https://developer.android.com/topic/libraries/architecture/paging/v3-overview">Paging library</a> </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 被其他组件阻塞 </td>
+<td style="text-align:left;"> 其他的组件比如广播接收器(BroadcastReceiver)正在运行并阻塞着主线程 </td>
+<td style="text-align:left;"> 主线程尽量不要做非UI操作，另起一个线程运行broadcast receivers ｜</td>
+</tr>
+<tr>
+<td style="text-align:left;"> GPU挂起 </td>
+<td style="text-align:left;"> GPU挂起是一个系统问题或者硬件问题，会导致渲染被阻塞，因此也会引发输入派发ANR </td>
+<td style="text-align:left;"> 很不幸的是在应用程序侧是无法搞定这个问题的。唯一的可能就是联系对应厂商。</td>
+</tr>
+</tbody>
+</table>
+
+
+<h3>如何调试</h3>
+
+<p>通过查看在Google Play Console和Firebase Crashlytics中的ANR簇标来开始调试。簇集会包含疑似引发ANR的最多的栈帧。</p>
+
+<p><strong>注意：</strong>忽略簇集是&#8221;navivePollOnce&#8221;和&#8221;main thread idle&#8221;的输入派发ANR。这类标志通常是关联着栈帧转储太晚的ANRs，没有可操作的提示所以要忽略掉。一般来说，真正的ANR会在其他簇集里，所以问题并不会被掩盖。详细信息可参见<a href="">nativePollOnce部分</a>。</p>
+
+<p><strong>译注：</strong>这篇文档是谷歌官方的，所以它自然会使用谷歌官方的应用后台(Google Play Console)和统计分析(Firebase Crashlytics)工具，对于大部分国内的开发者来说这两个东西可能比较陌生。但没关系，原理是相通的，国内也有很多应用异常统计工具和后台，或者一些本地工具抓取的日志，形式是不限的，只要能收集到类似的栈帧(stack traces)就可以用于分析调试ANR。栈帧(stack frame或者stack trace)就是线程里面的函数调用栈，比如a->b->c->d这样的函数调用，所有的异常统计工具或者日志工具都能抓取出来某一时刻每个线程的栈帧，这也称之为栈帧转储(stack frame dump)。</p>
+
+<p>下面的流程图展示如何确定一个输入派发超时ANR的根因：</p>
+
+<p><img src="https://developer.android.com/static/topic/performance/images/debug-input-dispatch-anr.png" alt="" />
+图1. 如何调试一个输入派发无响应ANR</p>
+
+<p>Play vitals能够探测并帮助调试这些常见ANRs原因中的一部分。比如说，如果vitals探测到一个ANR是因为锁竞争，它会总结这些问题并在ANR Insights部分给出建议的修复方法。</p>
+
+<p><img src="https://developer.android.com/static/topic/performance/images/play-vitals-anr-detection.png" alt="" />
+图2. Google Play vitals ANR探测</p>
+
+<p><strong>译注：</strong>输入派发超时ANR发生的时候应用一定是在前台的，并且用户正在交互。因此重点要看主线程里面的可能的耗时操作，对于系统侧的问题以及关键的生命周期方法则一般不太相干，因为这时生命周期一般都走完了，处理常规的交互阶段。</p>
+
+<h2>找不到有焦点的窗口(No focused window)</h2>
+
+<p>像触摸等的事件通过命中测试后会直接发送到相关窗口，而像硬件按键事件则需要一个目标（窗口）。这个目标就是指有焦点的窗口。每一个显示器每一时刻只有一个有焦点的窗口，并且常常就是用户当前正在使用的那个。如果找不到有焦点的窗口，输入服务会触发一个&#8221;No focused window ANR&#8221;。找不到焦点窗口ANR是输入派发无响应中的一种。</p>
+
+<p><strong>默认超时时间：5秒。</strong></p>
+
+<h3>常见的原因</h3>
+
+<p>无焦点窗口ANRs通常由以下原因导致：</p>
+
+<ul>
+<li>应用启动做了太多耗时操作，还没有渲染出来第一帧。</li>
+<li>应用的主窗口无法获取焦点。如果一个窗口被使用了标志位<a href="">FLAG_NOT_FOCUSABLE</a>，那么用户 就无法发送按键事件或者触摸事件到这个窗口上面。</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">setContentView</span><span class="p">(</span><span class="n">R</span><span class="p">.</span><span class="n">layout</span><span class="p">.</span><span class="n">activity_main</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">window</span><span class="p">.</span><span class="n">addFlags</span><span class="p">(</span><span class="n">WindowManager</span><span class="p">.</span><span class="n">LayoutParams</span><span class="p">.</span><span class="n">FLAG_FLAG_NOT_FOCUSABLE</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>译注：</strong>No focused window说明应用应在前台而未在前台，或者不应该在前台而在前台，这类ANR最容易发生在生命周期方法执行太慢导致input与window焦点状态不同步导致的。所以重点要看应用的关键生命周期回调方法是否有耗时操作，比如onCreate()/onDestroy()，onStart()/onStop()，以及特别的onResume()/onPause()。可以与上面的输入派发超时进行对比，可以发现这两类ANR分析的侧重点并不一样。</p>
+
+<h2>广播接收器超时Broadcast receiver timeout</h2>
+
+<p>广播接收器ANR发生在当一个广播接收器无法及时的响应一个广播。对于一个同步的接收器，或者没有调用<a href="https://developer.android.com/reference/android/content/BroadcastReceiver#goAsync(">goAsync</a>)的receivers，超时的意思是<a href="">onReceive()</a>方法未能及时的执行完。对于异步接收器，或者调用了goAsync的receivers，超时的意思是<a href="">PendingResult.finish</a>未能及时的被调用。</p>
+
+<p>广播接收器ANRs经常发生在这些线程中：</p>
+
+<ul>
+<li>主线程，问题会是应用启动太慢</li>
+<li>运行broadcast receiver的线程，问题会是onReceive执行太慢</li>
+<li>广播的后台线程，问题会是执行goAsync的代码太耗时了遵循这些最佳实践来避免广播接收器ANRs：</li>
+<li>保证快速应用启动，因为应用启动时间也会被计算在ANR的超时时间里，如果应用是被唤醒来处理广播。</li>
+<li>如果使用了goAsync，要确保PengingResult.finish早点被调用。这跟同步receivers一样都受超时时间影响。</li>
+<li>如果使用了goAsync，要确保工作线程没有开启耗时操作或者阻塞性的操作。</li>
+<li>考虑在非主线程里面调用<a href="">regisgerReceiver</a>以免阻塞主线程中的代码执行。</li>
+</ul>
+
+
+<p><strong>译注：</strong>广播接收器是一个独立的组件，用于任何时候接收广播事件并进行处理，包括应用还未运行时。因此，如果应用还未有运行，那么要响应广播，必须先把应用唤起(创建进程，并创建Application实例)，然后才能创建receiver实例来处理广播。所以应用冷启动时间是会被计算在超时时限内的，从而慢的冷启动肯定会影响广播处理。通常开发者都会只关注应用启动后的情况，比如渲染性能或者用户体验，会忽略其他组件如BroadcastReceiver，Service以及ContentProvider是与Activity一样的平台级别的组件，它们都能单独的运行，但它们毕竟都是在同一个应用里面，要运行在同一进程和同一个Application实例下面，所以在运行这些组件前AMS是需要先唤起应用，应用的启动会影响着所有的四大组件。另外要注意，尽管可以用&#8221;android:process&#8221;给组件(通常是给Service和ContentProvider)指定单独的进程，但冷启动的影响也是存在的，同样需要创建进程和Application实例，并且其实主进程也是被会唤起的。</p>
+
+<h3>超时时限(Broadcast receiver timeout)</h3>
+
+<p>广播接收超时时限取决于前台Intent标志是否启用以及系统平台的版本：</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:left;"> Intent类型 </th>
+<th style="text-align:left;"> Android 13以及更低版本 </th>
+<th style="text-align:left;"> Android 14及更高的版本 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;"> 优先级是前台的Intent(启用了FLAG_RECEIVER_FOREGROUND) </td>
+<td style="text-align:left;"> 10秒 </td>
+<td style="text-align:left;"> 10~20秒，取决于进程是否是CPU挨饿 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 优先级是后台Intent(未启用FLAG_RECEIVER_FOREGROUND) </td>
+<td style="text-align:left;"> 60秒 </td>
+<td style="text-align:left;"> 60~120秒，取决于进程是否是CPU挨饿 </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>想要知道是否启用了FLAG_RECEIVER_FOREGROUND，可以通过在ANR标题中寻找&#8221;flg=&ldquo;然后查看是否存在<strong>0x10000000</strong>。如果这他二进制位是1就说明前台标志被启用了。</p>
+
+<p>受制于短时广播超时时间(10~20秒)的标题例子：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>Broadcast of Intent <span class="o">{</span> <span class="nv">act</span><span class="o">=</span>android.inent.action.SCREEN_ON <span class="nv">flg</span><span class="o">=</span>0x50200010 <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>受制于长广播超时(60~120秒)的标题例子:</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>Broadcast of Intent <span class="o">{</span> <span class="nv">act</span><span class="o">=</span>android.intent.action.TIME_SET <span class="nv">flg</span><span class="o">=</span>0x25200010 <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>广播的超时时间是如何计算的</h3>
+
+<p>广播耗时时长测量从system_server把广播派发给应用时开始，到当应用完成广播的处理时结束。如果应用程序的进程没在运行，还需要把应用冷启动时间计算在ANR的超时时间里面。因此，<a href="">缓慢的应用启动</a>也可能会导致广播接收超时ANR。</p>
+
+<p>下面这张图展示了广播接收器的时间线与应用进程的对齐关系：</p>
+
+<p><img src="https://developer.android.com/static/topic/performance/images/broadcast-receiver-anr-timeline.png" alt="" />
+图3. 广播接收器时间线</p>
+
+<p>ANR超时时间测量当接收器处理完广播时就结束，具体这个什么时候算结束取决于是同步接收器还是异步接收器：</p>
+
+<ul>
+<li>对于同步接收器，当onReceive方法返回时测量就结束了。</li>
+<li>对于异步接收器，当PendingResult.finish被调用时就结束。</li>
+</ul>
+
+
+<p><img src="https://developer.android.com/static/topic/performance/images/sync-async-measurement-end.png" alt="" />
+图4. 同步接收器和异步接收器的ANR超时测量结束时间点</p>
+
+<h3>常见的根因</h3>
+
+<p>这里列出广播接收超时ANR的一些常见根因以及修复建议。</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:left;"> 根因 </th>
+<th style="text-align:left;"> 适用于 </th>
+<th style="text-align:left;"> 表象 </th>
+<th style="text-align:left;"> 建议的修复方式 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;"> 缓慢的应用启动 </td>
+<td style="text-align:left;"> 所有接收器 </td>
+<td style="text-align:left;"> 应用在冷启动耗时太多 </td>
+<td style="text-align:left;"> 优化应用的冷启动 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> onReceive未被调度 </td>
+<td style="text-align:left;"> 所有接收器 </td>
+<td style="text-align:left;"> 广播接收器线程正忙于其他操作无法执行onReceive </td>
+<td style="text-align:left;"> 不要在接收器的线程里面做长时间的耗时操作(放到其他工作线程里去) </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 缓慢的onReceive </td>
+<td style="text-align:left;"> 所有的接收器，主要是同步接收器 </td>
+<td style="text-align:left;"> 开始执行onReceive了，但因为被阻塞了或者执行的太慢，无法及时的完成并返回 </td>
+<td style="text-align:left;"> 优化缓慢的onReceive代码 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 异步接收器未被调度 </td>
+<td style="text-align:left;"> goAsync()接收器 </td>
+<td style="text-align:left;"> onReceive要在一个被阻塞的工作线程池中执行，所以始终得不到执行 </td>
+<td style="text-align:left;"> 优化阻塞的代码或者binder call，或者用不同的线程来当作广播的工作线程 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 工作线程太慢或者被阻塞 </td>
+<td style="text-align:left;"> goAsync()接收器 </td>
+<td style="text-align:left;"> 当处理广播时，在工作线程池中有耗时操作或者阻塞代码。因此，PendingResult.finish()无法及时被调用 </td>
+<td style="text-align:left;"> 优化缓慢的异步接收器代码 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 忘记调用PendingResult.finish() </td>
+<td style="text-align:left;"> goAsync()接收器 </td>
+<td style="text-align:left;"> 代码的逻辑中没有调用finish() </td>
+<td style="text-align:left;"> 保证finish()被调用到 </td>
+</tr>
+</tbody>
+</table>
+
+
+<h3>如何调试</h3>
+
+<p>基于簇集标签(cluster signature)和ANR报告，可以定位到广播接收器运行的线程，然后再定位到未执行的代码或者运行缓慢的代码。</p>
+
+<p><strong>注意：</strong>不要忽略&#8221;nativePollOnce&#8221;或者&#8221;main thread idle&#8221;的簇集标签。Google Play Console和Firebase Crashlytics的ANR标签里面的栈帧通常都是从主线程中获取生成的。但是，广播接收器可能运行在非主线程或者调用了goAsync()（也即转成了异步接收器&mdash;译注）。因此，这些簇集标签仍然有实际价值，可以查看一下栈帧里面的相关线程。</p>
+
+<p>下面的流程图展示了如何确定一个广播接收超时ANR的根因：</p>
+
+<p><img src="https://developer.android.com/static/topic/performance/images/debug-broadcast-receiver-timeout-anr.png" alt="" />
+图5. 如何调试一个广播超时ANR</p>
+
+<h3>找到接收器的代码</h3>
+
+<p>Google Play Console会在ANR簇集标签里面显示接收器的类名和广播Intent。寻找以下信息：</p>
+
+<ul>
+<li>cmp=&lt;receiver class&gt;</li>
+<li>act=&lt;broadcast_intent&gt;</li>
+</ul>
+
+
+<p>这里是一个广播超时ANR标签的例子：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>com.example.app.MyClass.myMethod
+</span><span class='line'>Broadcast of Intent <span class="o">{</span> <span class="nv">act</span><span class="o">=</span>android.accounts.LOGIN_ACCOUNTS_CHANGED
+</span><span class='line'>    <span class="nv">cmp</span><span class="o">=</span>com.example.app/com.example.app.MyAccountReceiver <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>寻找运行onReceive方法的线程</h3>
+
+<p>如果使用Context.registerReceiver()时指定了自定义的handler，那就会运行在此handler所依附的线程里。此外，就是在主线程里。</p>
+
+<h3>实例：异步接收器未被调度</h3>
+
+<p>这部分将逐步的演示如何调试一个广播接收超时ANR。</p>
+
+<p>比如说ANR标签是像酱紫的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>com.example.app.MyClass.myMethod
+</span><span class='line'>Broadcast of Intent <span class="o">{</span>
+</span><span class='line'>    <span class="nv">act</span><span class="o">=</span>android.accounts.LOG_ACCOUNTS_CHANGED <span class="nv">cmp</span><span class="o">=</span>com.example.app/com.example.app.MyReceiver <span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>从标签中可以看出，广播intent是android.accounts.LOG_ACCOUNTS_CHANGED，接收器类型是com.example.app.MyReceiver。</p>
+
+<p>从接收器的代码，可以发现线程池&#8221;BG Thread [0,1,2,3]&ldquo;在主要负责处理这个广播。查看栈帧，可以发现所有四个后台线程(background threads)的模式是一样的：它们都执行了一个阻塞式的调用getDataSync。因为所有的后台线程都被占用着，这个广播无法被及时处理，最后发生了ANR。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>BG Thread <span class="c">#0 (tid=26) Waiting</span>
+</span><span class='line'>  at jdk.internal.misc.Unsafe.park<span class="o">(</span>Native method:0<span class="o">)</span>
+</span><span class='line'>   at java.util.concurrent.locks.LockSupport.park<span class="o">(</span>LockSupport.java:211<span class="o">)</span>
+</span><span class='line'>    at com.google.common.util.concurrent.AbstractFuture.get<span class="o">(</span>AbstractFuture:563<span class="o">)</span>
+</span><span class='line'>    at com.google.common.util.concurrent.ForwardingFuture.get<span class="o">(</span>ForwardingFuture:68<span class="o">)</span>
+</span><span class='line'>    at com.example.app.getDataSync<span class="o">(</span>&lt;MyClass&gt;:152<span class="o">)</span>
+</span><span class='line'>    ...
+</span><span class='line'>    at java.util.concurrent.ThreadPoolExecutor.runWorker<span class="o">(</span>ThreadPoolExecutor.java:1145<span class="o">)</span>at java.util.concurrent.ThreadPoolExecutor<span class="nv">$Worker</span>.run<span class="o">(</span>ThreadPoolExecutor.java:644<span class="o">)</span>
+</span><span class='line'>    at com.google.android.libraries.concurrent.AndroidExecutorsModule.lambda<span class="nv">$withStrictMode$5</span><span class="o">(</span>AndroidExecutorsModule:451<span class="o">)</span>
+</span><span class='line'>    at com.google.android.libraries.concurrent.AndroidExecutorsModule<span class="nv">$$</span>ExternalSyntheticLambda8.run<span class="o">(</span>AndroidExecutorsModule:1<span class="o">)</span>
+</span><span class='line'>    at java.lang.Thread.run<span class="o">(</span>Thread.java:1012<span class="o">)</span>
+</span><span class='line'>    at com.google.android.libraries.concurrent.ManagedPriorityThread.run<span class="o">(</span>ManagedPriorityThread:34<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>有几种方法可以修复这个问题：</p>
+
+<ul>
+<li>查出为何getDataSync会如此之慢，然后优化</li>
+<li>不要在四后台线程中都执行getDataSync</li>
+<li>更为通用的做法是，保证后台线程池中不要执行长时间的耗时操作</li>
+<li>为goAsync任务设计一个专用线程池</li>
+<li>使用一个无数量限制的线程池，而不是限量为4的后台线程池</li>
+</ul>
+
+
+<h3>实例：应用启动缓慢</h3>
+
+<p>应用启动缓慢可能会导致几个不同类型的ANR，以广播接收超时ANR和执行服务超时ANR最为显著。如果你在主线程的帧中看到了ActivityThread.handleBindApplication，那么这个ANR的根因很有可能就是启动慢造成的。</p>
+
+<p><strong>译注：</strong>四大组件(Activity, Service, BroadcastReceiver和ContentProvidier)都是平台能直接识别的组件，均可由AMS直接启动运行，但它们都是应用的一部分，如果应用尚未运行，那么AMS必须先要创建进程，并创建Application实例，这都需要花费时间，会耗费更久，甚至引发ANR，如果冷启动过程中有耗时操作。所以优化应用启动是性能优化的基石。</p>
+
+<h2>执行服务超时(Exceute service timeout)</h2>
+
+<p>当应用程序的主线程无法及时的启动一个Service时就会发生执行服务超时ANR。具体来说，就是一个服务无法在一定时限范围内完成onCreate()或者onStartCommand()或者onBind()的执行。</p>
+
+<p><strong>默认超时时间：</strong>前台服务(Foreground Service)是20秒; 后台服务(Background Service)是200秒。ANR超时时间包括应用冷启动，以及onCreate()，onBind()和onStartCommand的调用。</p>
+
+<p>遵循如下最佳实战来规避执行服务ANR：</p>
+
+<ul>
+<li>确保应用启动很快，因为如果一个应用被唤起来运行服务组件，启动时间也会被计算在超时时间内。</li>
+<li>确保服务的onCreate()，onBind()和onStartCommand()执行的都很快。</li>
+<li>不要在主线程里执行来自其他组件的耗时操作或者阻塞式操作，这些操作会阻碍服务的快速启动。</li>
+</ul>
+
+
+<h3>常见的根因</h3>
+
+<p>下表列出执行服务超时ANR的常见根因和修复建议：。</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:left;"> 根因 </th>
+<th style="text-align:left;"> 表象 </th>
+<th style="text-align:left;"> 建议的修复 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;"> 缓慢的应用启动 </td>
+<td style="text-align:left;"> 应用冷启动时间过长 </td>
+<td style="text-align:left;"> 优化应用启动速度 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 缓慢的onCreate()，onStartCommand和onBind </td>
+<td style="text-align:left;"> 服务组件的onCreate()，onStartCommand()和onBind()在主线程执行了耗时操作 </td>
+<td style="text-align:left;"> 优化代码，或者把耗时操作从这些关键的方法中移出去 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 未被调度(在执行onStart()之前主线程就被阻塞了) </td>
+<td style="text-align:left;"> 在服务启动之前，主线程就被其他组件级阻塞了 </td>
+<td style="text-align:left;"> 把其他组件的工作移出主线程。优化其他组件的阻塞代码 </td>
+</tr>
+</tbody>
+</table>
+
+
+<h3>如何调试</h3>
+
+<p>从Google Play Console和Firebase Crashlytics中的簇集标签和ANR报告，基于主线程当时的运行状态，通常就能确定ANR的根因。</p>
+
+<p><strong>注意：</strong>忽略标签是&#8221;nativePollOnce&#8221;和&#8221;main thread idle&#8221;的执行服务ANR簇集。这些簇集通常是栈帧捕获的太晚，无实际参考意义。真实的ANR栈帧可能会在其他的簇集里，所以问题并不会被掩藏。详细参见nativePollOnce部分。</p>
+
+<p>下面的流程图描述了如何调试一个执行服务超时ANR。</p>
+
+<p><img src="https://developer.android.com/static/topic/performance/images/debug-execute-service-anr.png" alt="" />
+图6. 如何调试一个执行服务ANR</p>
+
+<p>如果发现某个执行报务ANR是有实际操作意义的，遵循以下步骤来解决问题：</p>
+
+<ol>
+<li>找到ANR簇集标签中的服务组件。在Google Play Console里，服务组件类型会显示在ANR标签里。在后面的这个例子里，类型就是com.example.app/MyService。</li>
+</ol>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>com.google.common.util.concurrent.Uninterruptibles.awaitUninterruptibly
+</span><span class='line'>Executing service com.example.app/com.example.app.MyService
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ol>
+<li>确定应用启动过程中，服务组件或者其他地方是否有耗时或者阻塞操作，通过检查主线程中的下面这些重要的方法调用</li>
+</ol>
+
+
+<table>
+<thead>
+<tr>
+<th style="text-align:left;"> 主线程栈帧中的方法调用 </th>
+<th style="text-align:left;"> 背后的含义 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;"> android.app.ActivityThread.handleBindApplication </td>
+<td style="text-align:left;"> 应用正在启动，ANR由启动太慢引起 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> <ServiceClass>.onCreate()<br/>[&hellip;.]<br/>android.app.ActivityThread.handleCreateService </td>
+<td style="text-align:left;"> 服务正在被创建中，所以ANR是由缓慢的onCreate()引起的 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> <ServiceClass>.onBind()<br/>[&hellip;.]<br/>android.app.ActivityThread.handleBindService </td>
+<td style="text-align:left;"> 服务正在被绑定中，所以ANR是由缓慢的onBind()引起的 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> <ServiceClass>.onStartCommand()<br/>[&hellip;.]<br/>android.app.ActivityThread.handleServiceArgs </td>
+<td style="text-align:left;"> 服务正在被启动中，所以ANR是由缓慢的onStartCommand()引起的 </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>举个粟子，如果在类MyService里的onStartCommand执行缓慢，主线程栈帧会像酱婶儿的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>at com.example.app.MyService.onStartCommand<span class="o">(</span>FooService.java:25<span class="o">)</span>
+</span><span class='line'>at android.app.ActivityThread.handleServiceArgs<span class="o">(</span>ActivityThread.java:4820<span class="o">)</span>
+</span><span class='line'>at android.app.ActivityThread.-<span class="nv">$$</span>Nest<span class="nv">$mhandleServiceArgs</span><span class="o">(</span>unavailable:0<span class="o">)</span>
+</span><span class='line'>at android.app.ActivityThread<span class="nv">$H</span>.handleMessage<span class="o">(</span>ActivityThread.java:2289<span class="o">)</span>
+</span><span class='line'>at android.os.Handler.dispatchMessage<span class="o">(</span>Handler.java:106<span class="o">)</span>
+</span><span class='line'>at android.os.Looper.loopOnce<span class="o">(</span>Looper.java:205<span class="o">)</span>
+</span><span class='line'>at android.os.Looper.loop<span class="o">(</span>Looper.java:294<span class="o">)</span>
+</span><span class='line'>at android.app.ActivityThread.main<span class="o">(</span>ActivityThread.java:8176<span class="o">)</span>
+</span><span class='line'>at java.lang.reflect.Method.invoke<span class="o">(</span>Native method:0<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果没有发现重要的方法调用，还有其他一些可能：</p>
+
+<ul>
+<li>服务正在运行或者在关闭中，意思是说栈帧捕获的太晚了，可以忽略此类ANR或者视为假阳性。</li>
+<li><p>另外一个组件正在运行，比如广播接收器。这种情况下主线程可能被这个组件阻塞着，导致服务无法启动。</p></li>
+<li><p>如果能看到关键的方法 调用并确定ANR发生的地点，检查主线程的栈帧以找到缓慢的操作并把它们从关键的方法中移出去。</p></li>
+</ul>
+
+
+<p>关于服务的更多信息，可以看下面这些链接：</p>
+
+<ul>
+<li><a href="https://developer.android.com/guide/components/services">服务概览</a></li>
+<li><a href="https://developer.android.com/guide/components/foreground-services">前台服务</a></li>
+<li><a href="https://developer.android.com/reference/android/app/Service">服务</a></li>
+</ul>
+
+
+<h2>内容提供程序无响应(Content Provider not responding)</h2>
+
+<p>当一个远端内内容提供程序响应查询(query)时花费超过时限，内容提供程序ANR就会发生，且会被杀掉。</p>
+
+<p><strong>默认超时时间：</strong>内容提供程序通过ContentProviderClient.setDetectNotResponding指定的。ANR超时时限包括远端内容提供程序执行查询的时间，以及如果远端应用还未启还包括它的冷启动时间，加在一起的总时间。</p>
+
+<p>遵循下面这些最佳实践来规避内容提供程序ANR：</p>
+
+<ul>
+<li>确保应用启动很快，因为如果应用未运行时会被唤起，冷启动时间也会被计算在超时时间内。</li>
+<li>确保内容提供程序的查询能很快执行完。</li>
+<li>不要执行大量的并发阻塞式的binder call，因为这会阻塞应用的所有的binder线程。</li>
+</ul>
+
+
+<p><strong>译注：</strong>内容提供程序Content provider都是要经过跨进程调用(binder call)，尽管可能并没有真正的在另外一个进程里。因为我们使用ContentProvider的时候都是通过另一个API ContentResolver来完成，而ContentResolver是通过binder call来与ContentProvider通信的，无论是否真的跨进程。所以，ContentProvider就像一个服务器一样是远端的一侧提供内容，而应用程序(使用者)是客户端一侧需要内容。内容提供程序可能同时服务着不同的客户请求，比如像系统通用的内容提供程序ContactsProvider或者MediaProvider可能同时会有大量的应用请求查询，每一个请求都需要执行binder call，因此内容提供程序可能会同时执行着大量的binder call(它需要查询结果，并把结果以binder call的形式返回给请求方)。所以对于内容提供程序来说，查看binder call的运行状态对于解决ANR问题以及排查性能问题都是非常有帮助的。</p>
+
+<h3>常见根因</h3>
+
+<p>下表列出了内容提供程序ANR的常见根因和修复建议。</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:left;"> 根因 </th>
+<th style="text-align:left;"> 表象 </th>
+<th style="text-align:left;"> 信号 </th>
+<th style="text-align:left;"> 建议的修复方式 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;"> 缓慢的查询 </td>
+<td style="text-align:left;"> 内容提供程序执行耗时太长或者被阻塞 </td>
+<td style="text-align:left;"> binder线程里有android.content.ContentProvider\$Transport.query栈帧 </td>
+<td style="text-align:left;"> 优化查询或者查出什么东西在阻塞着binder线程 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> 应用启动太慢 </td>
+<td style="text-align:left;"> 内容提供程序启动耗时太久 </td>
+<td style="text-align:left;"> 主线程里有ActivityThread.handleBindApplication栈帧 </td>
+<td style="text-align:left;"> 优化应用启动 </td>
+</tr>
+<tr>
+<td style="text-align:left;"> Binder线程耗尽了，所有的binder线程都被占用着 </td>
+<td style="text-align:left;"> 所有的binder线程都被占用着服务着其他的同步请求，因此内容提供程序binder调用无法执行 </td>
+<td style="text-align:left;"> 应用未启动起来，所有的binder线程都被占用，内容提供程序也未能启动起来 </td>
+<td style="text-align:left;"> 减小binder线程的负载。也就是说执行更少一些的外发同步binder调用或者在处理到来的调用时少做一些操作。</td>
+</tr>
+</tbody>
+</table>
+
+
+<h3>如何调试</h3>
+
+<p>要想调试一个内容提供程序ANR，使用Google Play Console或者Firebase Crashlytics中的簇集标签和ANR报告，并用来查看主线程以及binder线程都在做什么。</p>
+
+<p>下面的流程图描述如何调试一个内容提供程序ANR：</p>
+
+<p><img src="https://developer.android.com/static/topic/performance/images/debug-content-provider-anr.png" alt="" />
+图7.如何调试一个内容提供程序ANR</p>
+
+<p>下面的代码块展示了当被一个缓慢的内容提供程序查询阻塞时，binder线程的状态。在这个例子里，内容提供程序的查询正在等待一个打开数据库的锁。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>binder:11300_2 <span class="o">(</span><span class="nv">tid</span><span class="o">=</span>13<span class="o">)</span> Blocked
+</span><span class='line'>
+</span><span class='line'>Waiting <span class="k">for</span> osm <span class="o">(</span>0x01ab5df9<span class="o">)</span> held by at com.google.common.base.Suppliers<span class="nv">$NonSerializableMemoizingSupplier</span>.get<span class="o">(</span>Suppliers:182<span class="o">)</span>
+</span><span class='line'>    at com.example.app.MyClass.blockingGetOpenDatabase<span class="o">(</span>FooClass:171<span class="o">)</span>
+</span><span class='line'>    <span class="o">[</span>...<span class="o">]</span>
+</span><span class='line'>    at com.example.app.MyContentProvider.query<span class="o">(</span>MyContentProvider.java:915<span class="o">)</span>
+</span><span class='line'>    at android.content.ContentProvider<span class="nv">$Transport</span>.query<span class="o">(</span>ContentProvider.java:292<span class="o">)</span>
+</span><span class='line'>    at android.content.ContentProviderNative.onTransact<span class="o">(</span>ContentProviderNative.java:107<span class="o">)</span>
+</span><span class='line'>    at android.os.Binder.execTransactInternal<span class="o">(</span>Binder.java:1339<span class="o">)</span>
+</span><span class='line'>    at android.os.Binder.execTransact<span class="o">(</span>Binder.java:1275<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>下面的代码块展示了当被缓慢的应用启动阻塞时，binder线程的状态。在这个例子里，应用启动因为dagger初始化时的锁竞争而变得很慢。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>main <span class="o">(</span><span class="nv">tid</span><span class="o">=</span>1<span class="o">)</span> Blocked
+</span><span class='line'><span class="o">[</span>...<span class="o">]</span>
+</span><span class='line'>at dagger.internal.DoubleCheck.get<span class="o">(</span>DoubleCheck:51<span class="o">)</span>
+</span><span class='line'>    - locked 0x0e33cd2c <span class="o">(</span>a qsn<span class="o">)</span>at dagger.internal.SetFactory.get<span class="o">(</span>SetFactory:126<span class="o">)</span>
+</span><span class='line'>    at com.myapp.Bar_Factory.get<span class="o">(</span>Bar_Factory:38<span class="o">)</span>
+</span><span class='line'>    <span class="o">[</span>...<span class="o">]</span>
+</span><span class='line'>    at com.example.app.MyApplication.onCreate<span class="o">(</span>DocsApplication:203<span class="o">)</span>
+</span><span class='line'>    at android.app.Instrumentation.callApplicationOnCreate<span class="o">(</span>Instrumentation.java:1316<span class="o">)</span>
+</span><span class='line'>    at android.app.ActivityThread.handleBindApplication<span class="o">(</span>ActivityThread.java:6991<span class="o">)</span>
+</span><span class='line'>    at android.app.ActivityThread.-<span class="nv">$$</span>Nest<span class="nv">$mhandleBindApplication</span><span class="o">(</span>unavailable:0<span class="o">)</span>
+</span><span class='line'>    at android.app.ActivityThread<span class="nv">$H</span>.handleMessage<span class="o">(</span>ActivityThread.java:2235<span class="o">)</span>
+</span><span class='line'>    at android.os.Handler.dispatchMessage<span class="o">(</span>Handler.java:106<span class="o">)</span>
+</span><span class='line'>    at android.os.Looper.loopOnce<span class="o">(</span>Looper.java:205<span class="o">)</span>
+</span><span class='line'>    at android.os.Looper.loop<span class="o">(</span>Looper.java:294<span class="o">)</span>
+</span><span class='line'>    at android.app.ActivityThread.main<span class="o">(</span>ActivityThread.java:8170<span class="o">)</span>
+</span><span class='line'>    at java.lang.reflect.Method.invoke<span class="o">(</span>Native method:0<span class="o">)</span>
+</span><span class='line'>    at com.android.internal.os.RuntimeInit<span class="nv">$MethodAndArgsCaller</span>.run<span class="o">(</span>RuntimeInit.java:552<span class="o">)</span>
+</span><span class='line'>    at com.android.internal.os.ZygoteInit.main<span class="o">(</span>ZygoteInit.java:971<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>缓慢的作业响应(Slow job response)</h2>
+
+<p>当应用响应JobService.onStartJob()或者JobService.onStopJob耗时太久，或者用JobService.setNotification()提供通知时耗时太久，都会引发缓慢的作业响应ANR发生。这说明应用的主线程因为其他操作而被阻塞了。</p>
+
+<p>如果问题是与JobService.onStartJob()或者JobService.onStopJob()有关系，就要检查下主线程的情况。如果问题与JobService.setNotification()有关系，要保证它尽可能的快速的被调用到。在提供通知之前 不要做很多其他事情。</p>
+
+<p><strong>译注：</strong><a href="https://developer.android.com/reference/android/app/job/JobService">JobService</a>是Android 5.0 API 21时增加的一个专门用于后台作业的一个Service的子类。上面提到的是都是它的一些回调，与一些其他的回调类似，这些回调必须快速执行完毕，因为<a href="https://developer.android.com/reference/android/app/job/JobScheduler">JobSchedule</a>内部需要做一些资源回收之类的工作，所以这些回调不允许被阻塞。</p>
+
+<h2>隐秘的ANRs</h2>
+
+<p>有时候搞不清楚为啥ANR会发生，或者在簇集标签和ANR报告中找不到足够的信息去调试。遇到这些情况，还是可以采取一些步骤以确定这些ANR是否是值得处理的。</p>
+
+<h3>消息队列是空闲(Message queue idle)的或者正处理轮询中(nativePollOnce)</h3>
+
+<p>如果你在栈帧信息中发现android.os.MessageQueue.nativePollOnce，这通常说明疑似无响应的线程实际上是空闲的或者在等待队列中的消息。在Google Play Console里面，ANR的细节是酱紫的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>Native method - android.os.MessageQueue.nativePollOnce
+</span><span class='line'>Executing service com.example.app/com.example.app.MyService
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>举个粟子，如果主线程是空闲的，栈帧是酱紫的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="s2">&quot;main&quot;</span> <span class="nv">tid</span><span class="o">=</span><span class="m">1</span> NativeMain threadIdle
+</span><span class='line'><span class="c">#00  pc 0x00000000000d8b38  /apex/com.android.runtime/lib64/bionic/libc.so (__epoll_pwait+8)</span>
+</span><span class='line'><span class="c">#01  pc 0x0000000000019d88  /system/lib64/libutils.so (android::Looper::pollInner(int)+184)</span>
+</span><span class='line'><span class="c">#02  pc 0x0000000000019c68  /system/lib64/libutils.so (android::Looper::pollOnce(int, int*, int*, void**)+112)</span>
+</span><span class='line'><span class="c">#03  pc 0x000000000011409c  /system/lib64/libandroid_runtime.so (android::android_os_MessageQueue_nativePollOnce(_JNIEnv*, _jobject*, long, int)+44)</span>
+</span><span class='line'>at android.os.MessageQueue.nativePollOnce <span class="o">(</span>Native method<span class="o">)</span>
+</span><span class='line'>    at android.os.MessageQueue.next <span class="o">(</span>MessageQueue.java:339<span class="o">)</span>  at android.os.Looper.loop <span class="o">(</span>Looper.java:208<span class="o">)</span>
+</span><span class='line'>    at android.app.ActivityThread.main <span class="o">(</span>ActivityThread.java:8192<span class="o">)</span>
+</span><span class='line'>    at java.lang.reflect.Method.invoke <span class="o">(</span>Native method<span class="o">)</span>
+</span><span class='line'>    at com.android.internal.os.RuntimeInit<span class="nv">$MethodAndArgsCaller</span>.run <span class="o">(</span>RuntimeInit.java:626<span class="o">)</span>
+</span><span class='line'>    at com.android.internal.os.ZygoteInit.main <span class="o">(</span>ZygoteInit.java:1015<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>疑似无响应线程可能是空闲的会有几个原因：</p>
+
+<ul>
+<li>延迟的栈转储：在ANR被 触发和栈帧转储之间的短时间内，线程状态恢复了。在Android 13版本的Pixels设备上这个延迟大约在100ms，但也可能超过1秒。Android 14版本的Pixels设备上这个延迟小于10ms。</li>
+<li>线程归因错误：用于构建ANR标签的线程并不是实际上触发ANR的无响应线程。这种情况下，尝试确定一下这个ANR是否是如下的类型：
+
+<ul>
+<li>广播接收超时</li>
+<li>内容提供程序无响应</li>
+<li>找不到带焦点的窗口</li>
+<li>系统侧问题：由于系统负载太重或者系统服务有问题而导致应用进程无法被调度。</li>
+</ul>
+</li>
+</ul>
+
+
+<h3>没有栈帧(No stack frames)</h3>
+
+<p>有一些ANR报告里面没有包含与ANR相关的栈帧，这说明在生成ANR报告时栈帧转储失败了。有很多可能的原因会导致栈帧丢失：</p>
+
+<ul>
+<li>转储栈帧太耗时了，所以超时了</li>
+<li>在栈帧转储完成之前进程就挂了或者被杀掉了</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="o">[</span>...<span class="o">]</span>
+</span><span class='line'>
+</span><span class='line'>--- CriticalEventLog ---
+</span><span class='line'>capacity: 20
+</span><span class='line'>timestamp_ms: 1666030897753
+</span><span class='line'>window_ms: 300000
+</span><span class='line'>libdebuggerd_client: failed to <span class="nb">read </span>status response from tombstoned: timeout reached?
+</span><span class='line'>
+</span><span class='line'>----- Waiting Channels: pid <span class="m">7068</span> at 2022-10-18 02:21:37.&lt;US_SOCIAL_SECURITY_NUMBER&gt;+0800 -----
+</span><span class='line'>
+</span><span class='line'><span class="o">[</span>...<span class="o">]</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>簇集标签或者ANR报告里面没有栈帧的ANR是没有实际分析意义的。如果要调试，可以去看其他的簇集信息，因为如果一个问题足够明显的话，那么它通常会有它自己的簇集标签存在。其他的可行方案就是查看<a href="https://perfetto.dev/docs/">Perfetto traces</a>.</p>
+
+<h2>已知问题(Known issues)</h2>
+
+<p>在应用的进程里用计时器来测量广播的处理时间或者ANR的触发是行不通的，因为系统是以异步的方式在监控着ANR。</p>
+
+<h2>更多的官方资料</h2>
+
+<ul>
+<li><a href="https://developer.android.com/topic/performance/anrs/find-unresponsive-thread">Find the unresponsive thread</a></li>
+<li><a href="https://developer.android.com/topic/performance/anrs/keep-your-app-responsive">Keep your app responsive</a></li>
+<li><a href="https://developer.android.com/guide/topics/resources/layout-resource">Layout resource</a></li>
+<li><a href="https://developer.android.com/topic/performance/vitals/anr">ANRs</a></li>
+</ul>
+
+
+<h2>其他优质博文</h2>
+
+<ul>
+<li><a href="https://juejin.cn/post/7181731795439157306">钉钉 ANR 治理最佳实践 | 定位 ANR 不再雾里看花</a></li>
+<li><a href="https://juejin.cn/post/6940061649348853796">今日头条 ANR 优化实践系列 - 设计原理及影响因素</a></li>
+<li><a href="https://juejin.cn/post/7053819042268151838">Android ANR全解析&amp;华为AGC性能管理解决ANR案例集</a></li>
+</ul>
+
 ]]></content>
   </entry>
   
@@ -2223,7 +2963,7 @@ site packages: &lsquo;/Library/Python/2.7/site-packages&rsquo;,</p></li>
 site packages &lsquo;/Library/Frameworks/Python.framework/Versions/3.7/lib/python3.7/site-packages&rsquo;,</p></li>
 <li><p>Python3.11
 由brew升级安装得到的。被安装在
-二进制是在：/usr/local/opt/<a href="&#109;&#x61;&#105;&#x6c;&#116;&#111;&#x3a;&#x70;&#121;&#x74;&#104;&#111;&#110;&#x40;&#x33;&#x2e;&#x31;&#x31;">&#112;&#121;&#116;&#104;&#x6f;&#x6e;&#64;&#x33;&#x2e;&#49;&#49;</a>
+二进制是在：/usr/local/opt/<a href="&#x6d;&#97;&#x69;&#108;&#116;&#x6f;&#58;&#112;&#121;&#x74;&#104;&#x6f;&#110;&#x40;&#x33;&#x2e;&#49;&#x31;">&#x70;&#x79;&#116;&#x68;&#111;&#x6e;&#x40;&#51;&#x2e;&#x31;&#49;</a>
 site-packages  /usr/local/lib/python3.11/site-packages</p></li>
 </ul>
 
