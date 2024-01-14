@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-01-14T21:14:58+08:00</updated>
+  <updated>2024-01-14T21:26:23+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,170 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Kotlin进阶之协程从上车到起飞]]></title>
+    <link href="http://toughcoder.net/blog/2024/01/14/kotlin-coroutines-an-advanced-guide/"/>
+    <updated>2024-01-14T21:17:20+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/01/14/kotlin-coroutines-an-advanced-guide</id>
+    <content type="html"><![CDATA[<p>通过<a href="http://toughcoder.net/blog/2024/01/11/kotlin-coroutine-made-easy/">前面的一篇文章</a>我们理解了协程的基本概念，学会协程的基本使用方法，算是正式入门了，接下来就是要深入的学习技术细节和高级使用方法，以期完全掌握Kotlin协程并能熟练的正确的使用协程，发挥出协程应有的并发编程能力。</p>
+
+<p><a href=""><img src="https://repository-images.githubusercontent.com/61722736/08e87280-62dc-11ea-8fed-a8a4a4ea865d" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>本篇为协程三步曲中的第二篇：</p>
+
+<ul>
+<li>初级篇：<a href="http://toughcoder.net/blog/2024/01/11/kotlin-coroutine-made-easy/">Kotlin进阶之协程从入门到放弃</a></li>
+<li>高级篇：<a href="">Kotlin进阶之协程从上车到起飞</a></li>
+<li>终极篇：待定</li>
+</ul>
+
+
+<p>本篇将细致的讨论协程中的一些重要的话题，以期更好的理解协程的原理和正确的使用协程，将从协程运行的上下文开始。</p>
+
+<h2>深究协程上下文</h2>
+
+<p><img src="https://files.betamax.kodeco.com/attachments/videos/3493/c049283d-193b-43b9-b796-0aafe8e9c804.png" alt="" /></p>
+
+<p>创建协程的方法launch/async一共有3个参数，除了最后一个是协程的代码块以外，另外两个参数都是用来控制协程的，如协程上下文是用以控制协程运行环境的，包括在什么线程中去运行，句柄和树形关系以及何时切换线程，通过传递给launch/async的参数CoroutineContext。以及CoroutineStart就可以控制协程的运行。</p>
+
+<pre><code class="Kotlin">fun CoroutineScope.launch(
+    context: CoroutineContext = EmptyCoroutineContext,
+    start: CoroutineStart = CoroutineStart.DEFAULT,
+    block: suspend CoroutineScope.() -&gt; Unit
+): Job
+
+fun &lt;T&gt; CoroutineScope.async(
+    context: CoroutineContext = EmptyCoroutineContext,
+    start: CoroutineStart = CoroutineStart.DEFAULT,
+    block: suspend CoroutineScope.() -&gt; T
+): Deferred&lt;T&gt;
+</code></pre>
+
+<p>首先我们来看一下协程上下文对象CoroutineContext。</p>
+
+<h3>CoroutineContext</h3>
+
+<p><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.coroutines/-coroutine-context/">CoroutineContext</a>是一个集合，具体元素类型是<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.coroutines/-coroutine-context/-element/">Element</a>，Element重载了操作符，可以通过<strong>+</strong>来形成集合。CoroutineContext是类似于Map的，每个Element有自己的Key，这是为了保证每个CoroutineContext对象中每个Key只能有一个Element对象。</p>
+
+<p>具体Element有四种：
+* <a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/">Job</a>：协程的句柄，或者说唯一标识，用以具体控制每个协程的（cancel和join等），具有树形关系
+* <a href="">CoroutineDispatcher</a>：用以指定协程的运行线程
+* <a href="">CoroutineName</a>：给协程取个名字，方便调试
+* <a href="">CoroutineExceptionHandler</a>：指定协程的异常处理器，用以处理未被捕获的异常</p>
+
+<p>这里主要介绍一下Job，CoroutineDispatcher和Name，至于ExceptionHandler留到后面讲异常处理时再细讲。</p>
+
+<h4><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/">Job</a></h4>
+
+<p>用launch创建一个协程时也会返回一个Job对象，它就是新创建的协程的句柄，但更好的方式是通过launch的参数，在上下文中指定一个Job对象作为协程的句柄。前面了讲过了，Job用以控制协程的，更为重要的是它能维持树形关系，父协程是可以控制子协程的，像cancel是会传导到所有的子协程的。自己创建Job对象就可以自由指定父协程，而不是默认的从CoroutineScope中继承。</p>
+
+<p>另外，Job也会影响Exception handling，会在后面异常处理部分详细的讲。</p>
+
+<h4><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-dispatcher/">CoroutineDispatcher</a></h4>
+
+<p>这个是在平时用的最多的，因为协程是一种并发编程范式，而要想真并发，必然要涉及线程的切换，不可能指望着主线程把所有的事情都干了，而Dispatcher的作用就是用于主动的指定协程的运行线程。与Java中的Executor，和RxJava中的Schedulers作用是一样的。有一些预定义好的Dispatcher可以用，它们定义在<a href="">Dispatchers</a>里面：</p>
+
+<ul>
+<li><a href="">Main</a> 主线程，主函数所在的主线程，以及像UI框架（如Swing和Android）等的UI线程（主线程）</li>
+<li><a href="">IO</a> 适合I/O密集型的协程，如网络操作（上传/下载），文件读写，数据库读写等等。它背后是线程池，线程的数量是比较多的。因为I/O虽然耗时，但一般都耗在等待上面，所以线程的数量可以多一些。</li>
+<li><a href="">Default</a> 适合CPU密集型的协程，比如计算类型的，图形的计算，矩阵计算，多媒体文件的编解码，压缩解压缩，或者算法时间复杂度较高的任务等等。也是线程池，线程的数量一般是CPU的核数。这个线程池的数量很少，因为这是CPU密集型的任务，需要大量占用着CPU，使CPU一直处于忙碌状态，因此线程数量即使多了，也是没有用处的，因为多创建的线程根本得不到操作系统的调试，没有多余的CPU给线程跑。</li>
+<li><a href="">Unconfied</a> 未给协程指定线程，协程会在当前的线程中执行（也就是调用者的线程），直到协程被挂起(suspended)。挂起后再继续(resume)时，由在恢复的线程中继续执行。很混乱吧，是的并发虽然讲究效率，虽然线程/协程啥时候进行，挂起并不能直接完全控制，但是我们仍希望并发要有秩序和确定性。一定要为新创建的协程指定其线程运行环境，因此，<strong>Unconfined不应该被使用</strong>。</li>
+</ul>
+
+
+<p>一般情况下，框架预定义好了的这些dispatcher已经够用了。但如果真的不够用，也可以自定义dispatcher，用扩展函数<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/as-coroutine-dispatcher.html">asCoroutineDispatcher</a>可以非常方便的把Java中的线程池Executors转化为dispatcher：</p>
+
+<pre><code class="Kotlin">val dispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher
+launch(dispatcher) {
+    delay(1000)
+    println("Single thread dispatcher")
+}
+</code></pre>
+
+<h4>CoroutineName</h4>
+
+<p><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-name/">CoroutineName</a>是比较简单的结构，的构造方法可以传一个字符串用以指定协程的名字。协程的名字只有调试的意义，对于代码的运行没有任何影响。比如在调试的时候，或者在性能分析Profiling的时候，可以用名字更加方便的区分不同的协程，进而缩小调试的范围。</p>
+
+<h3>CoroutineStart</h3>
+
+<p><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/">CoroutineStart</a>，是一个枚举类型，用以控制协程的启动方式，具体有四种模式类型：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/-d-e-f-a-u-l-t/">DEFAULT</a> 默认，如果未指定这个参数 时也是默认模式，根据指定的上下文环境，立即调度此协程</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/-l-a-z-y/">LAZY</a> 只有当需要此协程时才调度它。比较有意思，具体啥是<strong>需要</strong>呢，也就是当await其结果时，或者需要此协程去<strong>生产事件(produce)</strong>或者<strong>消费事件(consume)</strong>时。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/-a-t-o-m-i-c/">ATOMIC</a> 以原子化的方式来调度此协程，也就是以不可取消的方式来调度协程。也就是说在协程代码块执行之前是不可取消的。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-start/-u-n-d-i-s-p-a-t-c-h-e-d/">UNDISPATCHED</a> 在当前的线程环境（也就是调用者的线程）中立即执行协程直到协程的第一个挂起点。挂起之后，继续时则在指定的上下文中的线程运行。</li>
+</ul>
+
+
+<p>一般情况下，我们用默认的就行了。但当熟悉了协程以后，在适当的场景使用不同的启动方式参数可以更大限度的发挥协程的威力。</p>
+
+<p>延展阅读：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/docs/coroutine-context-and-dispatchers.html">Coroutine context and dispatchers</a></li>
+<li><a href="https://juejin.cn/post/6926695962354122765">揭秘kotlin协程中的CoroutineContext</a></li>
+<li><a href="https://juejin.cn/post/7270899168532152381">深入Kotlin协程系列|图解上下文</a></li>
+<li><a href="https://juejin.cn/post/7137927889835524126">协程是怎么切换线程的</a></li>
+</ul>
+
+
+<h2>启动，挂起，让度和延续</h2>
+
+<p><img src="https://doordash.engineering/wp-content/uploads/2021/11/coroutine-11-1-1024x484.jpg" alt="" /></p>
+
+<h2>无限序列</h2>
+
+<h2>协程取消</h2>
+
+<p><img src="https://assets.alexandria.raywenderlich.com/books/kco/images/7116dd4d1cf7d079a1ece92d888198c4fdcd6cced5bc408119700a236409fdbd/original.png" alt="" /></p>
+
+<p>更多的好文：</p>
+
+<ul>
+<li><a href="https://juejin.cn/post/7288606110336401467">一文搞懂 Kotlin Coroutine Job 的工作流程</a></li>
+</ul>
+
+
+<h2>超时处理</h2>
+
+<h2>异常处理</h2>
+
+<h2>调试</h2>
+
+<h2>测试</h2>
+
+<h2>协程间通信</h2>
+
+<p>协程之间要想更好的协作必然会涉及通信，Channel也是一个比较复杂的话题，用好Channel才可以写出优雅健壮的并发代码，可以参考以下资料进一步学习：</p>
+
+<ul>
+<li><a href="https://juejin.cn/post/7171272840426029063">Kotlin协程之一文看懂Channel管道</a></li>
+<li><a href="https://juejin.cn/post/7252905430473048124">Kotlin Channel系列（一）之读懂Channel每一行源码</a></li>
+<li><a href="https://juejin.cn/post/7272174836335296548">Kotlin协程之Channel的使用与原理</a></li>
+</ul>
+
+
+<h2>并发安全性</h2>
+
+<h2>在安卓中使用协程</h2>
+
+<p><img src="https://ts1.cn.mm.bing.net/th/id/R-C.bd4dc46a7a5a9909ddeb90af8b5d689c?rik=6LThCIIV%2bEN67w&amp;riu=http%3a%2f%2fwikicodecamp.com%2fwp-content%2fuploads%2f2022%2f07%2fandroid_2_coroutine.jpg&amp;ehk=EORu%2fSzDMOJNZINUWgwnsOQ%2bf%2f53YvmcuiPz9Cj%2b%2bNI%3d&amp;risl=&amp;pid=ImgRaw&amp;r=0" alt="" /></p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://developer.android.google.cn/kotlin/coroutines">Kotlin coroutines on Android</a></li>
+<li><a href="https://amitshekhar.me/blog/kotlin-coroutines">Mastering Kotlin Coroutines</a></li>
+<li><a href="https://developer.android.google.cn/kotlin/coroutines/coroutines-adv">Improve app performance with Kotlin coroutines</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Kotlin进阶之协程从入门到放弃]]></title>
@@ -842,77 +1006,6 @@ with (res) {
 <li><a href="https://shusheng007.top/2020/10/02/1-6/">秒懂Kotlin之彻底掌握Scope Functions (apply, also,let,run,with)</a></li>
 <li><a href="https://www.jianshu.com/p/5c4a954d2b2c">Kotlin之let,apply,run,with等函数区别</a></li>
 <li><a href="https://juejin.cn/post/6868179386344931342">Kotlin学习：run、with、apply、also、let的区别</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Understanding Kotlin Based DSL]]></title>
-    <link href="http://toughcoder.net/blog/2023/02/14/understanding-kotlin-based-dsl/"/>
-    <updated>2023-02-14T16:51:58+08:00</updated>
-    <id>http://toughcoder.net/blog/2023/02/14/understanding-kotlin-based-dsl</id>
-    <content type="html"><![CDATA[<p><a href="https://en.wikipedia.org/wiki/Domain-specific_language">DSL Domain Specific Langauge</a>是解决特定领域内问题的编程语言，它的特点通常是简洁，虽不通用，但可读性强，呈描述式和声明式，比较典型的例子就是SQL语句和正则表达式，以及一些文本处理工具如Sed和AWK。与之对应的就是通用编程语言<a href="https://en.wikipedia.org/wiki/General-purpose_language">GPL General Purpose Language</a>，能解决几乎所有的计算机问题，没有为特定领域进行定制，但语句可读性远不及DSL，它们的语句一般都是命令式的，如熟悉的C/C++, Java和Python等。</p>
-
-<p><a href=""><img src="https://cdn.educba.com/academy/wp-content/uploads/2022/07/Kotlin-DSL.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>GPL中的DSL痛点</h2>
-
-<p>DSL的优点是<strong>声明式的，描述式的</strong>，并不在意<strong>具体细节的实现</strong>，比如像SQL语句，我只关心我想要什么，具体如何实现的是底下工具的事情：</p>
-
-<pre><code class="SQL">select (id, name, address)
-    where name = "John" and age &lt;= 10
-    from classlist
-</code></pre>
-
-<p>但，当在GPL，通用编程语言中解决DSL问题时，就会很蛋疼，在任何一个编程语言中实现一个SQL查询 的接口都会相当的笨拙和难用，要么需要创建很多个对象，要么需要传递一大堆令人费解的参数：</p>
-
-<pre><code class="Java">    Cursor cursor = query(uri, projects, where, whereArgs, sortby);
-</code></pre>
-
-<p>可读性非常的差，假如能写成DSL那样，可读性会大大的增强。</p>
-
-<h2>DSL式的API</h2>
-
-<p>在Kotlin中，可以写成这样：</p>
-
-<pre><code class="kotlin">query {
-    from "classlist"
-    where {
-        "name" eq "John"
-        "age" lessEq 10
-    }
-}
-</code></pre>
-
-<p>可读性大大加强，这样的API使用起来也会如丝般顺滑，因为它符合DSL：描述性的，声明式的，不关心具体实现细节，只关注想要什么。</p>
-
-<h2>背后原理</h2>
-
-<p>Kotlin借助尾部lambda，infix函数，扩展函数。整体来就其实是一个函数调用，因为Kotlin函数最后一个参数如果是lambda时可以写在函数调用之外，所以，一层一层的花括号，其实就是函数调用。</p>
-
-<p>再借助扩展函数和infix函数，可以把另外一些函数调用写成DSL式，比如像二进制按位或运算a or b等同于a.or(b)，这也是一个函数调用，但可读性大大加强。可以像写不作文一样的来写代码。</p>
-
-<p>总之，见到DSL式的语句时不用惊慌，它是合法的Kotlin函数调用，把它理解成为函数调用就可以了。</p>
-
-<h2>合理使用</h2>
-
-<p>虽然DSL式的API能大大提高可读性，像真正的DSL一样去使用，但也要注意合理使用，不能滥用。我们要正向的解决问题，当遇到特定领域(Domain)的问题时，就可以定义和实现出一套符合DSL的API。也就是说我们要利用Kotlin语言提供的能力来实现DSL式的API去解决特定领域的问题。就像Android的布局，就可以定义出一套DSL式的API，这就是当时比较火的<a href="https://github.com/Kotlin/anko">anko</a>(现已废弃了)和现在的Compose，以及像涉及HTML，SQL的等特定领域问题时。</p>
-
-<p>但不能反过来，为了写成DSL式，而去把所有的API都搞成DSL那样，比如把一些常规的操作像网络，像文件操作等都搞成那样，那就纯属滥用了。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/type-safe-builders.html#full-definition-of-the-com-example-html-package">Type-safe builders﻿</a></li>
-<li><a href="https://www.baeldung.com/kotlin/dsl">Building DSLs in Kotlin</a></li>
-<li><a href="https://coolshell.cn/articles/5709.html">API设计：用流畅接口构造内部DSL</a></li>
-<li><a href="https://www.jianshu.com/p/f5f0d38e3e44">Kotlin之美——DSL篇</a></li>
-<li><a href="https://blog.mindorks.com/mastering-kotlin-dsl-in-android-step-by-step-guide/">Mastering Kotlin DSL In Android - Step By Step Guide</a></li>
-<li><a href="https://brunoaybar.com/how-do-kotlin-dsl-libraries-work/">How do Kotlin DSL libraries work?</a></li>
 </ul>
 
 ]]></content>
