@@ -154,11 +154,15 @@
 
 <p><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.coroutines/-coroutine-context/">CoroutineContext</a>是一个集合，具体元素类型是<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.coroutines/-coroutine-context/-element/">Element</a>，Element重载了操作符，可以通过<strong>+</strong>来形成集合。CoroutineContext是类似于Map的，每个Element有自己的Key，这是为了保证每个CoroutineContext对象中每个Key只能有一个Element对象。</p>
 
-<p>具体Element有四种：
-* <a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/">Job</a>：协程的句柄，或者说唯一标识，用以具体控制每个协程的（cancel和join等），具有树形关系
-* <a href="">CoroutineDispatcher</a>：用以指定协程的运行线程
-* <a href="">CoroutineName</a>：给协程取个名字，方便调试
-* <a href="">CoroutineExceptionHandler</a>：指定协程的异常处理器，用以处理未被捕获的异常</p>
+<p>具体Element有四种：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/">Job</a>：协程的句柄，或者说唯一标识，用以具体控制每个协程的（cancel和join等），具有树形关系</li>
+<li><a href="">CoroutineDispatcher</a>：用以指定协程的运行线程</li>
+<li><a href="">CoroutineName</a>：给协程取个名字，方便调试</li>
+<li><a href="">CoroutineExceptionHandler</a>：指定协程的异常处理器，用以处理未被捕获的异常</li>
+</ul>
+
 
 <p>这里主要介绍一下Job，CoroutineDispatcher和Name，至于ExceptionHandler留到后面讲异常处理时再细讲。</p>
 
@@ -225,13 +229,85 @@
 
 <h2>启动，挂起，让度和延续</h2>
 
+<p>知道了如何创建协程，以及如何通过参数指定它运行的上下文和影响启动的参数后，就需要详细的了解一下协程的几中运行状态，以及什么是挂起，如何让度再到咋回到延续。</p>
+
+<h3>协程的状态</h3>
+
+<p>与Java中的线程类似，协程也是有几种不同的状态的，可以参考下表：</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:center;"> 协程状态 </th>
+<th style="text-align:left;"> 描述 </th>
+<th style="text-align:center;"> isActive </th>
+<th style="text-align:center;"> isCompleted </th>
+<th style="text-align:center;"> isCanclled </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;"> New </td>
+<td style="text-align:left;"> 协程刚被创建，但还未被调度，未运行 </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> false </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Active </td>
+<td style="text-align:left;"> 已被调度，已运行 </td>
+<td style="text-align:center;"> true </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> false </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Completing </td>
+<td style="text-align:left;"> 等待子协程结束中 </td>
+<td style="text-align:center;"> true </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> false </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Cancelling </td>
+<td style="text-align:left;"> cancel子协程中 </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> true </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Cancelled </td>
+<td style="text-align:left;"> 已被取消 </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> true </td>
+<td style="text-align:center;"> true </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Completed </td>
+<td style="text-align:left;"> 已结束，是最终状态 </td>
+<td style="text-align:center;"> false </td>
+<td style="text-align:center;"> true </td>
+<td style="text-align:center;"> false </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>需要注意，这些状态是由<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/">接口Job</a>来定义的，它是一个广义上的异步并发任务，协程是它的一个实现而已，协程返回的也是对象Job，可以通过Job的方法如join，cancel，isActive等方法来控制协程和查询状态。协程的状态转移可以看这张图：</p>
+
+<p><img src="https://assets.alexandria.raywenderlich.com/books/kco/images/7116dd4d1cf7d079a1ece92d888198c4fdcd6cced5bc408119700a236409fdbd/original.png" alt="" /></p>
+
+<h3>协程的挂起，让度和延续</h3>
+
+<p>用suspend修饰的函数必须在协程里调用，因为它们在运行的时候可以让协程挂起，协程遇到<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/delay.html">delay</a>或者<a href="">join</a>以及<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/await.html">await/awaitAll</a>时就会被挂起。除此之外，还可以调用<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/yield.html">yield</a>主动进行挂起，这会释放线程，让其他协程得以运行，这便是<strong>让度</strong>。挂起，是可能导致线程切换的，这取决 于我们如何设置协程的上下文以及start参数。那么，Kotlin中的协程是如何做到协程延续(resume)时，协程的运行状态和本地变量等是如何得以在线程之间保存和传播的呢？这就涉及到了</p>
+
 <p><img src="https://doordash.engineering/wp-content/uploads/2021/11/coroutine-11-1-1024x484.jpg" alt="" /></p>
+
+<p>扩展阅读：
+* <a href="https://juejin.cn/post/7288606110336401467">一文搞懂 Kotlin Coroutine Job 的工作流程</a></p>
 
 <h2>无限序列</h2>
 
 <h2>协程取消</h2>
-
-<p><img src="https://assets.alexandria.raywenderlich.com/books/kco/images/7116dd4d1cf7d079a1ece92d888198c4fdcd6cced5bc408119700a236409fdbd/original.png" alt="" /></p>
 
 <p>更多的好文：</p>
 
@@ -264,6 +340,16 @@
 <h2>在安卓中使用协程</h2>
 
 <p><img src="https://ts1.cn.mm.bing.net/th/id/R-C.bd4dc46a7a5a9909ddeb90af8b5d689c?rik=6LThCIIV%2bEN67w&amp;riu=http%3a%2f%2fwikicodecamp.com%2fwp-content%2fuploads%2f2022%2f07%2fandroid_2_coroutine.jpg&amp;ehk=EORu%2fSzDMOJNZINUWgwnsOQ%2bf%2f53YvmcuiPz9Cj%2b%2bNI%3d&amp;risl=&amp;pid=ImgRaw&amp;r=0" alt="" /></p>
+
+<h2>书籍推荐</h2>
+
+<p>当对Kotlin以及协程有了基本的认识之后，如果想要进阶的学习，就需要读一些专题书籍，这里推荐两本：</p>
+
+<ul>
+<li><a href="https://www.packtpub.com/product/learning-concurrency-in-kotlin/9781788627160">Learn Concurrency in Kotlin</a> 这本书以并发为主题，只不过是用Kotlin协程的方式来实现并发，所以它的重点在于并发，具体实现方式其实可以多种多样。</li>
+<li><a href="https://www.bennyhuo.com/project/kotlin-coroutines.html">深入理解Kotlin协程</a> 这本书的优点在于会横向的介绍其他编程语言中的并发范式，从而能够深入的理解协程，对于有一定编程经验的人来说，横向比较的方式是非常有效的。</li>
+</ul>
+
 
 <h2>参考资料</h2>
 
