@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-01-15T22:54:46+08:00</updated>
+  <updated>2024-01-16T22:11:41+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -208,21 +208,156 @@ launch(dispatcher) {
 <ul>
 <li><a href="https://juejin.cn/post/7288606110336401467">一文搞懂 Kotlin Coroutine Job 的工作流程</a></li>
 <li><a href="https://juejin.cn/post/7304615395741351988">详解Kotlin协程实现原理</a></li>
+<li><a href="https://juejin.cn/post/7312404578958934054">源解 Kotlin 协程</a></li>
 </ul>
 
 
 <h2>无限序列</h2>
 
-<h2>协程取消</h2>
+<p>在继续深入学习其他话题之前先来看一个实际的妙用协程的例子，使用协程创建异步无限序列。<a href="https://kotlinlang.org/docs/constructing-collections.html">集合(Collections)</a>是对象的容器，用来存储对象实例（objects）的，把对象放入到集合中，也就是说在『放入』的过程中时，元素必须已经创建好了。而<a href="https://kotlinlang.org/docs/sequences.html">序列(Sequences)</a>并不存储对象实例，它按需生成对象，也就是说只有需要某个元素时，序列才会生成它，并且序列可以有无限个元素，它是按需生成元素，如果需要可以有无限发子弹。</p>
 
-<p>更多的好文：</p>
+<p>序列是按需生成元素，因此它具有延迟化，占用资源少的特点。对于用<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.sequences/sequence.html">sequence builder</a>来创建无限序列时，其实就用到了协程，比如说创建一个质数的序列：</p>
+
+<pre><code class="Kotlin">fun primes(start: Int): Sequence&lt;Int&gt; = sequence {
+    println("Infinite prime sequence:")
+    var n = start
+    while (true) {
+        if (n &gt; 1 &amp;&amp; (2 until n).none { i -&gt; n % i == 0 }) {
+            yield(n)
+            println("Gnerating next prime after $n")
+        }
+        n++
+    }
+}
+
+fun main() {
+    for (prime in primes(start = 10)) {
+        println("Received $prime")
+        if (prime &gt; 30) {
+            break
+        }
+    }
+}
+</code></pre>
+
+<p>这段代码的输出是：</p>
+
+<pre><code class="Bash">Infinite prime sequence:
+Received 11
+Gnerating next prime after 11
+Received 13
+Gnerating next prime after 13
+Received 17
+Gnerating next prime after 17
+Received 19
+Gnerating next prime after 19
+Received 23
+Gnerating next prime after 23
+Received 29
+Gnerating next prime after 29
+Received 31
+</code></pre>
+
+<p>序列生成器之所以能够一个一个的生成元素，并返回给调用者的原因就是在于<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.sequences/-sequence-scope/yield.html">yield()</a>函数，它是一个suspend函数，执行后就会挂起，然后调用者的代码得以继续执行。如果没有把sequence生成器挂起的话，它会陷入死循环。我们可以详细的看一眼sequence的签名：</p>
+
+<pre><code class="Kotlin">fun &lt;T&gt; sequence(
+    block: suspend SequenceScope&lt;T&gt;.() -&gt; Unit
+): Sequence&lt;T&gt;
+</code></pre>
+
+<p>可以发现sequence builder的参数是一个运行在SequenceScope中的挂起函数，内部一定是会创建一个协程来运行此代码块。并且，我们在此代码块中一定要让协程挂起，否则可能会陷入死循环。</p>
+
+<p>拓展阅读：</p>
 
 <ul>
-<li><a href="https://juejin.cn/post/7288606110336401467">一文搞懂 Kotlin Coroutine Job 的工作流程</a></li>
+<li><a href="https://kt.academy/article/cc-sequence">Sequence builders in Kotlin Coroutines</a></li>
+</ul>
+
+
+<h2>协程取消</h2>
+
+<p>创建协程能得到协程的句柄即Job对象，可以用来控制协程，最重要的一个操作就是取消协程，通过<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/cancel.html">cancel</a>方法，目的是终止协程的运行。我们先来看一个示例：</p>
+
+<pre><code class="Kotlin">val job = launch {
+    repeat(1000) { i -&gt;
+        println("job: I'm sleeping $i ...")
+        delay(500L)
+    }
+}
+delay(1300L) // delay a bit
+println("main: I'm tired of waiting!")
+job.cancel() // cancels the job
+job.join() // waits for job's completion 
+println("main: Now I can quit.")
+</code></pre>
+
+<p>输出如下：</p>
+
+<pre><code class="Kotlin">job: I'm sleeping 0 ...
+job: I'm sleeping 1 ...
+job: I'm sleeping 2 ...
+main: I'm tired of waiting!
+main: Now I can quit.
+</code></pre>
+
+<h3>协程取消的特性</h3>
+
+<p>协程只有<strong>处于挂起状态时才能被取消</strong>，这个可以看上面Job的状态表格。父协程被取消，它同时也会取消所有的子协程，并且父协程只有在所有子协程退出后才会退出，这种树形管理关系是结构化并发的基础。另外就是，为了更好的<strong>实现可取消性</strong>，在协程内部要在关键的地方检查<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/is-active.html">isActive</a>，比如循环时，或者做一些耗时操作时，以及时响应cancel。</p>
+
+<p>为了更全面的响应取消操作，也要捕获<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-cancellation-exception/">CancellationException</a>，并在finally中清理占用的资源，这是因为对于挂起的库函数，当被cancel时会抛出CancellationException。如果有Java的并发经验的同学可以发现，这跟取消Thread是一样的。</p>
+
+<h3>不可取消协程</h3>
+
+<p>有时候可能希望协程不被取消，也就是不能被取消，因为可能在执行一些关键的初始化工作，不可被打断和取消，这时可以用<strong>withContext(NonCancellable) { &hellip; }</strong>来作为协程的上下文环境，这坨代码块就不可被取消了，只有执行完才会返回，任外部如何cancel都没用：</p>
+
+<pre><code class="Kotlin">val job = launch {
+    try {
+        repeat(1000) { i -&gt;
+            println("job: I'm sleeping $i ...")
+            delay(500L)
+        }
+    } finally {
+        withContext(NonCancellable) {
+            println("job: I'm running finally")
+            delay(1000L)
+            println("job: And I've just delayed for 1 sec because I'm non-cancellable")
+        }
+    }
+}
+delay(1300L) // delay a bit
+println("main: I'm tired of waiting!")
+job.cancelAndJoin() // cancels the job and waits for its completion
+println("main: Now I can quit.")
+</code></pre>
+
+<p>这段代码非常有意思，父协程启动了子协程后就取消它，子协程中的try代码块会被取消，repeat不会执行完，但它的finally代码块是不可以取消的，一定要执行完子协程才能返回。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/docs/cancellation-and-timeouts.html">Cancellation and timeouts</a></li>
 </ul>
 
 
 <h2>超时处理</h2>
+
+<p>对于异步和并发编程来说，超时处理是非常关键的，虽然异步地或者并发地去执行任务，但对于主线程来说不可能永远等待任务，比如请求网络时，如果在网络库设置了无限长的超时，那么主线程或者说主协程就有可能面临无限等待。一般的做法是把问题丢给用户，用户受不了了，不想等了，那就返回或者退出，返回或者退出自然会去cancel掉所有的异步任务，无论是协程还是线程。</p>
+
+<p>但是，更为优雅的方式是对于每一个启动的异步任务，都主动的设置一个超时时间，在给定的时间内任务仍未结束，那就取消它，终止它。这样整体的并发会更加的有秩序和可控，当然了，取消随时仍可能发生，超时时间未到时，仍是可以主动取消的。</p>
+
+<p>在Kotlin中，给协程加上超时时限非常的方便，用扩展函数<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-timeout.html">withTimeout(limit) {&hellip;}</a>就可以非常方便的给代码块加上超时时限，当超时时限达到时，如果协程仍未返回，会终止协程并抛出异常<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-cancellation-exception/index.html">TimeoutCancellationException</a>。</p>
+
+<pre><code class="Kotlin">withTimeout(1300L) {
+    repeat(1000) { i -&gt;
+        println("I'm sleeping $i ...")
+        delay(500L)
+    }
+}
+//I'm sleeping 0 ...
+//I'm sleeping 1 ...
+//I'm sleeping 2 ...
+//Exception in thread "main" kotlinx.coroutines.TimeoutCancellationException: Timed out waiting for 1300 ms
+</code></pre>
 
 <h2>异常处理</h2>
 
@@ -252,8 +387,8 @@ launch(dispatcher) {
 <p>当对Kotlin以及协程有了基本的认识之后，如果想要进阶的学习，就需要读一些专题书籍，这里推荐两本：</p>
 
 <ul>
-<li><a href="https://www.packtpub.com/product/learning-concurrency-in-kotlin/9781788627160">Learn Concurrency in Kotlin</a> 这本书以并发为主题，只不过是用Kotlin协程的方式来实现并发，所以它的重点在于并发，具体实现方式其实可以多种多样。</li>
-<li><a href="https://www.bennyhuo.com/project/kotlin-coroutines.html">深入理解Kotlin协程</a> 这本书的优点在于会横向的介绍其他编程语言中的并发范式，从而能够深入的理解协程，对于有一定编程经验的人来说，横向比较的方式是非常有效的。</li>
+<li><a href="https://www.packtpub.com/product/learning-concurrency-in-kotlin/9781788627160">《Learn Concurrency in Kotlin》</a> 这本书以并发为主题，只不过是用Kotlin协程的方式来实现并发，所以它的重点在于并发，具体实现方式其实可以多种多样。</li>
+<li><a href="https://www.bennyhuo.com/project/kotlin-coroutines.html">《深入理解Kotlin协程》</a> 这本书的优点在于会横向的介绍其他编程语言中的并发范式，从而能够深入的理解协程，对于有一定编程经验的人来说，横向比较的方式是非常有效的。</li>
 </ul>
 
 
