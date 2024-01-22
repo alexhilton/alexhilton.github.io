@@ -255,11 +255,42 @@
 
 <p><a href="https://en.wikipedia.org/wiki/Continuation-passing_style">CPS(Continuation Passing Style)</a>续体传递风格，是一种函数式的编程风格，函数并不直接返回结果，而是接收一个代码块作为最后一个参数。这个代码块会在函数要执行完被调用执行，用以处理函数结果。其实这个代码块就是回调函数，称之为续体(Continuation)，它会决定程序接下来的行为。整个程序就通过一个一个的Continuation拼接在一起。</p>
 
+<p><img src="https://img95.699pic.com/element/40073/5266.png_860.png" alt="" /></p>
+
+<p>如果以同步式的写法，函数处理foo的返回值，可这样写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">a</span> <span class="p">=</span> <span class="n">foo</span><span class="p">()</span>
+</span><span class='line'><span class="k">if</span> <span class="p">(</span><span class="n">a</span> <span class="p">==</span> <span class="m">200</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">bar</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果改成CPS式，就可这样写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">foo</span><span class="p">()</span> <span class="p">{</span> <span class="n">a</span><span class="p">-&gt;</span>
+</span><span class='line'>   <span class="k">if</span> <span class="p">(</span><span class="n">a</span> <span class="p">==</span> <span class="m">200</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">bar</span><span class="p">()</span>
+</span><span class='line'>   <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
 <p>扩展阅读：</p>
 
 <ul>
 <li><a href="https://matt.might.net/articles/by-example-continuation-passing-style/">By example: Continuation-passing style in JavaScript</a></li>
 <li><a href="https://www.cs.purdue.edu/homes/suresh/590s-Fall2002/lectures/lecture-4.html">Continuation-Passing Style</a></li>
+<li><a href="https://juejin.cn/post/7137905800504148004">Kotlin协程之再次读懂协程工作原理</a></li>
 </ul>
 
 
@@ -267,15 +298,130 @@
 
 <p>比较值得学习就是Go语言的协程Goroutines，以及Python中的async I/O。</p>
 
-<h2>测试</h2>
+<h2>测试Testing</h2>
 
-<h2>并发安全性</h2>
+<p>这里主要指的是针对开发人员的单元测试，而非测试同学的验收测试。</p>
+
+<p>协程是一种并发编程范式，因此，测试与并发代码测试是一样的。无论哪种测试，本质都是一样的，把代码当成黑盒，给特定的输入，看是否能产生符合预期的输出。特定的输入通常需要Mock。</p>
+
+<h3>需要测试的是逻辑</h3>
+
+<p>一定要厘清，逻辑代码是需要测试的，要把重点放在逻辑的测试，啥是逻辑？其实就是条件控制语句和循环语句，所以要盯着条件和循环来写case。</p>
+
+<p>比如说，网络请求，要把无网络，连接超时，服务器返回超时，返回码不对，返回数据格式不对，这些情况都Mock到，以测试逻辑是否有把所有的可能情况都考虑到了。</p>
+
+<h3>TestScope</h3>
+
+<p>Kotlin的协程库特意准备了一个专门用于测试的TestScope，这个scope的好处在于它使用的是虚拟时间。时间对于并发编程是特别重要的，比如经常需要等待多少时间间隔（协程相互协作的等待，或者等待服务器返回），以及异步任务的超时时间，在实际的运行中肯定是真实的去等。但对于测试代码来说，也这样真的去等，就有点难以接受了，单元测试的一个非常重要的要求就是测试必须要快，要能快速反馈结果。</p>
+
+<p>为此，就有了TestScope，它用的是虚拟时间，可以理解为这个scope中delay的时间是一个虚拟的时间，它会很快的执行，相当于这里的时间变快了。因为它相当于是整体的时间都变快了，所以里面代码相对的时序并不受影响，所以不会影响原本应该有的时序。</p>
+
+<p>扩展阅读 <a href="https://kotlinlang.org/docs/coroutines-and-channels.html#testing-coroutines">Testing coroutines﻿</a>。</p>
+
+<h2>并发安全性（Concurrent safety）</h2>
+
+<p>这里指的是并发程序中共享数据的并发安全性（Concurrent safety），而非程序安全的那个安全(data security)。</p>
+
+<p>线程有自己的代码，但却可以与其他线程共享数据，代码操作数据，看到的数据不一致，就产生了并发安全问题，并发安全问题是由多线程共享变量引发的，所以要想解决并发安全，要么别共享变量（无论是避免共享变量，用线程自己的变量，用锁来保证共享变量的原子访问）；要么别用多线程。</p>
+
+<p>协程也是并发编程，如果协程切换了不同的运行线程，且又访问了共享数据，那就有可能有并发安全。注意并发安全问题（共享数据不一致）是由多线程引起的，如果没有切换线程，则没有问题，我们可以验证一下：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span><span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">count</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">jobs</span> <span class="p">=</span> <span class="n">mutableListOf</span><span class="p">&lt;</span><span class="n">Job</span><span class="p">&gt;()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">timeCost</span> <span class="p">=</span> <span class="n">measureTimeMillis</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">repeat</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">job</span> <span class="p">=</span> <span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
+</span><span class='line'>                <span class="n">count</span><span class="p">++</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="n">jobs</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">job</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">jobs</span><span class="p">.</span><span class="n">joinAll</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;timeCost = $timeCost&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;count = $count&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">//[main @coroutine#1] timeCost = 173</span>
+</span><span class='line'><span class="c1">//[main @coroutine#1] count = 1000</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个示例中多个协程共享了一个变量，并且++并不是原子的，但结果是对的，说明没有发生数据不一致的问题，原因是没有为协程切换线程。我们切一下线程试试：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span><span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">count</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">jobs</span> <span class="p">=</span> <span class="n">mutableListOf</span><span class="p">&lt;</span><span class="n">Job</span><span class="p">&gt;()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">timeCost</span> <span class="p">=</span> <span class="n">measureTimeMillis</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">repeat</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">job</span> <span class="p">=</span> <span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Default</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
+</span><span class='line'>                <span class="n">count</span><span class="p">++</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="n">jobs</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">job</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">jobs</span><span class="p">.</span><span class="n">joinAll</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;timeCost = $timeCost&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;count = $count&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">//[main @coroutine#1] timeCost = 165</span>
+</span><span class='line'><span class="c1">//[main @coroutine#1] count = 998</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这回可以看到数据不一致的问题发生了，因为结果并不是预期的1000。</p>
+
+<h3>轻量级锁</h3>
+
+<h3>要锁数据的操作而非协程</h3>
 
 <p>扩展阅读</p>
 
 <ul>
 <li><a href="https://juejin.cn/post/7300122001767514112">Kotlin 协程的并发安全之道</a></li>
 <li><a href="https://juejin.cn/post/7219522025198895159">Kotlin 协程中的并发问题：我明明用 mutex 上锁了，为什么没有用？</a></li>
+<li><a href="https://kotlinlang.org/docs/shared-mutable-state-and-concurrency.html">Shared mutable state and concurrency</a></li>
 </ul>
 
 
