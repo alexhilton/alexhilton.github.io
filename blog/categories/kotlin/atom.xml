@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-01-25T21:04:58+08:00</updated>
+  <updated>2024-01-26T00:17:32+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,475 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[包教包会的Kotlin Flow教程]]></title>
+    <link href="http://toughcoder.net/blog/2024/01/25/kotlin-flow-made-easy/"/>
+    <updated>2024-01-25T23:17:51+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/01/25/kotlin-flow-made-easy</id>
+    <content type="html"><![CDATA[<p>Kotlin中的<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-flow/">Flow</a>是专门用于处理异步数据流的API，是函数响应式编程范式(Functional Reactive Programming FRP)在Kotlin上的一个实现，并且深度融合了Kotlin的协程。是Kotlin中处理异步数据流问题的首先方案。今天就来认识一下Flow并学会如何使用它。</p>
+
+<p><a href=""><img src="https://blog.mindorks.com/images/kotlin-flow-banner-image.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>Hello, Flow!</h2>
+
+<p>老规矩，新学习一个新东西的时候，总是要从一个基础的『Hello, world』开始，快速上手体验，有个第一印象。我们就从一个简单的『Hello, Flow!』开始Flow之旅：</p>
+
+<pre><code class="Kotlin">fun main() = runBlocking {
+    val simple = flow {
+        listOf("Hello", "world", "of", "flows!")
+            .forEach {
+                delay(100)
+                emit(it)
+            }
+    }
+
+    simple.collect {
+        println(it)
+    }
+}
+//Hello
+//world
+//of
+//flows!
+</code></pre>
+
+<p>这里创建了一个异步产生String的数据流Flow<String>，会不定时的产生一个String，然后收集此数据流产生的数据，把流出的String对象消费掉。可以看出Flow本质上是一个生产者消费者模式，流出的数据是由生产者产生的，且最终被消费者消费掉。可以把Flow想像成为一个生产线中的传送带，产品（数据）在上面不停的流动，经过各个站点的加工，最终成型，由消费者消费掉。从这个小例子中可以看出Flow API的三要素：数据流的上游是创建Flow（生产者）；中游是变幻操作（数据的处理和加工）；下游是收集数据（消费者），我们一一的详细来学习。</p>
+
+<h2>创建Flow</h2>
+
+<p>Flow是一个生产者，创建Flow也就是把数据放到传送带上。数据可以是基础数据或者集合，也可以是其他方式生成的数据，如网络或者回调或者硬件。创建Flow的API称作flow builder函数。</p>
+
+<h3>用集合创建Flow</h3>
+
+<p>这是创建Flow的最简单的方式，有两个，一个是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flow-of.html">flowOf</a>用于从固定数量的元素创建，多用于示例，实际中基本上用不到：</p>
+
+<pre><code class="Kotlin">val simple = flowOf("Hello", "world", "of", "flows!")
+simple.collect { println(it) }
+</code></pre>
+
+<p>或者，通过<a href="">asFlow</a>把现有的集合转为Flow，这个还是比较实用的：</p>
+
+<pre><code class="Kotlin">listOf("Hello", "world", "of", "flows!").asFlow()
+    .collect { println(it) }
+(1..5).asFlow().collect { println(it) }
+</code></pre>
+
+<h3>通用flow builder</h3>
+
+<p>最为通用的flow builder就是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flow.html">flow {&hellip;}</a>了，这是最为通用，也是最为常用的构造器。在代码块中调用<a href="">emit</a>就可以了，这个代码块会运行在协程之中，所以在这个代码里可以调用suspend函数：</p>
+
+<pre><code class="Kotlin">fun main() = runBlocking {
+    val simple = flow {
+        for (i in 1..3) {
+            delay(100)
+            println("Emitting: $i")
+            emit(i)
+        }
+    }
+    simple.collect { println(it) }
+}
+//Emitting: 1
+//1
+//Emitting: 2
+//2
+//Emitting: 3
+//3
+</code></pre>
+
+<p>这是一个代码块，只要调用了emit产生数据即可，又可调用suspend函数，因此非常的实用，比如可以执行网络请求，请求回来后emit等等。</p>
+
+<h2>终端操作符</h2>
+
+<p>数据从生产者流出，直到消费者把数据收集起来进行消费，而只有数据被消费了才有意义。因此，还需要终端操作（Terminal flow operators）。需要注意的是终端操作符是Flow的终点，并不算是Flow传送带内部，因此终端操作都是suspend函数，调用者需要负责创建协程以正常调用这些suspending terminal operators。</p>
+
+<p><img src="https://programming.vip/images/doc/938ac9f1c0bdc25247c23c073789f14f.jpg" alt="" /></p>
+
+<p>常见的终端操作有三个：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/collect.html">collect</a> 最为通用的，可执行一个代码块，参数就是Flow流出的数据</li>
+<li>转换为<a href="https://kotlinlang.org/docs/collections-overview.html">集合Collections</a>，如<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/to-list.html">toList</a>和<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/to-set.html">toSet</a>等，可以方便把收集到的数据转换为集合</li>
+<li>取特定的值，如<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/first.html">first()</a>只取第一个，<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/last.html">last</a>只取最后一个, <a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/single.html">single</a>只要一个数据（无数据和超过一个数据时都会抛异常。</li>
+<li>降维（或者叫作聚合accumulate）操作，如折叠<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/fold.html">fold</a>和化约<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/reduce.html">reduce</a>，折叠和化约可以对数据流进行降维，如求和，求积，求最大值最小值等等。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/count.html">count</a> 其实也是降维的一种，返回数据流中的数据个数，它还可以结合过滤以计算某种过滤条件后的数据数量。</li>
+</ul>
+
+
+<pre><code class="Kotlin">fun main() = runBlocking {
+    val simple = flow {
+        for (i in 1..3) {
+            delay(100)
+            println("Emitting: $i")
+            emit(i)
+        }
+    }
+    simple.collect { println(it) }
+    println("toList: ${simple.toList()}")
+    println("first: ${simple.first()}")
+    println("sum by fold: ${simple.fold(0) { s, a -&gt; s + a }}")
+}
+</code></pre>
+
+<p>输出：</p>
+
+<pre><code class="Bash">Emitting: 1
+1
+Emitting: 2
+2
+Emitting: 3
+3
+Emitting: 1
+Emitting: 2
+Emitting: 3
+toList: [1, 2, 3]
+Emitting: 1
+first: 1
+Emitting: 1
+Emitting: 2
+Emitting: 3
+sum by fold: 6
+</code></pre>
+
+<p>这些终端操作符都简单，比较好理解，看一眼示例就知道怎么用了。需要注意的就是first()和single()，first是只接收数据流中的第一个，而single则要求数据流只能有一个数据（没有或者超过一个都会抛异常）。比较有意思就是last()，数据流是一个流，一个产品传送带，通常情况下都是指无限或者说不确定数据 数量时才叫数据流，那又何来最后一个数据呢？通常情况下last都是无意义的。只有当我们知道流的生产者只生产有限数量数据时，或者采用了一些限制性的变幻操作符时，last才能派上用场。</p>
+
+<p>再有就是注意fold和reduce的区别，这里它们的区别跟集合上的操作是一样的，fold可以提供初始值，流为空时返回初始值；而reduce没初始值，流为空时会抛异常。</p>
+
+<h2>变幻操作符</h2>
+
+<p>数据在流动的过程中可以对数据进行转化操作，从一种数据类型变别另外一种，这就是变幻(Transformation)，这是数据流最为灵活和强大的一个方面。这跟<a href="https://kotlinlang.org/docs/collection-transformations.html">集合的变幻</a>是类似的。</p>
+
+<p><img src="https://cdn-media-1.freecodecamp.org/images/1*ju5YD8bRZhdCGmptRQdmlw.png" alt="" /></p>
+
+<h3>转换</h3>
+
+<p>最常见的变幻就是转换，也就是把从一种数据类型转换为另一种数据类型，用的最多当然是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/map.html">map</a>，还有更为通用的<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/transform.html">transform</a>。它们都能把数据流中的数据从一种类型转换为另一种类型，比如把Flow<String>转为Flow<Int>。区别在于，map是死板的转换，一个对象进去，另一个对象作为返回值出来；但transform更为灵活，它并不是把新类型作为返回值，它可以像上游生产者那样产生(emit)新数据，甚至可以产生(emit)多个新数据，它是非常强大的，所有其他的变幻操作符，都是基于transform实现的。</p>
+
+<pre><code class="Kotlin">fun main() = runBlocking {
+    val simple = flow {
+        for (i in 1..3) {
+            delay(100)
+            println("Emitting: $i")
+            emit(i)
+        }
+    }
+
+    simple.map { " Mapping to ${it * it}" }
+        .collect { println(it) }
+
+    simple.transform { req -&gt;
+        emit(" Making request $req")
+        emit(performRequest(req))
+    }.collect {
+        println(it)
+    }
+}
+
+fun performRequest(req: Int) = "Response for $req"
+</code></pre>
+
+<p>输出是:</p>
+
+<pre><code class="Bash">Emitting: 1
+ Mapping to 1
+Emitting: 2
+ Mapping to 4
+Emitting: 3
+ Mapping to 9
+Emitting: 1
+ Making request 1
+Response for 1
+Emitting: 2
+ Making request 2
+Response for 2
+Emitting: 3
+ Making request 3
+Response for 3
+</code></pre>
+
+<p>还有一个操作符<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/with-index.html">withIndex</a>它与集合中的<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.collections/map-indexed.html">mapIndexed</a>是类似的，它的作用是把元素变成IndexedValue，这样在后面就可以得到元素和元素的索引 了，在某些场景下还是比较方便的。</p>
+
+<h3>限制</h3>
+
+<p>数据流里面的数据不一定都是需要的，所以通常需要对数据元素进行过滤，这就是限制性操作符，最常见的就是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/filter.html">filter</a>，这里与集合的限制操作也是类似的：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/filter.html">filter</a> 把数据转为布尔型，从而对数据流进行过滤。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/distinct-until-changed.html">distinctUntilChanged</a> 过滤数据流中重复的元素。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/drop.html">drop</a> 丢弃前面一定数量的元素。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/take.html">take</a> 只返回流中前面一定数量的元素，当数量达到时流将被取消，注意take与drop是相反的。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/debounce.html">debounce</a> 仅保留流中一定超时间隔内的元素，比如超时时间是1秒，那只返回到达1秒时最新的元素，这个元素前面的将被丢弃。这个在秒杀场景拦截疯狂点击，或者一个服务中拦截疯狂请求时非常有用。只取一定时间间隔内的最新的元素，拦截掉无效数据。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/sample.html">sample</a> 以一定的时间间隔取元素，与debounce差不多，区别在于debounce会返回最后一个元素，而sample不一定，要看间隔最后一个元素能否落在一个时间间隔内。</li>
+</ul>
+
+
+<pre><code class="Kotlin">@OptIn(FlowPreview::class)
+fun main() = runBlocking {
+    val constraint = flow {
+        emit(1)
+        delay(90)
+        emit(2)
+        delay(90)
+        emit(3)
+        delay(1010)
+        emit(4)
+        delay(1010)
+        emit(5)
+    }
+
+    constraint.filter { it % 2 == 0 }
+        .collect { println("filter: $it") }
+    constraint.drop(3)
+        .collect { println("drop(3): $it") }
+    constraint.take(3)
+        .collect { println("take(3): $it") }
+
+    constraint.debounce(1000)
+        .collect { println("debounce(1000): $it") }
+    constraint.sample(1000)
+        .collect { println("sample(1000): $it") }
+}
+</code></pre>
+
+<p>仔细看它们的输出，以理解它们的作用：</p>
+
+<pre><code class="Bash">filter: 2
+filter: 4
+drop(3): 4
+drop(3): 5
+take(3): 1
+take(3): 2
+take(3): 3
+debounce(1000): 3
+debounce(1000): 4
+debounce(1000): 5
+sample(1000): 3
+sample(1000): 4
+</code></pre>
+
+<p>需要留意，debounce和sample是Preview的API，需要<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-flow-preview/">加上Preview注解</a>。</p>
+
+<p>中游的变幻操作符仍属于流的一部分，它们都仍运行在Flow的上下文中，因此，这些操作符内，与流的builder一样，都可以直接调用其他的supsend函数，甚至是其他的耗时的，阻塞的函数都可以调用。并不需要特别的为上游和中游创建上下文。</p>
+
+<p>Flow的操作符特别多，我们需要留意区别中游操作符和下游终端。看这些函数的返回类型就可以了，返回类型是具体数据的，一定是下游终端操作符；而对于上游生产者和中游变幻操作符，其返回值一定是一个Flow。</p>
+
+<h2>高级操作符</h2>
+
+<p>前面讲的操作符都是针对 某一个流本身的，但大多数场景一个流明显不够用啊，我们需要操作多个流，这时就需要用到一些高级操作符了。</p>
+
+<h3>合并多路流</h3>
+
+<p>多路流不可能一个一个的处理，合并成为一路流更加的方便，有以下合并方法：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/merge.html">归并merge</a>把数据类型相同的多路流归并为一路，注意一定是数据类型相同的才可以归并，并且归并后的元素顺序是未知的，也即不会保留原各路流的元素顺序。归并流的数量没有限制。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/zip.html">粘合zip</a> 当想要把两路流的元素粘合为一个元素时，就可以使用<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/zip.html">zip</a>，当任何一个流结束或者被取消时，zip也就结束了。只能二个二个的粘合。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/combine.html">组合combine</a>把多路流的每个最新元素粘合成新数据，形成一个新的流，是把<strong>每个元素</strong>都用<strong>每路流的最新元素</strong>来转换生成。最少需要2路流，最多支持5路流。</li>
+</ul>
+
+
+<p>用一个示例来感受一下它们的作用：</p>
+
+<pre><code class="Kotlin">fun main() = runBlocking {
+    val one = flowOf(1, 2, 3)
+                .map(Int::toString)
+                .onEach { delay(10) }
+    val two = flowOf("a", "b", "c", "d")
+                .onEach { delay(25) }
+    merge(one, two)
+        .collect { println("Merge: $it") }
+    one.zip(two) { i, s -&gt; "Zip: $i. $s" }
+        .collect { println(it) }
+    combine(one, two) { i, s -&gt; "Combine $i with $s" }
+        .collect { println(it) }
+}
+</code></pre>
+
+<p>这里是输出：</p>
+
+<pre><code class="Bash">Merge: 1
+Merge: 2
+Merge: a
+Merge: 3
+Merge: b
+Merge: c
+Merge: d
+Zip: 1. a
+Zip: 2. b
+Zip: 3. c
+Combine 2 with a
+Combine 3 with a
+Combine 3 with b
+Combine 3 with c
+Combine 3 with d
+</code></pre>
+
+<p>通过它们的输出可以看到它们的区别：merge就像把两个水管接到一样，简单没有多余加工，适合数据类型一样的流（比如都是水）；zip会对齐两路流，让能对齐的元素两两结合，对不齐时就结束了；而combine要等到集齐每路流的最新元素，才能转换成新数据，two是较one慢的，看到two的元素&#8221;a&#8221;时，one最新的元素是&#8221;2&#8221;，之后one的&#8221;3&#8221;来了，这时two最新的元素还是&#8221;a&#8221;，之后one停在了&#8221;3&#8221;，后续two的元素都与&#8221;3&#8221;组合。有同学可能会有疑问，为啥one的『1』丢弃了，没找到组合呢？因为它来的太早了，one的『1』来了时，two还没有元素，它肯定会等，但当two的第一个元素『a』来了时，这时one的最新元素已是『2』了，one是10发一个元素，two是隔25发一个元素，所以two的第1个元素到了时，one的第2个元素已经来了，它是最新的，所以组合时会用它。combine要集齐每路流的最新元素才能合成。</p>
+
+<p>总结起来就是，<strong>zip会按顺序对齐元素</strong>；而combine要<strong>集齐每路流的最新元素</strong>，先要<strong>集齐</strong>，齐了时还要<strong>取每个流的最新元素</strong>。可以动手运行示例，修改delay的时间，看输出有啥不一样的，以加深理解。</p>
+
+<h3>展平(Flatten)</h3>
+
+<p>一个Flow就是一个异步数据流，它相当于一个传送带或者管道，货物（具体的数据）在其上面或者里面流动。正常情况下Flow内部都是常规数据（对象）在流动，但Flow本身也是一个对象，因此也可以嵌套，把流当成另一个流的数据，比如Flow&lt;Flow<Int>>，这就是flow of flows of Int。Flow是数据流，最终消费者需要的是具体的数据，所以对于嵌套的flow of flows，通常都需要在传给终端操作符之前进行展平(flatten)，得到一个faltterned flow（即从Flow&lt;Flow<Int>>转成Flow<Int>），就可以被终端消费了。操作符中以flat开头的函数都是用于展平的，主要是两类，一类是展平，一类是先变幻再展平。</p>
+
+<h4>直接展平</h4>
+
+<p>最直观的展平莫过于对于已经是嵌套的Flow of Flows做展平处理，以能让终端操作符正常的消费Flow里面的数据，有两个API可以做展平：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flatten-concat.html">flattenConcat</a> 把嵌套的flow of flows展平为一个Flow，内层的每个流都是按顺序拼接在一起的，串行拼接。比如Flow of 4 Flows，内层有四个管道，那就就变成了内1->内2->内3->内4。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flatten-merge.html">flattenMerge</a> 把Flow of Flows展平为一个Flow，内层的所有Flow是以并发的方式将元素混合流入新管道，是并行混合，相当于四个管道同时往另一个管道倒水，原流中的顺序会错乱掉。</li>
+</ul>
+
+
+<p><img src="https://img95.699pic.com/element/40073/5266.png_860.png" height="240" width="320" alt="" /></p>
+
+<pre><code class="Kotlin">@OptIn(ExperimentalCoroutinesApi::class)
+fun main() = runBlocking {
+    val flow2D = flowOf("Hello", "world", "of", "flow!")
+        .map { it.toCharArray().map { c -&gt; " '$c' " }.asFlow() }
+        .flowOn(Dispatchers.Default)
+
+    flow2D.collect { println("Flow object before flatten: $it") } // Data in flow are Flow objects
+
+    println("With flattenConcat:")
+    flow2D.flattenConcat()
+        .collect { print(it) }
+
+    println("\nWith flattenMerge:")
+    flow2D.flattenMerge()
+        .collect { print(it) }
+}
+//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@1b0375b3
+//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@e580929
+//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@1cd072a9
+//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@7c75222b
+//With flattenConcat:
+ //'H'  'e'  'l'  'l'  'o'  'w'  'o'  'r'  'l'  'd'  'o'  'f'  'f'  'l'  'o'  'w'  '!' 
+//With flattenMerge:
+// 'H'  'e'  'l'  'l'  'o'  'w'  'o'  'r'  'l'  'd'  'o'  'f'  'f'  'l'  'o'  'w'  '!'
+</code></pre>
+
+<p>从输出中可以看出，如果不展平Flow里面是Flow对象，没法用。flattenConcat是把内部的流串行的接在一起。但flattenMerge的输出似乎与文档描述不太一致，并没有并发式的混合。</p>
+
+<h4>先转换再展平</h4>
+
+<p><img src="https://velog.velcdn.com/images/morning-la/post/59271fa7-8768-43f7-bebf-1387e77d8013/image.png" alt="" /></p>
+
+<p>大多数时候并没有现成的嵌套好的Flow of Flows给你展平，更多的时候是我们需要自己把元素转换为一个Flow，先生成Flow of Flows，然后再展平，且有定义好的API可以直接用：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-concat.html">flatMapConcat</a> 先把Flow中的数据做变幻，这个变幻必须从元素变成另一个Flow，这时就变成了嵌套式的Flow of Flows，然后再串行式展平为一个Flow。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-latest.html">flatMapLatest</a> 先把Flow中的最新数据做变幻，这个变幻必须从元素变成另一个Flow，这时会取消掉之前转换生成的内层流，结果虽然也是嵌套，但内层流只有一个，就是原Flow中最新元素转换生成的那个流。然后再展平，这个其实也不需要真展平，因为内层流只有一个，它里面的数据就是最终展平后的数据。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-merge.html">flatMapMerge</a> 与flatMapConcat一样，只不过展平的时候嵌套的内层流是以并发的形式来拼接的。</li>
+</ul>
+
+
+<p><img src="https://img95.699pic.com/element/40073/5266.png_860.png" height="240" width="320" alt="" /></p>
+
+<pre><code class="Kotlin">@OptIn(ExperimentalCoroutinesApi::class)
+fun main() = runBlocking {
+    val source = (1..3).asFlow()
+        .onEach { delay(100) }
+
+    println("With flatMapConcat:")
+    var start = System.currentTimeMillis()
+    source.flatMapConcat(::requestFlow)
+        .collect { println("$it at ${System.currentTimeMillis() - start}ms from the start") }
+
+    println("With flatMapMerge:")
+    start = System.currentTimeMillis()
+    source.flatMapMerge(4, ::requestFlow)
+        .collect { println("$it at ${System.currentTimeMillis() - start}ms from the start") }
+
+    println("With flatMapLatest:")
+    source.flatMapLatest(::requestFlow)
+        .collect { println("$it at ${System.currentTimeMillis() - start}ms from the start") }
+}
+
+fun requestFlow(x: Int): Flow&lt;String&gt; = flow {
+    emit(" &gt;&gt;[$x]: First: $x")
+    delay(150)
+    emit(" &gt;&gt;[$x]: Second: ${x * x}")
+    delay(200)
+    emit(" &gt;&gt;[$x]: Third: ${x * x * x}")
+}
+</code></pre>
+
+<p>输出比较多：</p>
+
+<pre><code class="Bash">With flatMapConcat:
+ &gt;&gt;[1]: First: 1 at 140ms from the start
+ &gt;&gt;[1]: Second: 1 at 306ms from the start
+ &gt;&gt;[1]: Third: 1 at 508ms from the start
+ &gt;&gt;[2]: First: 2 at 613ms from the start
+ &gt;&gt;[2]: Second: 4 at 765ms from the start
+ &gt;&gt;[2]: Third: 8 at 969ms from the start
+ &gt;&gt;[3]: First: 3 at 1074ms from the start
+ &gt;&gt;[3]: Second: 9 at 1230ms from the start
+ &gt;&gt;[3]: Third: 27 at 1432ms from the start
+With flatMapMerge:
+ &gt;&gt;[1]: First: 1 at 130ms from the start
+ &gt;&gt;[2]: First: 2 at 235ms from the start
+ &gt;&gt;[1]: Second: 1 at 284ms from the start
+ &gt;&gt;[3]: First: 3 at 341ms from the start
+ &gt;&gt;[2]: Second: 4 at 386ms from the start
+ &gt;&gt;[1]: Third: 1 at 486ms from the start
+ &gt;&gt;[3]: Second: 9 at 492ms from the start
+ &gt;&gt;[2]: Third: 8 at 591ms from the start
+ &gt;&gt;[3]: Third: 27 at 695ms from the start
+With flatMapLatest:
+ &gt;&gt;[1]: First: 1 at 807ms from the start
+ &gt;&gt;[2]: First: 2 at 915ms from the start
+ &gt;&gt;[3]: First: 3 at 1021ms from the start
+ &gt;&gt;[3]: Second: 9 at 1173ms from the start
+ &gt;&gt;[3]: Third: 27 at 1378ms from the start
+</code></pre>
+
+<p><img src="https://velog.velcdn.com/images/morning-la/post/5d218551-4021-4a91-8b85-bf69beb786d6/image.png" alt="" />
+这个示例中原始Flow是一个Int值，把它转换成为一个字符串流Flow<String>。从输出中可以看到flatMapConcat确实是串行拼接，并且flatMapMerge是并发式的混合，不保证内部Flow的元素顺序。仔细看flatMapLatest的输出，每当原始Flow中有新的值生成时，之前转换生成的流会被取消，它们还没有运行完，仅第一个元素流出了。而原始流的最后一个元素3则完整的从展平流中流出了。</p>
+
+<h2>异常，取消和结束</h2>
+
+<h2>上下文切换</h2>
+
+<h2>什么时候用Flow</h2>
+
+<h2>Flow是冷流</h2>
+
+<h2>与ReactiveX的区别</h2>
+
+<h2>在Android中使用Flow</h2>
+
+<p><img src="https://koenig-media.raywenderlich.com/uploads/2020/05/KotlinFlow-twitter.png" alt="" /></p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://blog.mindorks.com/what-is-flow-in-kotlin-and-how-to-use-it-in-android-project/">What is Flow in Kotlin and how to use it in Android Project?</a></li>
+<li><a href="https://developer.android.com/kotlin/flow">Kotlin flows on Android</a></li>
+<li><a href="https://github.com/amitshekhariitbhu/Learn-Kotlin-Flow">Learn Kotlin Flow by real examples for Android</a></li>
+</ul>
+
+
+<h2>书籍推荐</h2>
+
+<p>Flow本身的东西其实并不多，就是三版斧：创建，变幻和终端。但Flow背后的思想是很庞大的，想要用好Flow必须要学会函数响应式编程范式。也就是说只有以FRP方式来构建软件时，才算真正用好了Flow，否则就是在滥用。</p>
+
+<p><a href="https://www.manning.com/books/functional-reactive-programming">《Functional Reactive Programming》</a></p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://kotlinlang.org/docs/flow.html">Asynchronous Flow</a></li>
+<li><a href="https://amitshekhar.me/blog/flow-api-in-kotlin">Mastering Flow API in Kotlin</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Kotlin进阶之协程从上车到起飞]]></title>
@@ -1484,204 +1953,6 @@ fun area(shape: Shape): Int = shape.length * shape.width
 <li><a href="https://www.baeldung.com/kotlin/inline-functions">Inline Functions in Kotlin</a></li>
 <li><a href="https://amitshekhar.me/blog/inline-function-in-kotlin">inline function in Kotlin</a></li>
 <li><a href="https://www.geeksforgeeks.org/kotlin-inline-functions/">Kotlin Inline Functions</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Understanding Kotlin Scope Functions]]></title>
-    <link href="http://toughcoder.net/blog/2023/04/12/understanding-kotlin-scope-functions/"/>
-    <updated>2023-04-12T15:06:18+08:00</updated>
-    <id>http://toughcoder.net/blog/2023/04/12/understanding-kotlin-scope-functions</id>
-    <content type="html"><![CDATA[<p>Kotlin是基于JVM衍生出来的新一代通用编程语言，它的目标是简洁，可读和高效，这里的高效并不是代码的运行效率高，而是说项目的开发效率高。Kotlin有太多的小巧的新特性（在Java眼中就是语法糖），比如在Kotlin中有几个作用和用法都非常接近的函数apply/with/run/let/also，它们的正统名字是<strong>作用域函数</strong>(Scope functions)，今天就来学习一下这些函数的使用方法和具体区别。</p>
-
-<p><a href=""><img src="https://tse2-mm.cn.bing.net/th/id/OIP-C.eDXYmyuQp-E1wGqx4WnhIgHaEK?pid=ImgDet&amp;rs=1" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>Java是面向对象的王牌语言，它的特点是严谨和教条，Java写出来的代码学过Java的人大多都看得懂，所以规模以上的项目现在基本上都用Java，这对维护是有好处的。但Kotlin不一样，它有非常多的特性，融合了众多编程语言的特点，同样一件事情，可能有无数种写法，虽然号称是用标准Kotlin语言实现的，但是即使学过Kotin的人也看不懂。比如虽然你学会了Function，Object和lambda，以及像inline function和extension，但是如果用apply和with写几段方法，你就看不懂了，这就导致了Kotlin虽然易于上手，但是要想学透和提高曲线 就会陡峭许多。</p>
-
-<p><img src="https://tse2-mm.cn.bing.net/th/id/OIP-C.pVewkBVy74Ivnoumj0Gx0wHaF8?pid=ImgDet&amp;rs=1" alt="" /></p>
-
-<h2>到底是个啥</h2>
-
-<p>先来看一下Scope function到底是什么，它们的作用是在一个对象上执行一段代码，我们来看一个简单的例子：有一个类是Person，它有一些属性和方法，我们想对它的一个对象进行操作，通常会这样做：</p>
-
-<pre><code class="kotlin">val alice = Person(name="Alice", age=20,addr="Amsterdam")
-println(alice)
-alice.moveTo("London")
-alice.incrementAge(2)
-println("Two years later ${alice.name} is at ${alice.addr}")
-</code></pre>
-
-<p>但使用scope function，我们可以这样做：</p>
-
-<pre><code class="kotlin">val alice = Person("Alice", 20, "Amsterdam").apply {
-    println(this)
-    moveTo("London")
-    incrementAge(2)
-}
-println("Two years later ${alice.name} is at ${alice.addr}")
-
-//Person(name='Alice', age=20, addr='Amsterdam')
-//Two years later Alice is at London
-</code></pre>
-
-<p>这两段代码的输出是完全一样的，但是第二段明显要简洁很多这就是scope function的作用，仔细看apply后面的lambda块，它是一个scope，犹如在对象的类定义之中，在这个代码块中可以直接引用对象的方法，而不是像常规的那样使用对象的引用。</p>
-
-<p><em>注意</em>：如果不是很尾部lambda的同学可以先行参考<a href="http://toughcoder.net/blog/2023/01/24/understanding-kotlin-functions/">另外一篇文章</a>，以加强理解。</p>
-
-<h2>理解Scope</h2>
-
-<p>作用域也可以理解为一个代码块的上下文，也就是说在一个代码中，可以直接使用的东西，环境变量之于进程，系统框架为应用准备的基础对象，都可以视为一种scope。最为明显的就是类的定义，在类中，我们可以引用this指针来代表当前对象super指针来代表基类，这也是一种scope。lambda捕获的闭包也是一种scope。</p>
-
-<p>Kotlin的scope functions就是把某一个对象当作代码块的scope，代码块中的代码可以方便的使用这个对象。</p>
-
-<h2>Scope funtions的作用</h2>
-
-<p>如同开头讨论的，能用scope function写出来的东西，用常规方式也一样可以做到，那到底图个啥呢？用scope function的方式代码变得更加的简洁和紧凑，我们把针对某一对象的密集操作集中在一起放入一个代码块中，会更加的内聚和紧凑，易于扩展和维护。但也要注意不能滥用，代码块中只应该写与对象相关的操作，与scope对象不相干的事情是绝对不应该放入其中的。</p>
-
-<h2>Scope functions</h2>
-
-<p>主要有6个，它们的应用主体都是一个对象，也就是要在一个对象上面调用这些函数，然后提供一个代码块（lambda）：</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:center;"> Scope Function </th>
-<th style="text-align:center;"> Object reference </th>
-<th style="text-align:center;"> Return value </th>
-<th style="text-align:center;"> Description </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:center;"> let </td>
-<td style="text-align:center;"> it </td>
-<td style="text-align:center;"> lambda result </td>
-<td style="text-align:center;"> Extension function </td>
-</tr>
-<tr>
-<td style="text-align:center;"> run </td>
-<td style="text-align:center;"> this </td>
-<td style="text-align:center;"> lambda result </td>
-<td style="text-align:center;"> Extension function </td>
-</tr>
-<tr>
-<td style="text-align:center;"> run </td>
-<td style="text-align:center;"> _ </td>
-<td style="text-align:center;"> lambda result </td>
-<td style="text-align:center;"> No object in the scope </td>
-</tr>
-<tr>
-<td style="text-align:center;"> with </td>
-<td style="text-align:center;"> this </td>
-<td style="text-align:center;"> lambda result </td>
-<td style="text-align:center;"> Take the object as an argument </td>
-</tr>
-<tr>
-<td style="text-align:center;"> apply </td>
-<td style="text-align:center;"> this </td>
-<td style="text-align:center;"> context object </td>
-<td style="text-align:center;"> Extension function </td>
-</tr>
-<tr>
-<td style="text-align:center;"> also </td>
-<td style="text-align:center;"> it </td>
-<td style="text-align:center;"> context object </td>
-<td style="text-align:center;"> Extension function </td>
-</tr>
-</tbody>
-</table>
-
-
-<h2>它们的区别</h2>
-
-<h3>with不是一个extension函数</h3>
-
-<p>其他几个都是extension函数，所以with一定要把scope object作为参数传入。</p>
-
-<h3>scope对象的引用方式</h3>
-
-<p>对于scope function来说scope对象都会作为一个context object，可以在lambda块中使用，有些是作为this指针，有些是作为lambda的默认参数名字也即it指针，但它们都指向context object，本质上是没有区别的只是指针的名字一个是this一个是it。但是，跟类的定义scope是一样的，this指针是可以省略的，但如果it作为参数，则是不能省略的，具体来说，比如说，用apply时，代码块中是this指针，那么可以直接这样写：</p>
-
-<pre><code class="kotlin">val alice = Person("Alice", 20, "Amsterdam").apply {
-    println(this)
-    moveTo("London")
-    incrementAge(2)
-}
-</code></pre>
-
-<p>当然 你也可以显式的把this写出来，this.moveTo(&ldquo;London&rdquo;)，但这就麻烦多了，何必呢。所以apply最合适的场景是对对象本身的操作，如赋值和修改属性。</p>
-
-<p>但如果是用also，就必须用it了，这个不能省，因为它是对scope对象的引用：
-<code>kotlin
-alice.also {
-    println("Two years later ${it.name} is at ${it.addr}")
-}
-</code>
-所以，also最适合的不是对对象本身的操作，而是一些与对象相关的副作用，如打印日志等。</p>
-
-<h3>返回值不同</h3>
-
-<p>这坨Scope functions是一个函数，它是有返回值的，这个返回是不一样的，apply/also返回的是context object，其他几个则是返回lambda中的返回值也就是lambda的最后一个表达 式或者lambda中显式的return语句。</p>
-
-<p>所以，如果是想继续使用scope object，那么就要用apply/also，如果想得到某个其他值就要用let/run/with，即使说不在乎函数的返回值时，这时也推荐使用also，因为假如后续想继续添加其他操作时，可以直接在后面链接上其他的scope function。其他返回值的let/run/with一般用在一组操作的确定性的终点上面，比如统计均值，那最后的均值计算可以用run，比如文件操作，读写都可以用with。</p>
-
-<h2>如何选择合适的scope函数</h2>
-
-<p>结合它们各自的特点，可以得到如下使用建议：</p>
-
-<h3>如果是更改scope对象本身，用apply()</h3>
-
-<p>比如说要设置某个对象的一坨属性状态，这时就把目标对象作为scope，然后在其上调用apply()，在函数块内把操作都做完：</p>
-
-<pre><code class="Kotlin">val alice = Person("Alice", 20, "Amsterdam").apply {
-    println(this)
-    moveTo("London")
-    incrementAge(2)
-}
-</code></pre>
-
-<h3>如果是对象弱相关的副作用操作，就用also()</h3>
-
-<p>最为典型的例子就是比如说打印一些日志，这时最好的就是用also。</p>
-
-<h3>判断nullity，不是null时执行一些强相关操作时用let</h3>
-
-<p>基于当前对象，执行一些强相关的操作，这时可以用let，并且可以顺便做nullable检查。</p>
-
-<h3>对象作为一个参数，执行一些转化时用run/with</h3>
-
-<p>把当前对象作为一个参数，或者一个输入，做一些操作，执行一些转化，最终输出为其他对象时，这种时候最好用run/with，比如在不同的架构层级之间转换类型对象时，就可以用run/with。或者在网络返回和本地数据库实体之间转换时，也可以用run/with，区别不大，但用with可读性略强一些，相当于是把对象视为一个上下文，比如：</p>
-
-<pre><code class="Kotlin">val res = nowWeather.getWeather(city)
-with (res) {
-   WeatherEnity(weather, city)
-}
-</code></pre>
-
-<p>with函数体内的参数是this，可以直接引用对象的成员，可以使代码非常的简洁，对象成了上下文，又不失可读性。这就让scope函数发挥了最大的价值。</p>
-
-<h2>注意事项</h2>
-
-<p>任何技术和工具要深刻理解它们的应用范围和使用场景以避免滥用，要用到恰到好处才能发挥最大的价值。对于一些非必须的东西，更是如此。</p>
-
-<p>Scope functions是应用于对象上面的，所以前提是当你需要对一个对象进行一些操作时，才可以使用scope functions，具体选择哪一个参考 上面一节的讨论。另外，就是放入代码块中的操作必须全部是scope对象相关的才可以。一个scope function中只能是一组相关的操作，不同组的操作要启用不同的scope functions。比如说网络请求response的处理，可以分为服务器状态码和返回实体的检测，转成具体数据，打印日志这么三个scope functions，而不是全放进一个里面。</p>
-
-<p>总而言之，要视具体的需求和场景，并基于场景选择合适的scope function，切忌过度使用。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/scope-functions.html">Scope functions</a></li>
-<li><a href="https://blog.mindorks.com/using-scoped-functions-in-kotlin-let-run-with-also-apply/">Using Scoped Functions in Kotlin - let, run, with, also, apply</a></li>
-<li><a href="https://www.digitalocean.com/community/tutorials/kotlin-let-run-also-apply-with">Kotlin let, run, also, apply, with</a></li>
-<li><a href="https://shusheng007.top/2020/10/02/1-6/">秒懂Kotlin之彻底掌握Scope Functions (apply, also,let,run,with)</a></li>
-<li><a href="https://www.jianshu.com/p/5c4a954d2b2c">Kotlin之let,apply,run,with等函数区别</a></li>
-<li><a href="https://juejin.cn/post/6868179386344931342">Kotlin学习：run、with、apply、also、let的区别</a></li>
 </ul>
 
 ]]></content>
