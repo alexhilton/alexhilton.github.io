@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-01-27T20:52:32+08:00</updated>
+  <updated>2024-01-27T21:06:52+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,311 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[专家之路上的Flow高级教程]]></title>
+    <link href="http://toughcoder.net/blog/2024/01/27/an-advanced-guide-to-kotlin-flow/"/>
+    <updated>2024-01-27T20:59:38+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/01/27/an-advanced-guide-to-kotlin-flow</id>
+    <content type="html"><![CDATA[<blockquote><p>『君不见黄河之水天上来，奔流到海不复归』</p></blockquote>
+
+<p>学习与河流一样，一方面学无止境，又是逆水行舟，不进则退，因为其他人都在卷。<a href="http://toughcoder.net/blog/2024/01/25/kotlin-flow-made-easy/">前文一篇文章</a>讲了Flow的基础，大多数情况下够用了，但是不能停止卷，因为你不卷，就会被别人卷。一旦涉及到复杂的应用场景，就需要用到一些高级的API，当遇到问题时也能更从容的应对。今天就来学习一下Flow的高级特性。</p>
+
+<p><a href="http://toughcoder.net/blog/2024/01/27/an-advanced-guide-to-kotlin-flow/"><img src="https://amitshekhar.me/static/images/blog/flow-api-in-kotlin.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>上下文切换</h2>
+
+<p>Flow是基于协程的，是用协程来实现并发，前面也提到过像<a href="">flow {&hellip;}</a>，在上游生产数据，以及中游做变幻时，都是可以直接调用suspend，耗时甚至是阻塞的函数的。而终端操作符如<a href="">collect</a>则是suspend的，调用者（也就是消费者）需要负责确保collect是在协程中调用。我们还知道Flow是是冷流，消费者终端才会触发上游生产者生产，所以对于flow {&hellip;}来说，它的上游和中游运行的上下文来自于终端调用者的上下文，这个叫做『上下文保留』（context preservation），我们可以用一个&#127792; 来验证一下：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Should be main by default</span>
+</span><span class='line'>    <span class="n">simple</span><span class="p">().</span><span class="n">collect</span> <span class="p">{</span> <span class="n">log</span><span class="p">(</span><span class="s">&quot;Got: $it&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Collect in a specified context</span>
+</span><span class='line'>    <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Default</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">simple</span><span class="p">().</span><span class="n">collect</span> <span class="p">{</span> <span class="n">log</span><span class="p">(</span><span class="s">&quot;Now got: $it&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">simple</span><span class="p">():</span> <span class="n">Flow</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">flow</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;Started the simple flow&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="k">in</span> <span class="m">1.</span><span class="p">.</span><span class="m">3</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">log</span><span class="p">(</span><span class="s">&quot;Producing $i&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">emit</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出如下：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'><span class="o">[</span>main @coroutine#1<span class="o">]</span> Started the simple flow
+</span><span class='line'><span class="o">[</span>main @coroutine#1<span class="o">]</span> Producing 1
+</span><span class='line'><span class="o">[</span>main @coroutine#1<span class="o">]</span> Got: 1
+</span><span class='line'><span class="o">[</span>main @coroutine#1<span class="o">]</span> Producing 2
+</span><span class='line'><span class="o">[</span>main @coroutine#1<span class="o">]</span> Got: 2
+</span><span class='line'><span class="o">[</span>main @coroutine#1<span class="o">]</span> Producing 3
+</span><span class='line'><span class="o">[</span>main @coroutine#1<span class="o">]</span> Got: 3
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Started the simple flow
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Producing 1
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Now got: 1
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Producing 2
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Now got: 2
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Producing 3
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Now got: 3
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>从这个&#127792; 可以清楚的看到，Flow的context是来自于终端调用者的。</p>
+
+<h3>用flowOn来指定上下文</h3>
+
+<p>有时候使用终端调用者的上下文可能不太方便，因为生产者与消费者的模式其实是解耦的，它们不应该相互受制于对方，对于关键的并发的上下文更是如此。比如说在GUI的应用中，明显应该在工作线程中生产数据，在UI线程中消费数据，从上面的例子来看，由终端调用者来决定上游上下文明显不可取。有同学举手了，欺负我没学过协程是吧？我可以在Flow内部使用withContext来指定上下文啊，我们来试试：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Should be main by default</span>
+</span><span class='line'>    <span class="n">simple</span><span class="p">().</span><span class="n">collect</span> <span class="p">{</span> <span class="n">log</span><span class="p">(</span><span class="s">&quot;Got: $it&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">simple</span><span class="p">():</span> <span class="n">Flow</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">flow</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Default</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">log</span><span class="p">(</span><span class="s">&quot;Started the simple flow&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="k">in</span> <span class="m">1.</span><span class="p">.</span><span class="m">3</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">log</span><span class="p">(</span><span class="s">&quot;Producing $i&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">emit</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这位同学可以直接出去了，因为你的代码crash 了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Started the simple flow
+</span><span class='line'><span class="o">[</span>DefaultDispatcher-worker-1 @coroutine#1<span class="o">]</span> Producing 1
+</span><span class='line'>Exception in thread <span class="s2">&quot;main&quot;</span> java.lang.IllegalStateException: Flow invariant is violated:
+</span><span class='line'>      Flow was collected in <span class="o">[</span>CoroutineId<span class="o">(</span>1<span class="o">)</span>, <span class="s2">&quot;coroutine#1&quot;</span>:BlockingCoroutine<span class="o">{</span>Active<span class="o">}</span>@545486c7, BlockingEventLoop@13bfcf14<span class="o">]</span>,
+</span><span class='line'>      but emission happened in <span class="o">[</span>CoroutineId<span class="o">(</span>1<span class="o">)</span>, <span class="s2">&quot;coroutine#1&quot;</span>:DispatchedCoroutine<span class="o">{</span>Active<span class="o">}</span>@27015c5a, Dispatchers.Default<span class="o">]</span>.
+</span><span class='line'>      Please refer to <span class="s1">&#39;flow&#39;</span> documentation or use <span class="s1">&#39;flowOn&#39;</span> instead
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>意思大概是说Flow内部不让直接用withContext来切上下文，破坏了Flow的不变式，想切上下文要用flowOn。而且仔细看，异常是由emit函数抛出来的。</p>
+
+<p>其实Flow的设计者已经考虑到了这个问题，并且给出了优雅的方式，如果想切换Flow内部（也即上游和中游）的运行上下文，要用<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flow-on.html">flowOn</a>函数：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Should be main by default</span>
+</span><span class='line'>    <span class="n">simple</span><span class="p">().</span><span class="n">collect</span> <span class="p">{</span> <span class="n">log</span><span class="p">(</span><span class="s">&quot;Got: $it&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">simple</span><span class="p">():</span> <span class="n">Flow</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">flow</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;Started the simple flow&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="k">in</span> <span class="m">1.</span><span class="p">.</span><span class="m">3</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">log</span><span class="p">(</span><span class="s">&quot;Producing $i&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">emit</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">Thread</span><span class="p">.</span><span class="n">sleep</span><span class="p">(</span><span class="m">50</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}.</span><span class="n">flowOn</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Default</span><span class="p">)</span>
+</span><span class='line'><span class="c1">//[DefaultDispatcher-worker-1 @coroutine#2] Started the simple flow</span>
+</span><span class='line'><span class="c1">//[DefaultDispatcher-worker-1 @coroutine#2] Producing 1</span>
+</span><span class='line'><span class="c1">//[main @coroutine#1] Got: 1</span>
+</span><span class='line'><span class="c1">//[DefaultDispatcher-worker-1 @coroutine#2] Producing 2</span>
+</span><span class='line'><span class="c1">//[main @coroutine#1] Got: 2</span>
+</span><span class='line'><span class="c1">//[DefaultDispatcher-worker-1 @coroutine#2] Producing 3</span>
+</span><span class='line'><span class="c1">//[main @coroutine#1] Got: 3</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这回就和谐多了，后台搞生产，UI只展示，完美！还需要特别注意的是<strong>函数flowOn只影响它的上游，不影响它的下游，更不会影响终端</strong>，终端永远都在<strong>其调用者的上下文</strong>中，来看一个&#127792; ：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">singleValue</span> <span class="p">=</span> <span class="n">intFlow</span> <span class="c1">// will be executed on IO if context wasn&#39;t specified before</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">map</span> <span class="p">{</span> <span class="p">...</span> <span class="p">}</span> <span class="c1">// Will be executed in IO</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">flowOn</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="p">...</span> <span class="p">}</span> <span class="c1">// Will be executed in Default</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">flowOn</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Default</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">single</span><span class="p">()</span> <span class="c1">// Will be executed in the Main</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>第一个flowOn切到<em>IO</em>，只影响到它前面的创建和map，第二次切换到<em>Default</em>，只影响filter。single是终端，是在<em>Main</em>，因为它的调用者是在<em>Main</em>里面。</p>
+
+<p><strong>注意，注意：</strong> Flow是一个数据流，保持其数据流的特点是相当重要的，无论是正常数据，异常数据，还是出错都是一种数据，应该让其自上而下的流动，在<strong>中游变幻时或者终端时通过操作符来处理</strong>。所以，像硬性的上下文切换，或者异常的try/catch都是不允许的。这就是所谓的流的不变性（Flow invariant）。后面讲异常时还会提到这点。</p>
+
+<h2>带有上下文的Flow builders</h2>
+
+<h2>副作用函数</h2>
+
+<p>Flow是一个数据流，核心思想是把数据的生产和处理和最终消费分开，上游只负责生产数据，各种操作都应该由中游操作符来做，最终数据由终端消费掉。需要加强数据的封装性，和流的不变性，不破坏管道，用各种转换器来对数据进行操作。那么，对于流何时开始，每个数据何时产生，流什么时候终止，这些事件对于调试来说是很有帮助的。Flow的设计者给出了一系列副作用函数来做之些事情。副作用的意思就是这些函数不会对流本身产生影响。</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/on-start.html">onStart</a> Flow开始生产之前会调用此函数。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/on-each.html">onEach</a> 在生产(emit)每个数据之前调用此函数，这个函数最常用被用来打日志，以查看每个产生的数据。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/on-completion.html">onCompletion</a> 当Flow终止时或者被取消后会调用此函数。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/on-subscription.html">onSubscritpion</a> 有消费者了时调用此函数（也就是有人collect了此Flow时）。</li>
+</ul>
+
+
+<h2>异常，取消和错误处理</h2>
+
+<p>这一小节重点来看看非正常代码逻辑的处理。先来看看异常处理（Exception handling）。</p>
+
+<h3>用catch函数来处理Flow过程中的异常</h3>
+
+<p>代码随时都可能抛出异常，所以异常处理是一个必须要考虑的事情。当然可以在Flow的各个节点如上游生产，中游变幻和下游终端的代码块里面各种try/catch。一来是不够优雅，再者这会破坏Flow的不变性或者说一致性，它就是管道，数据在里面流动，不应该加以过多的干扰，想要对数据处理应该用操作符。也就是说要让异常（包括其他错误也是如此）对Flow是透明的，意思是说Flow并不关心是否有异常。所以提供了一个<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/catch.html">catch函数</a>，它的作用是捕获并处理上游操作中发生的异常：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">simple</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">.</span><span class="k">catch</span> <span class="p">{</span> <span class="n">e</span> <span class="p">-&gt;</span> <span class="n">emit</span><span class="p">(</span><span class="s">&quot;Caught $e&quot;</span><span class="p">)</span> <span class="p">}</span> <span class="c1">// emit on exception</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">value</span> <span class="p">-&gt;</span> <span class="n">println</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>需要注意catch与flowOn一样，只影响上游发生的异常，管不了下游：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">flow</span> <span class="p">{</span> <span class="n">emitData</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">map</span> <span class="p">{</span> <span class="n">computeOne</span><span class="p">(</span><span class="n">it</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">.</span><span class="k">catch</span> <span class="p">{</span> <span class="p">...</span> <span class="p">}</span> <span class="c1">// catches exceptions in emitData and computeOne</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">map</span> <span class="p">{</span> <span class="n">computeTwo</span><span class="p">(</span><span class="n">it</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">process</span><span class="p">(</span><span class="n">it</span><span class="p">)</span> <span class="p">}</span> <span class="c1">// throws exceptions from process and computeTwo</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>取消Flow</h3>
+
+<p>Flow没有显式的取消函数。Flow是冷流，有消费者时才会去生产数据，消费者停止消费了，Flow自然也就被取消了。终端操作都是suspend的，也就是要在协程中调用，因此<strong>取消终端调用的协程，就会取消Flow。</strong></p>
+
+<h3>错误处理</h3>
+
+<p>其实没有特别的错误处理函数，前面的异常算是一个，如果上游没有抛出异常，就不会有其他错误了，因为错误也是数据的一种类型，并且是由我们自己根据场景来定义的。比如说从网络获取新闻列表，正常时的数据当然是一个个的新闻条目。出错了，比如无网络，或者服务器无响应，这时可能返回一个空的条目，里面有错误的具体信息。但这都是由业务逻辑决定的，是业务逻辑层面的东西。对于Flow而言，都还是有数据的，都是一种数据，具体数据的解读，那是消费者终端的事情，Flow并不关心。</p>
+
+<p>唯一算得上错误处理的函数就是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/on-empty.html">onEmpty</a>，它会在Flow是空的时候，也就是不生产任何数据的时候被回调。可以在onEmpty里面生产emit数据，比如产生一个带有错误信息的数据，或者产生一个默认值。因为Flow为空，不产生emit任何数据时，管子是空的数据没有流动，Flow的整个链路，特别是终端collect是不会被执行的，这时可能会有问题，比如UI根本无法做出任何react，除非你设置过了默认UI状态，否则可能会不对。这个时候如果用onEmpty去产生一些默认值或者错误信息的话，就能激活整个Flow，终端能做出预期的响应。</p>
+
+<h3>重试机制</h3>
+
+<p>另一个非常有用的函数就是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/retry.html">retry</a>，它可以预设一个条件，当条件满足时就会触发重新collect。Flow是冷流，有消费者collect时才会触发生产者emit数据，因此重新collect就能让Flow重新emit数据流。</p>
+
+<h2>背压</h2>
+
+<p>Flow是异步数据流，响应式编程范式，上游生产数据，下游终端消费数据。有时候可能会遇到这样一种情况，就是上游数据生产的速度超过了下游终端的消费速度，这会造成数据流积压在管道中，终端无法及时响应。这种情况称为『背压（Back pressure）』。想像一下一个水管，如果进水速度大于水龙头流出的速度，水就会积压在水管里，如果水管是比较薄弱的（如气球），那么它会膨胀，最后爆掉。</p>
+
+<p>通常情况下，当上游是较为可控的生产者时，不会产生背压，但如果是一些不是开发人员可控的，如硬件（触摸事件，位置信息，传感器，摄像头），其他系统（系统框架的回调，或者服务器的Push）等等，就会产生背压，这时必须进行相应的处理。所有的FRP式异步数据流API都必须处理『背压』，Flow也有相应的API来处理：</p>
+
+<ul>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/buffer.html">buffer</a> 把生产者的emit的数据缓存，然后用Channel以并发的方式流向中游和下游，可以简单理解为并发地调用collect。正常情况下Flow是顺序的（Sequentially），就是数据从上游到中游再到终端，按顺序流动，先生产的数据先流到collect，这就是顺序的数据流sequentially。用上buffer后，就是会是并发的流，先emit的数据不一定先到collect，这就是concurrently。明显，能用buffer的前提是终端处理数据时没有对数据顺序的依赖。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/conflate.html">conflate</a> 也会像buffer一样启动并发式emit数据，但未能及时被终端消费掉的数据会被丢弃，终端只处理最新数据。</li>
+<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/collect-latest.html">collectLatest</a> 当有新的数据流出来时，终端只处理最新的数据，此之的终端处理会被取消掉（如果还没有处理完）。</li>
+</ul>
+
+
+<h2>转为热流</h2>
+
+<p><img src="https://koenig-media.raywenderlich.com/uploads/2021/05/StateFlowAndSharedFlow-twitter.png" alt="" /></p>
+
+<h3>StateFlow</h3>
+
+<h3>SharedFlow</h3>
+
+<h2>参考资料</h2>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[包教包会的Kotlin Flow教程]]></title>
@@ -5839,7 +6144,7 @@ site packages: &lsquo;/Library/Python/2.7/site-packages&rsquo;,</p></li>
 site packages &lsquo;/Library/Frameworks/Python.framework/Versions/3.7/lib/python3.7/site-packages&rsquo;,</p></li>
 <li><p>Python3.11
 由brew升级安装得到的。被安装在
-二进制是在：/usr/local/opt/<a href="&#x6d;&#97;&#x69;&#108;&#x74;&#111;&#58;&#112;&#x79;&#x74;&#x68;&#111;&#x6e;&#64;&#x33;&#46;&#49;&#x31;">&#112;&#x79;&#116;&#x68;&#x6f;&#x6e;&#x40;&#51;&#46;&#49;&#x31;</a>
+二进制是在：/usr/local/opt/<a href="&#109;&#x61;&#x69;&#x6c;&#x74;&#111;&#x3a;&#x70;&#121;&#116;&#x68;&#x6f;&#110;&#x40;&#x33;&#x2e;&#x31;&#x31;">&#112;&#121;&#116;&#104;&#111;&#110;&#64;&#51;&#46;&#x31;&#x31;</a>
 site-packages  /usr/local/lib/python3.11/site-packages</p></li>
 </ul>
 
@@ -5915,297 +6220,6 @@ site-packages  /usr/local/lib/python3.11/site-packages</p></li>
 <li><a href="https://zhuanlan.zhihu.com/p/269805011">如何使用 virtualenv 创建 Python 虚拟环境？</a></li>
 <li><a href="https://www.infoworld.com/article/3239675/virtualenv-and-venv-python-virtual-environments-explained.html">Virtualenv and venv: Python virtual environments explained</a></li>
 <li><a href="https://www.cnblogs.com/doublexi/p/15783355.html">python多环境管理（venv与virtualenv）</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Hashing Hash and HashMap]]></title>
-    <link href="http://toughcoder.net/blog/2023/07/13/hashing-hash-and-hashmap/"/>
-    <updated>2023-07-13T23:17:13+08:00</updated>
-    <id>http://toughcoder.net/blog/2023/07/13/hashing-hash-and-hashmap</id>
-    <content type="html"><![CDATA[<p>哈希表(HashMap)或者叫做散列表，是非常常用的一种二维的键值对式的数据结构，用以非常高效的解决查询问题的。
-其核心是Hashing，这是把一个对象映射到一个索引的过程，实现hashing的函数通常称为hash函数或者叫散列函数，基于hashing实现的数据结构称作HashMap，或者叫做散列表。</p>
-
-<p><a href="http://toughcoder.net/blog/2023/07/13/hashing-hash-and-hashmap/"><img src="https://techdose.co.in/wp-content/uploads/2021/02/City-of-TL-2-1024x576.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2><a href="https://www.techtarget.com/searchdatamanagement/definition/hashing">Hashing</a></h2>
-
-<p><a href="https://www.educative.io/answers/what-is-hashing">哈希或者散列</a>，是一个映射的过程，把一个对象，一些值，一些数据，一个文件等等通过某些方式映射成为一个键，用这个键可以<strong>非常快速</strong>的找到对应的值，也即原数据。通常键都是以索引形式存在的，因为用索引去查找数组的元素是绝对的O(1)时间的。但，这只是哈希过程的一个普通应用实例。</p>
-
-<p><img src="https://tse1-mm.cn.bing.net/th/id/OIP-C.LEfONm4SRcDy3upe46WUMQHaE7?pid=ImgDet&amp;rs=1" alt="" /></p>
-
-<p>在更广泛的加密领域，哈希过程并不是为了查找，而是为了生成一种代表着原数据的签名，也就是用一个更为小巧的方便的数据（通常是字符串）作为原数据的代表，看到了签名，就认为是看到的是其原数据，当然，其实这也是一种查找过程。</p>
-
-<p>所以，不失一般性，满足这样的关系hash(data) = key，就是一个hashing。还要注意这个过程是不可逆的，也就是不存在反函数g(key) = data，没有办法能从key逆推出data。</p>
-
-<h2><a href="https://en.wikipedia.org/wiki/Hash_function">Hash</a></h2>
-
-<p>通常称作Hash，Hash function，Hash algorithm，哈希函数，哈希算法或者散列函数，散列算法。是能够实现hashing的一个函数或者算法。</p>
-
-<p><img src="https://tse1-mm.cn.bing.net/th/id/OIP-C.RKHyLYrEjVpCdQfJFUQy2AHaDq?pid=ImgDet&amp;rs=1" alt="" /></p>
-
-<p>哈希算法是把一个对象转化为int的过程，最为常用的一种哈希方法就是用多项式乘素法，比如一个长度为n的byte数组payload，它的hash = payload[0]*P<sup>n-1</sup> + payload[1]*P<sup>n-2</sup> + &hellip; + payload[n-1]。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="c1">// Other possible primes are: 31, 131, 1313, 13131, 131313</span>
-</span><span class='line'><span class="kd">public</span> <span class="kd">static</span> <span class="kd">final</span> <span class="kt">int</span> <span class="n">P</span> <span class="o">=</span> <span class="mi">33</span><span class="o">;</span>
-</span><span class='line'><span class="kd">public</span> <span class="kd">static</span> <span class="kt">int</span> <span class="nf">hash</span><span class="o">(</span><span class="n">String</span> <span class="n">s</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>    <span class="k">return</span> <span class="nf">hashBytes</span><span class="o">(</span><span class="n">s</span><span class="o">.</span><span class="na">toCharArray</span><span class="o">());</span>
-</span><span class='line'><span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="cm">/*</span>
-</span><span class='line'><span class="cm"> * Polynomial multiplication of prime:</span>
-</span><span class='line'><span class="cm"> * hash = c[0]*P^(n-1) + c[1]*P^(n-2) + ... + s[n-1]</span>
-</span><span class='line'><span class="cm"> */</span>
-</span><span class='line'><span class="kd">public</span> <span class="kd">static</span> <span class="kt">int</span> <span class="nf">hashBytes</span><span class="o">(</span><span class="kt">char</span><span class="o">[]</span> <span class="n">chars</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>    <span class="kt">int</span> <span class="n">hash</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
-</span><span class='line'>    <span class="k">for</span> <span class="o">(</span><span class="kt">char</span> <span class="n">ch</span> <span class="o">:</span> <span class="n">chars</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>        <span class="n">hash</span> <span class="o">=</span> <span class="n">P</span> <span class="o">*</span> <span class="n">hash</span> <span class="o">+</span> <span class="n">ch</span><span class="o">;</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">return</span> <span class="n">hash</span><span class="o">;</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>像Java中的String用的就是这个算法，Prime选择可能不一样，常用的有31, 131, 1313, 13131, 131313。其他对象都可以使用此方法，因为任何对象都可以序列化为byte。可以看到hash算法没有考虑溢出，这样计算P的乘方，很快就会溢出，但是没关系，溢出会变成负数，并不影响hashing。在有些算法中会对一个很大的素数如10<sup>9</sup>+7取余，以让哈希值变得的不那么大。</p>
-
-<p>另外，可以看出哈希算法是O(L)的，这里L是输入数据的长度，比如对于字符串来说就是字符串的长度，假如是一个很长很长很长的字符串，那么计算其hash可能会很久很久，因此当使用HashMap时，可能就会变得很慢。</p>
-
-<h3>参考资料</h3>
-
-<ul>
-<li><a href="https://www.zhihu.com/question/20820286">什么是哈希算法？</a></li>
-<li><a href="https://wingsxdu.com/posts/algorithms/cryptographic-hashing-function/">加密哈希算法的实现原理</a></li>
-<li><a href="https://segmentfault.com/a/1190000021199728">图解一致性哈希算法</a></li>
-<li><a href="https://www.cnblogs.com/barrywxx/p/10739871.html">经典Hash函数的实现</a></li>
-<li><a href="https://houbb.github.io/2018/05/30/hash-impl">Hash 算法实现</a></li>
-<li><a href="https://developer.aliyun.com/article/1012265">Hash算法详细介绍与实现(一)</a></li>
-<li><a href="https://developer.aliyun.com/article/1015830">Hash 算法详细介绍与实现 (二)</a></li>
-</ul>
-
-
-<h2><a href="https://docs.oracle.com/javase/8/docs/api/java/util/HashMap.html">HashMap</a>/<a href="https://docs.oracle.com/javase/8/docs/api/java/util/HashSet.html">HashSet</a></h2>
-
-<p>基于Hashing和Hash构建出来的用于高效查询的数据结构。</p>
-
-<p><img src="https://cdn.educba.com/academy/wp-content/uploads/2019/11/hashmap-in-java.png" alt="" /></p>
-
-<h3>参考资料</h3>
-
-<ul>
-<li><a href="https://www.interviewcake.com/concept/java/hash-map">Data structure Hash Table</a></li>
-<li><a href="https://www.geeksforgeeks.org/hashing-data-structure/">Hashing Data Structure</a></li>
-<li><a href="https://tech.meituan.com/2016/06/24/java-hashmap.html">Java 8系列之重新认识HashMap</a></li>
-<li><a href="https://pdai.tech/md/java/collection/java-map-HashMap&amp;HashSet.html">Map - HashSet &amp; HashMap 源码解析</a></li>
-<li><a href="https://xie.infoq.cn/article/01538faefd4816128ede4212a">了解 HashMap 数据结构，超详细！</a></li>
-</ul>
-
-
-<h2><a href="https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/ConcurrentHashMap.html">ConcurrentHashMap</a></h2>
-
-<p>线程安全的哈希表，采用分段式读加锁的方式来提高并发效率。</p>
-
-<h3>参考资料</h3>
-
-<ul>
-<li><a href="https://www.cnblogs.com/zerotomax/p/8687425.html">ConcurrentHashMap源码分析(1.8)</a></li>
-<li><a href="https://javaguide.cn/java/collection/concurrent-hash-map-source-code.html">ConcurrentHashMap 源码分析</a></li>
-<li><a href="https://juejin.cn/post/7045955943296679949">ConcurrentHashMap源码分析</a></li>
-</ul>
-
-
-<h2><a href="https://en.wikipedia.org/wiki/Hash_collision">哈希碰撞Hash Collision</a></h2>
-
-<p>哈希算法针对不同的原始数据却产生了相同的键，这就是哈希碰撞，因为最理想的hashing是一一对应，同样的原始数据（也就是相等的两个对象）肯定会产生相同的键，这时我们认为数据是同一份（相等的），但不同的数据（也即不相等）却产生了相同的键，就需要进行特殊处理，这会增加复杂度。哈希碰撞是不可避免的，同时也是一个衡量指标，即好的哈希函数会产生较少的合理碰撞（也就是因为数据边界和算法能力导致的碰撞）。</p>
-
-<p><img src="https://ts1.cn.mm.bing.net/th/id/R-C.b7b51eed3f8027b11a32e091363c26f7?rik=scKHPWTjDjuM5Q&amp;riu=http%3a%2f%2fjustinparrtech.com%2fJustinParr-Tech%2fwp-content%2fuploads%2fHashing-Passwords_Hash-Collision.png&amp;ehk=Cs%2fOrEQS48SFm8KbaMfL0mOJxPm3AfjQlJvsMeddGP4%3d&amp;risl=&amp;pid=ImgRaw&amp;r=0" alt="" /></p>
-
-<p>哈希碰撞会降低效率和安全性，比如说服务器通常会把客户端的request先暂存起来，去异步处理，当有了response后，再找到其对应的request然后给其回复response。这一过程，一般会有哈希表来存储request。假如哈希函数选择的不好，比如用request当中的某一个String字段来作为request的Key的话，就有可能被恶意攻击。哈希表常规的效率是很高的，一旦有哈希碰撞就会变成链表复杂度会上升为O(n<sup>2</sup>)。而String的hash是容易产生碰撞，假如恶意客户端发现了是用String作为Key的，那么就可以用能产生哈希碰撞的String来生成不同的request，这样就会让服务器短时间内负载特别高而且宕机。这是一种基于哈希碰撞的古老的攻击方式。</p>
-
-<p>所以一般服务器使用的哈希函数都是要特别设计，不能采用太普通 的哈希算法。</p>
-
-<h3>参考资料</h3>
-
-<ul>
-<li><a href="https://www.ruanyifeng.com/blog/2018/09/hash-collision-and-birthday-attack.html">哈希碰撞与生日攻击</a></li>
-<li><a href="https://cloud.tencent.com/developer/article/1776352">HASH碰撞问题一直没真正搞懂？这下不用慌了</a></li>
-<li><a href="https://segmentfault.com/a/1190000041421664">哈希理解、哈希碰撞（hash冲突）及处理</a></li>
-<li><a href="https://www.baeldung.com/cs/hash-collision-weak-vs-strong-resistance">Hash Collision: Weak and Strong Resistance</a></li>
-</ul>
-
-
-<h2><a href="https://en.wikipedia.org/wiki/Rolling_hash">滚动哈希Rolling Hash</a></h2>
-
-<p>是一种哈希算法，使用一个固定长度的窗口（通常远小于数据本身的长度）在数据中滑动，能以更高的效率计算出数据的哈希值（键）。通常会被用于检查文章的相似性（是否存在抄袭），查找重复的子串等。因为滚动哈希是在一个长的序列中以一个固定的窗口在计算，所以特别擅长在接近无限的序列中探测重复子序列，比如网络流模式探测，视频重复帧识别等等。</p>
-
-<p><img src="https://www.francofernando.com/assets/img/blog/algorithms/rolling-hash/rolling-hash-1.png" alt="" /></p>
-
-<p>一个典型的Rolling hash实现：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kd">static</span> <span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span> <span class="nf">rollingHash</span><span class="o">(</span><span class="n">String</span> <span class="n">payload</span><span class="o">,</span> <span class="kt">int</span> <span class="n">window</span><span class="o">,</span> <span class="kt">int</span> <span class="n">p</span><span class="o">,</span> <span class="kt">int</span> <span class="n">mod</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>        <span class="kd">final</span> <span class="kt">int</span> <span class="n">n</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="na">length</span><span class="o">();</span>
-</span><span class='line'>        <span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span> <span class="n">hashValues</span> <span class="o">=</span> <span class="k">new</span> <span class="n">ArrayList</span><span class="o">&lt;&gt;(</span><span class="n">n</span> <span class="o">-</span> <span class="n">window</span> <span class="o">+</span> <span class="mi">1</span><span class="o">);</span>
-</span><span class='line'>        <span class="kt">int</span> <span class="n">power</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
-</span><span class='line'>        <span class="k">for</span> <span class="o">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">window</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span> <span class="n">i</span><span class="o">++)</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">power</span> <span class="o">*=</span> <span class="n">p</span><span class="o">;</span>
-</span><span class='line'>            <span class="n">power</span> <span class="o">%=</span> <span class="n">mod</span><span class="o">;</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="kt">int</span> <span class="n">hash</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
-</span><span class='line'>        <span class="k">for</span> <span class="o">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">window</span><span class="o">;</span> <span class="n">i</span><span class="o">++)</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">hash</span> <span class="o">=</span> <span class="o">(</span><span class="n">hash</span> <span class="o">*</span> <span class="n">p</span> <span class="o">+</span> <span class="n">payload</span><span class="o">.</span><span class="na">charAt</span><span class="o">(</span><span class="n">i</span><span class="o">))</span> <span class="o">%</span> <span class="n">mod</span><span class="o">;</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>        <span class="n">hashValues</span><span class="o">.</span><span class="na">add</span><span class="o">(</span><span class="n">hash</span><span class="o">);</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">for</span> <span class="o">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span> <span class="o">-</span> <span class="n">window</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span> <span class="n">i</span><span class="o">++)</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">hash</span> <span class="o">=</span> <span class="o">(</span><span class="n">hash</span> <span class="o">-</span> <span class="n">power</span> <span class="o">*</span> <span class="n">payload</span><span class="o">.</span><span class="na">charAt</span><span class="o">(</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="o">))</span> <span class="o">%</span> <span class="n">mod</span><span class="o">;</span>
-</span><span class='line'>            <span class="n">hash</span> <span class="o">=</span> <span class="o">(</span><span class="n">hash</span> <span class="o">*</span> <span class="n">p</span> <span class="o">+</span> <span class="n">payload</span><span class="o">.</span><span class="na">charAt</span><span class="o">(</span><span class="n">i</span> <span class="o">+</span> <span class="n">window</span> <span class="o">-</span> <span class="mi">1</span><span class="o">))</span> <span class="o">%</span> <span class="n">mod</span><span class="o">;</span>
-</span><span class='line'>            <span class="n">hashValues</span><span class="o">.</span><span class="na">add</span><span class="o">(</span><span class="n">hash</span><span class="o">);</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">return</span> <span class="n">hashValues</span><span class="o">;</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="kd">public</span> <span class="kd">static</span> <span class="kt">void</span> <span class="nf">main</span><span class="o">(</span><span class="n">String</span><span class="o">[]</span> <span class="n">args</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>        <span class="n">String</span> <span class="n">payload</span> <span class="o">=</span> <span class="s">&quot;abcabcabc&quot;</span><span class="o">;</span>
-</span><span class='line'>        <span class="kt">int</span> <span class="n">window</span> <span class="o">=</span> <span class="mi">3</span><span class="o">;</span>
-</span><span class='line'>        <span class="n">ArrayList</span><span class="o">&lt;</span><span class="n">Integer</span><span class="o">&gt;</span> <span class="n">hashes</span> <span class="o">=</span> <span class="n">rollingHash</span><span class="o">(</span><span class="n">payload</span><span class="o">,</span> <span class="n">window</span><span class="o">,</span> <span class="mi">31</span><span class="o">,</span> <span class="n">MOD</span><span class="o">);</span>
-</span><span class='line'>        <span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">.</span><span class="na">println</span><span class="o">(</span><span class="s">&quot;Rolling hash of &quot;</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="s">&quot;, window size &quot;</span> <span class="o">+</span> <span class="n">window</span><span class="o">);</span>
-</span><span class='line'>        <span class="n">IntStream</span><span class="o">.</span><span class="na">range</span><span class="o">(</span><span class="mi">0</span><span class="o">,</span> <span class="n">hashes</span><span class="o">.</span><span class="na">size</span><span class="o">())</span>
-</span><span class='line'>                <span class="o">.</span><span class="na">mapToObj</span><span class="o">(</span><span class="n">i</span> <span class="o">-&gt;</span> <span class="n">i</span> <span class="o">+</span> <span class="s">&quot;-&gt;&quot;</span> <span class="o">+</span> <span class="n">payload</span><span class="o">.</span><span class="na">substring</span><span class="o">(</span><span class="n">i</span><span class="o">,</span> <span class="n">i</span> <span class="o">+</span> <span class="n">window</span><span class="o">)</span> <span class="o">+</span> <span class="s">&quot; whose hash is &quot;</span> <span class="o">+</span> <span class="n">hashes</span><span class="o">.</span><span class="na">get</span><span class="o">(</span><span class="n">i</span><span class="o">))</span>
-</span><span class='line'>                <span class="o">.</span><span class="na">forEach</span><span class="o">(</span><span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">::</span><span class="n">println</span><span class="o">);</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>    <span class="c1">// outputs</span>
-</span><span class='line'>    <span class="c1">//Rolling hash of abcabcabc, window size 3</span>
-</span><span class='line'>    <span class="c1">//0-&gt;abc whose hash is 96354</span>
-</span><span class='line'>    <span class="c1">//1-&gt;bca whose hash is 97344</span>
-</span><span class='line'>    <span class="c1">//2-&gt;cab whose hash is 98244</span>
-</span><span class='line'>    <span class="c1">//3-&gt;abc whose hash is 96354</span>
-</span><span class='line'>    <span class="c1">//4-&gt;bca whose hash is 97344</span>
-</span><span class='line'>    <span class="c1">//5-&gt;cab whose hash is 98244</span>
-</span><span class='line'>    <span class="c1">//6-&gt;abc whose hash is 96354</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>可以看出，字符串是&#8221;abcabcabc&#8221;，有三个重复子串，Rolling hash能清查的找到，看Rolling hash输出中的0，3和6个元素（即子串&#8221;abc&#8221;），另外两个重复子串&#8221;bca&#8221;，是1和4，以及&#8221;cab&#8221;，是2和5。</p>
-
-<p>Rolling hash是O(n)的，每个子串的比较都是O(1)，是相当高效的算法，是用于解决子串查找，重复子串查找的利器。</p>
-
-<h3>参考资料</h3>
-
-<ul>
-<li><a href="https://www.geeksforgeeks.org/introduction-to-rolling-hash-data-structures-and-algorithms/">Introduction to Rolling Hash – Data Structures and Algorithms</a></li>
-<li><a href="https://juejin.cn/post/7180323231918882874">(Rabin-Karp算法)匹配字符串（滚动哈希）</a></li>
-<li><a href="https://zhuanlan.zhihu.com/p/564537288">滚动哈希（Rolling Hash）</a></li>
-<li><a href="https://www.cnblogs.com/sunchi/p/13632779.html">滚动hash实现字符串匹配</a></li>
-</ul>
-
-
-<h3>典型问题</h3>
-
-<p>哈希表作为一种极基础的数据结构，提供以O(1)时间查询的能力，所以是刷题当中最为常用的辅助数据结构，没有之一。但其实HashMap/HashSet并不 真的O(1)，它只是摊还分析的时间复杂度能到O(1)，但真实的运行效率不可能达到O(1)，一旦发生哈希碰撞就会上升到O(n<sup>2</sup>)。并且还有扩容和自动装箱autobox等隐形开销，hash函数本身也有开销一般是O(L)的，所以HashMap真实的运行效率并不高。</p>
-
-<p>但哈希表是一种hashing的实现，更为重要的是体现了hashing的映射思想。所以，在有些时候虽然用到了哈希表，但不一定要用HashMap。比如像英文字母到索引的映射，以及数据范围不大的自然数到索引的映射，这本质上也是hashing，但用数组就可以了，并且这是真正的O(1)。</p>
-
-<p>哈希表一般当作基础设施来使用，所以没有专门的题，关于哈希的题目一般都是滚动哈希的，并且难度都不小。</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;"> 题目 </th>
-<th style="text-align:left;"> 题解 </th>
-<th style="text-align:left;"> 说明 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/repeated-dna-sequences/">187. 重复的DNA序列</a></td>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/repeated-dna-sequences/solution/187-zhong-fu-de-dnaxu-lie-by-alexhilton-5or9/">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/shortest-palindrome/description/">214. 最短回文串</a></td>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/shortest-palindrome/solutions/2562115/xi-you-yuan-su-214-zui-duan-hui-wen-chua-0nac/">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href=""></a></td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-</tbody>
-</table>
-
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://www.liaoxuefeng.com/wiki/1252599548343744/1304227729113121">哈希算法</a></li>
 </ul>
 
 ]]></content>
