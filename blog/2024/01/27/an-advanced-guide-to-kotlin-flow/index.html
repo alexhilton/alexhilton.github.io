@@ -314,7 +314,50 @@
 
 <p><strong>注意，注意：</strong> Flow是一个数据流，保持其数据流的特点是相当重要的，无论是正常数据，异常数据，还是出错都是一种数据，应该让其自上而下的流动，在<strong>中游变幻时或者终端时通过操作符来处理</strong>。所以，像硬性的上下文切换，或者异常的try/catch都是不允许的。这就是所谓的流的不变性（Flow invariant）。后面讲异常时还会提到这点。</p>
 
-<h2>带有上下文的Flow builders</h2>
+<h2>任意上下文的Flow builders</h2>
+
+<p>从前面的学习我们知道了，下下文保留的特性，终端会决定上游生产者的上下文，当然也可以通过flowOn来改变上下文。Flow builder其实就是一个生产者，异步的emit数据。但有些时候生产数据时的上下文，也就是调用emit时的上下文，是不确定的。比如说安卓 上面的各种回调（callback）有些是回调在调用者的线程里，有些则不是。<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flow.html">flow {&hellip;}</a>中的emit就不能在异步的回调里面调用，这时就要用<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/callback-flow.html">callbackFlow {&hellip;}</a>。callbackFlow专门适用于把现有的一些回调转为Flow，最典型的应用就是位置信息：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">locationFlow</span><span class="p">():</span> <span class="n">Flow</span><span class="p">&lt;</span><span class="n">Location</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">callbackFlow</span> <span class="p">{</span>
+</span><span class='line'>  <span class="k">val</span> <span class="py">listener</span> <span class="p">=</span> <span class="k">object</span> <span class="err">: </span><span class="nc">LocationListener</span> <span class="p">{</span>
+</span><span class='line'>      <span class="k">override</span> <span class="k">fun</span> <span class="nf">onLocationUpdate</span><span class="p">(</span><span class="n">loc</span><span class="p">:</span> <span class="n">Location</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>          <span class="n">trySend</span><span class="p">(</span><span class="n">location</span><span class="p">)</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'>  <span class="n">locationManager</span><span class="p">.</span><span class="n">reqisterLocaitonUpdates</span><span class="p">(</span><span class="n">listener</span><span class="p">)</span>
+</span><span class='line'>  
+</span><span class='line'>  <span class="n">awaitClose</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">locationManager</span><span class="p">.</span><span class="n">unregisterLocationUpdates</span><span class="p">(</span><span class="n">listener</span><span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果这个Flow，用flow {}去创建会抛异常，因为emit没法在回调中使用。callbackFlow会在回调中发射数据，并在<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/await-close.html">awaitClose</a>代码块中反注册回调以清理资源。awaitClose会在这个流结束时（完成或者被取消）被回调到，以有机会进行资源清理。</p>
+
+<p>其实，无论是flow {}还是callbackFlow {}都是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/channel-flow.html">channelFlow {}</a>的简单化，channelFlow非常复杂，也超级强大，它可以自带buffer，自带并发，适用于创建一些非常复杂的Flow。在多数时候flow {}和callbackFlow {}就够我们用了。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://stackoverflow.com/questions/61865744/android-kotlin-coroutines-what-is-the-difference-between-flow-callbackflow-ch">Android Kotlin Coroutines: what is the difference between flow, callbackFlow, channelFlow,&hellip; other flow constructors</a></li>
+<li><a href="https://www.cnblogs.com/joy99/p/15805962.html">Kotlin 协程四 —— Flow 和 Channel 的应用 </a></li>
+<li><a href="https://juejin.cn/post/7220593395420627004">[译]轻松学习Kotlin的Flow、ChannelFlow和CallbackFlow</a></li>
+<li><a href="https://juejin.cn/post/7202265125540659259">轻松搞定Kotlin的Flow, ChannelFlow和CallbackFlow - 2</a></li>
+</ul>
+
 
 <h2>副作用函数</h2>
 
@@ -389,11 +432,32 @@
 
 <h2>转为热流</h2>
 
-<p><img src="https://koenig-media.raywenderlich.com/uploads/2021/05/StateFlowAndSharedFlow-twitter.png" alt="" /></p>
+<p>常规的Flow都是冷的(cold flow)，但有时热流(hot flow)也有它的应用场景，Flow API中也有创建热流的方法。
+<img src="https://koenig-media.raywenderlich.com/uploads/2021/05/StateFlowAndSharedFlow-twitter.png" alt="" /></p>
 
 <h3>StateFlow</h3>
 
+<p><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-state-flow/">StateFlow</a>是一个『状态持有』流，它仅包含一个当前元素<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-state-flow/value.html">value</a>，可以用过<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/update.html">update</a>来更新此状态。它是一个热流，可以有多个终端colloctor，每次更新都会把当前的值emit给所有的终端。</p>
+
+<p>可以用<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-state-flow.html">构造方法MutableStateFlow</a>创建一个StateFlow，或者通过函数<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/state-in.html">stateIn</a>来把一个冷流转化为一个StateFlow。</p>
+
+<p>StateFlow是比较常用的，在安卓开发中，几乎所有的ViewModel都会用StateFlow来暂存UI状态数据。</p>
+
 <h3>SharedFlow</h3>
+
+<p>比StateFlow更为通用的便是通用的热流<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-shared-flow/">SharedFlow</a>。可以通过构造方法<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-shared-flow.html">MutableSharedFlow</a>来创建SharedFlow，或者通过函数<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/share-in.html">sharedIn</a>把一个冷流转为SharedFlow。</p>
+
+<p>SharedFlow可以有多个终端collector，所以可以实现一对多的通知，如实现<a href="https://en.wikipedia.org/wiki/Observer_pattern">观察者模式</a>，或者像设置/配置更新，或者广播等等就可以考虑用SharedFlow来实现。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://developer.android.com/kotlin/flow/stateflow-and-sharedflow">StateFlow and SharedFlow</a></li>
+<li><a href="https://juejin.cn/post/7314159614065131554">SharedFlow vs StateFlow，一篇看懂选择和使用技巧</a></li>
+<li><a href="https://juejin.cn/post/7195569817940164668">Kotlin SharedFlow&amp;StateFlow 热流到底有多热？</a></li>
+<li><a href="https://juejin.cn/post/7271832299339169844">ShareFlow与StateFlow实战</a></li>
+</ul>
+
 
 <h2>参考资料</h2>
 </div>
