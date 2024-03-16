@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-03-16T19:13:34+08:00</updated>
+  <updated>2024-03-16T19:29:20+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,139 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Deep Dive Into Kotlin Generics Runtime]]></title>
+    <link href="http://toughcoder.net/blog/2024/03/16/deep-dive-into-kotlin-generics-runtime/"/>
+    <updated>2024-03-16T19:16:00+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/03/16/deep-dive-into-kotlin-generics-runtime</id>
+    <content type="html"><![CDATA[<p>通过前面的学习，对Kotlin的泛型已经有了比较全面的了解了，泛型的目的是让通用的代码更加的类型安全。现在我们离写出类型安全的泛型代码还差最后一块拼图，那就是泛型的类型擦除，今天就来深入地学习一下运行时的泛型，彻底的弄懂类型擦除的前因后果，并学会如何在运行时做类型检查和类型转换，以期完成拼图掌握泛型，写出类型安全的通用代码。</p>
+
+<p><a href=""><img src="https://global-uploads.webflow.com/618fa90c201104b94458e1fb/61978c1b9e0bf52082dabe92_Kotlin-Generics.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>这是关于泛型话题的一系列文章：</p>
+
+<ul>
+<li><a href="http://toughcoder.net/blog/2024/03/04/kotlin-generics-made-easy/">这回就好好聊聊Kotlin的泛型</a></li>
+<li><a href="http://toughcoder.net/blog/2024/03/10/java-generics-made-easy/">深入浅出Java泛型</a></li>
+<li><a href="http://toughcoder.net/blog/2024/03/13/kotlin-generics-revisited/">Kotlin Generics Revisited</a></li>
+<li><a href="">Dive deep into Kotlin type erasure</a></li>
+</ul>
+
+
+<h2>泛型类型擦除（Type erasure）</h2>
+
+<p>泛型的类型安全性（包括类型检查，和类型转换）都是由编译器在编译时做的，为了保持在JVM上的兼容性，编译器在保障完类型安全性后会对泛型类型进行<a href="https://en.wikipedia.org/wiki/Type_erasure">擦除（Type erasure）</a>。在运行时泛型类型的实例并不包含其类型信息，也就是说它不知道具体的类型参数，比如Foo&lt;Bar&gt;和Foo&lt;Baz?&gt;都被擦除成了Foo&lt;&#42;&gt;，在虚拟机（JVM）来看，它们的类型是一样的。</p>
+
+<p>因为泛型Foo&lt;T&gt;的类型参数T会<strong>被擦除（erased）</strong>，所以与类型参数相关的类型操作（类型检查is T和类型转换as T）都是不允许的。</p>
+
+<h2>可行的类型检查和转换</h2>
+
+<p>虽然类型参数会被擦除，但并不是说对泛型完全不能进行类型操作。</p>
+
+<h3>星号类型操作</h3>
+
+<p>因为所有泛型会被擦除成为星号无界通配Foo&lt;&#42;&gt;，它相当于Foo&lt;Any?&gt;，是所有Foo泛型的基类，类型参数Any?是根基类，所以可以进行类型检查和类型转换：</p>
+
+<pre><code class="Kotlin">if (something is List&lt;*&gt;) {
+    something.forEach { println(it) } // 元素被视为Any?类型
+}
+</code></pre>
+
+<p>针对星号通配做类型操作，类型参数会被视为Any?。但其实这种类型操作没有任何意义，毕竟Any是根基类，任何类当成Any都是没有问题的。</p>
+
+<h3>完全已知具体的类型参数时</h3>
+
+<p>另外一种情况就是，整个方法的上下文中已经完全知道了具体的类型参数时，不涉及泛型类型时，也是可以进行类型操作的，说的比较绕，我们来看一个&#127792;：</p>
+
+<pre><code class="Kotlin">fun handleStrings(list: MutableList&lt;String) {
+    if (list is ArrayList) {
+        // list is smart-cast to ArrayList&lt;String&gt;
+    }
+}
+</code></pre>
+
+<p>这个方法并不涉及泛型类型，已经知道了具体的类型参数是String，所以类型操作也是可行的，因为编译器知道具体的类型，能对类型进行检查 保证是类型安全的。并且因为具体类型参数String可以推断出来，所以&lt;String&gt;是可以省略的。</p>
+
+<h2>未检查的转换</h2>
+
+<p>当编译器能推断出具体的类型时，进行类型转换就是安全的，这就是被检查的转型（checked cast），如上面的&#127792;。</p>
+
+<p>如果无法推断出类型时，比如涉及泛型类型T时，因为类型会被擦除，编译器不知道具体的类型，这时as T或者as List&lt;T&gt;都是不安全的，编译器会报错，这就是未检查转型（unchecked cast）。</p>
+
+<p>但如果能确信是类型转换是安全的，可以用注解&#64;Suppress(&ldquo;UNCHECKED_CAST&rdquo;)来忽略。</p>
+
+<h2>用关键reified修饰inline泛型函数</h2>
+
+<p><img src="https://tse3-mm.cn.bing.net/th/id/OIP-C.Y0Gq_pPe6TUb1g0oEN_51wHaEb?rs=1&amp;pid=ImgDetMain" alt="" /></p>
+
+<p>要想能够对泛型类型参数T做类型操作，只能是在用关键字reified修饰了的inline泛型函数，在这种函数体内可以对泛型类型参数T做类型操作，&#127792;如：</p>
+
+<pre><code class="Kotlin">inline fun &lt;reified A, reified B&gt; Pair&lt;*, *&gt;.asPairOf(): Pair&lt;A, B&gt;? {
+    if (first !is A || second !is B) return null
+    return first as A to second as B
+}
+
+val somePair: Pair&lt;Any?, Any?&gt; = "items" to listOf(1, 2, 3)
+
+
+val stringToSomething = somePair.asPairOf&lt;String, Any&gt;()
+val stringToInt = somePair.asPairOf&lt;String, Int&gt;()
+</code></pre>
+
+<p>需要注意的是关键字reified能够让针对类型参数T的操作得到编译器的检查，保证安全，是允许的。但是对于泛型仍是不允许的，&#127792;如：</p>
+
+<pre><code class="Kotlin">inline fun &lt;reified T&gt; List&lt;*&gt;.asListOfType(): List&lt;T&gt;? =
+    if (all { it is T })
+        @Suppress("UNCHECKED_CAST")
+        this as List&lt;T&gt; else
+        null
+</code></pre>
+
+<p>这个inline泛型函数用关键字reified修饰了，因此针对类型参数T是允许类型检查类型转换，如第2行是允许的。但泛型仍是不合法，如第4行，这时可以用上一小节提到的注解&#64;Suppress(&ldquo;UNCHECKED_CAST&rdquo;)来忽略未检查类型转换。</p>
+
+<h2>inline和reified的原理</h2>
+
+<p>对于一些泛型工厂方法，就非常适合使用inline和reified，以保证转换为类型参数（因为工厂方法最终肯定要as T）是允许的且是安全的：</p>
+
+<pre><code class="Kotlin">inline fun &lt;reified T&gt; logger(): Logger = LoggerFactory.getLogger(T::class.java)
+
+class User {
+    private val log = logger&lt;User&gt;()
+    // ...
+}
+</code></pre>
+
+<p>关键字reified其实也没有什么神秘的，因为这是inline函数，这种函数是会把函数体嵌入到任何调用它的地方（call site），而每个调用泛型函数的地方必然会有明确的具体类型参数，那么编译器就知道了具体的类型能保证类型安全（checked cast）。上面的工厂方法在调用时就会大概变成酱紫：</p>
+
+<pre><code class="Kotlin">class User {
+    private val log = LoggerFactory.getLogger(User.class.java)
+}
+</code></pre>
+
+<p>这时其实在函数体内已经知道了具体的类型参数User，编译器能够进行类型检查，所以是安全的。</p>
+
+<h2>总结</h2>
+
+<p>本文深入的讨论一下运行时泛型的一些特性，泛型类型在运行时会被擦除，无法做泛型相关的类型操作，因为编译器无法保证其类型安全。例外就是在用reified修饰的inline函数中可以对类型参数T做类型操作，但泛型类型（带尖括号的&lt;T&gt;）仍是会被擦除，可以用注解&#64;Suppress(&ldquo;UNCHECKED_CAST&rdquo;)来忽略unchecked cast。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://kotlinlang.org/docs/generics.html#type-erasure">Type erasure</a></li>
+<li><a href="https://www.baeldung.com/kotlin/generics#generics-at-runtime">6. Generics at Runtime</a></li>
+<li><a href="https://www.baeldung.com/kotlin/type-erased-list-array-conversion">How to Convert a Type-Erased List to an Array in Kotlin</a></li>
+<li><a href="https://discuss.kotlinlang.org/t/type-erasure/14519">Discussion about Type Erasure</a></li>
+<li><a href="https://stackoverflow.com/questions/42916801/how-does-erasure-work-in-kotlin">How does erasure work in Kotlin?</a></li>
+<li><a href="https://workingdev.net/2018/09/reified-generics-in-kotlin.html">Reified Generics in Kotlin</a></li>
+<li><a href="https://duongnt.com/type-erasure-reified/">Type erasure and reified in Kotlin</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Kotlin Generics Revisited]]></title>
@@ -832,494 +965,6 @@ private fun simple(): Flow&lt;Int&gt; = flow {
 <li><a href="https://juejin.cn/post/7314159614065131554">SharedFlow vs StateFlow，一篇看懂选择和使用技巧</a></li>
 <li><a href="https://juejin.cn/post/7195569817940164668">Kotlin SharedFlow&amp;StateFlow 热流到底有多热？</a></li>
 <li><a href="https://juejin.cn/post/7271832299339169844">ShareFlow与StateFlow实战</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[包教包会的Kotlin Flow教程]]></title>
-    <link href="http://toughcoder.net/blog/2024/01/25/kotlin-flow-made-easy/"/>
-    <updated>2024-01-25T23:17:51+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/01/25/kotlin-flow-made-easy</id>
-    <content type="html"><![CDATA[<p>Kotlin中的<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-flow/">Flow</a>是专门用于处理异步数据流的API，是<a href="https://en.wikipedia.org/wiki/Functional_reactive_programming">函数响应式编程范式(Functional Reactive Programming FRP)</a>在Kotlin上的一个实现，并且深度融合了Kotlin的协程。是Kotlin中处理异步数据流问题的首先方案。今天就来认识一下Flow并学会如何使用它。</p>
-
-<p><a href=""><img src="https://blog.mindorks.com/images/kotlin-flow-banner-image.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>Hello, Flow!</h2>
-
-<p>老规矩，新学习一个新东西的时候，总是要从一个基础的『Hello, world』开始，快速上手体验，有个第一印象。我们就从一个简单的『Hello, Flow!』开始Flow之旅：</p>
-
-<pre><code class="Kotlin">fun main() = runBlocking {
-    val simple = flow {
-        listOf("Hello", "world", "of", "flows!")
-            .forEach {
-                delay(100)
-                emit(it)
-            }
-    }
-
-    simple.collect {
-        println(it)
-    }
-}
-//Hello
-//world
-//of
-//flows!
-</code></pre>
-
-<p>这里创建了一个异步产生String的数据流Flow&lt;String&gt;，会不定时的产生一个String，然后收集此数据流产生的数据，把流出的String对象消费掉。</p>
-
-<p>可以看出Flow本质上是一个<strong>生产者消费者模式</strong>，流出的数据是由生产者产生的，且最终被消费者消费掉。可以把Flow想像成为一个<strong>生产线中的传送带</strong>，产品（数据）在上面不停的流动，经过各个站点的加工，最终成型，由消费者消费掉。从这个小例子中可以看出Flow API的三要素：数据流的<strong>上游</strong>是创建Flow（生产者）；<strong>中游</strong>是变幻操作（数据的处理和加工）；<strong>下游</strong>是收集数据（消费者），我们一一的详细来学习。</p>
-
-<h2>创建Flow</h2>
-
-<p>Flow是一个生产者，创建Flow也就是把数据放到传送带上。数据可以是基础数据或者集合，也可以是其他方式生成的数据，如网络或者回调或者硬件。创建Flow的API称作flow builder函数。</p>
-
-<h3>用集合创建Flow</h3>
-
-<p>这是创建Flow的最简单的方式，有两个，一个是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flow-of.html">flowOf</a>用于从固定数量的元素创建，多用于示例，实际中基本上用不到：</p>
-
-<pre><code class="Kotlin">val simple = flowOf("Hello", "world", "of", "flows!")
-simple.collect { println(it) }
-</code></pre>
-
-<p>或者，通过<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/as-flow.html">asFlow</a>把现有的集合转为Flow，这个还是比较实用的：</p>
-
-<pre><code class="Kotlin">listOf("Hello", "world", "of", "flows!").asFlow()
-    .collect { println(it) }
-(1..5).asFlow().collect { println(it) }
-</code></pre>
-
-<h3>通用flow builder</h3>
-
-<p>最为通用的flow builder就是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flow.html">flow {&hellip;}</a>了，这是最为通用，也是最为常用的构造器。在代码块中调用<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-flow-collector/emit.html">emit</a>就可以了，这个代码块会运行在协程之中，所以在这个代码里可以调用suspend函数：</p>
-
-<pre><code class="Kotlin">fun main() = runBlocking {
-    val simple = flow {
-        for (i in 1..3) {
-            delay(100)
-            println("Emitting: $i")
-            emit(i)
-        }
-    }
-    simple.collect { println(it) }
-}
-//Emitting: 1
-//1
-//Emitting: 2
-//2
-//Emitting: 3
-//3
-</code></pre>
-
-<p>这是一个代码块，只要调用了emit产生数据即可，又可调用suspend函数，因此非常的实用，比如可以执行网络请求，请求回来后emit等等。</p>
-
-<h2>终端操作符</h2>
-
-<p>数据从生产者流出，直到消费者把数据收集起来进行消费，而只有数据被消费了才有意义。因此，还需要终端操作（Terminal flow operators）。需要注意的是终端操作符是Flow的终点，并不算是Flow传送带内部，因此终端操作都是suspend函数，调用者需要负责创建协程以正常调用这些suspending terminal operators。</p>
-
-<p><img src="https://tse1-mm.cn.bing.net/th/id/OIP-C.WAtR3lx1-6aO3Cnsl3s3YgHaB7?rs=1&amp;pid=ImgDetMain" alt="" /></p>
-
-<p>常见的终端操作有三个：</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/collect.html">collect</a> 最为通用的，可执行一个代码块，参数就是Flow流出的数据</li>
-<li>转换为<a href="https://kotlinlang.org/docs/collections-overview.html">集合Collections</a>，如<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/to-list.html">toList</a>和<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/to-set.html">toSet</a>等，可以方便把收集到的数据转换为集合</li>
-<li>取特定的值，如<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/first.html">first()</a>只取第一个，<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/last.html">last</a>只取最后一个, <a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/single.html">single</a>只要一个数据（无数据和超过一个数据时都会抛异常。</li>
-<li>降维（或者叫作聚合accumulate）操作，如折叠<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/fold.html">fold</a>和化约<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/reduce.html">reduce</a>，折叠和化约可以对数据流进行降维，如求和，求积，求最大值最小值等等。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/count.html">count</a> 其实也是降维的一种，返回数据流中的数据个数，它还可以结合过滤以计算某种过滤条件后的数据数量。</li>
-</ul>
-
-
-<pre><code class="Kotlin">fun main() = runBlocking {
-    val simple = flow {
-        for (i in 1..3) {
-            delay(100)
-            println("Emitting: $i")
-            emit(i)
-        }
-    }
-    simple.collect { println(it) }
-    println("toList: ${simple.toList()}")
-    println("first: ${simple.first()}")
-    println("sum by fold: ${simple.fold(0) { s, a -&gt; s + a }}")
-}
-</code></pre>
-
-<p>输出：</p>
-
-<pre><code class="Bash">Emitting: 1
-1
-Emitting: 2
-2
-Emitting: 3
-3
-Emitting: 1
-Emitting: 2
-Emitting: 3
-toList: [1, 2, 3]
-Emitting: 1
-first: 1
-Emitting: 1
-Emitting: 2
-Emitting: 3
-sum by fold: 6
-</code></pre>
-
-<p>这些终端操作符都简单，比较好理解，看一眼示例就知道怎么用了。需要注意的就是first()和single()，first是只接收数据流中的第一个，而single则要求数据流只能有一个数据（没有或者超过一个都会抛异常）。比较有意思就是last()，数据流是一个流，一个产品传送带，通常情况下都是指无限或者说不确定数据 数量时才叫数据流，那又何来最后一个数据呢？通常情况下last都是无意义的。只有当我们知道流的生产者只生产有限数量数据时，或者采用了一些限制性的变幻操作符时，last才能派上用场。</p>
-
-<p>再有就是注意fold和reduce的区别，这里它们的区别跟集合上的操作是一样的，fold可以提供初始值，流为空时返回初始值；而reduce没初始值，流为空时会抛异常。</p>
-
-<h2>变幻操作符</h2>
-
-<p>数据在流动的过程中可以对数据进行转化操作，从一种数据类型变别另外一种，这就是变幻(Transformation)，这是数据流最为灵活和强大的一个方面。这跟<a href="https://kotlinlang.org/docs/collection-transformations.html">集合的变幻</a>是类似的。</p>
-
-<p><img src="https://cdn-media-1.freecodecamp.org/images/1*ju5YD8bRZhdCGmptRQdmlw.png" alt="" /></p>
-
-<h3>转换</h3>
-
-<p>最常见的变幻就是转换，也就是把从一种数据类型转换为另一种数据类型，用的最多当然是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/map.html">map</a>，还有更为通用的<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/transform.html">transform</a>。它们都能把数据流中的数据从一种类型转换为另一种类型，比如把Flow<String>转为Flow<Int>。区别在于，map是死板的转换，一个对象进去，另一个对象作为返回值出来；但transform更为灵活，它并不是把新类型作为返回值，它可以像上游生产者那样产生(emit)新数据，甚至可以产生(emit)多个新数据，它是非常强大的，所有其他的变幻操作符，都是基于transform实现的。</p>
-
-<pre><code class="Kotlin">fun main() = runBlocking {
-    val simple = flow {
-        for (i in 1..3) {
-            delay(100)
-            println("Emitting: $i")
-            emit(i)
-        }
-    }
-
-    simple.map { " Mapping to ${it * it}" }
-        .collect { println(it) }
-
-    simple.transform { req -&gt;
-        emit(" Making request $req")
-        emit(performRequest(req))
-    }.collect {
-        println(it)
-    }
-}
-
-fun performRequest(req: Int) = "Response for $req"
-</code></pre>
-
-<p>输出是:</p>
-
-<pre><code class="Bash">Emitting: 1
- Mapping to 1
-Emitting: 2
- Mapping to 4
-Emitting: 3
- Mapping to 9
-Emitting: 1
- Making request 1
-Response for 1
-Emitting: 2
- Making request 2
-Response for 2
-Emitting: 3
- Making request 3
-Response for 3
-</code></pre>
-
-<p>还有一个操作符<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/with-index.html">withIndex</a>它与集合中的<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.collections/map-indexed.html">mapIndexed</a>是类似的，它的作用是把元素变成IndexedValue，这样在后面就可以得到元素和元素的索引 了，在某些场景下还是比较方便的。</p>
-
-<h3>限制</h3>
-
-<p>数据流里面的数据不一定都是需要的，所以通常需要对数据元素进行过滤，这就是限制性操作符，最常见的就是<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/filter.html">filter</a>，这里与集合的限制操作也是类似的：</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/filter.html">filter</a> 把数据转为布尔型，从而对数据流进行过滤。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/distinct-until-changed.html">distinctUntilChanged</a> 过滤数据流中重复的元素。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/drop.html">drop</a> 丢弃前面一定数量的元素。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/take.html">take</a> 只返回流中前面一定数量的元素，当数量达到时流将被取消，注意take与drop是相反的。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/debounce.html">debounce</a> 仅保留流中一定超时间隔内的元素，比如超时时间是1秒，那只返回到达1秒时最新的元素，这个元素前面的将被丢弃。这个在秒杀场景拦截疯狂点击，或者一个服务中拦截疯狂请求时非常有用。只取一定时间间隔内的最新的元素，拦截掉无效数据。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/sample.html">sample</a> 以一定的时间间隔取元素，与debounce差不多，区别在于debounce会返回最后一个元素，而sample不一定，要看间隔最后一个元素能否落在一个时间间隔内。</li>
-</ul>
-
-
-<pre><code class="Kotlin">@OptIn(FlowPreview::class)
-fun main() = runBlocking {
-    val constraint = flow {
-        emit(1)
-        delay(90)
-        emit(2)
-        delay(90)
-        emit(3)
-        delay(1010)
-        emit(4)
-        delay(1010)
-        emit(5)
-    }
-
-    constraint.filter { it % 2 == 0 }
-        .collect { println("filter: $it") }
-    constraint.drop(3)
-        .collect { println("drop(3): $it") }
-    constraint.take(3)
-        .collect { println("take(3): $it") }
-
-    constraint.debounce(1000)
-        .collect { println("debounce(1000): $it") }
-    constraint.sample(1000)
-        .collect { println("sample(1000): $it") }
-}
-</code></pre>
-
-<p>仔细看它们的输出，以理解它们的作用：</p>
-
-<pre><code class="Bash">filter: 2
-filter: 4
-drop(3): 4
-drop(3): 5
-take(3): 1
-take(3): 2
-take(3): 3
-debounce(1000): 3
-debounce(1000): 4
-debounce(1000): 5
-sample(1000): 3
-sample(1000): 4
-</code></pre>
-
-<p>需要留意，debounce和sample是Preview的API，需要<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-flow-preview/">加上Preview注解</a>。</p>
-
-<p>中游的变幻操作符仍属于流的一部分，它们都仍运行在Flow的上下文中，因此，这些操作符内，与流的builder一样，都可以直接调用其他的supsend函数，甚至是其他的耗时的，阻塞的函数都可以调用。并不需要特别的为上游和中游创建上下文。</p>
-
-<p>Flow的操作符特别多，我们需要留意区别中游操作符和下游终端。看这些函数的返回类型就可以了，返回类型是具体数据的，一定是下游终端操作符；而对于上游生产者和中游变幻操作符，其返回值一定是一个Flow。</p>
-
-<h2>高级操作符</h2>
-
-<p>前面讲的操作符都是针对 某一个流本身的，但大多数场景一个流明显不够用啊，我们需要操作多个流，这时就需要用到一些高级操作符了。</p>
-
-<h3>合并多路流</h3>
-
-<p>多路流不可能一个一个的处理，合并成为一路流更加的方便，有以下合并方法：</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/merge.html">归并merge</a>把<strong>数据类型相同的多路流归并为一路</strong>，注意一定是数据类型相同的才可以归并，并且归并后的元素顺序是未知的，也即不会保留原各路流的元素顺序。归并流的数量没有限制。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/zip.html">粘合zip</a> 当想要<strong>把两路流的元素对齐后粘合为一个元素</strong>时，就可以使用<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/zip.html">zip</a>，当任何一个流结束或者被取消时，zip也就结束了。只能两个两个的粘合。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/combine.html">组合combine</a>把多路流中的每个流的最新元素粘合成新数据，形成一个新的流，其元素是把<strong>每个元素</strong>都用<strong>每路流的最新元素</strong>来转换生成。最少需要2路流，最多支持5路流。</li>
-</ul>
-
-
-<p>用一个&#127792;来感受一下它们的作用：</p>
-
-<pre><code class="Kotlin">fun main() = runBlocking {
-    val one = flowOf(1, 2, 3)
-                .map(Int::toString)
-                .onEach { delay(10) }
-    val two = flowOf("a", "b", "c", "d")
-                .onEach { delay(25) }
-    merge(one, two)
-        .collect { println("Merge: $it") }
-    one.zip(two) { i, s -&gt; "Zip: $i. $s" }
-        .collect { println(it) }
-    combine(one, two) { i, s -&gt; "Combine $i with $s" }
-        .collect { println(it) }
-}
-</code></pre>
-
-<p>这里是输出：</p>
-
-<pre><code class="Bash">Merge: 1
-Merge: 2
-Merge: a
-Merge: 3
-Merge: b
-Merge: c
-Merge: d
-Zip: 1. a
-Zip: 2. b
-Zip: 3. c
-Combine 2 with a
-Combine 3 with a
-Combine 3 with b
-Combine 3 with c
-Combine 3 with d
-</code></pre>
-
-<p>通过它们的输出可以看到它们的区别：merge就像把两个水管接到一样，简单没有多余加工，适合数据类型一样的流（比如都是水）；zip会对齐两路流，让能对齐的元素两两结合，对不齐时就结束了。</p>
-
-<p>而combine要等到<strong>集齐每路流的最新元素，才能转换成新数据</strong>，two是较one慢的，看到two的元素『a』时，one最新的元素是『2』，之后one的『3』来了，这时two最新的元素还是『a』，之后one停在了『3』，后续two的元素都与『3』组合。有同学可能会有疑问，为啥one的『1』丢弃了，没找到组合呢？因为它来的太早了，one的『1』来了时，two还没有元素，它肯定会等，但当two的第一个元素『a』来了时，这时one的最新元素已是『2』了，one是10发一个元素，two是隔25发一个元素，所以two的第1个元素到了时，one的第2个元素已经来了，它是最新的，所以组合时会用它。combine要集齐每路流的最新元素才能合成。</p>
-
-<p>总结起来就是，<strong>zip会按顺序对齐元素</strong>；而combine要<strong>集齐每路流的最新元素</strong>，先要<strong>集齐</strong>，齐了时还要<strong>取每个流的最新元素</strong>。可以动手运行示例，修改delay的时间，看输出有啥不一样的，以加深理解。</p>
-
-<h3>展平(Flatten)</h3>
-
-<p>一个Flow就是一个异步数据流，它相当于一个传送带或者管道，货物（具体的数据）在其上面或者里面流动。正常情况下Flow内部都是常规数据（对象）在流动，但Flow本身也是一个对象，因此也可以嵌套，把流当成另一个流的数据，比如Flow&lt;Flow&lt;Int&gt;&gt;，这就是Flow of Flows of Int。Flow是数据流，最终消费者需要的是具体的数据，所以对于嵌套的Flow of Flows，通常都需要在传给终端操作符之前进行展平(flatten)，得到一个faltterned Flow（即从Flow&lt;Flow&lt;Int&gt;&gt;转成Flow&lt;Int&gt;），就可以被终端消费了。操作符中以flat开头的函数都是用于展平的，主要是两类，一类是<strong>展平flatten系</strong>，一类是<strong>先变幻再展平flatMap系</strong>。</p>
-
-<h4>直接展平</h4>
-
-<p>最直观的展平莫过于对于已经是嵌套的Flow of Flows做展平处理，以能让终端操作符正常的消费Flow里面的数据，有两个API可以做展平：</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flatten-concat.html">flattenConcat</a> 把嵌套的Flow of Flows展平为一个Flow，内层的每个流都是按顺序拼接在一起的，串行拼接。比如Flow of 4 Flows，内层有四个管道，那就就变成了『内层1』->『内层2』->『内层3』->『内层4』。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flatten-merge.html">flattenMerge</a> 把Flow of Flows展平为一个Flow，内层的所有Flow是以并发的方式将元素混合流入新管道，是并发式混合，相当于四个管道同时往另一个管道倒水，原流中的顺序会错乱掉。</li>
-</ul>
-
-
-<pre><code class="Kotlin">@OptIn(ExperimentalCoroutinesApi::class)
-fun main() = runBlocking {
-    val flow2D = flowOf("Hello", "world", "of", "flow!")
-        .map { it.toCharArray().map { c -&gt; " '$c' " }.asFlow() }
-        .flowOn(Dispatchers.Default)
-
-    flow2D.collect { println("Flow object before flatten: $it") } // Data in flow are Flow objects
-
-    println("With flattenConcat:")
-    flow2D.flattenConcat()
-        .collect { print(it) }
-
-    println("\nWith flattenMerge:")
-    flow2D.flattenMerge()
-        .collect { print(it) }
-}
-//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@1b0375b3
-//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@e580929
-//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@1cd072a9
-//Flow object before flatten: kotlinx.coroutines.flow.FlowKt__BuildersKt$asFlow$$inlined$unsafeFlow$3@7c75222b
-//With flattenConcat:
- //'H'  'e'  'l'  'l'  'o'  'w'  'o'  'r'  'l'  'd'  'o'  'f'  'f'  'l'  'o'  'w'  '!' 
-//With flattenMerge:
-// 'H'  'e'  'l'  'l'  'o'  'w'  'o'  'r'  'l'  'd'  'o'  'f'  'f'  'l'  'o'  'w'  '!'
-</code></pre>
-
-<p>从输出中可以看出，如果不展平Flow里面是Flow对象，没法用。flattenConcat是把内层的流串行的接在一起。但flattenMerge的输出似乎与文档描述不太一致，并没有并发式的混合。</p>
-
-<h4>先转换再展平</h4>
-
-<p><img src="https://velog.velcdn.com/images/morning-la/post/59271fa7-8768-43f7-bebf-1387e77d8013/image.png" alt="" /></p>
-
-<p>大多数时候并没有现成的嵌套好的Flow of Flows给你展平，更多的时候是我们需要自己把元素转换为一个Flow，先生成Flow of Flows，然后再展平，且有定义好的API可以直接用：</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-concat.html">flatMapConcat</a> 先把Flow中的数据做变幻，这个变幻必须从元素变成另一个Flow，这时就变成了嵌套式的Flow of Flows，然后再串行式展平为一个Flow。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-latest.html">flatMapLatest</a> 先把Flow中的最新数据做变幻，这个变幻必须从元素变成另一个Flow，这时会取消掉之前转换生成的内层流，结果虽然也是嵌套，但内层流只有一个，就是原Flow中最新元素转换生成的那个流。然后再展平，这个其实也不需要真展平，因为内层流只有一个，它里面的数据就是最终展平后的数据。</li>
-<li><a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-merge.html">flatMapMerge</a> 与flatMapConcat一样，只不过展平的时候嵌套的内层流是以并发的形式来拼接的。</li>
-</ul>
-
-
-<p>来看个&#127792;就能明白它们的作用了：</p>
-
-<pre><code class="Kotlin">@OptIn(ExperimentalCoroutinesApi::class)
-fun main() = runBlocking {
-    val source = (1..3).asFlow()
-        .onEach { delay(100) }
-
-    println("With flatMapConcat:")
-    var start = System.currentTimeMillis()
-    source.flatMapConcat(::requestFlow)
-        .collect { println("$it at ${System.currentTimeMillis() - start}ms from the start") }
-
-    println("With flatMapMerge:")
-    start = System.currentTimeMillis()
-    source.flatMapMerge(4, ::requestFlow)
-        .collect { println("$it at ${System.currentTimeMillis() - start}ms from the start") }
-
-    println("With flatMapLatest:")
-    source.flatMapLatest(::requestFlow)
-        .collect { println("$it at ${System.currentTimeMillis() - start}ms from the start") }
-}
-
-fun requestFlow(x: Int): Flow&lt;String&gt; = flow {
-    emit(" &gt;&gt;[$x]: First: $x")
-    delay(150)
-    emit(" &gt;&gt;[$x]: Second: ${x * x}")
-    delay(200)
-    emit(" &gt;&gt;[$x]: Third: ${x * x * x}")
-}
-</code></pre>
-
-<p>输出比较多：</p>
-
-<pre><code class="Bash">With flatMapConcat:
- &gt;&gt;[1]: First: 1 at 140ms from the start
- &gt;&gt;[1]: Second: 1 at 306ms from the start
- &gt;&gt;[1]: Third: 1 at 508ms from the start
- &gt;&gt;[2]: First: 2 at 613ms from the start
- &gt;&gt;[2]: Second: 4 at 765ms from the start
- &gt;&gt;[2]: Third: 8 at 969ms from the start
- &gt;&gt;[3]: First: 3 at 1074ms from the start
- &gt;&gt;[3]: Second: 9 at 1230ms from the start
- &gt;&gt;[3]: Third: 27 at 1432ms from the start
-With flatMapMerge:
- &gt;&gt;[1]: First: 1 at 130ms from the start
- &gt;&gt;[2]: First: 2 at 235ms from the start
- &gt;&gt;[1]: Second: 1 at 284ms from the start
- &gt;&gt;[3]: First: 3 at 341ms from the start
- &gt;&gt;[2]: Second: 4 at 386ms from the start
- &gt;&gt;[1]: Third: 1 at 486ms from the start
- &gt;&gt;[3]: Second: 9 at 492ms from the start
- &gt;&gt;[2]: Third: 8 at 591ms from the start
- &gt;&gt;[3]: Third: 27 at 695ms from the start
-With flatMapLatest:
- &gt;&gt;[1]: First: 1 at 807ms from the start
- &gt;&gt;[2]: First: 2 at 915ms from the start
- &gt;&gt;[3]: First: 3 at 1021ms from the start
- &gt;&gt;[3]: Second: 9 at 1173ms from the start
- &gt;&gt;[3]: Third: 27 at 1378ms from the start
-</code></pre>
-
-<p><img src="https://velog.velcdn.com/images/morning-la/post/5d218551-4021-4a91-8b85-bf69beb786d6/image.png" alt="" /></p>
-
-<p>这个示例中原始Flow是一个Int值，把它转换成为一个字符串流Flow&lt;String&gt;。从输出中可以看到flatMapConcat确实是串行拼接，并且flatMapMerge是并发式的混合，不保证内部Flow的元素顺序。仔细看flatMapLatest的输出，每当原始Flow中有新的值生成时，之前转换生成的流会被取消，它们并没有运行完（仅第一个元素流出了）。而原始流的最后一个元素『3』则完整的从展平流中流出了。</p>
-
-<p>展平的函数比较多容易学杂，其实有一个非常简单的区分方法：带有<strong>Map字样</strong>的函数就是先把元素<strong>转换成Flow</strong>之后再展平；带有<strong>Concat</strong>就是把嵌套内层流<strong>串行拼接</strong>；而带有<strong>Merge</strong>的则是把内层流<strong>并发式的混合</strong>。使用的时候，如果<strong>想保证顺序就用带有Concat的函数；想要并发性，想高效一些，并且不在乎元素顺序，那就用带有Merge的函数。</strong></p>
-
-<h2>Flow是冷流</h2>
-
-<p>对于数据流来说有<strong>冷热</strong>之分，冷流(Cold stream)是指消费者开始接收数据时，才开始生产数据，换句话说就是生产者消费者整个链路搭建好了后，上游才开始生产数据；热流(Hot stream)，与之相反，不管有没有人在消费，都在生产数据。有一个非常形象的比喻就是，冷流就好比CD，你啥时候都可以听，而且只要你播放就从头开始播放CD上所有的音乐；而热流就好比电台广播，不管你听不听，它总是按它的节奏在广播，今天不听，就错过今天的数据了，今天听跟明天听，听到的内容也是不一样的。</p>
-
-<p>Kotlin的<strong>Flow是冷流</strong>，其实从上面的例子也能看出来，每个例子中都是只创建一个Flow对象，然后有多次collect，但<strong>每次collect都能拿到Flow中完整的数据</strong>，这就是<strong>典型的冷流</strong>。绝大多数场景，我们需要的也都是冷流。</p>
-
-<p>扩展阅读<a href="https://kt.academy/article/cc-hot-cold">Hot and cold data sources</a>。</p>
-
-<h2>与ReactiveX的区别</h2>
-
-<p>Flow是用于处理异步数据流的API，是函数响应式编程范式FRP的一个实现。但它并不是唯一的，更为<a href="https://github.com/ReactiveX/RxJava">流行的RxJava</a>也是符合FRP的异步数据流处理API，它出现的要更早，社区更活跃，资源更丰富，流行程度更高，基本上是每个安卓项目必备的依赖库，同时也是面试必考题。</p>
-
-<p>因为Kotlin是基于JVM的衍生语言，它与Java是互通的，可以混着用。所以RxJava可以直接在Kotlin中使用，无需要任何改动。但毕竟RxJava是原生的Java库，Kotlin中的大量语法糖还是很香的，由此便有了<a href="https://github.com/ReactiveX/RxKotlin">RxKotlin</a>。RxKotlin并不是把<a href="https://reactivex.io/">ReactiveX规范</a>重新实现一遍，它只是一个轻量的粘合库，通过扩展函数和Kotlin的语法糖等，让RxJava更加的Kotlin友好，在Kotlin中使用RxJava时更加的顺滑。但核心仍是RxJava，如并发的实现仍是用线程。</p>
-
-<p>那么Flow相较RxJava有啥区别呢？区别就在于Flow是纯的Kotlin的东西，它们背后的思想是一样的都是异步数据流，都是FRP，但Flow是原生的，它与Kotlin的特性紧密结合，比如它的并发是用协程通信用的是Channel。使用建议就是，如果本身对RxJava很熟悉，且是遗留代码，那就没有必要去再改成Flow；但如果是新开发的纯新功能，并且不与遗留代码交互，也没有与架构冲突，还是建议直接上Flow。</p>
-
-<h2>什么时候用Flow</h2>
-
-<p>每一个工具都有它特定的应用场景，Flow虽好，但不可滥用，要以架构的角度来认清问题的本质，符合才可以用。Flow是用于处理异步数据流的API，是FRP范式下的利器。因此，只当核心业务逻辑是由异步数据流驱动的场景时，用Flow才是合适的。现在绝大多数端（前端，客户端和桌面）GUI应用都是响应式的，用户输入了，或者服务器Push了数据，应用做出响应，所以都是符合FRP范式的。那么重点就在于数据流了，如果数据连串成流，就可以用Flow。比如用户输出，点击事件/文字输入等，这并不只发生一次，所以是数据流（事件流）。核心的业务数据，比如新闻列表，商品列表，文章列表，评论列表等都是流，都可以用Flow。配置，设置和数据库的变化也都是流。</p>
-
-<p>但，一个单篇的文章展示，一个商品展示这就不是流，只有一个文章，即使用流，它也只有一个数据，而且我们知道它只有一个数据。这种情况就没有必要用Flow，直接用一个supsend请求就好了。</p>
-
-<h2>在Android中使用Flow</h2>
-
-<p><img src="https://koenig-media.raywenderlich.com/uploads/2020/05/KotlinFlow-twitter.png" alt="" /></p>
-
-<p>安卓开发的官方语言已经变成了Kotlin了，安卓应用也非常符合FRP范式，那么对于涉及异步数据流的场景自然要使用Flow。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://blog.mindorks.com/what-is-flow-in-kotlin-and-how-to-use-it-in-android-project/">What is Flow in Kotlin and how to use it in Android Project?</a></li>
-<li><a href="https://developer.android.com/kotlin/flow">Kotlin flows on Android</a></li>
-<li><a href="https://github.com/amitshekhariitbhu/Learn-Kotlin-Flow">Learn Kotlin Flow by real examples for Android</a></li>
-</ul>
-
-
-<h2>书籍推荐</h2>
-
-<p>Flow本身的东西其实并不多，就是三板斧：创建，变幻和终端。但Flow背后的思想是很庞大的，想要用好Flow必须要学会函数响应式编程范式。也就是说只有学会以FRP范式来构建软件时，才能真正用好Flow。</p>
-
-<p><a href="https://www.manning.com/books/functional-reactive-programming">《Functional Reactive Programming》</a></p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/flow.html">Asynchronous Flow</a></li>
-<li><a href="https://amitshekhar.me/blog/flow-api-in-kotlin">Mastering Flow API in Kotlin</a></li>
 </ul>
 
 ]]></content>
