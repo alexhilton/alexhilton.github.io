@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-04-09T22:33:15+08:00</updated>
+  <updated>2024-04-16T21:32:32+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,159 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[一文搞懂Kotlin符号处理接口KSP]]></title>
+    <link href="http://toughcoder.net/blog/2024/04/16/kotlin-ksp-made-easy/"/>
+    <updated>2024-04-16T21:17:43+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/04/16/kotlin-ksp-made-easy</id>
+    <content type="html"><![CDATA[<p>Kotlin符号处理（Kotlin Symbol Processing）即KSP是可以用于开发轻量级编译器插件的一套API。是Kotlin原生的，Kotlin语法友好的编译器插件。使用简单且易于上手，可以实现一些非常强大的编译时代码处理功能，如代码生成和代码检查。今天就来学习一下KSP的基本原理，以及如何使用KSP API。</p>
+
+<p><a href=""><img src="https://androiddeepdive.github.io/Team-Blog/images/cover_ksp.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p><strong>注意</strong>，本文是Kotlin中较为高级的话题，适合有一定的Kotlin基础的同学，否则理解起来可能有难度，可以事先<a href="https://juejin.cn/column/7351592055908892723">阅读前面的文章</a>。</p>
+
+<h2>什么是KSP</h2>
+
+<p>与前文提到的注解处理器kapt类似，KSP也是一种编译时的插件，能够在编译前处理Kotlin语言的符号。KSP API能地道地处理Kotlin的源码，因为它是专门为Kotlin而设计的，能够完全的理解和识别Kotlin的语言符号，以及Kotlin专属的特性：如扩展函数，声明点泛型变化以及本地函数。KSP API基于Kotlin的语法，把Kotlin程序拆解为各种静态的符号，可以处理如类，成员，函数，参数 以及注解等等。但它并不是运行时的（那是反射做的事情），因此像逻辑如循环和条件语句是没有办法进行处理，以及也无法得到表达式的结果。</p>
+
+<p>虽然KSP是编译器插件，但它是运行在最终编译之前，也就是说在编译器编译全部代码之前，事先会运行KSP插件。所以KSP API最适合做的事情是：</p>
+
+<ol>
+<li>读取代码和各种资源文件，并进行分析</li>
+<li>生成代码</li>
+</ol>
+
+
+<p>接下来看如何具体使用KSP API。</p>
+
+<h2>配置KSP</h2>
+
+<p><img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcStf17qaB5JSFveiBVlA6ljiI0OgI3kN4hnQkBKtuFnSw&amp;s" alt="" /></p>
+
+<p>KSP是由谷歌开发的一套工具，包括两部分一个是Kotlin plugin，另一个是依赖库。所以需要在项目的根build.gradle里面，先把plugin添加到项目里：</p>
+
+<pre><code class="Groovy">// The root build.gradle of your project
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '1.9.23' apply false
+    id 'com.google.devtools.ksp' version '1.9.23-1.0.20' apply false
+}
+</code></pre>
+
+<p>当然，这一步其实并不是必须的，也可以在每个模块中再配置plugin。</p>
+
+<p>接下来，在使用KSP的模块里面添加plugin，添加依赖以及指明KSP processor，这是最为关键的配置：</p>
+
+<pre><code class="Groovy">// module build.gradle
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+    id 'com.google.devtools.ksp'
+}
+
+dependencies {
+    implementation project(':kspannotation')
+    ksp project(':kspprocessor')
+}
+</code></pre>
+
+<p>如果项目顶层指定了plugin的版本，那么到了module这里，就不必再指定版本了。另外就是要注意版本的匹配，ksp的版本前半段『1.9.23』指明 的是最低的Kotlin版本要求。最好是让ksp要求的版本与指定的Kotlin版本匹配或者差距较小，否则可能会有问题。dependencies中的ksp指定的是KSP processor，对于有些库可能注解和定义和KSP的processor可能会在同一个包里，那么写一句就够了，如Room的，就一句：ksp &lsquo;androidx.room:room-compiler:2.6.1&#8217;。</p>
+
+<p>如果是自定义的processor，需要为processor单独建一个library module，配置ksp库为依赖即可：</p>
+
+<pre><code class="Groovy">// KSP processor module build.gradle
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+}
+
+dependencies {
+    implementation project(':kspannotation')
+
+    implementation 'com.google.devtools.ksp:symbol-processing-api:1.9.23-1.0.20'
+    implementation 'com.squareup:kotlinpoet-ksp:1.16.0'
+}
+</code></pre>
+
+<p>典型的KSP procesor（包括网上大部分的例子）都是分了三个module，一个是定义注解的module，一个是实现processor的，一个是使用注解和processor的。但这并不是必须的，为了方便，其实把注解的定义和processor放在一个module就可以了。只要把processor与使用它的module分开来了，就可以。</p>
+
+<p><strong>注意：</strong>对于processor module来说它的类型要是library，并且要是Java library或者Kotlin library，因为这是Kotlin语言层面的东西。对于Android同学来说在新建module时一定要选择『Java or Kotlin Library』。</p>
+
+<h2>实现KSP Processor</h2>
+
+<p>配置好了模块后，剩下的就是要实现一个KSP processor了。</p>
+
+<h3>实现Processor</h3>
+
+<p>大部分工作plugin已经做好了，我们需要做的就是实现一些接口。有两个需要实现，一个是<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/processing/SymbolProcessorProvider.kt">SymbolProcessorProvider</a>，另一个则是<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/processing/SymbolProcessor.kt">SymbolProcessor</a>。</p>
+
+<p>SymbolProcessorProvider相当于是processor的一个工厂方法，我们实现它的create方法，返回一个SymbolProcessor实例，一个典型的实现：</p>
+
+<pre><code class="Kotlin">class MyProcessorProvider : SymbolProcessorProvider {
+    override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor {
+        return MyProcessor(environment.codeGenerator)
+    }
+}
+</code></pre>
+
+<p>它就相当于一个工厂方法，把上下文环境传给processor，SymbolProcessor是重点，我们需要实现它的process方法，针对感兴趣的符号进行处理，比如用<a href="https://square.github.io/kotlinpoet/">KotlinPoet</a>生成代码，这里是发挥创造力的地方：</p>
+
+<pre><code class="Kotlin">class MyProcessor(private val generator: CodeGenerator) : SymbolProcessor {
+    override fun process(resolver: Resolver): List&lt;KSAnnotated&gt; {
+        val annotatedClasses = resolver
+            .getSymbolsWithAnnotation(MyAnnotation::class.java.name)
+            .filterIsInstance&lt;KSClassDeclaration&gt;()
+
+        for (aclass in annotatedClasses) {
+            val packageName = aclass.packageName.asString()
+            val className = aclass.simpleName.asString()
+            val methods = aclass.getDeclaredFunctions())
+            // ...
+         }
+        return emptyList()
+    }
+}
+</code></pre>
+
+<h3>注册Processor</h3>
+
+<p>实现了process后还需要把process注册一下，否则ksp plugin无法找到这个processor。在processor module与代码同级文件夹下新建文件『resources/META-INF/services/com.google.devtools.ksp.processing.SymbolProcessorProvider』，然后把刚才实现的provider的完整类名，写在文件里，如果是使用IDE一般都会有提示的。</p>
+
+<pre><code class="Kotlin">// myprocessor/src/main/
+//    |-- kotlin/net/toughcoder/
+//              |-- MyProcessorProvider.kt
+//              |-- MyProcessor.kt
+//    |-- resources/META-INF/services/
+//              |-- com.google.devtools.ksp.processing.SymbolProcessorProvider
+// file: resources/META-INF/services/com.google.devtools.ksp.processing.SymbolProcessorProvider
+net.toughcoder.MyProcessorProvider
+</code></pre>
+
+<h2>为啥要用KSP</h2>
+
+<p>目前来说KSP最主要应用仍然 是注解的处理，以及配合注解进行代码生成。通过前面一篇<a href="https://juejin.cn/post/7355024828262334501">关于注解的文章</a>中我们知道，注解的处理已经有了一个专门的工具了叫做kapt，就目前来说KSP能做的事情kapt也都能做，它们都是用于编译时代码处理以及代码生成，都能处理注解。那么，在已经有了kapt的前提下，为啥还要搞KSP呢？</p>
+
+<p>kapt虽然是Kotlin的注解处理器，但是它保持Java的兼容性，它直接复用了Java的<a href="https://docs.oracle.com/javase/8/docs/api/javax/annotation/processing/AbstractProcessor.html">AbstractProcessor</a>，要依赖于Java的annotation procssor以及javac，只适用于Kotlin/JVM，其他target用不起来，因此它并不能算是Kotlin原生的工具，对Kotlin的特性支持不友好。再有就是，为了保持与javac的兼容性，它的处理速度很慢，必须先把Kotlin代码转成javac能认识的标准Java代码，这肯定会有不必要的性能开销。基于这些限制，kapt已经停止开发了，处于维护状态了，不会再添加新功能了。<strong>省流点来说，kapt是以Java角度来看待输入代码的（即也要处理的源码），而KSP是以Kotlin角度</strong>。</p>
+
+<p>KSP则是Kotlin原生的，基于Kotlin开发的，且是为了Kotlin开发的，并不受限于javac，因此所有的Kotlin目标平台都能用。并且对Kotlin的特性支持的很友好。它的处理速度也较kapt有提升，因为不必要做编码转换了，省了一道工序。从官方给出的数据看至少能省25%的编译时间。另外，KSP的API使用起来更加的Kotlin友好一些SymbolProcessor传递过来的<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/processing/Resolver.kt">Resolver</a>有很方便的接口可以取得被标的类，而且符号对象是<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/symbol/KSClassDeclaration.kt">KSClassDeclaration</a>，它可以方便的取一个Kotlin类的相关的其他符号，如包名，类名，方法等。</p>
+
+<h2>总结</h2>
+
+<p>通过本文我们理解了KSP的概念，并学会了如何在项目中配置KSP， 以及如何实现一个KSP processor。KSP视Kotlin代码为一系列的静态符号，对Kotlin语言特性支持友好，处于活跃的开发状态且被官方大力支持，因此应该尽早转向KSP。并且相信KSP能做的事情会越来越多。</p>
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://kotlinlang.org/docs/ksp-overview.html">Kotlin Symbol Processing API</a></li>
+<li><a href="https://developer.android.com/build/migrate-to-ksp">Migrate from kapt to KSP</a></li>
+<li><a href="https://www.kodeco.com/33148161-write-a-symbol-processor-with-kotlin-symbol-processing">Write a Symbol Processor with Kotlin Symbol Processing</a></li>
+<li><a href="https://www.codecentric.de/wissens-hub/blog/kotlin-symbol-processing-introduction">An Introduction to Kotlin Symbol Processing</a></li>
+<li><a href="https://kt.academy/article/ak-ksp">Kotlin Symbol Processing</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Kotlin Annotation Made Easy]]></title>
@@ -858,166 +1011,6 @@ class User {
 <li><a href="https://rengwuxian.com/kotlin-generics/">Kotlin 的泛型</a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[一文带你吃透Kotlin类与对象]]></title>
-    <link href="http://toughcoder.net/blog/2024/02/26/kotlin-class-made-easy/"/>
-    <updated>2024-02-26T21:22:39+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/02/26/kotlin-class-made-easy</id>
-    <content type="html"><![CDATA[<p>Kotlin是多范式通用编程语言，对面向对象编程(OOP)自然也提供了全方位的支持。通过<a href="http://toughcoder.net/blog/2018/05/17/introduction-to-kotlin-programming-language/">先前一篇文章</a>，学习了使用Kotlin进行基本面向对象编程的方法，本文将在前文基础之上继续深入的学习面向对象编程的高级特性，以能够写出更加符合OO的代码，并能够从容应对一些复杂的OOP场景。</p>
-
-<p><a href=""><img src="https://bigknol.com/wp-content/uploads/2023/07/kotlin_class_objects.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>注意构造的顺序</h2>
-
-<p>在构造对象过程中，有三个地方可以对成员进行初始化：1）是在<strong>首构造方法（Primary constructor）</strong>；2）是在声明成员的同时进行初始化，或者是在<strong>初始化代码块(init {&hellip;})</strong>中；3）是在<strong>次要构造方法(Secondary constructor)</strong>中。</p>
-
-<p>要注意它们之间的<strong>区别和执行顺序</strong>，首构造方法是最先执行的，但它不能运行代码，只能进行赋值；成员声明和初始化代码块(init {&hellip;})是首构造方法的一部分，因此要先于次要构造方法。次要构造方法是最后执行，并且次要构造方法一定要委托到首构造方法。成员声明和初始化代码块之间则依赖于书写的顺序，从上到下执行。</p>
-
-<p>虽然编译器有它的规则来保障顺序，但为了可读性和可维护性，我们不应该完全依赖编译器。这里建议的方式是：</p>
-
-<ul>
-<li>把类的最核心的成员放在首构造方法，如必须要依赖的参数，公开的成员，类型体系中的核心成员等，这些应该直接放在首构造方法中，并按重要的顺序进行声明，这样也能方便进行依赖注入和测试Mock对象替换。</li>
-<li>私有成员应该在类中声明，并且在声明时进行初始化，如果无法初始化就标记为延迟初始(late init)。</li>
-<li>初始化代码块，应该做一些复杂的初始化过程，或者成员之间有关联的初始化，或者做一些构造完成之后的操作。比如像在ViewModel中，构造之后，可能执行拉取数据，这就非常适合放在init {&hellip;}之中。</li>
-<li>不建议使用次要构造方法，可以用<strong>给首构造方法的参数设置默认值</strong>的方式来进行成员参数上的重载。</li>
-<li>初始化代码块要放在所有成员声明之后，以保障执行顺序。</li>
-</ul>
-
-
-<p>扩展阅读<a href="https://kotlinlang.org/docs/classes.html">Classes﻿</a>和<a href="https://kotlinlang.org/docs/properties.html">Properties﻿</a>。</p>
-
-<h2>妙用late init</h2>
-
-<p>通常成员的初始化可以在声明时完成，比如像集合或者一些简单的原始类型对象（Int, Float, String等）。但如果初始化过程比较复杂，或者初始值较难获得，这种情况下，就适合标记为<strong>延迟初始化late init</strong>，然后在合适的时机对成员进行初始化（比如系统框架层的回调中，或者依赖注入等等）。使用一个未初始化的late init成员时会抛出一个叫做<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin/-uninitialized-property-access-exception/">UninitializedPropertyAccessException</a>的异常，可以在使用成员变量前用<a href="https://kotlinlang.org/docs/reflection.html#property-references">.isInitialized</a>来判断成员变量是否初始化过：</p>
-
-<pre><code class="Kotlin">if (foo::bar.isInitialized) {
-    println(foo.bar)
-}
-</code></pre>
-
-<p>可以发现，对于Android 开发来说<strong>late init</strong>绝对非常有用，因为对于系统组件，我们无法在其构造方法中进行成员初始化，通常都是在第一个回调(如onCreate)中进行初始化，而这些变量全都应该用late init来标记。</p>
-
-<p>另外，需要注意的是，成员是否有被初始化与成员是否是非法值(如null)并不是同一回事，初始化是第一次对成员对象赋值，赋的什么值(正常对象or null)虚拟机并不关心，但只要有过赋值后变量就初始化过了。因此，<strong>用late init可以帮助减少null检查</strong>。</p>
-
-<p>还需要注意的是，延迟初始化late init与属性委托也不是同一回事，late init通常用于内部私有的成员变量，而属性委托通常用于对外开放的公开成员。</p>
-
-<p>扩展阅读<a href="https://kotlinlang.org/docs/properties.html">Properties</a>。</p>
-
-<h2>函数式接口</h2>
-
-<p><img src="https://tse1-mm.cn.bing.net/th/id/OIP-C.aCUdGlN1mIUaSZQXKdceSgHaD4?rs=1&amp;pid=ImgDetMain" alt="" /></p>
-
-<p>接口(interfaces)是更高级别的抽象，专注于行为的抽象，用以实现对象间契约式行为交互。这一部分不打算详细讲解interface的使用，而是重点关注函数式接口(function interface)。Kotlin中的接口与Java 8中的接口是一样的，不再全是抽象方法了，可以有默认方法，也就是对接口的方法添加默认的实现，没有默认实现的方法就是抽象方法了（Abstract method）。只有一个抽象方法的接口称之为函数式接口(functional interface)，或者单个抽象方法接口(Single Abstract Method interface)。用fun interface来声明，如：</p>
-
-<pre><code class="Kotlin">fun interface IntPredict {
-    fun accept(i: Int): Boolean
-}
-</code></pre>
-
-<p>函数式接口的最大优势在于，实现接口时可以简化到只用一个lambda，如：</p>
-
-<pre><code class="Kotlin">val isEnv = IntPredict { it % 2 == 0 }
-</code></pre>
-
-<p>注意，只有用fun interface声明的含有一个抽象方法的接口才是函数式接口，才能用lambda。对于普通接口，如果它仅含有一个抽象方法，可以转化为函数式接口，比如原接口是酱紫的：</p>
-
-<pre><code class="Kotlin">interface Printer {
-    fun print()
-}
-</code></pre>
-
-<p>那么，可以直接定义一个fun interface Printer就可以了：</p>
-
-<pre><code class="Kotlin">fun interface Printer {
-    fun print()
-}
-</code></pre>
-
-<p>编译器会帮忙做转化。</p>
-
-<p>扩展阅读<a href="https://kotlinlang.org/docs/fun-interfaces.html">Functional (SAM) interfaces</a>。</p>
-
-<h2>关键字object的妙用</h2>
-
-<p>关键字object用以方便创建匿名对象的场景，如匿名对象，单例以及静态内部类。</p>
-
-<h3>使用匿名对象</h3>
-
-<p>有些时候我们会实现一些接口，或者继承某个基类，但仅是在本地一次性使用(One shot)，这时匿名对象就派上用场了，类似于Java中的匿名内部类。用<strong>object : </strong>后面跟要实现的接口或者要继承的类：</p>
-
-<pre><code class="Kotlin">window.addMouseListener(object : MouseAdapter() {
-    override fun mouseClicked(e: MouseEvent) { ... }
-    override fun mouseEntered(e: MouseEvent) { ... }
-})
-</code></pre>
-
-<h3>单例对象</h3>
-
-<p>用object可以非常方便的实现单例模式：</p>
-
-<pre><code class="Kotlin">object DataProviderManager {
-    fun registerDataProvider(provider: DataProvider) { ... }
-    val allDataProviders: List&lt;DataProvider&gt;
-        get() = { ... }
-}
-</code></pre>
-
-<p>使用时就直接用类名就可以了：DataProviderManager.registerDataProvider(&hellip;)。</p>
-
-<h3>静态成员和方法</h3>
-
-<p><img src="https://ts1.cn.mm.bing.net/th/id/R-C.b4723d86a22037c40298fff12e484b19?rik=tyTmLVbaHs9Mpw&amp;pid=ImgRaw&amp;r=0" alt="" /></p>
-
-<p>在Java中有静态的成员和方法，用以实现一些属于类的成员和方法，在Kotlin中就需要用companion object来实现同样的功能。</p>
-
-<pre><code class="Kotlin">class MyClass {
-    companion object Factory {
-        fun create(): MyClass = MyClass()
-    }
-}
-</code></pre>
-
-<p>使用时就是用类+方法：MyClass.create()。</p>
-
-<p>扩展阅读<a href="https://kotlinlang.org/docs/object-declarations.html">Object expressions and declarations</a>。</p>
-
-<h2>纯数据类型</h2>
-
-<p><img src="https://qwebtechnologies.com/blog/wp-content/uploads/2023/03/Kotlin-Data-Class.png" alt="" /></p>
-
-<p>对于函数式编程，通常要写大量的<a href="https://en.wikipedia.org/wiki/Plain_old_Java_object">PoJo</a>用以在函数之间传递数据，这些对象最大的特点就是仅是数据，且不可变(Immutable)，通常的实现方式就是把成员变量全用final修饰（只读read only）。在Kotlin中，可以非常方便的定义这要的类型，即data class。</p>
-
-<pre><code class="Kotlin">data class User(val name: String, val age: Int)
-</code></pre>
-
-<p>针对data class，编译器会自动生成equals, hashCode, toString, copy和componentN方法。注意，虽然成员可以标记为var，但不建议这样做，最好还是都标记为只读val，因为data class就是要Immutable。</p>
-
-<p>扩展阅读<a href="https://kotlinlang.org/docs/data-classes.html">Data classes</a>。</p>
-
-<h2>密封类和接口</h2>
-
-<p>密封类和接口是指用<strong>关键字sealed</strong>修饰的类和接口。它的作用是限制类的层次结构，用sealed修饰的类和接口，它们的所有子类必须在编译的时候就已知，一旦编译完成，不允许再被继承。</p>
-
-<p>密封类型特别适用于库的设计，能够保证库的完整性。通常用于修饰库中的一些关键的有明确类型要求的类型，如<strong>消息类型，错误类型</strong>等等。因为，库会预定义一些消息类型，以及处理消息的接口，假如调用者扩展了某一消息类型，加了很多自定义的东西，这时再用库中的接口来处理的时候，可能会产生未预期的行为，因为库可能不认识这个新的新的消息类型，但因为是子类继承，语法上是合法的。这时密封类型就能派上用场，把消息类型用sealed修饰，就能保证库的完备性，它提供的错误处理接口一定可以正确处理它定义的消息类型。但注意不能滥用，没有必要为库的每一个类和接口都用sealed修饰，其实大部分时候我们是用不到sealed的。</p>
-
-<p>扩展阅读<a href="https://kotlinlang.org/docs/sealed-classes.html">Sealed classes and interfaces</a>。</p>
-
-<h2>类型别名</h2>
-
-<p>一个非常有意思的特性是类型别名，并不是定义一个新类型，而是取个别名。一般情况下，是为了方便，比如目标类型名字太长时，或者有大量的泛型参数时，就可以为它定义一个别名，图个省流。</p>
-
-<pre><code class="Kotlin">typealias NodeSet = Set&lt;Network.Node&gt;
-
-typealias MyHandler = (Int, String, Any) -&gt; Unit
-</code></pre>
-
-<p>扩展阅读<a href="https://kotlinlang.org/docs/type-aliases.html">Type aliases</a>。</p>
 ]]></content>
   </entry>
   
