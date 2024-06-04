@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-06-03T20:35:18+08:00</updated>
+  <updated>2024-06-04T21:09:36+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,154 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『鸿渐于陆』| State]]></title>
+    <link href="http://toughcoder.net/blog/2024/06/04/jetpack-compose-state/"/>
+    <updated>2024-06-04T21:05:02+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/06/04/jetpack-compose-state</id>
+    <content type="html"><![CDATA[<p>Jetpack Compose是一种声明式的UI框架，用以构建GUI应用程序。通过前面的文章我们学会了<a href="https://juejin.cn/post/7371239685702844454">如何使用元素来填充页面</a>，也学会了<a href="https://juejin.cn/post/7373867360020480038">如何装饰元素</a>，但这还不够。UI还必须处理与页面直接相关的数据，因为这是对用户有价值的东西。今天就来学习一下Compose如何处理数据。</p>
+
+<p><a href=""><img src="https://alexzh.com/content/images/size/w2000/2021/02/logo-1.65-1980-4.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>什么是状态</h2>
+
+<p>状态（State）其实就是数据，Compose是一种UI框架，UI要显示数据才会有价值。但是呢，Compose毕竟是一种UI框架，它应该只处理需要展示给用户的那部分数据，所以，这里说的数据应该是经过业务逻辑处理过的，需要展示给用户的那部分数据。也就是说只需要处理从ViewModel推送过来的数据即可。</p>
+
+<p>此外，还有一部分只需要在UI内部处理的数据，比如像一些控件的状态，动画中的参数变化等等，这些数据需要完全在UI部分处理掉，都不应该暴露给ViewModel。</p>
+
+<p>因此，对于Compose来说的状态（State），就包括两部分，一部分是从ViewModel推过来的需要展示的数据（具体叫做UiState），以及UI内部逻辑中的状态。</p>
+
+<h2>状态与重组</h2>
+
+<p>本质上来说Compose就是坨函数，更新UI的方式就变成了用新的参数来重新调用这些函数。这些参数便是状态了。任何时候状态发生变化就会发生重组（re-Composition），结果就是UI刷新了，最新的数据呈现给了用户。感知状态变化如何影响着UI的刷新就是状态管理。</p>
+
+<p>有些术语需要说明一下：组合（Composition）描述着UI的生成过程，也即当Compose执行我们所声明的一坨坨函数的时候；初始组合（Initial Composition）首次执行这一坨函数的过程；重组（re-Composition）当状态有更新，重新运行某些函数的过程。</p>
+
+<p>UI要想刷新，呈现最新的数据，这就需要Compose进行重组，而重组是由状态更新触发的，也就是说我们需要用新的数据来重新执行这一坨函数。对于业务逻辑数据，这很好办，可以通过ViewModel推送新的数据，然后重新调用UI函数即可。但这并没有看起来那么容易，因为ViewModel与UI的关系通常不是ViewModel直接持有着UI的对象或者函数，更多的时候是Compose的函数（Composable）中创建持有ViewModel对象，一个函数是没有办法直接调用自身的，这会陷入死循环的（StackOverFlow）。</p>
+
+<pre><code class="Kotlin">@Composable
+fun WellnessScreen(
+    modifier: Modifier = Modifier,
+    wellnessViewModel: WellnessViewModel = viewModel()
+) {
+    Column(modifier = modifier) {
+
+        WellnessTasksList(
+            list = wellnessViewModel.tasks,
+            onCheckedTask = { },
+            onCloseTask = { }
+        )
+    }
+}
+</code></pre>
+
+<p>对于UI逻辑中的数据也是如此，比如说，一个很简单的按扭计数，按照常规的理解，似乎可以这样写：</p>
+
+<pre><code class="Kotlin">@Composable
+fun WaterCounter(modifier: Modifier = Modifier) {
+    var count = 0
+
+    Column(modifier = modifier.padding(16.dp)) {
+        Text(
+            text = "You have had $count glasses.",
+            modifier = modifier.padding(16.dp)
+        )
+        Row(
+            modifier = modifier.padding(top = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = { count++ }, enabled = count &lt; 10) {
+                Text("Add one")
+            }
+            Button(onClick = { count = 0 }, Modifier.padding(start = 8.dp), enabled = count &gt; 0) {
+                Text("Clear water count")
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>但这样写文本中的数字不会变化。</p>
+
+<p>重组要想发生，就必须重新调用Compose的『根函数』，这就需要用到专门的数据结构<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/MutableState">MutableState</a>，Compose会识别并跟踪这些State，当其变化时，会触发重组，并使用State中的最新值。</p>
+
+<pre><code class="Kotlin">interface MutableState&lt;T&gt; : State&lt;T&gt; {
+    override var value: T
+}
+</code></pre>
+
+<h2>管理UI状态</h2>
+
+<p>要想让Compose识别到数据变化，就需要使用状态State，这样当数据变化时会触发重组，Compose会用State中的最新数值来重新运行函数，以刷新UI。比如上面的计数的例子，可以这样修改：</p>
+
+<pre><code class="Kotlin">@Composable
+fun WaterCounter(modifier: Modifier = Modifier) {
+    var count by remember { mutableStateOf(0) }
+    // Other codes not changed
+}
+</code></pre>
+
+<p>这次，能得到期望的行为：</p>
+
+<p><img src="https://pic2.zhimg.com/v2-d26bd68593ea22ef777f42f83aee37f5_b.webp" alt="state demo" /></p>
+
+<p>有三种方式声明一个状态MutableState：</p>
+
+<ul>
+<li>val state = remember { mutableStateOf(default) }</li>
+<li>var value by remember { mutableStateOf(default) }</li>
+<li>val (vale, setValue) = remember { mutableStateOf(default) }</li>
+</ul>
+
+
+<p>基本上无差别，一般委托方式用的稍多一些。这里<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#remember(kotlin.Function0">remember</a>)的作用是让Compose记住并追踪状态的变化。如果想要让状态能够跨Activity的实例（比如遇到屏幕旋转，语言变化等配置变化导致Activity重启）就需要用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/saveable/package-summary#rememberSaveable(kotlin.Array,androidx.compose.runtime.saveable.Saver,kotlin.String,kotlin.Function0">remeberSaveable</a>)。</p>
+
+<p>这些主要是针对Composable中内部的状态。对于像从ViewModel过来的业务数据，一般都用<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#(androidx.lifecycle.Lifecycle">collectAsState</a>.currentStateAsState())系列方法。</p>
+
+<h2>有状态（Stateful）和无状态（Stateless）</h2>
+
+<p>对于包含了创建State的函数就称作有状态的Composable，而不包含创建状态就是Stateless的。</p>
+
+<p>无状态的Composable是幂等的，调用时直接传入数据，不会产生副作用，也不会触发重组，显然这对开发者来说是最高效的，因为很纯粹，使用起来相当简单，并且完全可复用，<strong>应该尽可能的创建并使用无状态Composables</strong>：</p>
+
+<pre><code class="Kotlin">@Composable
+fun CustomButton(text: String, onClick: ()-&gt;Unit) {
+     Button(onClick) {
+         Text(text)
+     }
+}
+</code></pre>
+
+<h2>状态提升</h2>
+
+<p>因为State是有额外的成本的，因此应该尽可能的减少State的创建，那么就要尽可能的复用State。这就需要把状态提升到使用此State的所有子函数的最小公共函数里面。比如前面的例子，状态count在Text和两个Button中都有使用，那么count至少要提升到它们的公共函数里面。假如，这个count在其他Composable中也有使用，那么就提升到WaterCounter的更上一层，甚至是整个Screen级别。</p>
+
+<p>一般情况下，除了一些仅在局部使用的状态外，放在页面级别的根函数里面是比较好的选择，这样的话只有页面的根函数是Stateful的，其余函数都是Stateless的。</p>
+
+<h2>实战</h2>
+
+<p>纸上来行终觉浅，要想掌握还是要亲手撸。状态管理对于UI框架是相当重要的，因为这是UI发挥作用和产生价值的地方。对于状态管理有一些非常好的CodeLab，可以亲手撸一下，感受一下状态管理到底是啥。</p>
+
+<ul>
+<li><a href="https://developer.android.com/codelabs/jetpack-compose-state#0">State in Jetpack Compose</a></li>
+</ul>
+
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/state">State and Jetpack Compose</a></li>
+<li><a href="https://decode.agency/article/jetpack-compose-state/">How to handle state in Jetpack Compose</a></li>
+<li><a href="https://www.composables.com/tutorials/state">Everything you need to know about State in Jetpack Compose with examples</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『见龙在田』| Modifier]]></title>
@@ -743,131 +891,6 @@ fun Greeting(name: String, modifier: Modifier = Modifier) {
 <h2>未完，待续</h2>
 
 <p>本文从快速上手的Demo开始，解释一些核心概念，并给出一些有用的资源链接。相信通过此文，能对Compose有一个很好的了解。后续会继续深入探讨各个话题，以练成降Compose十八掌！</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[实战技巧：Android 14适配从挂号到出院]]></title>
-    <link href="http://toughcoder.net/blog/2024/04/23/upgrade-to-targetsdk-34/"/>
-    <updated>2024-04-23T21:30:23+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/04/23/upgrade-to-targetsdk-34</id>
-    <content type="html"><![CDATA[<p>啥？这都4202年了，你的应用还没有升级到targetSDK 34？莫慌，本文就带着你全面的了解升级targetSDK 34的方法以及避坑指南。</p>
-
-<p><a href=""><img src="https://cdn.jsdelivr.net/gh/b0xt/sobyte-images/2022/04/25/1c33d2fabbc44e53b64b6dbbc84fd0ae.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>注意，<a href="https://apilevels.com/">Android版本与其API level或者targetSDK是一一对应的</a>，只不过一个是外在的说法，一个是具体要做的事情，对于开发者来说适配Android 14，就等同于升级targetSDK到34，这个34称作API level。本文会混着用，但说的都是同一个意思。</p>
-
-<p>等下，有同学举手了，这<a href="https://developer.android.com/about/versions/15">眼看着Android 15（API 35）都</a>要出来，您才教我们升级到targetSDK 34？您 是不是写错了，还是在这里浪费时间呢？</p>
-
-<p>这位同学你先坐下，没写错今天要讲的就是适配Android 14的。至于Android 15还处于预览（Preview）状态呢，它要至少等到10月份左右才会正式发布，属于下半年的KPI了。不过如果 我们把targetSDK 34搞定了，那么年底升级targetSDK 35就会非常的顺畅。</p>
-
-<h2>为啥要升级targetSDK</h2>
-
-<p>在折腾之前要先要搞明白为啥要折腾升级SDK，因为毕竟配置开发环境是软件开发中的排名第二的麻烦事儿（排名第一的是折腾操作系统）项目跑的好好的，何必自找麻烦？</p>
-
-<p>省流点的说，就是你<strong>不得不升级</strong>。众所周知，Android生态最麻烦的事情就是碎片化，也就是用户手机的版本远远小于最新的版本，而且主流的版本升级较慢，通常会比最新的慢3个版本以上，对面的水果则能保持在2个版本以内。这对应用开发生态来说是十分不友好的，因为开发者不愿意升级到最新的SDK，使用平台的最新特性，核心原因在于升级了也没用，因为用户手上的版本仍是3代开外的。</p>
-
-<ul>
-<li><a href="https://www.composables.com/tools/distribution-chart">Android Distribution Chart</a></li>
-<li><a href="https://developer.android.com/about/dashboards">Distribution dashboard</a></li>
-<li><a href="https://gs.statcounter.com/android-version-market-share/mobile/worldwide/">Mobile Android Version Market Share Worldwide</a></li>
-</ul>
-
-
-<p>最心急的当然是谷歌，辛苦花大价钱开发的最新特性竟然没人用，这能忍？于是谷歌对<a href="https://developer.android.com/google/play/requirements/target-sdk">升级targetSDK要求</a>越来越严，对于<strong>谷歌能管得到的地方</strong>，如<a href="https://developer.android.com/distribute/console">Google Play Store</a>和厂商的<a href="https://source.android.com/docs/security/safety-center/test-requirements">GTS测试</a>，都要求至少升级targetSDK到前一代的版本，比如2023年发布了Android 14，那就必须到targetSDK 33（Android 13）；今年将发布Android 15（API 35）那到快要发布时约在2024年秋，应用必须升级到targetSDK 34。</p>
-
-<p>如果不是强制要求升级targetSDK，比如我既不上线到Play Store也不用过GTS，那确实也没必要折腾。因为最近几年Android的新特性其实也都挺鸡肋的，犯不着折腾。</p>
-
-<h2>Android 14的新特性与变化</h2>
-
-<p>具体折腾前还是要先了解一下平台的变化，以评估影响，省流点说，Android 14有以下变化：</p>
-
-<ul>
-<li><a href="https://developer.android.com/develop/background-work/services/foreground-services">FOREGROUND&#95;SERVICE</a>必须要指定一个<a href="https://developer.android.com/about/versions/14/changes/fgs-types-required">类型</a>。</li>
-<li>调用<a href="https://developer.android.com/reference/android/bluetooth/BluetoothAdapter#getProfileConnectionState(int">BluetoothAdapter#getProfileConnectionState</a>)时必須在Manifest中声明<a href="https://developer.android.com/reference/android/Manifest.permission#BLUETOOTH_CONNECT">BLUETOOTH&#95;CONNECT</a>权限。</li>
-<li>支持JDK17，可以使用Java 17了。</li>
-<li>动态广播接收器必须指明<a href="https://developer.android.com/reference/androidx/core/content/ContextCompat#RECEIVER_NOT_EXPORTED(">export flag</a>)，这个其实targetSDK 33时就有了。</li>
-<li>动态加载的代码（Jar 或者Dex）文件必须标记为只读。这个对插件化和Hotfix等影响较大。</li>
-<li>Zip文件处理时，如果有路径越界（如&#8221;..&ldquo;或者以&rdquo;/&ldquo;开头的绝对路径）<a href="https://developer.android.com/reference/java/util/zip/ZipException">会抛异常</a>。</li>
-</ul>
-
-
-<p>总的来说变化不大，主要还是<strong>权限收紧和安全加强</strong>。可以查看<a href="https://developer.android.com/about/versions/14/behavior-changes-14">官方文档</a>来看具体的。不喜欢看原文的同学，还有<a href="https://developer.android.com/about/versions/14/behavior-changes-14?hl=zh-cn">翻译的版本</a>。啥？官方无法访问，莫慌还有<a href="https://developer.android.google.cn/about/versions/14/behavior-changes-14">官方的镜像</a>。</p>
-
-<h2>如何升级</h2>
-
-<h3>做好准备</h3>
-
-<p>折腾开发环境是比较烦的，所以最好找一个相对轻松的时间（比如产品汪休假时），以及心情还不错时。另外一定要把手头的事情做好备份并切到新的分支，以防不测。这真不是把33改到34就能完事儿的，会有各种意想不到的事情。</p>
-
-<h3>修改build.gradle文件</h3>
-
-<p>升级targetSDK的第一步是修改应用的build.gradle文件。找到defaultConfig部分，将targetSdkVersion的值修改为34。例如：</p>
-
-<pre><code class="Groovy">android {
-    compileSdkVersion 34
-    defaultConfig {
-        targetSdkVersion 34
-        // 其他配置...
-    }
-    // 其他构建配置...
-}
-</code></pre>
-
-<p>同时，确保compileSdkVersion也设置为34，以确保使用最新的编译工具。</p>
-
-<p>注意，建议手动改配置，而不要用所谓的<a href="https://developer.android.com/build/sdk-upgrade-assistant">SDK Upgrade Assistant</a>，因为你不晓得它都会干啥，有可能把项目的配置改的面目全非。</p>
-
-<h3>适配SDK的变化</h3>
-
-<p>就是针对平台的新变化做对应的修改。如何修改？其实<a href="https://developer.android.com/about/versions/14/behavior-changes-14">官方文档</a>里面都有具体的指导，或者<a href="https://blog.csdn.net/lbs458499563/article/details/132928217">这篇文章讲的</a>也非常详细，这里就不重复了。</p>
-
-<h2>避坑指南</h2>
-
-<p>Android 14的变化并不大，没有Android 13带来的变化多，这几年最大的影响是Android 11到Android 13，主要体现在<strong>存储读写</strong>的变化上面，可以看<a href="http://toughcoder.net/blog/2023/05/03/android-scope-storage-puzzles/">之前的一篇文章</a>。</p>
-
-<p><img src="https://s3.eu-west-2.amazonaws.com/uploads.3alampro.com/2021/September/GUKIJS1LwonmLnjJY0Wq5lkZTv78fAukV2SbTSui.jpeg" alt="" /></p>
-
-<p>所以升级到targetSDK 34的难度有多大，有啥坑？这要取决于升级前的基础是什么。如果之前已经升级到了targetSDK 33，那么不会有坑，前面那几点稍弄下，就没有问题了。但如果还在API 30或者31，那麻烦会比较多，因为要先过targetSDK 33这一关，它的坑是最多的，可以<a href="https://juejin.cn/post/7260913522962956347">参考这篇文章</a>。</p>
-
-<h2>做好对平台的封装与隔离</h2>
-
-<p>最近几年Android版本的最大变化就是存储权限的收紧，以前可以直接用File到处读写，现在只有极少数文件夹可读可写，且像媒体文件要用<a href="https://developer.android.com/training/data-storage/shared/media">MediaStore API</a>。如果你的项目代码中到处都是File，甚至在JNI的so中也到处都是绝对路径，那么升级targetSDK会相当痛苦。</p>
-
-<p>这就要求我们在开发过程中多留一个心眼儿。一个伟大的计算机科学家说过「计算机科学中的任何问题都能通过增加一个层来解决」。解决这种平台的硬性依赖的最好方法就是多加一层封装以进行隔离：</p>
-
-<ul>
-<li>用一个模块来封装所有的涉及存储的I/O操作，这样即使遇到平台的重大变化，也<strong>只需要改这一个模块，风险大大减小</strong>。</li>
-<li>对于JNI，要尽可能的传递数据，而非直接让其操作文件。如果确实要操作文件，那么也要<strong>把根文件夹从Java层传入，不能让so使用绝对路径</strong>。</li>
-</ul>
-
-
-<p>对平台做好<strong>封装和隔离</strong>，会大大加强项目的兼容性，在升级平台SDK时起码能做到<strong>风险可控</strong>。</p>
-
-<h2>未来Android的发展趋势</h2>
-
-<p>Android（其实智能手机操作系统也一样）诞生于21世纪的第一个10年，在第二个10年达到了顶峰，移动互联网让科技巨头吃尽了红利，巨头们的市值更是超过了全球GDP总值。但回首最近两年的Google I/O和水果的WWDC，可以发现，Android和水果越来越像，也在相互抄袭，已经很久没有见到让人感到惊艳的东西了（乔帮主在天上估计都要看不下去了）。</p>
-
-<p>对于Android来说，<strong>系统安全（包括权限收紧和数据安全）</strong>和<strong>隐私保护</strong>（安全和隐私曾经是Android的弱项，现在已追上来了），以及<strong>互联互通</strong>这三个方面还有点新东西，其他的已经没有什么变化了。智能手机已经到了比较明显的瓶颈期，巨头的注意力已经全都转移到了AI上面了。可以看一看<a href="https://developer.android.com/about/versions/15/behavior-changes-15">Android 15的变化</a>，基本上没啥变化，以后的升级会越来越简单了，可能下次只是把34改成35就完事儿了。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://developer.android.com/about/versions/14/behavior-changes-14">Behavior changes: Apps targeting Android 14 or higher </a></li>
-<li><a href="https://developer.android.com/build/sdk-upgrade-assistant">Use the Android SDK Upgrade Assistant</a></li>
-<li><a href="https://developer.android.com/about/versions/14/setup-sdk">Set up the Android 14 SDK</a></li>
-<li><a href="https://swiftspeed.app/sdk-target-android-api-level/">How To Update Your App SDK To Target Android API Level 34</a></li>
-<li><a href="https://blog.csdn.net/lbs458499563/article/details/132928217">Android14 适配之——targetSdkVersion 升级到 34 需要注意些什么？</a></li>
-<li><a href="https://juejin.cn/post/7260913522962956347">升级targetSDK为33后的十来个坑 (工具篇)</a></li>
-<li><a href="https://zhuanlan.zhihu.com/p/628752923">Android 14 快速适配要点</a></li>
-<li><a href="https://juejin.cn/post/7302348032544866316">Android 14 正式版适配笔记（二）— 针对Android14或更高版本应用的变更</a></li>
-<li><a href="https://juejin.cn/post/7299834584375869474">Android 14 正式版适配笔记（一）— 针对所有应用的变更</a></li>
-<li><a href="https://www.cnblogs.com/joy99/p/17809113.html">记一个 Android 14 适配引发的Android 存储权限问题</a></li>
-</ul>
-
 ]]></content>
   </entry>
   

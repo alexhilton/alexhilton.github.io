@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-06-03T20:35:18+08:00</updated>
+  <updated>2024-06-04T21:09:36+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,210 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『鸿渐于陆』| State]]></title>
+    <link href="http://toughcoder.net/blog/2024/06/04/jetpack-compose-state/"/>
+    <updated>2024-06-04T21:05:02+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/06/04/jetpack-compose-state</id>
+    <content type="html"><![CDATA[<p>Jetpack Compose是一种声明式的UI框架，用以构建GUI应用程序。通过前面的文章我们学会了<a href="https://juejin.cn/post/7371239685702844454">如何使用元素来填充页面</a>，也学会了<a href="https://juejin.cn/post/7373867360020480038">如何装饰元素</a>，但这还不够。UI还必须处理与页面直接相关的数据，因为这是对用户有价值的东西。今天就来学习一下Compose如何处理数据。</p>
+
+<p><a href="http://toughcoder.net/blog/2024/06/04/jetpack-compose-state/"><img src="https://alexzh.com/content/images/size/w2000/2021/02/logo-1.65-1980-4.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>什么是状态</h2>
+
+<p>状态（State）其实就是数据，Compose是一种UI框架，UI要显示数据才会有价值。但是呢，Compose毕竟是一种UI框架，它应该只处理需要展示给用户的那部分数据，所以，这里说的数据应该是经过业务逻辑处理过的，需要展示给用户的那部分数据。也就是说只需要处理从ViewModel推送过来的数据即可。</p>
+
+<p>此外，还有一部分只需要在UI内部处理的数据，比如像一些控件的状态，动画中的参数变化等等，这些数据需要完全在UI部分处理掉，都不应该暴露给ViewModel。</p>
+
+<p>因此，对于Compose来说的状态（State），就包括两部分，一部分是从ViewModel推过来的需要展示的数据（具体叫做UiState），以及UI内部逻辑中的状态。</p>
+
+<h2>状态与重组</h2>
+
+<p>本质上来说Compose就是坨函数，更新UI的方式就变成了用新的参数来重新调用这些函数。这些参数便是状态了。任何时候状态发生变化就会发生重组（re-Composition），结果就是UI刷新了，最新的数据呈现给了用户。感知状态变化如何影响着UI的刷新就是状态管理。</p>
+
+<p>有些术语需要说明一下：组合（Composition）描述着UI的生成过程，也即当Compose执行我们所声明的一坨坨函数的时候；初始组合（Initial Composition）首次执行这一坨函数的过程；重组（re-Composition）当状态有更新，重新运行某些函数的过程。</p>
+
+<p>UI要想刷新，呈现最新的数据，这就需要Compose进行重组，而重组是由状态更新触发的，也就是说我们需要用新的数据来重新执行这一坨函数。对于业务逻辑数据，这很好办，可以通过ViewModel推送新的数据，然后重新调用UI函数即可。但这并没有看起来那么容易，因为ViewModel与UI的关系通常不是ViewModel直接持有着UI的对象或者函数，更多的时候是Compose的函数（Composable）中创建持有ViewModel对象，一个函数是没有办法直接调用自身的，这会陷入死循环的（StackOverFlow）。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">WellnessScreen</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">wellnessViewModel</span><span class="p">:</span> <span class="n">WellnessViewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">()</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">WellnessTasksList</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">list</span> <span class="p">=</span> <span class="n">wellnessViewModel</span><span class="p">.</span><span class="n">tasks</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">onCheckedTask</span> <span class="p">=</span> <span class="p">{</span> <span class="p">},</span>
+</span><span class='line'>            <span class="n">onCloseTask</span> <span class="p">=</span> <span class="p">{</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于UI逻辑中的数据也是如此，比如说，一个很简单的按扭计数，按照常规的理解，似乎可以这样写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">WaterCounter</span><span class="p">(</span><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">count</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;You have had $count glasses.&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="n">Row</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">SpaceEvenly</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">verticalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterVertically</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">count</span><span class="p">++</span> <span class="p">},</span> <span class="n">enabled</span> <span class="p">=</span> <span class="n">count</span> <span class="p">&lt;</span> <span class="m">10</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Add one&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">count</span> <span class="p">=</span> <span class="m">0</span> <span class="p">},</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">start</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">),</span> <span class="n">enabled</span> <span class="p">=</span> <span class="n">count</span> <span class="p">&gt;</span> <span class="m">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Clear water count&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但这样写文本中的数字不会变化。</p>
+
+<p>重组要想发生，就必须重新调用Compose的『根函数』，这就需要用到专门的数据结构<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/MutableState">MutableState</a>，Compose会识别并跟踪这些State，当其变化时，会触发重组，并使用State中的最新值。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">interface</span> <span class="n">MutableState</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;</span> <span class="p">:</span> <span class="n">State</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">var</span> <span class="py">value</span><span class="p">:</span> <span class="n">T</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>管理UI状态</h2>
+
+<p>要想让Compose识别到数据变化，就需要使用状态State，这样当数据变化时会触发重组，Compose会用State中的最新数值来重新运行函数，以刷新UI。比如上面的计数的例子，可以这样修改：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">WaterCounter</span><span class="p">(</span><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">count</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="c1">// Other codes not changed</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这次，能得到期望的行为：</p>
+
+<p><img src="https://pic2.zhimg.com/v2-d26bd68593ea22ef777f42f83aee37f5_b.webp" alt="state demo" /></p>
+
+<p>有三种方式声明一个状态MutableState：</p>
+
+<ul>
+<li>val state = remember { mutableStateOf(default) }</li>
+<li>var value by remember { mutableStateOf(default) }</li>
+<li>val (vale, setValue) = remember { mutableStateOf(default) }</li>
+</ul>
+
+
+<p>基本上无差别，一般委托方式用的稍多一些。这里<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#remember(kotlin.Function0">remember</a>)的作用是让Compose记住并追踪状态的变化。如果想要让状态能够跨Activity的实例（比如遇到屏幕旋转，语言变化等配置变化导致Activity重启）就需要用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/saveable/package-summary#rememberSaveable(kotlin.Array,androidx.compose.runtime.saveable.Saver,kotlin.String,kotlin.Function0">remeberSaveable</a>)。</p>
+
+<p>这些主要是针对Composable中内部的状态。对于像从ViewModel过来的业务数据，一般都用<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#(androidx.lifecycle.Lifecycle">collectAsState</a>.currentStateAsState())系列方法。</p>
+
+<h2>有状态（Stateful）和无状态（Stateless）</h2>
+
+<p>对于包含了创建State的函数就称作有状态的Composable，而不包含创建状态就是Stateless的。</p>
+
+<p>无状态的Composable是幂等的，调用时直接传入数据，不会产生副作用，也不会触发重组，显然这对开发者来说是最高效的，因为很纯粹，使用起来相当简单，并且完全可复用，<strong>应该尽可能的创建并使用无状态Composables</strong>：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">CustomButton</span><span class="p">(</span><span class="n">text</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">onClick</span><span class="p">:</span> <span class="p">()-&gt;</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>     <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>         <span class="n">Text</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+</span><span class='line'>     <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>状态提升</h2>
+
+<p>因为State是有额外的成本的，因此应该尽可能的减少State的创建，那么就要尽可能的复用State。这就需要把状态提升到使用此State的所有子函数的最小公共函数里面。比如前面的例子，状态count在Text和两个Button中都有使用，那么count至少要提升到它们的公共函数里面。假如，这个count在其他Composable中也有使用，那么就提升到WaterCounter的更上一层，甚至是整个Screen级别。</p>
+
+<p>一般情况下，除了一些仅在局部使用的状态外，放在页面级别的根函数里面是比较好的选择，这样的话只有页面的根函数是Stateful的，其余函数都是Stateless的。</p>
+
+<h2>实战</h2>
+
+<p>纸上来行终觉浅，要想掌握还是要亲手撸。状态管理对于UI框架是相当重要的，因为这是UI发挥作用和产生价值的地方。对于状态管理有一些非常好的CodeLab，可以亲手撸一下，感受一下状态管理到底是啥。</p>
+
+<ul>
+<li><a href="https://developer.android.com/codelabs/jetpack-compose-state#0">State in Jetpack Compose</a></li>
+</ul>
+
+
+<h2>参考资料</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/state">State and Jetpack Compose</a></li>
+<li><a href="https://decode.agency/article/jetpack-compose-state/">How to handle state in Jetpack Compose</a></li>
+<li><a href="https://www.composables.com/tutorials/state">Everything you need to know about State in Jetpack Compose with examples</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『见龙在田』| Modifier]]></title>
@@ -6803,191 +7007,6 @@
 <li><a href="https://kotlinlang.org/docs/coroutines-guide.html">Coroutines guide</a></li>
 <li><a href="https://kotlinlang.org/docs/coroutines-basics.html">Coroutines basics</a></li>
 <li><a href="https://kotlinlang.org/docs/coroutines-and-channels.html">Coroutines and channels − tutorial</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Understanding KMP Algorithm]]></title>
-    <link href="http://toughcoder.net/blog/2023/12/11/understanding-kmp-algortihm/"/>
-    <updated>2023-12-11T22:21:17+08:00</updated>
-    <id>http://toughcoder.net/blog/2023/12/11/understanding-kmp-algortihm</id>
-    <content type="html"><![CDATA[<p>字符串模式匹配问题是非常重要且基础的问题，它是解决在目标字符串str中搜索模式字符串pattern出现的次数，或者索引位置。这个问题最为高效的方法就是著名的KMP算法，但这个算法不太好理解，毕竟是解决了从O(n<sup>2</sup>)的复杂度提升到线程O(n)的，今天就来学习并理解一下KMP算法。</p>
-
-<p><a href="http://toughcoder.net/blog/2023/12/11/understanding-kmp-algortihm/"><img src="https://www.boardinfinity.com/blog/content/images/2022/10/27c5585ec1e3503400.webp" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>字符串模式匹配问题有很多变幻，比如从头匹配就是前缀匹配，从后就是后缀匹配，找出所有匹配的索引，找第一个，看是否有匹配等等。以及其他能转化为模式匹配的问题，比如回文相关问题，但本质都<strong>模式匹配</strong>问题。这里就以寻找模式pattern在str中的第一个索引位置为例题。</p>
-
-<h2>暴力大法</h2>
-
-<p>世上无难题，只要能用暴力不超时。很容易写出一个暴力方法：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kt">int</span> <span class="nf">index</span><span class="o">(</span><span class="n">String</span> <span class="n">str</span><span class="o">,</span> <span class="n">String</span> <span class="n">pattern</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>  <span class="kt">int</span> <span class="n">n</span> <span class="o">=</span> <span class="n">str</span><span class="o">.</span><span class="na">length</span><span class="o">();</span>
-</span><span class='line'>  <span class="kt">int</span> <span class="n">m</span> <span class="o">=</span> <span class="n">str</span><span class="o">.</span><span class="na">length</span><span class="o">();</span>
-</span><span class='line'>  <span class="k">for</span> <span class="o">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span> <span class="n">i</span> <span class="o">&lt;=</span> <span class="n">n</span> <span class="o">-</span> <span class="n">m</span><span class="o">;</span> <span class="n">i</span><span class="o">++)</span> <span class="o">{</span>
-</span><span class='line'>      <span class="kt">int</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
-</span><span class='line'>      <span class="k">while</span> <span class="o">(</span><span class="n">j</span> <span class="o">&lt;</span> <span class="n">m</span> <span class="o">&amp;&amp;</span> <span class="n">str</span><span class="o">.</span><span class="na">charAt</span><span class="o">(</span><span class="n">i</span> <span class="o">+</span> <span class="n">j</span><span class="o">)</span> <span class="o">==</span> <span class="n">pattern</span><span class="o">.</span><span class="na">charAt</span><span class="o">(</span><span class="n">j</span><span class="o">))</span> <span class="o">{</span>
-</span><span class='line'>          <span class="n">j</span><span class="o">++;</span>
-</span><span class='line'>      <span class="o">}</span>
-</span><span class='line'>      <span class="k">if</span> <span class="o">(</span><span class="n">j</span> <span class="o">==</span> <span class="n">m</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>          <span class="k">return</span> <span class="n">i</span><span class="o">;</span>
-</span><span class='line'>      <span class="o">}</span>
-</span><span class='line'>  <span class="o">}</span>
-</span><span class='line'>  <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="o">;</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>很明显暴力大法的时间复杂度是O(nm)，需要从str中的每一个字符开始尝试去匹配pattern。str的指针在尝试这一次匹配后，只能向前<strong>步进一个</strong>，这是暴力大法最大的问题。假如能有方法让它步进的快一些，那么就能显著 的提升效率，这就是KMP算法的牛逼之处。</p>
-
-<h2><a href="https://en.wikipedia.org/wiki/Knuth%E2%80%93Morris%E2%80%93Pratt_algorithm">KMP算法</a></h2>
-
-<p>KMP算法的牛逼之处就是利用<strong>预处理</strong>和已做过的<strong>上一次匹配</strong>来<strong>快速步进</strong>str的i指针，使总的匹配次数降到O(n + m)。</p>
-
-<p>无论是否能理解，好在代码不长，就当模板题背下来吧。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-</pre></td><td class='code'><pre><code class='java'><span class='line'><span class="kd">public</span> <span class="kt">int</span> <span class="nf">index</span><span class="o">(</span><span class="n">String</span> <span class="n">str</span><span class="o">,</span> <span class="n">String</span> <span class="n">pattern</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>    <span class="kt">char</span><span class="o">[]</span> <span class="n">sc</span> <span class="o">=</span> <span class="n">str</span><span class="o">.</span><span class="na">toCharArray</span><span class="o">();</span>
-</span><span class='line'>    <span class="kt">char</span><span class="o">[]</span> <span class="n">pc</span> <span class="o">=</span> <span class="n">pattern</span><span class="o">.</span><span class="na">toCharArray</span><span class="o">();</span>
-</span><span class='line'>    <span class="kt">int</span> <span class="n">n</span> <span class="o">=</span> <span class="n">sc</span><span class="o">.</span><span class="na">length</span><span class="o">;</span>
-</span><span class='line'>    <span class="kt">int</span> <span class="n">m</span> <span class="o">=</span> <span class="n">pc</span><span class="o">.</span><span class="na">length</span><span class="o">;</span>
-</span><span class='line'>    <span class="kt">int</span><span class="o">[]</span> <span class="n">next</span> <span class="o">=</span> <span class="n">calcNext</span><span class="o">(</span><span class="n">pc</span><span class="o">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">for</span> <span class="o">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="o">,</span> <span class="n">j</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="o">;</span> <span class="n">i</span><span class="o">++)</span> <span class="o">{</span>
-</span><span class='line'>        <span class="k">while</span> <span class="o">(</span><span class="n">j</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">sc</span><span class="o">[</span><span class="n">i</span><span class="o">]</span> <span class="o">!=</span> <span class="n">pc</span><span class="o">[</span><span class="n">j</span><span class="o">])</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">j</span> <span class="o">=</span> <span class="n">next</span><span class="o">[</span><span class="n">j</span> <span class="o">-</span> <span class="mi">1</span><span class="o">];</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">sc</span><span class="o">[</span><span class="n">i</span><span class="o">]</span> <span class="o">==</span> <span class="n">pc</span><span class="o">[</span><span class="n">j</span><span class="o">])</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">j</span><span class="o">++;</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">j</span> <span class="o">==</span> <span class="n">m</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>            <span class="k">return</span> <span class="n">i</span> <span class="o">-</span> <span class="n">m</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="o">;</span>
-</span><span class='line'><span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="kd">private</span> <span class="kt">int</span><span class="o">[]</span> <span class="nf">calcNext</span><span class="o">(</span><span class="kt">char</span><span class="o">[]</span> <span class="n">pattern</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>    <span class="kt">int</span> <span class="n">m</span> <span class="o">=</span> <span class="n">pattern</span><span class="o">.</span><span class="na">length</span><span class="o">;</span>
-</span><span class='line'>    <span class="kt">int</span><span class="o">[]</span> <span class="n">next</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="o">[</span><span class="n">m</span><span class="o">];</span>
-</span><span class='line'>    <span class="kt">int</span> <span class="n">k</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
-</span><span class='line'>    <span class="k">for</span> <span class="o">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">m</span><span class="o">;</span> <span class="n">i</span><span class="o">++)</span> <span class="o">{</span>
-</span><span class='line'>        <span class="k">while</span> <span class="o">(</span><span class="n">k</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">pattern</span><span class="o">[</span><span class="n">k</span><span class="o">]</span> <span class="o">!=</span> <span class="n">pattern</span><span class="o">[</span><span class="n">i</span><span class="o">])</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">k</span> <span class="o">=</span> <span class="n">next</span><span class="o">[</span><span class="n">k</span> <span class="o">-</span> <span class="mi">1</span><span class="o">];</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">pattern</span><span class="o">[</span><span class="n">k</span><span class="o">]</span> <span class="o">==</span> <span class="n">pattern</span><span class="o">[</span><span class="n">i</span><span class="o">])</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">k</span><span class="o">++;</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>        <span class="n">next</span><span class="o">[</span><span class="n">i</span><span class="o">]</span> <span class="o">=</span> <span class="n">k</span><span class="o">;</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">next</span><span class="o">;</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>next数组</strong>的现实意义是在pattern中当前字符之前的<strong>最长前后缀长度</strong>。前后缀就是即是前缀，又是后缀，比如&#8217;abcddabc&#8217;，这里&#8217;abc&#8217;就是这个字符串的前后缀。next数组长度与pattern长度一致，next[i]的意义是，在pattern中截止到pattern[i]的子串的最长前后缀长度。要牢记next数组的意义，这会是KMP的重点应用范围，比如题214回文问题。</p>
-
-<p>整个KMP算法，匹配过程并不难理解，主串的指针i从不回溯，一直在前进，而模式串的j指针则不断的跳转到其next数组指示的位置。核心仍是next数组的计算方式，有些难于理解，当作模板背下来也行。当涉及<strong>最长前后缀</strong>的题目时，就可以拿出next数组来使用。</p>
-
-<h2>典型题目</h2>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;"> 题目 </th>
-<th style="text-align:left;"> 题解 </th>
-<th style="text-align:left;"> 说明 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;">  <a href="https://leetcode.cn/problems/find-the-index-of-the-first-occurrence-in-a-string/description/">28. 找出字符串中第一个匹配项的下标</a>  </td>
-<td style="text-align:left;">  <a href="https://leetcode.cn/problems/find-the-index-of-the-first-occurrence-in-a-string/solutions/1650934/by-alexhilton-7n6e/">题解</a>  </td>
-<td style="text-align:left;"> KMP板子题 </td>
-</tr>
-<tr>
-<td style="text-align:left;">  <a href="https://leetcode.cn/problems/shortest-palindrome/description/">214. 最短回文串</a>  </td>
-<td style="text-align:left;">  <a href="https://leetcode.cn/problems/shortest-palindrome/solutions/2562115/xi-you-yuan-su-214-zui-duan-hui-wen-chua-0nac/">题解</a>  </td>
-<td style="text-align:left;"> next数组妙用 </td>
-</tr>
-<tr>
-<td style="text-align:left;">  <a href=""></a>  </td>
-<td style="text-align:left;">  <a href="">题解</a>  </td>
-<td style="text-align:left;">  </td>
-</tr>
-</tbody>
-</table>
-
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://www.geeksforgeeks.org/kmp-algorithm-for-pattern-searching/">KMP Algorithm for Pattern Searching</a></li>
-<li><a href="https://www.javatpoint.com/daa-knuth-morris-pratt-algorithm">The Knuth-Morris-Pratt (KMP)Algorithm</a></li>
-<li><a href="https://cp-algorithms.com/string/prefix-function.html">Prefix function. Knuth–Morris–Pratt algorithm</a></li>
-<li><a href="https://zhuanlan.zhihu.com/p/83334559">KMP 算法详解</a></li>
-<li><a href="https://www.cnblogs.com/dusf/p/kmp.html">KMP算法详解-彻底清楚了(转载+部分原创) </a></li>
-<li><a href="http://data.biancheng.net/view/180.html">KMP算法（快速模式匹配算法）C语言详解</a></li>
-<li><a href="https://zhuanlan.zhihu.com/p/145536254">全网最通俗的KMP算法图解</a></li>
-<li><a href="https://blog.csdn.net/weixin_46007276/article/details/104372119">数据结构KMP算法配图详解（超详细）</a></li>
-<li><a href="https://www.cnblogs.com/lin0/p/16252948.html">图解KMP字符串匹配算法+代码实现</a></li>
 </ul>
 
 ]]></content>
