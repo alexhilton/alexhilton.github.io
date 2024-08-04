@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-07-29T20:42:40+08:00</updated>
+  <updated>2024-08-04T21:12:17+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,245 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『时乘六龙』| Advanced Gestures]]></title>
+    <link href="http://toughcoder.net/blog/2024/08/02/advanced-gesture-in-compose/"/>
+    <updated>2024-08-02T07:46:30+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/08/02/advanced-gesture-in-compose</id>
+    <content type="html"><![CDATA[<p>通过<a href="https://juejin.cn/post/7395020728623480841">前面的一篇文章</a>我们学会了如何用各种高级别抽象的扩展函数来进行手势处理。像clickable，draggable，scrollable和anchoredDraggable都是类似于View系统中的各种回调（如onClick或者onScroll）是高级别的抽象，这里我们只能处理手势，大部分情况下这也够用了。</p>
+
+<p><a href=""><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/advanced_gesture.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>但是，对于一些复杂的交互 场景需要我们先识别手势，然后再处理手势，这时就不能再用封装好的扩展函数了，而必须要用到像View系统中的onTouchEvent那样的低级别的回调，直接拿到触点事件，然后再识别手势，最后再处理手势。这篇文章就学习一下如何使用Jetpack Compose中的低级别函数来识别和处理手势。</p>
+
+<h2>处理原始触点事件</h2>
+
+<p>除了使用一些封装好了的扩展函数来直接处理某个手势以外，还可以直接接收原始的事件输入。</p>
+
+<p>Jetpack Compose在Modifier中提供了扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/package-summary#(androidx.compose.ui.Modifier">pointerInput</a>.pointerInput(kotlin.Any,kotlin.Any,kotlin.coroutines.SuspendFunction1))来接收原始的触点事件，与View系统中的<a href="https://developer.android.com/reference/android/view/View.OnTouchListener">onTouch</a>是类似的，这是触点事件的低级别的API。通过此API能获得触点事件，之后可以进行手势识别和手势处理，因为拿到的是原始的触点事件，所以很多逻辑要自己写，有些麻烦，但因为完全可控，所以可以实现一些更为复杂的手势识别和手势处理，比如任意方向的拖拽和滑动，长按后的拖拽，多点触控等等。</p>
+
+<h3>接收触点事件</h3>
+
+<p>扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/package-summary#(androidx.compose.ui.Modifier">pointerInput</a>.pointerInput(kotlin.Any,kotlin.Any,kotlin.coroutines.SuspendFunction1))接收三个参数，前两个都是作为<strong>事件处理回调的标识（keys）</strong>，第三个参数是<strong>事件处理回调</strong>，是一个尾部lambda，当某个key发生变化，这个lambda会重新执行，否则即使发生重组（Recomposition），这个lambda也会不会重新执行。</p>
+
+<pre><code class="Kotlin">fun Modifier.pointerInput(key1: Any?, key2: Any?, block: suspend PointerInputScope.() -&gt; Unit): Modifier
+</code></pre>
+
+<p>第三参数就是我们要提供的事件处理回调，它是运行在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputScope">PointerInputScope</a>上下文中的lambda，这个上下文作用域里面有很多扩展函数可以直接使用。仔细看这个lambda是suspend的，这是因为输入事件可能不是即时的，可能会有等待的情况，也就是说lambda是在有事件的时候才会执行。PointerInputScope中的函数也都定义为suspend的，这些函数在lambda中可以直接调用，所以lambda本身也必须 是suspend的。</p>
+
+<p>比如说想要打印触点事件，就可以这样写：</p>
+
+<pre><code class="Kotlin">@Composable
+private fun LogPointerEvents(filter: PointerEventType? = null) {
+    var log by remember { mutableStateOf("") }
+    Column {
+        Text(log)
+        Box(
+            Modifier
+                .size(100.dp)
+                .background(Color.Red)
+                .pointerInput(filter) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            // handle pointer event
+                            if (filter == null || event.type == filter) {
+                                log = "${event.type}, ${event.changes.first().position}"
+                            }
+                        }
+                    }
+                }
+        )
+    }
+}
+</code></pre>
+
+<p>filter是一个事件的类型参数当作key，也当作过滤条件。在事件处理回调lambda中，用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/AwaitPointerEventScope#awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass">awaitPointerEvent</a>)获得每一个触点事件，然后打印出来，<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/AwaitPointerEventScope">awaitPoniterEventScope</a>函数是创建一个协程上下文作用域用以等待事件输入，在其内调用awaitPointerEvent来获得事件。</p>
+
+<h3>识别手势</h3>
+
+<p>虽然pointerInput是一个低级别的接口，但也并不意味着所有的逻辑都必须从头写，在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputScope">PointerInputScope</a>中已经定义了大量的函数可以识别大部分手势：</p>
+
+<ul>
+<li>非连续性手势如单击（tap），双击（double tap）和长按（long press）：<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTapGestures</a>.detectTapGestures(kotlin.Function1,kotlin.Function1,kotlin.coroutines.SuspendFunction2,kotlin.Function1))</li>
+<li>拖拽（drag）：<a href="">detectDragGestures</a>，<a href="">detectDragGesturesAfterLongPress</a>，以及固定方向拖拽<a href="">detectHorizontalDragGestures</a>和<a href="">detectVerticalDragGestures</a></li>
+<li>多点触控变幻的手势识别（旋转，平移和缩放）：<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTransformGestures</a>.detectTransformGestures(kotlin.Boolean,kotlin.Function4))</li>
+</ul>
+
+
+<p>比如像<a href="https://juejin.cn/post/7395020728623480841">前面文章中</a>提到的拖拽也可以用pointerInput实现：</p>
+
+<pre><code class="Kotlin">@Composable
+private fun DraggableTextLowLevel() {
+    Box(modifier = Modifier.fillMaxSize()) {
+        var offsetX by remember { mutableStateOf(0f) }
+        var offsetY by remember { mutableStateOf(0f) }
+
+        Box(
+            Modifier
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .background(Color.Blue)
+                .size(50.dp)
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount -&gt;
+                        change.consume()
+                        offsetX += dragAmount.x
+                        offsetY += dragAmount.y
+                    }
+                }
+        )
+    }
+}
+</code></pre>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-drag.gif" alt="detect_drag_demo" /></p>
+
+<p>前面提到了像detectTapGestures和detectDragGestures都是suspend的函数，所以在一个pointerInter的lambda中只能有一个，比如像下面这样写detectDragGestures不会得到执行：</p>
+
+<pre><code class="Kotlin">var log by remember { mutableStateOf("") }
+Column {
+    Text(log)
+    Box(
+        Modifier
+            .size(100.dp)
+            .background(Color.Red)
+            .pointerInput(Unit) {
+                detectTapGestures { log = "Tap!" }
+                // 不会得到执行，走不到这里，前面一个是suspend的
+                detectDragGestures { _, _ -&gt; log = "Dragging" }
+            }
+    )
+}
+</code></pre>
+
+<p>一个可行的解决办法就是可以写多个pointerInput，每个ponterInput处理一种手势：</p>
+
+<pre><code class="Kotlin">var log by remember { mutableStateOf("") }
+Column {
+    Text(log)
+    Box(
+        Modifier
+            .size(100.dp)
+            .background(Color.Red)
+            .pointerInput(Unit) {
+                detectTapGestures { log = "Tap!" }
+            }
+            .pointerInput(Unit) {
+                // These drag events will correctly be triggered
+                detectDragGestures { _, _ -&gt; log = "Dragging" }
+            }
+    )
+}
+</code></pre>
+
+<h3>直接处理事件</h3>
+
+<p>遇到交互比较复杂的场景，或者当PointerInputScope中提供的识别函数不能解决问题时，或者需要把几种不同的手势组合在一起时，就需要直接处理事件。像View系统中的onTouch一样，我们需要知道不同的事件类型，比如pointer down，pointer move和pointer up等。PointerInputScope中提供了一个函数awaitEachGesture可以取代while (true)来获得每个事件；awaitFirstDown，是手势的开始相当于ACTION&#95;DOWN；waitForUpOrCancellation是事件结束，相当于ACTION&#95;UP和ACTION&#95;CANCEL；drag相当于ACTION&#95;MOVE。我们来看一个例子：</p>
+
+<pre><code class="Kotlin">@Composable
+private fun LogPointerEvents() {
+    var log by remember { mutableStateOf("") }
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(log)
+        Box(
+            Modifier
+                .size(240.dp)
+                .background(Color.DarkGray)
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown().also {
+                            log = "Action Down"
+                        }
+                        var change = awaitTouchSlopOrCancellation(down.id) { ch, _ -&gt;
+                            ch.consume()
+                        }
+                        while (change != null &amp;&amp; change.pressed) {
+                            change = awaitDragOrCancellation(change.id)
+                            if (change != null &amp;&amp; change.pressed) {
+                                log = "Action Move ${change.type} ${change.position}"
+                            }
+                        }
+                        log = "Action Up"
+                    }
+                }
+        )
+    }
+}
+</code></pre>
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/event.gif" alt="event_demo" /></p>
+
+<p>需要注意的是这些函数都是suspend的，也就是说当预期的行为发生时才会带着结果返回，比如awaitFirstDown()当有第一个触点事件发生时结束suspend然后返回；awaitTouchSlopOrCancellation当有超过拖拽阈值时结束suspend然后返回；awaitDragOrCancellation当有拖拽发生时结束suspend返回。</p>
+
+<h2>触点事件的派发流程</h2>
+
+<p>为了更好的处理事件，需要了解一下Jetpack Compose的事件派发流程，与View系统是类似的，事件派发的过程也是沿着Composable的树形结构，从父Composable到子Composable，同一层级的顺序则是从上到下，从前到后（Z轴方向），依次做『Hit test』，直到事件被消费，就停止派发。</p>
+
+<p>事件的消费过程则是反过来，子Composable如果未消费就返回给父Composable，前面的Composable未消费，就继续向下传递，直到事件被消费。</p>
+
+<p>如果是自己在pointerInput中直接处理事件，就要特别注意手动的把事件给消费掉，否则可能会继续传递。像awaitPointerEvent，awaitFirstDown，awaitDragOrCancellation等返回的都是<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputChange">PointerInputChange</a>对象，调用它的<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputChange#consume(">consume()</a>)方法即可把事件消费掉。再比如像上面的例子awaitTouchSlopOrCancellation中，也需要手动的把事件给消费掉，如果把ch.consume()这句删除，就会发现awaitDragOrCancellation不会得到执行，这是因为awaitTouchSlopOrCancellation这个方法还在执行中，调用ch.consume()把事件消费掉，这个函数才会返回。</p>
+
+<p>这也说明了，还是要尽量用系统封装好的手势识别和手势处理函数，不到万不得已不要直接处理原始事件，因为逻辑写起来肯定相当复杂。</p>
+
+<h2>多点触控</h2>
+
+<p>多点触控是超过一个触点同时在屏幕上操作，最为常见的手势就是旋转和缩放，可以使用扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#(androidx.compose.ui.Modifier">transformable</a>.transformable(androidx.compose.foundation.gestures.TransformableState,kotlin.Boolean,kotlin.Boolean))监听旋转，平移和缩放手势，其中平移单个触点也能触发，缩放和旋转则需要两个触点，当超过3个触点时这个函数不会回调，也即不会触发任何手势：</p>
+
+<pre><code class="Kotlin">@Composable
+private fun TransformableSample() {
+    // set up all transformation states
+    var scale by remember { mutableStateOf(1f) }
+    var rotation by remember { mutableStateOf(0f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val state = rememberTransformableState { zoomChange, offsetChange, rotationChange -&gt;
+        scale *= zoomChange
+        rotation += rotationChange
+        offset += offsetChange
+    }
+    Box(
+        Modifier
+            // 把参数应用到图层去做变幻
+            .graphicsLayer(
+                scaleX = scale,
+                scaleY = scale,
+                rotationZ = rotation,
+                translationX = offset.x,
+                translationY = offset.y
+            )
+            // 接收变幻手势
+            .transformable(state = state)
+            .background(Color.Blue)
+            .fillMaxSize()
+    )
+}
+</code></pre>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-multitouch.gif" alt="multi_touch_demo" /></p>
+
+<p>除了直接使用Modifier.transformable以外，还可以用前面提到过的pointerInput中的<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTransformGestures</a>.detectTransformGestures(kotlin.Boolean,kotlin.Function4))这个函数也能得到平移，旋转和缩放的变化数值，把这些数值应用到graphicsLayer去做变幻就可以了，使用detectTransformGestures的另一个好处是可以与其他的手势结合起来。</p>
+
+<h2>总结</h2>
+
+<p>通过本文我们学习如何得到原始的触点事件，以及如何识别手势，相信对触点事件以及手势识别有了更深入的理解，并且借助这些扩展函数就可以写出交互性更好的应用程序界面。即使遇到一些复杂的交互 场景，或者需要组合多种手势时，也都能从容应对。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/understand-gestures">Understand gestures</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/multi-touch">Multitouch: Panning, zooming, rotating</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/touch-input/user-interactions/handling-interactions">Handling user interactions</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『鱼跃于渊』| Gesture Handling]]></title>
@@ -1206,366 +1445,6 @@ fun EasingUsage() {
 <li><a href="https://medium.com/@android-world/jetpack-compose-animation-for-beginners-a-step-by-step-guide-58f1215b7c2c">Jetpack Compose Animation for Beginners: A Step-by-Step Guide</a></li>
 <li><a href="https://www.jetpackcompose.net/jetpack-compose-animations">Jetpack Compose Animations</a></li>
 <li><a href="https://developer.android.com/develop/ui/compose/animation/customize">Customize animations</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『突如其来』| Graphics Modifiers]]></title>
-    <link href="http://toughcoder.net/blog/2024/06/26/graphics-with-modifiers/"/>
-    <updated>2024-06-26T22:14:14+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/06/26/graphics-with-modifiers</id>
-    <content type="html"><![CDATA[<p>在Jetpack Compose中创建自定义绘制内容的方式不止一种，除了前面提到的<a href="https://juejin.cn/post/7381826917086920742">通过Canvas函数的方式</a>以外，还可以通过Modifier的几个扩展函数更为灵活实现一些的自定义内容。今天就来学习一下如何使用Modifier的扩展函数来绘制自定义内容。</p>
-
-<p><a href=""><img src="https://files.koenig.kodeco.com/uploads/2023/11/GraphicsJetpackCompose-twitter.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>使用Modifier来叠加自定义内容</h2>
-
-<p>先用一个简单的实例来看一下，如何用Modifier来实现一个自定义内容：</p>
-
-<pre><code class="Kotlin">    val textMeasurer = rememberTextMeasurer()
-
-    Box(
-        modifier = Modifier.fillMaxSize()
-            .padding(16.dp)
-            .drawWithContent {
-                drawRect(Color.LightGray)
-
-                drawText(
-                    textMeasurer = textMeasurer,
-                    text = "降Compose十八掌",
-                    topLeft = Offset(size.width / 4f, size.height / 2.2f)
-                )
-
-                drawCircle(
-                    color = Color.Magenta,
-                    radius = size.width / 10f,
-                    center = Offset(size.width / 1.8f, size.height / 3f)
-                )
-                drawCircle(
-                    color = Color.Yellow,
-                    radius = size.width / 12f,
-                    center = Offset(size.width / 1.6f, size.height / 4.5f)
-                )
-                drawCircle(
-                    color = Color.Green,
-                    radius = size.width / 14f,
-                    center = Offset(size.width / 1.46f, size.height / 7f)
-                )
-            }
-    )
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Desktop/hello_graphics_modifer.png" alt="hello_graphics_modifier" /></p>
-
-<p>可以看到使用Modifier方式与Canvas略不一样，它要应用到其他的Composable上面，所以Modifier方式主要用于<strong>修改或者增强</strong>现有的Composable以达到想要的效果。仍是提供了一个带有<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/drawscope/DrawScope">DrawScope</a>指针的lambda，在这里写绘制指令。</p>
-
-<p>Modifier提供的自定义绘制方式有四种：drawWithContent，drawBehind，drawWithCache和graphicsLayer。前面三种是是针对绘制的扩展，也就是影响绘制的内容；最后一个是图形的扩展，也就是主要用于已经绘制好了的内容的变幻。</p>
-
-<h2>覆写式绘制</h2>
-
-<p>最核心的扩展函数就是<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/draw/package-summary#(androidx.compose.ui.Modifier">Modifier.drawWithContent</a>.drawWithContent(kotlin.Function1))，它可以让你在目标Composable的内容绘制前或者绘制后，执行一些DrawScope的绘制命令来进行自定义的绘制。也就是说，这个扩展函数可以你让自由的决定在目标Composable绘制之前前或者绘制之后，执行自己想要的绘制命令，以实现一些额外的自定义效果。不过，要记得调用drawContent函数，这个函数是目标Composable的内容绘制函数，当然也可以不调用，那样就变成纯的自定义Composable了。</p>
-
-<p>来看一个猫眼效果：</p>
-
-<pre><code class="Kotlin">@Composable
-fun DrawContentDemo(modifier: Modifier = Modifier.fillMaxSize()) {
-    var pointerOffset by remember {
-        mutableStateOf(Offset(0f, 0f))
-    }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput("dragging") {
-                detectDragGestures { change, dragAmount -&gt;
-                    pointerOffset += dragAmount
-                }
-            }
-            .onSizeChanged {
-                pointerOffset = Offset(it.width / 2f, it.height / 2f)
-            }
-            .drawWithContent {
-                drawContent()
-                // draws a fully black area with a small keyhole at pointerOffset that’ll show part of the UI.
-                drawRect(
-                    Brush.radialGradient(
-                        listOf(Color.Transparent, Color.Black),
-                        center = pointerOffset,
-                        radius = 100.dp.toPx(),
-                    )
-                )
-            }
-    ) {
-        Text(
-            text =
-            """
-                “降龙十八掌可说是【武学中的巅峰绝诣】，当真是无坚不摧、无固不破。虽招数有限，但每一招均具绝大威力。
-                北宋年间，丐帮帮主萧峰以此邀斗天下英雄，极少有人能挡得他三招两式，气盖当世，群豪束手。
-                当时共有“降龙廿八掌”，后经萧峰及他义弟虚竹子删繁就简，取精用宏，改为降龙十八掌，掌力更厚。
-                这掌法传到洪七公手上，在华山绝顶与王重阳、黄药师等人论剑时施展出来，王重阳等尽皆称道。”
-            """.trimIndent(),
-            modifier = Modifier
-                .padding(16.dp)
-                .drawWithCache {
-                    val brush = Brush.linearGradient(
-                        listOf(
-                            Color(0xFF9E8240),
-                            Color(0xFF42A565),
-                            Color(0xFFE2E575)
-                        )
-                    )
-                    onDrawBehind {
-                        drawRoundRect(
-                            brush,
-                            cornerRadius = CornerRadius(10.dp.toPx())
-                        )
-                    }
-                }
-                .padding(16.dp),
-            style = MaterialTheme.typography.headlineMedium
-        )
-    }
-}
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Desktop/draw_content.gif" alt="cat_eye" /></p>
-
-<h2>背景式绘制</h2>
-
-<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/draw/package-summary#(androidx.compose.ui.Modifier">Modifier.drawBehind</a>.drawBehind(kotlin.Function1))是在目标Composable内容的下面一层（更远离用户的方向）执行绘制命令，所以方便添加一些背景：</p>
-
-<pre><code class="Kotlin">Box {
-        Text(
-            "降Compose十八掌!",
-            modifier = Modifier
-                .padding(16.dp)
-                .drawBehind {
-                    drawRoundRect(
-                        Color(0xFFBBAAEE),
-                        cornerRadius = CornerRadius(10.dp.toPx())
-                    )
-                }
-                .padding(8.dp),
-            style = MaterialTheme.typography.headlineLarge
-        )
-    }
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Desktop/draw_behind.png" alt="" /></p>
-
-<h2>缓存式绘制</h2>
-
-<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/draw/package-summary#(androidx.compose.ui.Modifier">Modifier.drawWithCache</a>.drawWithCache(kotlin.Function1))能够缓存在lambda内部创建的一些对象，这主要是为了提升性能的。有过View经验的同学一定知道在自定义View的时候不能在onDraw里面创建对象，因为这会影响性能。这个函数的用途也在于此，把一些对象缓存起来，避免多次创建，以提升渲染性能。</p>
-
-<p>需要注意的是，这些缓存对象的生命周期是画面尺寸未改变，以及创建对象依赖的状态没有变化，也就是说一旦画面有改变，或者依赖的状态有变化，那么缓存失效，对象要被重新创建。</p>
-
-<p>注意，这个函数主要用于与绘制命令强相关的，或者说仅在绘制命令范围内使用的对象，如颜色啊，画刷（Brush），着色器（Shader）啊，路径（Path）啊之类的。</p>
-
-<pre><code class="Kotlin">Box {
-        Text(
-            "降Compose十八掌!",
-            modifier = Modifier
-                .padding(16.dp)
-                .drawWithCache {
-                    val brush = Brush.linearGradient(
-                        listOf(
-                            Color(0xFF9E82F0),
-                            Color(0xFF42A5F5),
-                            Color(0xFFE2E575)
-                        )
-                    )
-                    onDrawBehind {
-                        drawRoundRect(
-                            brush,
-                            cornerRadius = CornerRadius(10.dp.toPx())
-                        )
-                    }
-                }
-                .padding(16.dp),
-            style = MaterialTheme.typography.headlineLarge
-        )
-    }
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Desktop/drawcache_demo.png" alt="caceh_demo" /></p>
-
-<p>还要注意与状态（State）的区别，使用remember函数可以创建状态，这些状态的生命周期也是能跨越函数的，这也相当于是缓存。但状态的目的是让Compose感知数据变化，进面进行重组（ReComposition）。把与绘制强相关的对象放在状态里面（即用remember转成状态）并不合适。因为与绘制强相关的对象如Brush，Color和Shader等，它并不是自变量，而是因变量，这些对象依赖其底层的数据变化而需要重新创建。所以，最恰当的方式是，是把自变量如底层的颜色数值，或者图片放到状态里面，而Brush和Shader放在drawWithCache里面。</p>
-
-<h2>图形变幻</h2>
-
-<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/package-summary#(androidx.compose.ui.Modifier.graphicsLayer(kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,androidx.compose.ui.graphics.TransformOrigin,androidx.compose.ui.graphics.Shape,kotlin.Boolean,androidx.compose.ui.graphics.RenderEffect,androidx.compose.ui.graphics.Color,androidx.compose.ui.graphics.Color,androidx.compose.ui.graphics.CompositingStrategy">Modifier.graphicsLayer</a>))是一个图形的扩展函数，它能够把目标Composable的内容绘制到一个图层（layer）上面，然后提供了一些针对图层进行操作的函数，进而能实现一些变幻。这相当于是把绘制指令做了隔离，先把绘制结果放到一个图层上面，除了变幻，图层还能做很多事情：</p>
-
-<ul>
-<li>做类似于<a href="https://developer.android.com/reference/android/graphics/RenderNode">RenderNode</a>那样的渲染管线化（render pipeline），把图层用作管理线中的一个节点，而不用每次都重新绘制。</li>
-<li>光栅化（Rasterization），图层可以光栅化，甚至离屏渲染（offscreen drawing），这可以优化动画的帧率和流畅度。</li>
-</ul>
-
-
-<p>不过，最主要的仍是做变幻，进而实现动画（Animation）。但要注意，图形变幻，仅是针对绘制过程做的变幻，并不影响Composable的真实的属性。</p>
-
-<p>graphicsLayer也是一个扩展函数，它的lambda参数是GraphicsLayerScope的一个扩展函数，所以lambda中有指向GraphicsLayerScope的隐式指针。变幻，只需要指定一些参数的值即可，通过一些例子，一看就能懂。</p>
-
-<h3>缩放/位移/旋转/透明度</h3>
-
-<p>通过在graphicsLayer的lambda中指定相应的参数即可以实现这些变幻。对于旋转和缩放，还可以指定中心点（Origin），特别注意旋转，它是三维的有x，y，z三个参数，通过一个例子来感受这些变幻效果：</p>
-
-<pre><code class="Kotlin">    Box(
-        modifier = Modifier
-            .graphicsLayer {
-                scaleX = 1.1f
-                scaleY = 1.6f
-                translationX = 30.dp.toPx()
-                translationY = 50.dp.toPx()
-                alpha = 0.7f
-                rotationX = 10f
-                rotationY = 5f
-            }
-    ) {
-        Text(
-            "降Compose十八掌!",
-            modifier = Modifier
-                .padding(16.dp)
-                .drawWithCache {
-                    val brush = Brush.linearGradient(
-                        listOf(
-                            Color(0xFF9E82F0),
-                            Color(0xFF42A5F5),
-                            Color(0xFFE2E575)
-                        )
-                    )
-                    onDrawBehind {
-                        drawRoundRect(
-                            brush,
-                            cornerRadius = CornerRadius(10.dp.toPx())
-                        )
-                    }
-                }
-                .padding(16.dp),
-            style = MaterialTheme.typography.headlineLarge
-        )
-    }
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Desktop/graphics_layer_transform.png" alt="transformation" /></p>
-
-<h3>剪辑与形状</h3>
-
-<p>剪辑（clip）是把绘制好的图层进行裁剪，裁剪的效果由形状（shape）来指定。这里可以尽情的发挥想像力，做出非常炫酷的视觉效果。</p>
-
-<pre><code class="Kotlin">       Box(
-            modifier = Modifier
-                .size(200.dp)
-                .graphicsLayer {
-                    clip = true
-                    shape = CircleShape
-                }
-                .background(Color(0xFFF06292))
-        ) {
-            Text(
-                "降Compose十八掌",
-                style = TextStyle(color = Color.Black, fontSize = 36.sp),
-                modifier = Modifier.align(Alignment.Center)
-            )
-        }
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Desktop/clip_shape.png" alt="clip_shape" /></p>
-
-<h3>图层的变幻仅对绘制生效</h3>
-
-<p>需要注意的是，对图层做的变幻仅是对渲染结果生效，它并不影响Composable本身的属性（如大小和位置）。比如说，通过剪辑和位移，图层可能会超出Composable本身的区域，也就是说在View树中，这个元素的位置和大小还是原来的样子。</p>
-
-<p>通过Modifier中其他的函数能对Composable本身进行剪辑这才会真正影响它自身的大小，超出边界的内容会被裁剪掉：</p>
-
-<pre><code class="Kotlin">    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Box(
-            modifier = Modifier
-                .size(200.dp)
-                .clip(RectangleShape)
-                .border(2.dp, Color.Black)
-                .graphicsLayer {
-                    clip = true
-                    shape = CircleShape
-                    translationX = 50.dp.toPx()
-                    translationY = 50.dp.toPx()
-                }
-                .background(Color(0xFFF06292))
-        ) {
-            Text(
-                "降Compose十八掌",
-                style = TextStyle(color = Color.Black, fontSize = 36.sp),
-                modifier = Modifier.align(Alignment.Center)
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .size(200.dp)
-                .background(Color(0xFF4DB6AC))
-        )
-    }
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Desktop/clip_modifier.png" alt="clip_modifier" /></p>
-
-<h2>创建Composable的快照</h2>
-
-<p>就像截屏一样，可以给Composable拍照，即把Composable的绘制结果转成一个Bitmap，进而可以保存成图片文件，或者分享到其他应用。主要是通过graphicsLayer的record函数：</p>
-
-<pre><code class="Kotlin">val coroutineScope = rememberCoroutineScope()
-val graphicsLayer = rememberGraphicsLayer()
-Box(
-    modifier = Modifier
-        .drawWithContent {
-            // 用record函数来录制图层
-            graphicsLayer.record {
-                // 把内容绘制到图层上面
-                this@drawWithContent.drawContent()
-            }
-            // 把图层再绘制到画布上面，以让内容能正常显示
-            drawLayer(graphicsLayer)
-        }
-        .clickable {
-            coroutineScope.launch {
-                val bitmap = graphicsLayer.toImageBitmap()
-                // 快照Bitmap已准备好了，可以使用此Bitmap了
-            }
-        }
-        .background(Color.White)
-) {
-    Text("Hello Android", fontSize = 26.sp)
-}
-</code></pre>
-
-<blockquote><p>注意：函数rememberGraphicsLayer只在compose的1.7.0-alpha07以后的版本才支持，在稳定版本中是不支持的。以BOM方式指定的依赖都是稳定版。可以单独给compose-ui:ui指定版本，如implementation(&ldquo;androidx.compose.ui:ui:1.7.0-beta03&rdquo;)</p></blockquote>
-
-<p><img src="file:///Users/alexhilton/Desktop/graphics_to_bitmap.png" alt="bitmap_share" /></p>
-
-<h2>如何选择恰当的方式</h2>
-
-<p>自定义绘制有两种，一种纯的自已绘制内容，类似于直接继承View，在onDraw中绘制自己想要的效果；另外一种就是基于现有的部件进行改进和增强，类似于子例化TextView或者子例化ImageView，基于原View的内容，再进行变幻，改进或者增强。</p>
-
-<p>视具体的问题而定，如果是第一种，就用Canvas函数，否则的话就用上面讲的Modifier的扩展函数。</p>
-
-<p>其实如果仔细看API的实现，就可以发现Canvas函数其实是Modifier.drawBehind的一层包装：</p>
-
-<pre><code class="Kotlin">@Composable
-fun Canvas(modifier: Modifier, onDraw: DrawScope.() -&gt; Unit) =
-    Spacer(modifier.drawBehind(onDraw))
-</code></pre>
-
-<p>因为Spacer是一个空白的占位符，本身的内容就是空的（只有大小，没有内容），所以整体效果就相当于是一个纯的自定义绘制内容了。</p>
-
-<p>不过本质上都是使用DrawScope对象来进行具体的绘制，上面提到的Modifier的扩展函数也都是对DrawScope的封装。Modifier的强大之处在于它可以应用于所有其他的Composables，可以让开发者非常方便的对现有的Composables进行扩展和增强。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/graphics/draw/modifiers">Graphics modifiers</a></li>
 </ul>
 
 ]]></content>

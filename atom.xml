@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-07-29T20:42:40+08:00</updated>
+  <updated>2024-08-04T21:12:17+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,387 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『时乘六龙』| Advanced Gestures]]></title>
+    <link href="http://toughcoder.net/blog/2024/08/02/advanced-gesture-in-compose/"/>
+    <updated>2024-08-02T07:46:30+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/08/02/advanced-gesture-in-compose</id>
+    <content type="html"><![CDATA[<p>通过<a href="https://juejin.cn/post/7395020728623480841">前面的一篇文章</a>我们学会了如何用各种高级别抽象的扩展函数来进行手势处理。像clickable，draggable，scrollable和anchoredDraggable都是类似于View系统中的各种回调（如onClick或者onScroll）是高级别的抽象，这里我们只能处理手势，大部分情况下这也够用了。</p>
+
+<p><a href="http://toughcoder.net/blog/2024/08/02/advanced-gesture-in-compose/"><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/advanced_gesture.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>但是，对于一些复杂的交互 场景需要我们先识别手势，然后再处理手势，这时就不能再用封装好的扩展函数了，而必须要用到像View系统中的onTouchEvent那样的低级别的回调，直接拿到触点事件，然后再识别手势，最后再处理手势。这篇文章就学习一下如何使用Jetpack Compose中的低级别函数来识别和处理手势。</p>
+
+<h2>处理原始触点事件</h2>
+
+<p>除了使用一些封装好了的扩展函数来直接处理某个手势以外，还可以直接接收原始的事件输入。</p>
+
+<p>Jetpack Compose在Modifier中提供了扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/package-summary#(androidx.compose.ui.Modifier">pointerInput</a>.pointerInput(kotlin.Any,kotlin.Any,kotlin.coroutines.SuspendFunction1))来接收原始的触点事件，与View系统中的<a href="https://developer.android.com/reference/android/view/View.OnTouchListener">onTouch</a>是类似的，这是触点事件的低级别的API。通过此API能获得触点事件，之后可以进行手势识别和手势处理，因为拿到的是原始的触点事件，所以很多逻辑要自己写，有些麻烦，但因为完全可控，所以可以实现一些更为复杂的手势识别和手势处理，比如任意方向的拖拽和滑动，长按后的拖拽，多点触控等等。</p>
+
+<h3>接收触点事件</h3>
+
+<p>扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/package-summary#(androidx.compose.ui.Modifier">pointerInput</a>.pointerInput(kotlin.Any,kotlin.Any,kotlin.coroutines.SuspendFunction1))接收三个参数，前两个都是作为<strong>事件处理回调的标识（keys）</strong>，第三个参数是<strong>事件处理回调</strong>，是一个尾部lambda，当某个key发生变化，这个lambda会重新执行，否则即使发生重组（Recomposition），这个lambda也会不会重新执行。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">Modifier</span><span class="p">.</span><span class="n">pointerInput</span><span class="p">(</span><span class="n">key1</span><span class="p">:</span> <span class="n">Any</span><span class="p">?,</span> <span class="n">key2</span><span class="p">:</span> <span class="n">Any</span><span class="p">?,</span> <span class="n">block</span><span class="p">:</span> <span class="n">suspend</span> <span class="n">PointerInputScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">):</span> <span class="n">Modifier</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>第三参数就是我们要提供的事件处理回调，它是运行在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputScope">PointerInputScope</a>上下文中的lambda，这个上下文作用域里面有很多扩展函数可以直接使用。仔细看这个lambda是suspend的，这是因为输入事件可能不是即时的，可能会有等待的情况，也就是说lambda是在有事件的时候才会执行。PointerInputScope中的函数也都定义为suspend的，这些函数在lambda中可以直接调用，所以lambda本身也必须 是suspend的。</p>
+
+<p>比如说想要打印触点事件，就可以这样写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">LogPointerEvents</span><span class="p">(</span><span class="n">filter</span><span class="p">:</span> <span class="n">PointerEventType</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">log</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="n">log</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">Modifier</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">100.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Red</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">pointerInput</span><span class="p">(</span><span class="n">filter</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">awaitPointerEventScope</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="k">while</span> <span class="p">(</span><span class="k">true</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                            <span class="k">val</span> <span class="py">event</span> <span class="p">=</span> <span class="n">awaitPointerEvent</span><span class="p">()</span>
+</span><span class='line'>                            <span class="c1">// handle pointer event</span>
+</span><span class='line'>                            <span class="k">if</span> <span class="p">(</span><span class="n">filter</span> <span class="p">==</span> <span class="k">null</span> <span class="p">||</span> <span class="n">event</span><span class="p">.</span><span class="k">type</span> <span class="p">==</span> <span class="n">filter</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                                <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;${event.type}, ${event.changes.first().position}&quot;</span>
+</span><span class='line'>                            <span class="p">}</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>filter是一个事件的类型参数当作key，也当作过滤条件。在事件处理回调lambda中，用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/AwaitPointerEventScope#awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass">awaitPointerEvent</a>)获得每一个触点事件，然后打印出来，<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/AwaitPointerEventScope">awaitPoniterEventScope</a>函数是创建一个协程上下文作用域用以等待事件输入，在其内调用awaitPointerEvent来获得事件。</p>
+
+<h3>识别手势</h3>
+
+<p>虽然pointerInput是一个低级别的接口，但也并不意味着所有的逻辑都必须从头写，在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputScope">PointerInputScope</a>中已经定义了大量的函数可以识别大部分手势：</p>
+
+<ul>
+<li>非连续性手势如单击（tap），双击（double tap）和长按（long press）：<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTapGestures</a>.detectTapGestures(kotlin.Function1,kotlin.Function1,kotlin.coroutines.SuspendFunction2,kotlin.Function1))</li>
+<li>拖拽（drag）：<a href="">detectDragGestures</a>，<a href="">detectDragGesturesAfterLongPress</a>，以及固定方向拖拽<a href="">detectHorizontalDragGestures</a>和<a href="">detectVerticalDragGestures</a></li>
+<li>多点触控变幻的手势识别（旋转，平移和缩放）：<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTransformGestures</a>.detectTransformGestures(kotlin.Boolean,kotlin.Function4))</li>
+</ul>
+
+
+<p>比如像<a href="https://juejin.cn/post/7395020728623480841">前面文章中</a>提到的拖拽也可以用pointerInput实现：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">DraggableTextLowLevel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">var</span> <span class="py">offsetX</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>        <span class="k">var</span> <span class="py">offsetY</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">Modifier</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">offset</span> <span class="p">{</span> <span class="n">IntOffset</span><span class="p">(</span><span class="n">offsetX</span><span class="p">.</span><span class="n">roundToInt</span><span class="p">(),</span> <span class="n">offsetY</span><span class="p">.</span><span class="n">roundToInt</span><span class="p">())</span> <span class="p">}</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">50.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">pointerInput</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">detectDragGestures</span> <span class="p">{</span> <span class="n">change</span><span class="p">,</span> <span class="n">dragAmount</span> <span class="p">-&gt;</span>
+</span><span class='line'>                        <span class="n">change</span><span class="p">.</span><span class="n">consume</span><span class="p">()</span>
+</span><span class='line'>                        <span class="n">offsetX</span> <span class="p">+=</span> <span class="n">dragAmount</span><span class="p">.</span><span class="n">x</span>
+</span><span class='line'>                        <span class="n">offsetY</span> <span class="p">+=</span> <span class="n">dragAmount</span><span class="p">.</span><span class="n">y</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-drag.gif" alt="detect_drag_demo" /></p>
+
+<p>前面提到了像detectTapGestures和detectDragGestures都是suspend的函数，所以在一个pointerInter的lambda中只能有一个，比如像下面这样写detectDragGestures不会得到执行：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">var</span> <span class="py">log</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="n">log</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">Modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">100.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Red</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">pointerInput</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">detectTapGestures</span> <span class="p">{</span> <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;Tap!&quot;</span> <span class="p">}</span>
+</span><span class='line'>                <span class="c1">// 不会得到执行，走不到这里，前面一个是suspend的</span>
+</span><span class='line'>                <span class="n">detectDragGestures</span> <span class="p">{</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="p">-&gt;</span> <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;Dragging&quot;</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>一个可行的解决办法就是可以写多个pointerInput，每个ponterInput处理一种手势：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">var</span> <span class="py">log</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="n">log</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">Modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">100.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Red</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">pointerInput</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">detectTapGestures</span> <span class="p">{</span> <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;Tap!&quot;</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">pointerInput</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="c1">// These drag events will correctly be triggered</span>
+</span><span class='line'>                <span class="n">detectDragGestures</span> <span class="p">{</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span> <span class="p">-&gt;</span> <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;Dragging&quot;</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>直接处理事件</h3>
+
+<p>遇到交互比较复杂的场景，或者当PointerInputScope中提供的识别函数不能解决问题时，或者需要把几种不同的手势组合在一起时，就需要直接处理事件。像View系统中的onTouch一样，我们需要知道不同的事件类型，比如pointer down，pointer move和pointer up等。PointerInputScope中提供了一个函数awaitEachGesture可以取代while (true)来获得每个事件；awaitFirstDown，是手势的开始相当于ACTION&#95;DOWN；waitForUpOrCancellation是事件结束，相当于ACTION&#95;UP和ACTION&#95;CANCEL；drag相当于ACTION&#95;MOVE。我们来看一个例子：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">LogPointerEvents</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">log</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">Column</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
+</span><span class='line'>        <span class="n">horizontalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterHorizontally</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">verticalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="n">log</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">Modifier</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">240.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">DarkGray</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">pointerInput</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">awaitEachGesture</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="k">val</span> <span class="py">down</span> <span class="p">=</span> <span class="n">awaitFirstDown</span><span class="p">().</span><span class="n">also</span> <span class="p">{</span>
+</span><span class='line'>                            <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;Action Down&quot;</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                        <span class="k">var</span> <span class="py">change</span> <span class="p">=</span> <span class="n">awaitTouchSlopOrCancellation</span><span class="p">(</span><span class="n">down</span><span class="p">.</span><span class="n">id</span><span class="p">)</span> <span class="p">{</span> <span class="n">ch</span><span class="p">,</span> <span class="n">_</span> <span class="p">-&gt;</span>
+</span><span class='line'>                            <span class="n">ch</span><span class="p">.</span><span class="n">consume</span><span class="p">()</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                        <span class="k">while</span> <span class="p">(</span><span class="n">change</span> <span class="p">!=</span> <span class="k">null</span> <span class="p">&amp;&amp;</span> <span class="n">change</span><span class="p">.</span><span class="n">pressed</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                            <span class="n">change</span> <span class="p">=</span> <span class="n">awaitDragOrCancellation</span><span class="p">(</span><span class="n">change</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
+</span><span class='line'>                            <span class="k">if</span> <span class="p">(</span><span class="n">change</span> <span class="p">!=</span> <span class="k">null</span> <span class="p">&amp;&amp;</span> <span class="n">change</span><span class="p">.</span><span class="n">pressed</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                                <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;Action Move ${change.type} ${change.position}&quot;</span>
+</span><span class='line'>                            <span class="p">}</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                        <span class="n">log</span> <span class="p">=</span> <span class="s">&quot;Action Up&quot;</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/event.gif" alt="event_demo" /></p>
+
+<p>需要注意的是这些函数都是suspend的，也就是说当预期的行为发生时才会带着结果返回，比如awaitFirstDown()当有第一个触点事件发生时结束suspend然后返回；awaitTouchSlopOrCancellation当有超过拖拽阈值时结束suspend然后返回；awaitDragOrCancellation当有拖拽发生时结束suspend返回。</p>
+
+<h2>触点事件的派发流程</h2>
+
+<p>为了更好的处理事件，需要了解一下Jetpack Compose的事件派发流程，与View系统是类似的，事件派发的过程也是沿着Composable的树形结构，从父Composable到子Composable，同一层级的顺序则是从上到下，从前到后（Z轴方向），依次做『Hit test』，直到事件被消费，就停止派发。</p>
+
+<p>事件的消费过程则是反过来，子Composable如果未消费就返回给父Composable，前面的Composable未消费，就继续向下传递，直到事件被消费。</p>
+
+<p>如果是自己在pointerInput中直接处理事件，就要特别注意手动的把事件给消费掉，否则可能会继续传递。像awaitPointerEvent，awaitFirstDown，awaitDragOrCancellation等返回的都是<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputChange">PointerInputChange</a>对象，调用它的<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputChange#consume(">consume()</a>)方法即可把事件消费掉。再比如像上面的例子awaitTouchSlopOrCancellation中，也需要手动的把事件给消费掉，如果把ch.consume()这句删除，就会发现awaitDragOrCancellation不会得到执行，这是因为awaitTouchSlopOrCancellation这个方法还在执行中，调用ch.consume()把事件消费掉，这个函数才会返回。</p>
+
+<p>这也说明了，还是要尽量用系统封装好的手势识别和手势处理函数，不到万不得已不要直接处理原始事件，因为逻辑写起来肯定相当复杂。</p>
+
+<h2>多点触控</h2>
+
+<p>多点触控是超过一个触点同时在屏幕上操作，最为常见的手势就是旋转和缩放，可以使用扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#(androidx.compose.ui.Modifier">transformable</a>.transformable(androidx.compose.foundation.gestures.TransformableState,kotlin.Boolean,kotlin.Boolean))监听旋转，平移和缩放手势，其中平移单个触点也能触发，缩放和旋转则需要两个触点，当超过3个触点时这个函数不会回调，也即不会触发任何手势：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">TransformableSample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// set up all transformation states</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">scale</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">1f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">rotation</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">offset</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">Offset</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">state</span> <span class="p">=</span> <span class="n">rememberTransformableState</span> <span class="p">{</span> <span class="n">zoomChange</span><span class="p">,</span> <span class="n">offsetChange</span><span class="p">,</span> <span class="n">rotationChange</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">scale</span> <span class="p">*=</span> <span class="n">zoomChange</span>
+</span><span class='line'>        <span class="n">rotation</span> <span class="p">+=</span> <span class="n">rotationChange</span>
+</span><span class='line'>        <span class="n">offset</span> <span class="p">+=</span> <span class="n">offsetChange</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">Modifier</span>
+</span><span class='line'>            <span class="c1">// 把参数应用到图层去做变幻</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">graphicsLayer</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">scaleX</span> <span class="p">=</span> <span class="n">scale</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">scaleY</span> <span class="p">=</span> <span class="n">scale</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">rotationZ</span> <span class="p">=</span> <span class="n">rotation</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">translationX</span> <span class="p">=</span> <span class="n">offset</span><span class="p">.</span><span class="n">x</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">translationY</span> <span class="p">=</span> <span class="n">offset</span><span class="p">.</span><span class="n">y</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="c1">// 接收变幻手势</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">transformable</span><span class="p">(</span><span class="n">state</span> <span class="p">=</span> <span class="n">state</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-multitouch.gif" alt="multi_touch_demo" /></p>
+
+<p>除了直接使用Modifier.transformable以外，还可以用前面提到过的pointerInput中的<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTransformGestures</a>.detectTransformGestures(kotlin.Boolean,kotlin.Function4))这个函数也能得到平移，旋转和缩放的变化数值，把这些数值应用到graphicsLayer去做变幻就可以了，使用detectTransformGestures的另一个好处是可以与其他的手势结合起来。</p>
+
+<h2>总结</h2>
+
+<p>通过本文我们学习如何得到原始的触点事件，以及如何识别手势，相信对触点事件以及手势识别有了更深入的理解，并且借助这些扩展函数就可以写出交互性更好的应用程序界面。即使遇到一些复杂的交互 场景，或者需要组合多种手势时，也都能从容应对。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/understand-gestures">Understand gestures</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/multi-touch">Multitouch: Panning, zooming, rotating</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/touch-input/user-interactions/handling-interactions">Handling user interactions</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『鱼跃于渊』| Gesture Handling]]></title>
@@ -5482,502 +5863,6 @@ textStyle比较丰富，除了直接指定颜色以外，还可以用<a href="ht
 <li><a href="https://www.baeldung.com/kotlin/annotations">Kotlin Annotations</a></li>
 <li><a href="https://kt.academy/article/ak-annotation-processing">Annotation Processing</a></li>
 <li><a href="https://www.kodeco.com/8574679-annotation-processing-supercharge-your-development">Annotation Processing: Supercharge Your Development</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Java Annotations Made Easy]]></title>
-    <link href="http://toughcoder.net/blog/2024/03/24/java-annotations-made-easy/"/>
-    <updated>2024-03-24T22:48:07+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/03/24/java-annotations-made-easy</id>
-    <content type="html"><![CDATA[<p>在Java编程语言中，注解Annotations是一种元数据，能提供代码以外的信息，是元编程的一种体现形式。注解的引入极大的增强了Java语言的元编程能力，能在编译时生成代码，大大减少了重复代码，让Java具有了相当高的动态特性，让一些高级技术如依赖注入，AOP等成为可能。今天将从基础使用，核心概念理解和创建自定义注解三个角度来彻底学会注解，并学会使用注解来提升开发效率。</p>
-
-<p><a href="http://toughcoder.net/blog/2024/03/24/java-annotations-made-easy/"><img src="https://developersjournal.in/wp-content/uploads/2017/06/java-annotations.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>基础知识</h2>
-
-<p>注解在代码中使用是非常常见的，相信只要有编程经验的同学都对注解非常的熟悉。</p>
-
-<h3>什么是注解</h3>
-
-<p>Java 注解（Annotation）是JDK5.0及以后版本引入的，它可以用于创建文档，代码分析，编译检查以及编译时生成代码。Java 注解是接口的一种特殊实现，程序可以通过反射来获取指定程序元素的Annotion对象，然后使用该对象来获取注解里面的元数据。</p>
-
-<h3>注解的用法</h3>
-
-<p>注解的使用是非常简洁明了的，Java 注解的基本语法是使用“@”符号来定义一个注解，然后在这个符号后面跟上注解的名字，并在这个名字的后面添加一个括号，括号中是这个注解所需要的参数列表。Java 注解是接口的一种特殊实现，因此注解的定义方式类似于接口的定义方式。Java 注解可以分为三种类型：标记注解、单值注解和完整注解。标记注解没有成员变量，只有一个标记作用；单值注解有一个成员变量；完整注解有多个成员变量。</p>
-
-<h3>内置注解</h3>
-
-<p>Java内置了一些注解，相信写过代码或者看过代码的人都对此非常的了解，因为在代码中是非常非常的常见的。</p>
-
-<ul>
-<li>@Override - 用于类的方法上，标记该方法要覆写基类（包括接口）的方法。编译器会对标记的方法作签名检查是否符合覆写规则。</li>
-<li>@Deprecated - 可以标记类，成员变量和成员方法为过时的方法，编译器会对调用这些类，成员或者方法给出警告（Compile warnings）。</li>
-<li>@SuppressWarnings - 可以用在类和方法上，强制忽略编译警告，即阻止编译器发出编译警告。后面需要加括号，里面传入字符串或者字符串数组代表要忽略的警告类型。</li>
-<li>@FunctionalInterface - 这是在Java 8版本中引入的，用在接口上，标记接口是一个函数式接口（即只有一个方法的接口，可以直接用一个lambda来作为接口的实例）。</li>
-<li>＠SafeVarargs - 用于方法和构造方法上，断言varargs参数（即可变长参数）会被安全地使用。比如涉及泛型的可变长参数会有『unchecked』警告，加了@SafeVarargs时编译器不会再给出『unchecked』警告。</li>
-</ul>
-
-
-<p>通过这些内置注解可以了解注解的类型和特点，并掌握注解的使用方法，这是学习自定义注解，即注解高级玩法的基础。</p>
-
-<h2>理解注解</h2>
-
-<p>可以发现注解并不直接对其修饰的代码产生影响，它是为代码提供额外的信息，它是代码的元数据，注解与代码一起构成了编译器的完整输入，编译器借助注解可以生成并得到最终完整的代码。</p>
-
-<p>注解本身无论是使用还是定义都相对直观和简洁，非常容易理解，因为注解本身就是一种元数据，提供一种标记或者额外的数据。重点在于注解的处理，这是注解功能发挥作用的地方也就是注解功能逻辑实现的地方。</p>
-
-<h3>元编程</h3>
-
-<p>注解是程序的元数据，所以这属于元编程范畴。<a href="https://en.wikipedia.org/wiki/Metaprogramming">元编程Metaprogramming</a>也即是以代码为操作目标和目标输出的编程范式，元编程是生产力工具，可以减少重复代码，大大的提高代码开发效率。大多数通用编程语言都支持元编程，像C/C++语言中的宏，Java中的注解，反射和动态代理，大Python中的装饰器（Decorators装饰器是高阶函数对函数进行操作）和元类（Metaclasses，对类进行操作可理解为类的模板）等等都是元编程。</p>
-
-<p>优秀的框架（Spring）和领域驱动开发（DDD）都是元编程的典型应用。</p>
-
-<p>关于Java的元编程，推荐这两篇文章：</p>
-
-<ul>
-<li><a href="https://jyjsjd.github.io/java/java-meta-programming/">Java元编程和热更新技术总结</a></li>
-<li><a href="https://tech.youzan.com/java-metaprograming/">Java元编程及其应用</a></li>
-</ul>
-
-
-<h2>注解的分类</h2>
-
-<p>注解是向编译器提供额外信息的一种元编程机制，那么依据机制的简单到复杂，可以把注解分为5个类型：</p>
-
-<h3>标记注解（Marker Annotations）</h3>
-
-<p>最简单的注解，对于某个<strong>声明进行标记</strong>，编译器会对被标记的声明进行检查和处理。如@Override和@Deprecated。</p>
-
-<h3>单值注解（Single Value Annotations）</h3>
-
-<p>需要给注解传递<strong>一个参数且只有一个参数</strong>，如@SuppressWarnings(&ldquo;unchecked&rdquo;)。</p>
-
-<h3>全值注解（Full Annotations）</h3>
-
-<p>需要给注解传递很多参数（多个键值对），如：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="nd">@Test</span><span class="o">(</span><span class="n">owner</span><span class="o">=</span><span class="s">&quot;Paul&quot;</span><span class="o">,</span> <span class="n">values</span><span class="o">=</span><span class="s">&quot;Class Greeks&quot;</span><span class="o">)</span>
-</span><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">testSomeMethod</span><span class="o">()</span> <span class="o">{</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>类型注解（Type Annotations）</h3>
-
-<p>可以用在<strong>类型被声明</strong>的地方，比如方法返回值，方法的参数声明等，如：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kd">public</span> <span class="nd">@NonNull</span> <span class="n">String</span> <span class="nf">transform</span><span class="o">(</span><span class="nd">@Nullable</span> <span class="n">String</span> <span class="n">source</span><span class="o">)</span> <span class="o">{</span> <span class="o">...</span> <span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>重复注解（Repeating Annotations）</h3>
-
-<p>常规的注解在同一个地方只能出现一次，但重复注解可以在同一个地方出现多次，如：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="nd">@Words</span><span class="o">(</span><span class="n">word</span><span class="o">=</span><span class="s">&quot;Hello&quot;</span><span class="o">,</span> <span class="n">value</span><span class="o">=</span><span class="mi">1</span><span class="o">)</span>
-</span><span class='line'><span class="nd">@Words</span><span class="o">(</span><span class="n">word</span><span class="o">=</span><span class="s">&quot;World&quot;</span><span class="o">,</span> <span class="n">value</span><span class="o">=</span><span class="mi">2</span><span class="o">)</span>
-</span><span class='line'><span class="kd">public</span> <span class="kt">void</span> <span class="nf">method</span><span class="o">()</span> <span class="o">{</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>自定义注解</h2>
-
-<p>注解的使用是非常的直观和简洁的，无论是内置注解还是各种框架定义好了的注解，使用起来那是相当的香。但这远远不够，因为注解最大的威力在于元编程，比如代码操作和代码生成，这是减少重复劳动（重复代码）和提供开发效率的大杀器。所以我们必须学会高级玩法，即自定义注解。</p>
-
-<h3>元注解</h3>
-
-<p>元注解，也即定义注解时所需要的注解。这有点类似于<a href="https://www.geeksforgeeks.org/bootstrapping-in-compiler-design/">编译器自举</a>，语言本身定义了一个最基础的注解，在其基础之上可以扩展出更多的注解，而注解的处理是通过反射，只要知道一些特殊的标记就可以了，其余的都是逻辑。</p>
-
-<h4>@Inherited</h4>
-
-<p>默认情况下，在基类中使用的注解是不会被子类继承的，如果注解本身标记有@Inherited，那么注解就会出现在被使用的继承体系中：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="nd">@Inherited</span>
-</span><span class='line'><span class="nd">@Target</span><span class="o">(</span><span class="n">ElementType</span><span class="o">.</span><span class="na">TYPE</span><span class="o">)</span>
-</span><span class='line'><span class="nd">@Retention</span><span class="o">(</span><span class="n">RetentionPolicy</span><span class="o">.</span><span class="na">RUNTIME</span><span class="o">)</span>
-</span><span class='line'><span class="kd">public</span> <span class="nd">@interface</span> <span class="n">Company</span> <span class="o">{</span>
-</span><span class='line'>    <span class="n">String</span> <span class="nf">name</span><span class="o">()</span> <span class="k">default</span> <span class="s">&quot;ABC&quot;</span><span class="o">;</span>
-</span><span class='line'>    <span class="n">String</span> <span class="nf">city</span><span class="o">()</span> <span class="k">default</span> <span class="s">&quot;xyz&quot;</span><span class="o">;</span>
-</span><span class='line'><span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="nd">@Company</span>
-</span><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">Employee</span> <span class="o">{</span> <span class="o">..</span> <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">Manager</span> <span class="kd">extends</span> <span class="n">Employee</span> <span class="o">{</span> <span class="o">...</span> <span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这个&#127792;中，如果把@Inherited从注解Company中去掉，那么给类Employee加的注解在其子类Manager中就不会得到继承。大部分时候定义注解时都要加上@Inherited标记。</p>
-
-<h4>@Documented</h4>
-
-<p>使用了@Documented标记的注解可以出现在文档中（JavaDocs）。</p>
-
-<h4>@Repeatable</h4>
-
-<p>对应着可重复的注解，指定着可以在哪些标识符上面重复注解。</p>
-
-<h4>@Target</h4>
-
-<p>指定注解可以作用于<strong>何种标识符</strong>，如果不指定则可以使用于<strong>任何标识符即任何程序元素</strong>。可选的选项有：</p>
-
-<ul>
-<li>ElementType.ANNOTATION&#95;TYPE - 可以用于其他的注解上面</li>
-<li>ElementType.CONSTRUCTOR - 可以用于构造方法上面</li>
-<li>ElementType.FIELD - 可以用于成员变量上面</li>
-<li>ElementType.LOCAL&#95;VARIABLE - 可以用于方法的本地变量（栈内变量）</li>
-<li>ElementType.METHOD - 可以用于方法上面</li>
-<li>ElementType.PACKAGE - 可以用于包（package）上面。</li>
-<li>ElementType.PARAMETER - 可以用于方法的参数上面。</li>
-<li>ElementType.TYPE - 可以用于类型声明的地方（即类，接口和枚举的声明）。</li>
-</ul>
-
-
-<p>可以指定一个@Target(ElementType.METHOD)或者多个目标@Target({ElementType.FIELD, ElementType.LOCAL&#95;VARIABLE})。</p>
-
-<h4>@Retention</h4>
-
-<p>元注解@Retention用于指定注解保留的生命周期。注解是一种元数据，目标是代码，而代码是有生命周期的：编辑或者说源码时；编译时；运行时。这是程序代码的典型生命周期。而@Retention的作用就是指明注解保留到哪个生命周期。</p>
-
-<ul>
-<li>RetentionPolicy.SOURCE - 在源码时保留，编译时就被丢弃，也就是说在编译时并不使用。一般用于编译前的源码处理工具使用，如javadoc，以及代码生成。</li>
-<li>RetentionPolicy.CLASS - 编译后仍会保留在class文件中，但在运行时（就是JVM加载class时）被丢弃。主要是在编译时使用（比如生成代码）。</li>
-<li>RetentionPolicy.RUNTIME - 保留到运行时，在运行时可以被使用。</li>
-</ul>
-
-
-<h3>自定义注解</h3>
-
-<p>注解可以视为一个特殊的接口，注解的定义就是定义一个接口，而每个接口就是其实现。注解的处理器利用反射获取注解接口的类型信息，再结合注解提供的数据就生成接口的实现代码。这就是注解的工作机制。</p>
-
-<p>用@interface就可以声明一个自定义注解，通用的格式是：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="o">[</span><span class="n">Access</span> <span class="n">Modifier</span><span class="o">]</span> <span class="nd">@interface</span> <span class="o">&lt;</span><span class="n">Annotation</span> <span class="n">name</span><span class="o">&gt;</span> <span class="o">{</span>
-</span><span class='line'>    <span class="o">&lt;</span><span class="n">Type</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="n">Method</span> <span class="n">name</span><span class="o">&gt;()</span> <span class="o">[</span><span class="k">default</span> <span class="n">value</span><span class="o">];</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>可以看到注解本质上是一种接口，但它有一些具体的限制规则：</p>
-
-<ul>
-<li>注解的方法不能有参数和异常签名（throws）</li>
-<li>方法的返回值不受限制，可以是任意类型</li>
-<li>方法的默认返回值是可选的（即可以有，也可以没有）</li>
-<li>定义注解时可以使用元注解，这种套娃机制可以实现更为复杂和更为强大的注解</li>
-</ul>
-
-
-<p>看一个完整自定义注解的&#127792;</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="nd">@Documented</span>
-</span><span class='line'><span class="nd">@Inherited</span>
-</span><span class='line'><span class="nd">@Target</span><span class="o">(</span><span class="n">ElementType</span><span class="o">.</span><span class="na">METHOD</span><span class="o">)</span>
-</span><span class='line'><span class="nd">@Retention</span><span class="o">(</span><span class="n">RetentionPolicy</span><span class="o">.</span><span class="na">RUNTIME</span><span class="o">)</span>
-</span><span class='line'><span class="kd">public</span> <span class="nd">@interface</span> <span class="n">MethodInfo</span> <span class="o">{</span>
-</span><span class='line'>    <span class="n">String</span> <span class="nf">author</span><span class="o">()</span> <span class="k">default</span> <span class="s">&quot;Kevin&quot;</span><span class="o">;</span>
-</span><span class='line'>    <span class="n">String</span> <span class="nf">date</span><span class="o">();</span>
-</span><span class='line'>    <span class="kt">int</span> <span class="nf">revision</span><span class="o">()</span> <span class="n">dfeault</span> <span class="mi">1</span><span class="o">;</span>
-</span><span class='line'>    <span class="n">String</span> <span class="nf">comments</span><span class="o">();</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>运行时注解解析</h2>
-
-<p>定义了注解后，就可以在代码中使用了，但这还没完，还需要对注解进行解析和处理。在运行时需要用到反射来解析注解，反射API中有专门用于处理注解的API：</p>
-
-<ul>
-<li><a href="https://docs.oracle.com/javase/8/docs/api/java/lang/reflect/AnnotatedElement.html">AnnotatedElement</a> - 这是反射接口处理注解的核心类型，它是反射类型Method，Field和Constructor的基类，通过它的方法来获取注解<a href="https://docs.oracle.com/javase/8/docs/api/java/lang/annotation/Annotation.html">Annotation</a>实例。</li>
-<li>用<a href="https://docs.oracle.com/javase/8/docs/api/java/lang/annotation/Annotation.html">Annotation</a>来处理具体的注解</li>
-</ul>
-
-
-<p>注意注意，注解的解析和处理用的是反射，所以注解定义时要用RententionPolicy.RUNTIME，否则用反射是拿不到注解信息的，因为反射是在运行时（Runtime）。下面我们会用一个完整的实例来学习如何处理自定义注解。</p>
-
-<h3>完整示&#127792;</h3>
-
-<p>至此注解的概念的原理都清楚了，融会贯通一下，用一个完整的&#127792;来展示自定义注解。</p>
-
-<h4>Step 1：定义注解</h4>
-
-<p>直接复用前面定义的@MethodInfo。</p>
-
-<h4>Step 2：使用注解</h4>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">MethodInfoExample</span> <span class="o">{</span>
-</span><span class='line'>    <span class="nd">@Override</span>
-</span><span class='line'>    <span class="nd">@MethodInfo</span><span class="o">(</span><span class="n">author</span> <span class="o">=</span> <span class="s">&quot;Alex&quot;</span><span class="o">,</span> <span class="n">comments</span> <span class="o">=</span> <span class="s">&quot;Main method&quot;</span><span class="o">,</span> <span class="n">date</span> <span class="o">=</span> <span class="s">&quot;Mar 29 2024&quot;</span><span class="o">,</span> <span class="n">revision</span> <span class="o">=</span> <span class="mi">2</span><span class="o">)</span>
-</span><span class='line'>    <span class="kd">public</span> <span class="n">String</span> <span class="nf">toString</span><span class="o">()</span> <span class="o">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="s">&quot;toString method Overridden&quot;</span><span class="o">;</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nd">@Deprecated</span>
-</span><span class='line'>    <span class="nd">@MethodInfo</span><span class="o">(</span><span class="n">comments</span> <span class="o">=</span> <span class="s">&quot;Deprecated method&quot;</span><span class="o">,</span> <span class="n">date</span> <span class="o">=</span> <span class="s">&quot;Mar 30, 2024&quot;</span><span class="o">)</span>
-</span><span class='line'>    <span class="kd">public</span> <span class="kd">static</span> <span class="kt">void</span> <span class="nf">oldMethod</span><span class="o">()</span> <span class="o">{</span>
-</span><span class='line'>        <span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">.</span><span class="na">println</span><span class="o">(</span><span class="s">&quot;Old method out!&quot;</span><span class="o">);</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nd">@SuppressWarnings</span><span class="o">({</span><span class="s">&quot;unchecked&quot;</span><span class="o">,</span> <span class="s">&quot;deprecation&quot;</span><span class="o">})</span>
-</span><span class='line'>    <span class="nd">@MethodInfo</span><span class="o">(</span><span class="n">author</span> <span class="o">=</span> <span class="s">&quot;Paul&quot;</span><span class="o">,</span> <span class="n">comments</span> <span class="o">=</span> <span class="s">&quot;Main method&quot;</span><span class="o">,</span> <span class="n">date</span> <span class="o">=</span> <span class="s">&quot;Mar 31 2024&quot;</span><span class="o">)</span>
-</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">genericsMethod</span><span class="o">()</span> <span class="kd">throws</span> <span class="n">FileNotFoundException</span> <span class="o">{</span>
-</span><span class='line'>        <span class="n">List</span> <span class="n">list</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">ArrayList</span><span class="o">();</span>
-</span><span class='line'>        <span class="n">list</span><span class="o">.</span><span class="na">add</span><span class="o">(</span><span class="s">&quot;Xyz&quot;</span><span class="o">);</span>
-</span><span class='line'>        <span class="n">oldMethod</span><span class="o">();</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h4>Step 3：解析注解</h4>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">MethodInfoParsing</span> <span class="o">{</span>
-</span><span class='line'>    <span class="kd">public</span> <span class="kd">static</span> <span class="kt">void</span> <span class="nf">main</span><span class="o">(</span><span class="n">String</span><span class="o">[]</span> <span class="n">args</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>        <span class="k">try</span> <span class="o">{</span>
-</span><span class='line'>            <span class="n">Method</span><span class="o">[]</span> <span class="n">methods</span> <span class="o">=</span> <span class="n">MethodInfoParsing</span><span class="o">.</span><span class="na">class</span>
-</span><span class='line'>                    <span class="o">.</span><span class="na">getClassLoader</span><span class="o">().</span><span class="na">loadClass</span><span class="o">(</span><span class="s">&quot;MethodInfoExample&quot;</span><span class="o">).</span><span class="na">getDeclaredMethods</span><span class="o">();</span>
-</span><span class='line'>            <span class="k">for</span> <span class="o">(</span><span class="n">Method</span> <span class="n">method</span> <span class="o">:</span> <span class="n">methods</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>                <span class="k">if</span> <span class="o">(!</span><span class="n">method</span><span class="o">.</span><span class="na">isAnnotationPresent</span><span class="o">(</span><span class="n">MethodInfo</span><span class="o">.</span><span class="na">class</span><span class="o">))</span> <span class="o">{</span>
-</span><span class='line'>                    <span class="k">continue</span><span class="o">;</span>
-</span><span class='line'>                <span class="o">}</span>
-</span><span class='line'>                <span class="k">for</span> <span class="o">(</span><span class="n">Annotation</span> <span class="n">annotation</span> <span class="o">:</span> <span class="n">method</span><span class="o">.</span><span class="na">getDeclaredAnnotations</span><span class="o">())</span> <span class="o">{</span>
-</span><span class='line'>                    <span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">.</span><span class="na">println</span><span class="o">(</span><span class="s">&quot;Annotation &quot;</span> <span class="o">+</span> <span class="n">annotation</span> <span class="o">+</span> <span class="s">&quot; on method &quot;</span> <span class="o">+</span> <span class="n">method</span><span class="o">.</span><span class="na">getName</span><span class="o">());</span>
-</span><span class='line'>                <span class="o">}</span>
-</span><span class='line'>                <span class="n">MethodInfo</span> <span class="n">info</span> <span class="o">=</span> <span class="n">method</span><span class="o">.</span><span class="na">getAnnotation</span><span class="o">(</span><span class="n">MethodInfo</span><span class="o">.</span><span class="na">class</span><span class="o">);</span>
-</span><span class='line'>                <span class="k">if</span> <span class="o">(</span><span class="s">&quot;Paul&quot;</span><span class="o">.</span><span class="na">equals</span><span class="o">(</span><span class="n">info</span><span class="o">.</span><span class="na">author</span><span class="o">()))</span> <span class="o">{</span>
-</span><span class='line'>                    <span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">.</span><span class="na">println</span><span class="o">(</span><span class="s">&quot;From Pauls: &quot;</span> <span class="o">+</span> <span class="n">method</span><span class="o">.</span><span class="na">getName</span><span class="o">());</span>
-</span><span class='line'>                <span class="o">}</span>
-</span><span class='line'>            <span class="o">}</span>
-</span><span class='line'>        <span class="o">}</span> <span class="k">catch</span> <span class="o">(</span><span class="n">ClassNotFoundException</span> <span class="n">e</span><span class="o">)</span> <span class="o">{</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>注解处理器</h2>
-
-<p>在运行时解析注解比较简单，较麻烦的是在编译时（Compile time）处理注解，这时的处理又特别的关键，因为像代码生成是在这一阶段做的。编译时处理注解需要用到<a href="https://docs.oracle.com/javase/8/docs/api/javax/annotation/processing/Processor.html">Annotation Processor</a>。</p>
-
-<p><img src="https://koenig-media.raywenderlich.com/uploads/2020/03/AnnotationProcessor-twitter.png" alt="" /></p>
-
-<p>一个典型的Annotation processor实现过程：</p>
-
-<ul>
-<li>实现一个Processor，通常通过继承<a href="https://docs.oracle.com/javase/8/docs/api/javax/annotation/processing/AbstractProcessor.html">AbstractProcess</a>。</li>
-<li>覆写方法process来处理注解，这里面过滤出想要处理的注解，然后用<a href="https://github.com/square/javapoet">JavaWriter</a>来生成Java文件（或者粗暴的用PrintWriter也可以）。</li>
-<li>注册实现好的Processor给编译器：可以通过编译命令javac -processor来指定处理器；也可以把处理器打成jar包然后当成库添加到项目中，因为编译器在开始编译前会自动的去搜索注解和注解处理器。</li>
-</ul>
-
-
-<p>可以参考如下文章来详细了解Annotation processor的实现过程：</p>
-
-<ul>
-<li><a href="https://www.baeldung.com/java-annotation-processing-builder">Java Annotation Processing and Creating a Builder</a></li>
-<li><a href="https://hannesdorfmann.com/annotation-processing/annotationprocessing101/">Annotation Processing 101</a></li>
-<li><a href="https://www.race604.com/annotation-processing/">Java注解处理器</a></li>
-<li><a href="https://tomgregory.com/gradle/annotation-processors-in-gradle-with-the-annotationprocessor-dependency-configuration/">Annotation Processors in Gradle with the annotationProcessor Dependency Configuration</a></li>
-<li><a href="https://kdrozd.pl/custom-annotation-processor/">Custom Annotation Processor</a></li>
-</ul>
-
-
-<p>这里是一系列<a href="https://github.com/gunnarmorling/awesome-annotation-processing">优秀的Annotation processor案例</a>。</p>
-
-<h2>为什么用注解</h2>
-
-<p>注解是非常优雅的元编程方式，可以生成代码（减少重复），降低耦合。比如著名的单元测试框架JUnit，在其4.0时（即JUnit4）就用注解替代了继承。在JUnit3要这样写测试：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="c1">// Using JUnit 3.0</span>
-</span><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">MyClassTest</span> <span class="kd">extends</span> <span class="n">TestCase</span> <span class="o">{</span>
-</span><span class='line'>    <span class="kd">private</span> <span class="n">MyClass</span> <span class="n">instance</span><span class="o">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nd">@Override</span>
-</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">setup</span><span class="o">()</span> <span class="kd">throws</span> <span class="n">Exception</span> <span class="o">{</span>
-</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">setup</span><span class="o">();</span>
-</span><span class='line'>        <span class="n">instance</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">MyClass</span><span class="o">();</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nd">@Override</span>
-</span><span class='line'>    <span class="kd">protected</span> <span class="kt">void</span> <span class="nf">tearDown</span><span class="o">()</span> <span class="kd">throws</span> <span class="n">Exception</span> <span class="o">{</span>
-</span><span class='line'>        <span class="kd">super</span><span class="o">.</span><span class="na">tearDown</span><span class="o">();</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">testSomeMethod</span><span class="o">()</span> <span class="o">{</span>
-</span><span class='line'>        <span class="n">assertNotNull</span><span class="o">(</span><span class="n">instance</span><span class="o">);</span>
-</span><span class='line'>        <span class="n">assertEquals</span><span class="o">(</span><span class="s">&quot;Hello, world&quot;</span><span class="o">,</span> <span class="n">instance</span><span class="o">.</span><span class="na">say</span><span class="o">());</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这是类MyClass的一个简单的测试用例。在JUnit4使用了注解后，就可以这样写了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="c1">// Using JUnit 4.0</span>
-</span><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">MyClassTest</span> <span class="o">{</span>
-</span><span class='line'>    <span class="kd">private</span> <span class="n">MyClass</span> <span class="n">instance</span><span class="o">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nd">@Before</span>
-</span><span class='line'>    <span class="kd">private</span> <span class="kt">void</span> <span class="nf">setup</span><span class="o">()</span> <span class="o">{</span>
-</span><span class='line'>        <span class="n">instance</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">MyClass</span><span class="o">();</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nd">@After</span>
-</span><span class='line'>    <span class="kd">private</span> <span class="kt">void</span> <span class="nf">tearDown</span><span class="o">()</span> <span class="o">{}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nd">@Test</span>
-</span><span class='line'>    <span class="kd">public</span> <span class="kt">void</span> <span class="nf">testSomeMethod</span><span class="o">()</span> <span class="o">{</span>
-</span><span class='line'>        <span class="n">assertNotNull</span><span class="o">(</span><span class="n">instance</span><span class="o">);</span>
-</span><span class='line'>        <span class="n">assertEquals</span><span class="o">(</span><span class="s">&quot;Hello, world&quot;</span><span class="o">,</span> <span class="n">instance</span><span class="o">.</span><span class="na">say</span><span class="o">());</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>通过注解@Before标记测试前准备和@After测试后清理，用@Test标记测试用例，也不用继承TestCase了，整体测试代码非常的优雅。这就是注解的作用。</p>
-
-<h2>什么时候用注解</h2>
-
-<p>注解的本质是程序的元数据，为编译器提供的代码以外的额外的数据。注解是优雅的元编程的一种方式，可以减少重复的代码，提升开发效率。所以每当需要减少重复代码，生成代码，提供元数据时就要用注解来实现。特别是特定领域的问题，非常适合大量使用注解，如数据库（Room），网络请求（Retrofit），单元测试（JUnit）等等。并且注解的大部分应用都是在编译时生成代码，也不影响性能，所以可劲造儿，尽可能的使用注解吧。</p>
-
-<h2>总结</h2>
-
-<p>本文从注解的基础用法出发，再到核心概念的阐述，最后用一个自定义注解的例子展示如何用注解来实现元编程，全方位的阐述了注解。相信通过此文对注解的理解会更上一个层次。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://docs.oracle.com/javase/tutorial/java/annotations/index.html">Lesson: Annotations</a></li>
-<li><a href="https://www.geeksforgeeks.org/annotations-in-java/">Annotations in Java</a></li>
-<li><a href="https://www.digitalocean.com/community/tutorials/java-annotations">Java Annotations</a></li>
-<li><a href="https://www.baeldung.com/java-custom-annotation">Creating a Custom Annotation in Java</a></li>
-<li><a href="https://reflectoring.io/java-annotation-processing/">An Introduction to Annotations and Annotation Processing in Java</a></li>
-<li><a href="https://www.cnblogs.com/ziph/p/13056092.html">教科书级讲解，秒懂最详细Java的注解</a></li>
-<li><a href="https://pdai.tech/md/java/basic/java-basic-x-annotation.html#google_vignette">Java 基础 - 注解机制详解</a></li>
-<li><a href="https://blog.csdn.net/qq_20009015/article/details/106038023">java注解的本质以及注解的底层实现原理</a></li>
 </ul>
 
 ]]></content>
