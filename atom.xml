@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-08-04T21:12:17+08:00</updated>
+  <updated>2024-08-12T22:46:13+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,459 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『密云不雨』| Navigation]]></title>
+    <link href="http://toughcoder.net/blog/2024/08/12/navigation-with-compose/"/>
+    <updated>2024-08-12T07:46:31+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/08/12/navigation-with-compose</id>
+    <content type="html"><![CDATA[<p>除了一些玩具性的Demo以外，相信任何一个应用程序不可能只有一个页面，最为极简的应用也至少会有两个页面，一个主页和一个设置页。对于传统的View系统来说对于导航这块没有专门的API，一般都是自己写逻辑跳Activity，或者跳到Fragment，然后再反向的Back，所以有了很多三方的各种Router类库（如大阿里的ARouter，货拉拉的TheRouter）。其实谷歌已经提供了解决方案，在Jetpack中提供了<a href="https://developer.android.com/guide/navigation">Navigation组件</a>，专门用于解决应用内部各种页面之间跳转的问题。</p>
+
+<p><a href="http://toughcoder.net/blog/2024/08/12/navigation-with-compose/"><img src="https://blog.mindorks.com/images/banner-jetpack-compose-navigation-657edc7b323cafdf.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>对于Jetpack Compose来说，因为是全新的框架，在设计之初就考虑到了导航的问题，但也不是重新开发了一套新库，而是把Jetpack中的组件Navigation深度的结合了进来。换句话说，在Jetpack Compose中可以直接使用Navigation组件来进行页面之间的跳转，并且有非常符合Compose的粘合API，使用起来非常的丝滑顺手。</p>
+
+<h2>基本概念</h2>
+
+<p>在深入之前有必要先澄清Navigation中的一些概念，了解了一些基本的概念和术语之后，会有助于理解组件的设计理念，也会更容易上手使用。</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:center;"> 术语 </th>
+<th style="text-align:left;"> 用途 </th>
+<th style="text-align:left;"> 具体的Composable </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;"> Host </td>
+<td style="text-align:left;"> 包含了当前导航页面的容器。应该把它理解成为导航的容器，包含着当前的页面， 以及一个NavController。 </td>
+<td style="text-align:left;"> <a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#NavHost(androidx.navigation.NavHostController,androidx.navigation.NavGraph,androidx.compose.ui.Modifier,androidx.compose.ui.Alignment,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1">NavHost</a>) </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Graph </td>
+<td style="text-align:left;"> 静态的数组结构，定义着一个应用中的所有页面，以及它们之间应该如何跳转。 </td>
+<td style="text-align:left;"> <a href="https://developer.android.com/reference/androidx/navigation/NavGraph">NavGraph</a> </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Controller </td>
+<td style="text-align:left;"> 页面之间导航的核心管理者。它封装着如何在页面之间跳转的方法，处理链接的方法，以及返回堆栈的方法。 </td>
+<td style="text-align:left;"> <a href="https://developer.android.com/reference/androidx/navigation/NavController">NavController</a> </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Destination </td>
+<td style="text-align:left;"> 在Graph中的一个节点。当跳转到这个节点时，Host中就包含并展示它的页面。在实际项目中，往往是一个Fragment或者一个Composable，也就是一个页面。 </td>
+<td style="text-align:left;"> <a href="https://developer.android.com/reference/androidx/navigation/NavDestination">NavDestination</a> </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Route </td>
+<td style="text-align:left;"> Destination的全局唯一标识，包括其所需要的参数。大部分时候，特别是在Compose中，这就是一坨类似于Uri一样的String </td>
+<td style="text-align:left;"> </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>还需要说明一下的就是导航的基本的操作对象是一个页面，一个页面可以理解为一个全屏的，逻辑上内聚，内容上互相关联，自成一家的一个UI页面，比如说一个应用的主页是一个页面，文章列表是一个页面，文章详情是一个页面，设置是一个页面，用户页又是一个页面。当然，这里全屏并不是直观的全屏，意思是说（特别是对于Compose）一个页面的大小是受系统控制的，并不能像普通的Composable那样随意设置大小，对于手机就是全屏的，对于平板可能会一个占据三分之一（列表页），一个占据三分之二（详情页）。</p>
+
+<h2>使用Navigation</h2>
+
+<p>Jetpack Compose是声明式UI，是函数式编程，每一个Composable都是一个函数，所以在Compose中使用Navigation略微的有点不一样。核心原理和核心的规则肯定与Navigation是一样一样的，只是使用上的API略不一样，其实是更简单更方便了（这是声明式UI带来的收益）。</p>
+
+<h3>添加依赖</h3>
+
+<p>在使用之前先要添加Navigation库作为项目的依赖：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">navVersion</span> <span class="p">=</span> <span class="s">&quot;2.7.7&quot;</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.navigation:navigation-runtime-ktx:$navVersion&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.navigation:navigation-compose:$navVersion&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>使用Navigation的方法</h3>
+
+<p>可以通过以下步骤来使用Navigation：</p>
+
+<ul>
+<li>创建NavHost，并设置为应用的入口，通过Composable函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#NavHost(androidx.navigation.NavHostController,androidx.navigation.NavGraph,androidx.compose.ui.Modifier,androidx.compose.ui.Alignment,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1">NavHost</a>)。</li>
+<li>创建NavController，可以直接创建，但推荐的方式是使用Compose提供的状态构造函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#rememberNavController(kotlin.Array">rememberNavController</a>)，它的好处在于当前导航会提升为一个状态。</li>
+<li>定义Destination和Route，其实对于Compose来说都是用类似于Uri的String来作为Destination，每一个Destition唯一对应着一个页面。</li>
+<li>添加页面，通过函数NavHost的尾部lambda，它实际上是一个<a href="https://developer.android.com/reference/kotlin/androidx/navigation/NavGraphBuilder">NavGraphBuilder</a>的扩展函数，这里调用函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#(androidx.navigation.NavGraphBuilder">composable</a>.composable(kotlin.collections.Map,kotlin.collections.List,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function2))来添加页面。</li>
+<li>配置跳转，通过前面创建的navController来实现跳转，用<a href="https://developer.android.com/reference/kotlin/androidx/navigation/NavController#navigate(android.net.Uri">navController.navigate</a>)来跳转到指定的Destination，用<a href="https://developer.android.com/reference/androidx/navigation/NavController#popBackStack(">navController.popBackStack</a>)来返回到前一个页面。而触发的入口肯定是在具体的页面之中，所以页面要把其跳转函数作为参数，在NavGraphBuilder时，再用NavController去实现，这样所有的跳转逻辑就都在NavGraph中，便于管理。</li>
+</ul>
+
+
+<h3>具体实例</h3>
+
+<p>说了那么多貌似挺烦杂的，让我们看一个实例就会瞬间明白。</p>
+
+<p>一个简单的应用有4个页面，先定义Destinations：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">object</span> <span class="nc">Destinations</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">APP_URI</span> <span class="p">=</span> <span class="s">&quot;http://toughcoder.net/chronos&quot;</span>
+</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">HOME_ROUTE</span> <span class="p">=</span> <span class="s">&quot;home&quot;</span> <span class="c1">// 主页</span>
+</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">HISTORY_ROUTE</span> <span class="p">=</span> <span class="s">&quot;history&quot;</span> <span class="c1">// 历史记录页面</span>
+</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">SETTINGS</span> <span class="p">=</span> <span class="s">&quot;settings&quot;</span> <span class="c1">// 设置页</span>
+</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">ARTICLES</span> <span class="p">=</span> <span class="s">&quot;articles&quot;</span> <span class="c1">// 文章页</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>那么就可以如此配置Navigation：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ChronosNavGraph</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">navController</span><span class="p">:</span> <span class="n">NavHostController</span> <span class="p">=</span> <span class="n">rememberNavController</span><span class="p">(),</span>
+</span><span class='line'>    <span class="n">start</span><span class="p">:</span> <span class="n">String</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">HOME_ROUTE</span> <span class="c1">// 默认的初始页面为主页</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">NavHost</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">navController</span> <span class="p">=</span> <span class="n">navController</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">startDestination</span> <span class="p">=</span> <span class="n">start</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">HOME_ROUTE</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.HOME_ROUTE}&quot;</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">ChronosScreen</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">gotoSettings</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Destinations</span><span class="p">.</span><span class="n">SETTINGS</span><span class="p">)</span> <span class="p">},</span>
+</span><span class='line'>                <span class="n">gotoHistory</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Destinations</span><span class="p">.</span><span class="n">HISTORY_ROUTE</span><span class="p">)</span> <span class="p">},</span>
+</span><span class='line'>                <span class="n">gotoArticles</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Destinations</span><span class="p">.</span><span class="n">ARTICLES</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">HISTORY_ROUTE</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.HISTORY_ROUTE}&quot;</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">HistoryScreen</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">navController</span><span class="p">.</span><span class="n">popBackStack</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">SETTINGS</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.SETTINGS}&quot;</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">SettingsScreen</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">navController</span><span class="p">.</span><span class="n">popBackStack</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">ARTICLES</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.ARTICLES}&quot;</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">ArticlesScreen</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">navController</span><span class="p">.</span><span class="n">popBackStack</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>可以看到每一个composable函数用以创建一个导航页面，里面有其Route，具体的页面，以及跳转的入口函数。deepLinks是每个页面的Uri式的链接，后面会详细的讲解。</p>
+
+<p>最后就是把这个NavGraph作为应用的入口页面：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">ChronosTheme</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Surface</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
+</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">background</span>
+</span><span class='line'>                <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">ChronosNavGraph</span><span class="p">()</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>在页面之间传递参数</h2>
+
+<p>页面跳转还必然会涉及参数的传递，比如具有递进关系的两个页面，核心参数肯定要由前一个页传递过去，最为典型的场景就是列表类页面到详情页面的跳转，比如文章列表要把文章的Id传给详情页，这样详情页才知道去展示哪个文章，用户列表要把用户Id传给详情页，详情页才知道展示哪个用户。</p>
+
+<p>Navigation提供了传递参数的方法，在创建导航页面时传入的Route可以加入占位符形参，然后在跳转navController.navigate时可以传入实参，只不过参数的类型有限制，只能是基础数据类型如字串或者数字。目标页面使用时通过backStackEntry.arguments来获得参数。来具体看一下，比如说传递用户Id的场景：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">NavHost</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">composable</span><span class="p">(</span>
+</span><span class='line'>          <span class="s">&quot;profile/{userId}&quot;</span><span class="p">,</span>
+</span><span class='line'>          <span class="n">arguments</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">navArgument</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">)</span> <span class="p">{</span> <span class="k">type</span> <span class="p">=</span> <span class="n">NavType</span><span class="p">.</span><span class="n">StringType</span> <span class="p">}</span> <span class="c1">// 这句可以省略，因为默认类型都当成是字符串</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
+</span><span class='line'>          <span class="n">Profile</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">arguments</span><span class="o">?.</span><span class="n">getString</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">))</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>上面参数类型的声明，其实可以省略，因为默认的类型都当成String来解析和处理，如果是其他类型则需要显式地声明。这样目标页面的参数就声明好了，我们在跳转的时候传入实参就可以了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="s">&quot;profile/user1234&quot;</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>大部分时候参数都是<strong>必填参数</strong>，像上面这样写userId是必填的参数。但有些时候一些非核心的参数，可能不是每次跳转都会传，这就需要页面把参数声明为<strong>可选参数</strong>。可选参数在声明的时候Uri中必须使用查询式语句，如（&#8221;?argName={argName}&ldquo;），另外必须 设置默认值，或者类型是nullable的。这也意味着我们不能省略导航页面构建composable函数中的arguments参数：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">composable</span><span class="p">(</span>
+</span><span class='line'>    <span class="s">&quot;profile?userId={userId}&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">arguments</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">navArgument</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">)</span> <span class="p">{</span> <span class="n">defaultValue</span> <span class="p">=</span> <span class="s">&quot;user1234&quot;</span> <span class="p">})</span> <span class="c1">// 注意这里的默认值，当调用navigate时如果不传userId就用这个默认值</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="n">Profile</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">arguments</span><span class="o">?.</span><span class="n">getString</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>注意：</strong> 要尽可能的使用基本的数据类型，如String，Int或者Long，而不传递复杂的数据。复杂的数据通常都是业务逻辑数据，而业务逻辑数据应该使用基本的参数，再从数据源处（通常是通过ViewModel从Repo处）去主动获取，这样才能保证数据的真实有效。这是设计原则中的『单一数据源原则Single Source of Truth』。复杂数据从Repo处获取后，可能会变得过时或者失真，而且在页面之间传递会有拷贝，效率也不高，因此要避免在页面之间传递复杂数据。</p>
+
+<h2>处理DeepLinks</h2>
+
+<p>DeepLinks是Uri式的链接跳转范式，能够以字符串形式的Uri精准的定位到某个应用的具体某个页面，就犹如互联网中的Uri一样。它的好处在于形成了一个统一的标准，形式简单方便，一个字符串就能定位到一个页面。</p>
+
+<p>使用导航页面构建函数composable在构建页面的时候可以传入<a href="https://developer.android.com/reference/androidx/navigation/NavDeepLink">NavDeepLink</a>对象，更为方便的是使用其构建函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/package-summary#navDeepLink(kotlin.Function1">navDeepLink</a>)：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">uri</span> <span class="p">=</span> <span class="s">&quot;https://www.example.com&quot;</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">composable</span><span class="p">(</span>
+</span><span class='line'>    <span class="s">&quot;profile?id={id}&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;$uri/{id}&quot;</span> <span class="p">})</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="n">Profile</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">arguments</span><span class="o">?.</span><span class="n">getString</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>从示例中可以看出Uri中还可以带有参数，形参的声明，以及参数的获取与前面提到的页面参数是一样一样的，如果实际传过来的Uri是&#8221;<a href="https://www.example.com/user123">https://www.example.com/user123</a>&#8220;，到此页面后，就能解析出参数id为user123。</p>
+
+<p>正常情况下这些DeepLinks只能在应用内部使用，如果要对应用外开放，则需要在应用的AndroidManifest文件中进行声明，声明为intent filter：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;activity</span> <span class="err">…</span><span class="nt">&gt;</span>
+</span><span class='line'>  <span class="nt">&lt;intent-filter&gt;</span>
+</span><span class='line'>    ...
+</span><span class='line'>    <span class="nt">&lt;data</span> <span class="na">android:scheme=</span><span class="s">&quot;https&quot;</span> <span class="na">android:host=</span><span class="s">&quot;www.example.com&quot;</span> <span class="nt">/&gt;</span>
+</span><span class='line'>  <span class="nt">&lt;/intent-filter&gt;</span>
+</span><span class='line'><span class="nt">&lt;/activity&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>页面跳转过渡动画</h2>
+
+<p>页面跳转可以指定具体的过渡动画，具体的可以参考<a href="https://juejin.cn/post/7385758285960609831#heading-10">前面专门讲动画的那篇文章</a>，这里就不再重复了。</p>
+
+<h2>Route的类型安全</h2>
+
+<p>通常情况下Route都是使用Uri式的String，但这明显不够安全，因为调用navController#navigate的时候，可能会传一个不认识的页面Route，或者参数传错了（比如数字参数传了String），等等。轻则跳转失败，因为找不到Destination页面，重则会Crash。要想类型安全，就不能使用String式的Uri，需要把Ruote定义为类型（也即class），但要使用注解&#64;Serializeable标记一下：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 主页面，不带任何参数</span>
+</span><span class='line'><span class="n">@Serializable</span>
+</span><span class='line'><span class="k">object</span> <span class="nc">Home</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 用户页面，参数是用户Id，其类型是一个String</span>
+</span><span class='line'><span class="n">@Serializable</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Profile</span><span class="p">(</span><span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>然后在构建导航页面的时候，函数composable其实是一个泛型函数，它可以指定Route的参数类型：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">NavHost</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">startDestination</span> <span class="p">=</span> <span class="n">Home</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>     <span class="n">composable</span><span class="p">&lt;</span><span class="n">Home</span><span class="p">&gt;</span> <span class="p">{</span> <span class="c1">// 泛型函数，可以指定参数类型</span>
+</span><span class='line'>         <span class="n">HomeScreen</span><span class="p">(</span><span class="n">onNavigateToProfile</span> <span class="p">=</span> <span class="p">{</span> <span class="n">id</span> <span class="p">-&gt;</span>
+</span><span class='line'>             <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Profile</span><span class="p">(</span><span class="n">id</span><span class="p">))</span> <span class="c1">// 跳转的时候传入的实参是一个对象，类型就是上面定义的Route</span>
+</span><span class='line'>         <span class="p">})</span>
+</span><span class='line'>     <span class="p">}</span>
+</span><span class='line'>     <span class="n">composable</span><span class="p">&lt;</span><span class="n">Profile</span><span class="p">&gt;</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
+</span><span class='line'>         <span class="k">val</span> <span class="py">profile</span><span class="p">:</span> <span class="n">Profile</span> <span class="p">=</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">toRoute</span><span class="p">()</span>  <span class="c1">// 获取参数的时候，用toRoute来获得Route对象，类型就是我们定义的那个</span>
+</span><span class='line'>         <span class="n">ProfileScreen</span><span class="p">(</span><span class="n">profile</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
+</span><span class='line'>     <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>然后在跳转的时候就可以把Route对象作为实参传进去：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Profile</span><span class="p">(</span><span class="n">id</span> <span class="p">=</span> <span class="m">123</span><span class="p">))</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这样因为都是定义的类型，所以编译器会做编译时检查，虚拟机也会做运行时的类型检查，保证类型安全。</p>
+
+<p><strong>注意：</strong> 不要混淆，这里Route虽然是自定义类型，但并不算是在页面之间传递复杂的业务数据，因为具体的参数仍是诸如String和Int之类的基础数值。把Route定义为类型（class），而不是直接使用String，是为了让编译器帮忙我们保证类型安全，减少出错。</p>
+
+<h2>总结</h2>
+
+<p>使用Navigation可以非常轻松的把应用的各个页面组织连接起来，形成一个完整的交互闭环。谷歌也提供了相应的<a href="https://developer.android.com/codelabs/jetpack-compose-navigation#0">CodeLab</a>可以学习一下。此外，谷歌的一些Sample app，像<a href="https://github.com/android/sunflower/tree/main">Sunflower</a>和<a href="https://github.com/android/compose-samples/tree/main/JetNews">JetNews</a>也是使用Navigation来实现导航的，是非常好的学习案例。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/navigation">Navigation with Compose</a></li>
+<li><a href="https://developer.android.com/guide/navigation">Navigation</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『时乘六龙』| Advanced Gestures]]></title>
@@ -5465,404 +5918,6 @@ textStyle比较丰富，除了直接指定颜色以外，还可以用<a href="ht
 <li><a href="https://www.kodeco.com/33148161-write-a-symbol-processor-with-kotlin-symbol-processing">Write a Symbol Processor with Kotlin Symbol Processing</a></li>
 <li><a href="https://www.codecentric.de/wissens-hub/blog/kotlin-symbol-processing-introduction">An Introduction to Kotlin Symbol Processing</a></li>
 <li><a href="https://kt.academy/article/ak-ksp">Kotlin Symbol Processing</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Kotlin Annotation Made Easy]]></title>
-    <link href="http://toughcoder.net/blog/2024/04/09/kotlin-annotation-made-easy/"/>
-    <updated>2024-04-09T22:14:10+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/04/09/kotlin-annotation-made-easy</id>
-    <content type="html"><![CDATA[<p>注解（Annotations）允许我们在代码中添加元数据（Meta data），提供代码以外的信息，这些元数据可以在编译时被编译器或其他工具读取和处理。 Kotlin作为一种功能强大且易于使用的多范式通用编程语言，注解（Annotations）是其核心特性之一。在Kotlin中，注解的使用非常广泛，可以用于框架设计、代码生成、测试、依赖注入等多个方面。今天就来学习一下Kotlin中注解的使用方法。</p>
-
-<p><a href="http://toughcoder.net/blog/2024/04/09/kotlin-annotation-made-easy/"><img src="https://appmaster.dev/wp-content/uploads/2023/03/Understan-Kotlin-Annotations-1024x536.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>Kotlin是基于JVM的编程语言，并且可以与Java互通使用，因此事先了解一下Java的注解对于学习Kotlin的注解是非常有帮助的。可以阅读一下前面的文章来<a href="https://juejin.cn/post/7353138889458319412">回顾Java语言的注解</a>。</p>
-
-<h2>什么是注解</h2>
-
-<p>注解是元编程的一种实现方式，它并不直接改变代码，而是为代码提供额外的数据。注解不能单独存在，必须与代码中的其他元素一起使用。在Kotlin中，注解要使用符号『@』后面加一个已定义的注解名字，如『@Deprecated』。注解在Kotlin中的使用非常广泛的，相信有过代码经验的同学都至少看过大量的注解。</p>
-
-<h2>注解的使用方法</h2>
-
-<p>注解的使用是非常的直观的，在需要的代码元素（类，变量，属性，函数，参数等等）加上想要使用的注解就可以了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Fancy</span> <span class="k">class</span> <span class="nc">Foo</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">@Fancy</span> <span class="k">fun</span> <span class="nf">baz</span><span class="p">(</span><span class="n">@Fancy</span> <span class="n">foo</span><span class="p">:</span> <span class="n">Int</span><span class="p">):</span> <span class="n">Int</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="p">(</span><span class="n">@Fancy</span> <span class="m">1</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>Kotlin的注解也可以用在lambda上面，这实际上相当于应用于lambda函数生成的函数实例的invoke()上面：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">annotation</span> <span class="k">class</span> <span class="nc">Suspendable</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">val</span> <span class="py">f</span> <span class="p">=</span> <span class="n">@Suspendable</span> <span class="p">{</span> <span class="n">Fiber</span><span class="p">.</span><span class="n">sleep</span><span class="p">(</span><span class="m">10</span><span class="p">)</span> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>注解的使用点目标</h3>
-
-<p>由于Kotlin最终要编译成为字节码，运行在JVM上，所以它必须符合Java的规范。但语法上Kotlin与Java还是不一样的，比如一句Kotlin代码可能会相当于Java的好几句，换句话说一个Kotlin语句中的元素可能会对应着Java中的好几个。这可能会带来问题。</p>
-
-<p>注解并不能单独出现，它必须作用到某一个语法上的元素，因为Kotlin语法元素可能会对应着几个Java语法元素，那么注解可能会被用在多个目标元素上面。为了能精确的指定注解的作用目标，可以使用『使用点目标』（use-site targets）来标记具体的目标元素：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">Example</span><span class="p">(</span><span class="n">@field</span><span class="p">:</span><span class="n">Ann</span> <span class="k">val</span> <span class="py">foo</span><span class="p">,</span>    <span class="c1">// annotate Java field</span>
-</span><span class='line'>              <span class="n">@get</span><span class="p">:</span><span class="n">Ann</span> <span class="k">val</span> <span class="py">bar</span><span class="p">,</span>      <span class="c1">// annotate Java getter</span>
-</span><span class='line'>              <span class="n">@param</span><span class="p">:</span><span class="n">Ann</span> <span class="k">val</span> <span class="py">quux</span><span class="p">)</span>   <span class="c1">// annotate Java constructor parameter</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这里面『Ann』是一个注解，其前面的『field/get/param』就用以指定具体的注解目标元素。可用的使用点目标有这些：</p>
-
-<ul>
-<li>file</li>
-<li>property</li>
-<li>field</li>
-<li>get 属性的getter</li>
-<li>set 属性的setter</li>
-<li>receiver 扩展函数或者扩展属性的底层对象</li>
-<li>param 构造函数的参数</li>
-<li>setparam 属性setter的参数</li>
-<li>delegate 指存储着受托对象实例的域成员</li>
-</ul>
-
-
-<p>『receiver』指的是扩展函数发生作用的实例，比如说：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">@receiver</span><span class="p">:</span><span class="n">Fancy</span> <span class="n">String</span><span class="p">.</span><span class="n">myExtension</span><span class="p">()</span> <span class="p">{</span> <span class="p">...</span> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>那么，这个注解『Fancy』将作用于具体调用这个扩展方法myExtension的String实例上面。</p>
-
-<p>这些具体的使用点目标可以精确的指定JVM认识的元素上面，可以发现，它们远比定义注解时的<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/">@Target</a>要丰富。如果不指定具体的使用点目标，那么就会按照@Target指定的目标，如果有多个目标，会按如下顺序选择：</p>
-
-<ul>
-<li>param</li>
-<li>property</li>
-<li>field</li>
-</ul>
-
-
-<h3>兼容Java注解</h3>
-
-<p>Kotlin是完全兼容Java注解，也就是说Java中定义的注解，在Kotlin中都可以直接使用。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="c1">// Java</span>
-</span><span class='line'><span class="kd">public</span> <span class="nd">@interface</span> <span class="n">Ann</span> <span class="o">{</span>
-</span><span class='line'>    <span class="kt">int</span> <span class="nf">intValue</span><span class="o">();</span>
-</span><span class='line'>    <span class="n">String</span> <span class="nf">stringValue</span><span class="o">();</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// Kotlin</span>
-</span><span class='line'><span class="n">@Ann</span><span class="p">(</span><span class="n">intValue</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span> <span class="n">stringValue</span> <span class="p">=</span> <span class="s">&quot;abc&quot;</span><span class="p">)</span> <span class="k">class</span> <span class="nc">C</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>虽然可以直接用，但毕竟Kotlin的语法要丰富得多，所以为了避免歧义，要使用前面介绍的使用点目标来精确指定注解的作用目标。</p>
-
-<h2>自定义注解</h2>
-
-<p>使用关键字『annotation』来声明自定义注解，如：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">annotation</span> <span class="k">class</span> <span class="nc">Fancy</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>之后就可以使用注解了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Fancy</span> <span class="k">class</span> <span class="nc">Foo</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">@Fancy</span> <span class="k">fun</span> <span class="nf">baz</span><span class="p">(</span><span class="n">@Fancy</span> <span class="n">foo</span><span class="p">:</span> <span class="n">Int</span><span class="p">):</span> <span class="n">Int</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="p">(</span><span class="n">@Fancy</span> <span class="m">1</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>光这样声明还不够，还需要定义注解具体的内容，如可修饰的目标和行为特点，这就需要用到元注解（Meta annotations），也即定义注解时所需要的注解。</p>
-
-<h3>元注解（Meta annotations）</h3>
-
-<h4>@MustBeDocumented</h4>
-
-<p>用于指定此注解是公开API的一部分，必须包含在文档中。</p>
-
-<h4>@Repeatable</h4>
-
-<p>允许在同一个地方多次使用注解。</p>
-
-<h4><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-target/">@Target</a></h4>
-
-<p>用于指定此注解可以应用到哪些程序元素上面，如类和接口，函数，属性和表达式。</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-c-l-a-s-s.html#kotlin.annotation.AnnotationTarget.CLASS">AnnotationTarget.CLASS</a> - 类型，包括类型原型（classes），接口，对象，注解类型</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-p-r-o-p-e-r-t-y.html#kotlin.annotation.AnnotationTarget.PROPERTY">AnnotationTarget.PROPERTY</a> - 属性</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-f-i-e-l-d.html#kotlin.annotation.AnnotationTarget.FIELD">AnnotationTarget.FIELD</a> - 域变量</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-l-o-c-a-l_-v-a-r-i-a-b-l-e.html#kotlin.annotation.AnnotationTarget.LOCAL_VARIABLE">AnnotationTarget.LOCAL_VARIABLE</a> - 局部变量（本地变量）</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-v-a-l-u-e_-p-a-r-a-m-e-t-e-r.html#kotlin.annotation.AnnotationTarget.VALUE_PARAMETER">AnnotationTarget.VALUE_PARAMETER</a> - 参数</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-c-o-n-s-t-r-u-c-t-o-r.html#kotlin.annotation.AnnotationTarget.CONSTRUCTOR">AnnotationTarget.CONSTRUCTOR</a> - 构造函数</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-f-u-n-c-t-i-o-n.html#kotlin.annotation.AnnotationTarget.FUNCTION">AnnotationTarget.FUNCTION</a> - 函数</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-p-r-o-p-e-r-t-y_-g-e-t-t-e-r.html#kotlin.annotation.AnnotationTarget.PROPERTY_GETTER">AnnotationTarget.PROPERTY_GETTER</a> - 属性的getter</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-p-r-o-p-e-r-t-y_-s-e-t-t-e-r.html#kotlin.annotation.AnnotationTarget.PROPERTY_SETTER">AnnotationTarget.PROPERTY_SETTER</a> - 属性的setter</li>
-</ul>
-
-
-<h4>@Retention</h4>
-
-<p>指定注解信息保存到代码生命周期的哪一阶段，编译前，编译时还是运行时。默认值是运行时，也即在运行时注解是可见的。</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-retention/-s-o-u-r-c-e.html">AnnotationRetention.SOURCE</a> - 只在源码过程中保留，并不会出现在编译后的class中（二进制文件中）。</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-retention/-b-i-n-a-r-y.html">AnnotationRetention.BINARY</a> - 会在class中保留，但对于运行时并不可见，也就是通过反射无法得到注解。</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-retention/-r-u-n-t-i-m-e.html">AnnotationRetention.RUNTIME</a> - 注解会保留到运行时，运行时的操作如反射可以解析注解，这是默认的@Rentention值。</li>
-</ul>
-
-
-<h3>构造方法（Constructors）</h3>
-
-<p>与Java很不同的是Kotlin的注解更加的像常规的类（class），注解也可以有构造函数：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">annotation</span> <span class="k">class</span> <span class="nc">Special</span><span class="p">(</span><span class="k">val</span> <span class="py">why</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Special</span><span class="p">(</span><span class="s">&quot;example&quot;</span><span class="p">)</span> <span class="k">class</span> <span class="nc">Foo</span> <span class="p">{}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>构造函数可以使用的参数包括：</p>
-
-<ul>
-<li>基础数据类型Int，Long，Float和String等</li>
-<li>类型原型（即class，如Foo::class）</li>
-<li>枚举类型</li>
-<li>其他注解类型</li>
-<li>由以上类型组成的数组</li>
-</ul>
-
-
-<p>注意不能有可能为空（如String?）的类型，当然也不可以传递null给注解的构造函数。还有，如果用其他注解作为参数时，注解名字前就不用再加『@』了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">annotation</span> <span class="k">class</span> <span class="nc">ReplaceWith</span><span class="p">(</span><span class="k">val</span> <span class="py">expression</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">annotation</span> <span class="k">class</span> <span class="nc">Deprecated</span><span class="p">(</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">message</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">replaceWith</span><span class="p">:</span> <span class="n">ReplaceWith</span> <span class="p">=</span> <span class="n">ReplaceWith</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">))</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>注解的实例化（Instantiation）</h3>
-
-<p>在Kotlin中可以通过调用注解的构造函数来实例化一个注解来使用。而不必非要像Java那样用反射接口去获取。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">annotation</span> <span class="k">class</span> <span class="nc">InfoMarker</span><span class="p">(</span><span class="k">val</span> <span class="py">info</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">fun</span> <span class="nf">processInfo</span><span class="p">(</span><span class="n">marker</span><span class="p">:</span> <span class="n">InfoMarker</span><span class="p">):</span> <span class="n">Unit</span> <span class="p">=</span> <span class="n">TODO</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">Array</span><span class="p">&lt;</span><span class="n">String</span><span class="p">&gt;)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">args</span><span class="p">.</span><span class="n">isNotEmpty</span><span class="p">())</span>
-</span><span class='line'>        <span class="n">processInfo</span><span class="p">(</span><span class="n">getAnnotationReflective</span><span class="p">(</span><span class="n">args</span><span class="p">))</span>
-</span><span class='line'>    <span class="k">else</span>
-</span><span class='line'>        <span class="n">processInfo</span><span class="p">(</span><span class="n">InfoMarker</span><span class="p">(</span><span class="s">&quot;default&quot;</span><span class="p">))</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>注解解析</h2>
-
-<p>Kotlin是基于JVM的编程语言，最终要编译成为字节码运行在JVM上面，所以注解的解析与Java语言注解解析是一样的，可以在运行时用反射API来解析注解。关于Java注解解析可以<a href="http://toughcoder.net/blog/2024/03/24/java-annotations-made-easy/">参考另一篇文章</a>，因为运行时注解解析用处并不大，并且也不复杂，看一个简单&#127792;就可以了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">Item</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">@Positive</span> <span class="k">val</span> <span class="py">amount</span><span class="p">:</span> <span class="n">Float</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">@AllowedNames</span><span class="p">([</span><span class="s">&quot;Alice&quot;</span><span class="p">,</span> <span class="s">&quot;Bob&quot;</span><span class="p">])</span> <span class="k">val</span> <span class="py">name</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">val</span> <span class="py">fields</span> <span class="p">=</span> <span class="n">item</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">.</span><span class="n">declaredFields</span>
-</span><span class='line'><span class="k">for</span> <span class="p">(</span><span class="n">field</span> <span class="k">in</span> <span class="n">fields</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">for</span> <span class="p">(</span><span class="k">annotation</span> <span class="k">in</span> <span class="n">field</span><span class="p">.</span><span class="n">annotations</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">field</span><span class="p">.</span><span class="n">isAnnotationPresent</span><span class="p">(</span><span class="n">AllowedNames</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">val</span> <span class="py">allowedNames</span> <span class="p">=</span> <span class="n">field</span><span class="p">.</span><span class="n">getAnnotation</span><span class="p">(</span><span class="n">AllowedNames</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">)</span><span class="o">?.</span><span class="n">names</span>
-</span><span class='line'>         <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>注解处理器</h2>
-
-<p>注解是元编程的一种方式，它最大的威力是在编译前进行代码处理和代码生成。除了注解的定义和使用外，更为关键的注解的处理需要用到注解处理器（Annotation Processor），并且要配合编译器插件<a href="https://kotlinlang.org/docs/kapt.html">kapt</a>和<a href="https://kotlinlang.org/docs/ksp-overview.html">KSP</a>来使用。</p>
-
-<p>需要注意，因为注解是JVM支持的特性，在编译时需要借助javac编译器，所以只有运行目标是JVM时注解才有效。因为Kotlin是支持编译为不同运行目标的，除了JVM外，还有JavaScript和Native。</p>
-
-<h3>实现注解处理器</h3>
-
-<p>与Java的注解处理器类似，在定义好注解后，还需要实现一个注解处理器，以对注解进行处理。一般情况下实现AbstractProcessor就可以了。在其process方法中过滤出来想要处理的注解进行处理，比如使用<a href="https://github.com/square/kotlinpoet">KotlinPoet</a>生成代码。</p>
-
-<p>另外，还要注意，注解处理器必须在一个单独的module中，然后添加为使用此注解module的依赖，这是因为注解的处理是在编译前，所以处理器需要在正式编译前就已经编译好。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">net.toughcoder</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">import</span> <span class="nn">javax.annotation.processing.*</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">javax.lang.model.element.*</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">javax.tools.Diagnostic</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@SupportedAnnotationTypes</span><span class="p">(</span><span class="s">&quot;com.example.MyAnnotation&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="n">@SupportedSourceVersion</span><span class="p">(</span><span class="n">SourceVersion</span><span class="p">.</span><span class="n">RELEASE_8</span><span class="p">)</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">MyAnnotationProcessor</span> <span class="p">:</span> <span class="n">AbstractProcessor</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">process</span><span class="p">(</span><span class="n">annotations</span><span class="p">:</span> <span class="n">MutableSet</span><span class="p">&lt;</span><span class="k">out</span> <span class="n">TypeElement</span><span class="p">&gt;,</span> <span class="n">roundEnv</span><span class="p">:</span> <span class="n">RoundEnvironment</span><span class="p">):</span> <span class="n">Boolean</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">for</span> <span class="p">(</span><span class="k">annotation</span> <span class="p">:</span> <span class="n">annotations</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">for</span> <span class="p">(</span><span class="n">element</span> <span class="p">:</span> <span class="n">roundEnv</span><span class="p">.</span><span class="n">getElementsAnnotatedWith</span><span class="p">(</span><span class="k">annotation</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">myAnnotation</span> <span class="p">=</span> <span class="n">element</span><span class="p">.</span><span class="n">getAnnotation</span><span class="p">(</span><span class="n">MyAnnotation</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">)</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">message</span> <span class="p">=</span> <span class="s">&quot;Processing element with annotation MyAnnotation(value = ${myAnnotation.value})&quot;</span>
-</span><span class='line'>                <span class="n">processingEnv</span><span class="p">.</span><span class="n">getMessager</span><span class="p">().</span><span class="n">printMessage</span><span class="p">(</span><span class="n">Diagnostic</span><span class="p">.</span><span class="n">Kind</span><span class="p">.</span><span class="n">NOTE</span><span class="p">,</span> <span class="n">message</span><span class="p">,</span> <span class="n">element</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="k">return</span> <span class="k">true</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>从例子中可以看到，其实Kotlin中的注解处理器（Processor）直接就是用的Java的，所以在用的时候最好加上Java语言的版本。</p>
-
-<h3>注册注解处理器</h3>
-
-<p>为能正常使用注解处理器，需要把注解处理器放在一个单独的Module里，并作为其他module的依赖，这样能确保它在编译被依赖项时正常使用，被依赖项也即注解使用的地方。</p>
-
-<p>需要在处理器module中与代码平级的文件夹创建resources文件夹，创建一个子文件夹META-INF，再在META-INF创建一个子文件services，在里面创建一个文件名为『javax.annotation.processing.Processor』，然后把实现的注解处理器的完整类名，写在这个文件的第一行：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// file: resources/META-INF/services/javax.annotation.processing.Processor</span>
-</span><span class='line'><span class="n">net</span><span class="p">.</span><span class="n">toughcoder</span><span class="p">.</span><span class="n">MyAnnotationProcessor</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>使用注解处理器</h3>
-
-<p><img src="https://bigknol.com/wp-content/uploads/2023/07/android-ksp-kapt-768x439.png" alt="" /></p>
-
-<p>需要做两个事情，一个是把注解处理器添加为其他项目或者module的依赖。然后再用<a href="https://kotlinlang.org/docs/kapt.html">专门处理注解处理器的编译器插件</a>使用注解处理器。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Groovy'><span class='line'><span class="n">dependencies</span> <span class="o">{</span>
-</span><span class='line'>    <span class="n">implementation</span><span class="o">(</span><span class="n">kotlin</span><span class="o">(</span><span class="s1">&#39;stdlib&#39;</span><span class="o">))</span>
-</span><span class='line'>    <span class="n">kapt</span> <span class="s1">&#39;net.toughcoder:my-annotation-processor:1.0.0&#39;</span>
-</span><span class='line'><span class="o">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">kapt</span> <span class="o">{</span>
-</span><span class='line'>    <span class="n">useBuildCache</span> <span class="o">=</span> <span class="kc">true</span>
-</span><span class='line'>    <span class="n">annotationProcessors</span> <span class="o">=</span> <span class="o">[</span><span class="s1">&#39;net.toughcoder:my-annotation-processor:1.0.0&#39;</span><span class="o">]</span>
-</span><span class='line'><span class="o">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>总结</h2>
-
-<p>本文介绍了Kotlin中注解的基本语法、使用方法和处理过程。通过自定义注解处理器，我们可以在编译时处理注解并生成相应的代码或执行其他任务。注解是Kotlin编程中的核心特性，它可以帮助我们提高代码的可读性、可维护性和可扩展性。大部分的注解都在编译时，也不会对性能产生影响，所以可以放心大胆的用注解来提升开发效率。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/annotations.html">Annotations</a></li>
-<li><a href="https://www.baeldung.com/kotlin/annotations">Kotlin Annotations</a></li>
-<li><a href="https://kt.academy/article/ak-annotation-processing">Annotation Processing</a></li>
-<li><a href="https://www.kodeco.com/8574679-annotation-processing-supercharge-your-development">Annotation Processing: Supercharge Your Development</a></li>
 </ul>
 
 ]]></content>
