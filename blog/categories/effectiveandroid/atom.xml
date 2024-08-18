@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-08-12T22:46:13+08:00</updated>
+  <updated>2024-08-18T12:15:53+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,240 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『损则有孚』| Lifecycle]]></title>
+    <link href="http://toughcoder.net/blog/2024/08/18/jetpack-compose-lifecycle/"/>
+    <updated>2024-08-18T12:14:35+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/08/18/jetpack-compose-lifecycle</id>
+    <content type="html"><![CDATA[<blockquote><p>这篇文章大部分是<a href="https://developer.android.com/develop/ui/compose/lifecycle">官方文档</a>的翻译，但并不是严格的翻译，同时也加入了笔者自己的理解。</p></blockquote>
+
+<p>通过前面的一系列文章我们已经基本掌握了使用Jetpack Compose来构建UI的方法，在接下来的几篇文章中将重点转移到Compose本身，理解一下Compose是如何把一坨坨的函数（Composables）转化成为目标平台UI的。先从composable的生命周期开始。</p>
+
+<p><a href=""><img src="https://koenig-media.raywenderlich.com/uploads/2022/05/LifecycleOfComposablesInJetpackCompose-twitter.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p><strong>注意：</strong> 这里的生命周期是指Compose中的基本单元composable函数的生命周期，与目标平台（如Android）的生命周期不是一个概念，没有关系。</p>
+
+<h2>概述</h2>
+
+<p>在前面<a href="https://juejin.cn/post/7376094685495001139">讲解状态（State）的文章</a>中提到过，composable函数是Jetpack Compose的基本单元，运行composables就是组合（Composition），组合将会变成应用的UI。</p>
+
+<p>当Jetpack Compose首次运行composables时，也即首次组合（Initial composition），它会追踪在组合中用来描述UI的composables。之后，当有状态变化时，Jetpack Compose会安排重组。重组就是重新执行状态发生变化的composables以作为对状态变化的响应，然后再更新组合体现变更。</p>
+
+<p>组合仅能在首次组合过程中生成然后在重组中更新。修改组合的唯一方式就是通过重组。</p>
+
+<h2>生命周期定义</h2>
+
+<p>一个composable的生命周期可以用三个事件来定义：进入组合，重组，离开组合。</p>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-composition.png" alt="lifecycle" /></p>
+
+<blockquote><p>图1. 组合中的一个composable的生命周期：进入组合，没有重组或者重组多次，最后离开组合。</p></blockquote>
+
+<p>重组通常都是由状态对象发生变化触发的。Compose会追踪这些状态然后执行在组合中读取这些状态的所有composables，以及被这些composables调用的且无法被跳过的composables。</p>
+
+<p><strong>注意：</strong> Composable的生命周期较View系统和Android平台的Activity以及Fragment要相对简单一些。如果一个composable需要处理外部的资源或者管理更为复杂的生命周期，可以使用副作用（Side Effects）。</p>
+
+<p>如果一个composable被调用了多次，就会有多个实例被放入到组合之中。每一次调用都有独立的属于它自己的生命周期。来看一个例子：</p>
+
+<pre><code class="Kotlin">@Composable
+fun MyComposable() {
+    Column {
+        Text("Hello")
+        Text("World")
+    }
+}
+</code></pre>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-hierarchy.png" alt="composition" /></p>
+
+<blockquote><p>图2. 在组合中MyComposable的可视化表示。如果一个composable被调用了多次，会在组合中生成多个实例。图中不同颜色的元素代表不同的实例。</p></blockquote>
+
+<h2>剖析组合中的composables</h2>
+
+<p>组合中一个composable实例是用其调用点来标识的。Compose编译器认为每个调用点都是不一样的。从多个调用点调用composables会在组合中创建多个实例。</p>
+
+<p><strong>关键术语：</strong> 调用点指的是composable被调用的代码位置。调用点会影响组合，进而影响最终UI。</p>
+
+<p>在重组过程中，如果一个composable调用了与其上一次重组中调用的不同的composables，Compose会标识出哪些composables已调用过，哪些还未被调用过，对于两次组合中都调用了的composables，如果它们的输入没有变化则Compose不会予以执行。</p>
+
+<p>因此，给关联到composable的副作用（各种Side Effects）指定标识就显得龙为重要，这样它们能成功的执行完成，而不是每次重组时都重新启动。</p>
+
+<p>对于下面这个例子：</p>
+
+<pre><code class="Kotlin">@Composable
+fun LoginScreen(showError: Boolean) {
+    if (showError) {
+        LoginError()
+    }
+    LoginInput() // This call site affects where LoginInput is placed in Composition
+}
+
+@Composable
+fun LoginInput() { /* ... */ }
+
+@Composable
+fun LoginError() { /* ... */ }
+</code></pre>
+
+<p>上面的代码中，函数LoginScreen会在一定条件下调用函数LogginError，并且总是会调用函数LoginInput。每个调用都有一个独一无二的调用点和代码位置，编译器正是用这些信息来独一无二的标识每个composable。
+<img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-showerror.png" alt="recomposition" /></p>
+
+<blockquote><p>图3. 在组合中，当有状态变化和重组发生时，LoginScreen的可视化展示。相同的颜色元素代表没有被重组。</p></blockquote>
+
+<p>尽管LoginInput从第一个被调用的函数变成了第二个被调用的函数，它的实例在重组中得以留存。并且，因为LoginInput并没有在重组之间发生变化的参数，Compose会跳过对LoginInput的再次调用。</p>
+
+<h2>提供额外的信息以优化重组</h2>
+
+<p>多次调用一个composable会在组合中添加多个实例。当在同一个调用点多次调用同一个composable时，因为Compose没有可用的信息来独一无二的标识每个调用，所以composable的执行顺序被用以区别这些composable实例。有些时候这也够用了，但有些时候这会导致一些非预期的行为。</p>
+
+<pre><code class="Kotlin">@Composable
+fun MoviesScreen(movies: List&lt;Movie&gt;) {
+    Column {
+        for (movie in movies) {
+            // MovieOverview composables are placed in Composition given its
+            // index position in the for loop
+            MovieOverview(movie)
+        }
+    }
+}
+</code></pre>
+
+<p>在上面的代码中，Compose会用执行顺序来区别调用的composable实例。如果一个新的数据元素movie被添加到了列表的底部（最后面），Compose可以复用已经在组合中的实例，因为它们的位次没有变化，故而这些composable的输入数据元素movie并不会变化，也就是说因为只在最后添加，先前存在的实例与其数据还是能够对应得上的。</p>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-newelement-bottom.png" alt="no_key" /></p>
+
+<blockquote><p>图4. 当一个新数据元素moviei添加到列表底部后时，组合中MovieScreen的可视化表示。组合中函数MovieOverview的实例会被复用。相同颜色的元素表示未被重组。</p></blockquote>
+
+<p>然而，如果输入列表的变化是在其顶部添加新元素，或者在中间添加新元素，或者有移除，或者变化元素顺序时，就会对列表中位置发生变化的所有MovieOverview进行重组。如果有储如在MovieOverview中获取电影图片的副作用函数的话，这些仅因位置改变而发生的重组就特别重要了。因为重组会影响副作用函数，如果副作用正在进行中，会被取消然后重新启动。</p>
+
+<pre><code class="Kotlin">@Composable
+fun MovieOverview(movie: Movie) {
+    Column {
+        // Side effect explained later in the docs. If MovieOverview
+        // recomposes, while fetching the image is in progress,
+        // it is cancelled and restarted.
+        val image = loadNetworkImage(movie.url)
+        MovieHeader(image)
+
+        /* ... */
+    }
+}
+</code></pre>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-newelement-top-all-recompose.png" alt="side_effect" /></p>
+
+<blockquote><p>图5. 新元素添加到列表中时组合中MovieScreen的可视化表示。MovieScreen实例无法复用，所有的副作用会重启。不同的颜色代表发生了重组。</p></blockquote>
+
+<p>理想情况下，应该让函数MovieScreen的实例标识与其数据项的标识联系起来。如果列表数据项顺序有变化，最为想理的办法是也把组合树中的对应的函数实例进行次序调整，而不是进行重组（前面说了次序作为函数实例的标识，次序变了，就要使用新位置的数据项调用composable进行重组）。Compose给我们提供了一个方法用以标识组会树中的函数实例：即<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#key(kotlin.Array,kotlin.Function0">函数key</a>)。</p>
+
+<p>把代码块放入函数key里面，再传给函数key一些数据，这些数据会被组合起来以标识组合中的函数实例。传给函数key的数据不必是全局唯一的，它只需要在key所在的调用点是唯一的就行。比如在前面例子中，每个数据项movie需要有一个唯一的标识，它能在这个列表中唯一标识一部电影就可以了：</p>
+
+<pre><code class="Kotlin">@Composable
+fun MoviesScreenWithKey(movies: List&lt;Movie&gt;) {
+    Column {
+        for (movie in movies) {
+            key(movie.id) { // Unique ID for this movie
+                MovieOverview(movie)
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>像上面用了key以后，无论列表怎么变化，Compose都能辩识出具体composable实例，然后加以复用：
+<img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-newelement-top-keys.png" alt="key" /></p>
+
+<blockquote><p>图6. 当新数据元素添加到列表时组合中MovieScreen的可视化展示。因为有了唯一标识，Compose能识别出哪些实例未发生变化，加以复用，它们附带的副作用会继续执行。</p></blockquote>
+
+<p><strong>关键点：</strong> 适度的使用函数key来帮助Compose唯一标识函数实例。特别是针对在同一个调用点大量调用同一个composable时，比如在各种集合性布局中。</p>
+
+<p>有些composable有更为友好的key支持方法。比如像LazyColumn它可以直接在其items DSL中传入一个lambda作为key：</p>
+
+<pre><code class="Kotlin">@Composable
+fun MoviesScreenLazy(movies: List&lt;Movie&gt;) {
+    LazyColumn {
+        items(movies, key = { movie -&gt; movie.id }) { movie -&gt;
+            MovieOverview(movie)
+        }
+    }
+}
+</code></pre>
+
+<h2>重组时跳过composable的策略</h2>
+
+<p>在重组过程中，一些具备条件的composable函数可以让Compose跳过他们的执行，如果它们的输入参数较前一次组合时没有任何变化。
+除了以下情况外，就可以说一个composable函数具备跳过条件：</p>
+
+<ul>
+<li>函数有返回值（non-Unit return type）</li>
+<li>函数使用了注解&#64;NonRestartableComposable或者&#64;NonSkippableComposable修饰</li>
+<li>必需的参数是一个非稳定类型（non-stable type）</li>
+</ul>
+
+
+<p>前两个都好理解，接下来重点看第三个情况。一个类型要想成为稳定的（stable），必须符合以下约定：</p>
+
+<ul>
+<li>对于两个相内实例来说，对其们使用equals方法的返回值必须永远相同</li>
+<li>如果一个类型的公开属性发生变化，组合会得到通知</li>
+<li>所有公开属性类型也必须是稳定的</li>
+</ul>
+
+
+<p>有一些重要的常见类型符合这个约定，Compose编译器会把它们当成稳定的类型，尽管他们并没有使用注解&#64;Stable显式地标注为稳定的：</p>
+
+<ul>
+<li>所有的基础数据类型：布尔（Boolean），整数（Int），长整数（Long），浮点（Float），字符（Char）等</li>
+<li>字符串（String）</li>
+<li>所有的函数类型（lambdas）</li>
+</ul>
+
+
+<p>所有这些类型都能符合稳定约定，因为他们都是不可变类型。因为不可变类型实例不会改变，它们不会通知组合说值有所改变，因此就能符合上述约定。</p>
+
+<p><strong>注意：</strong> 所有的整体不可变类型都可以安全地当成稳定的类型。</p>
+
+<p>一个值得注意的类型是可变状态类型（MutableState），虽然是稳定的但却可变可修改。如果MutableState中持有一个值，这个状态对象被认为是稳定的，因为State属性.value发生的任何变化都会通知给Compose。</p>
+
+<p>当作为传递给一个composable函数参数的所有类型都是稳定的（stable）时，这些参数的值会基于它们在UI树中的函数位置进行等值比较（equality）。从前一次组合起如果值未变化就会跳过其重组。换句话说输入参数的类型是稳定的（stable）是一个大前提，只有稳定的类型比较等值才有意义。</p>
+
+<p><strong>关键点：</strong> 如果一个composable的输入是稳定的且未有变化，Compose就会跳过它的重组。等值比较使用的是方法equals。</p>
+
+<p>仅当Compose能够证明一个类型是稳定的时，才会把一个类型当作稳定的。例如，接口（interface）通常认为是不稳定的，拥有可变公开属性的类型，虽然这些属性的实现可以是不可变的，但这种类型也认为是不稳定的。</p>
+
+<p>如果Compose无法推断出一个类型是不是稳定的，但是想强制它被当作稳定的类型，可以使用注解&#64;Stable来标注。</p>
+
+<pre><code class="Kotlin">// Marking the type as stable to favor skipping and smart recompositions.
+@Stable
+interface UiState&lt;T : Result&lt;T&gt;&gt; {
+    val value: T?
+    val exception: Throwable?
+
+    val hasError: Boolean
+        get() = exception != null
+}
+</code></pre>
+
+<p>上面的代码片段中，因为UiState是一个接口，会被当成不稳定的类型。通过添加注解&#64;Stable，告诉Compose它是稳定的，让Compose进行智能重组。这也意味着，当接口类型用于参数类型时，Compose会把接口的所有具体实现当成稳定的类型。</p>
+
+<p><strong>关键点：</strong> 如果Compose无法推断出类型的稳定性，使用注解&#64;Stable来标注以让Compose进行智能重组。</p>
+
+<h2>总结</h2>
+
+<p>Composable函数是Compose的基本单元，通过此文我们理解了一个composable的生命周期，并对Compose的重组机制做了介绍，以及如何更好的让Compose做智能重组。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/lifecycle">Lifecycle of composables</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『密云不雨』| Navigation]]></title>
@@ -1087,224 +1321,6 @@ fun AnnotatedClickableText() {
 <ul>
 <li><a href="https://developer.android.com/develop/ui/compose/text/user-input">Handle user input</a></li>
 <li><a href="https://developer.android.com/develop/ui/compose/text/user-interactions">Enable user interactions</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『或跃在渊』| Advanced Animations]]></title>
-    <link href="http://toughcoder.net/blog/2024/07/24/advanced-animations-in-compose/"/>
-    <updated>2024-07-24T08:26:32+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/07/24/advanced-animations-in-compose</id>
-    <content type="html"><![CDATA[<p>对于Jetpack Compose来说动画是一个很大的话题，对应的API也比较繁杂，我们在<a href="https://juejin.cn/post/7385758285960609831">前面一篇文章</a>中介绍了最为常用的创建动画的方式，在此基础之上来学习一些更为复杂的动画玩法。</p>
-
-<p><a href=""><img src="https://static.wixstatic.com/media/0d004d_3306bc9db6214c459f675f2a417cc718~mv2.jpeg/v1/fit/w_1000%2Ch_600%2Cal_c%2Cq_80/file.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>动画的本质：参数随时间变化</h2>
-
-<p>前面的文章提到过属性驱动动画，比如<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/package-summary#animateFloatAsState(kotlin.Float,androidx.compose.animation.core.AnimationSpec,kotlin.Float,kotlin.String,kotlin.Function1">animateFloatAsState</a>)，本质上就是让数值随时间变化，数值再作为Composable的属性去驱动变幻，进而产生动画效果。那一坨animate&#42;AsState都是通过一个animateValueAsState函数来实现的，这个函数是一个泛型，它可以把任意的数据类型转成随时间变化的动画状态。所以当遇到自定义的数据类型时，就可以使用animateValueAsState来驱动动画。这些属性动画函数animate&#42;AsState是基于更底层的<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Animatable">Animatable</a>实现的。</p>
-
-<h2>使用Transition来组合属性动画</h2>
-
-<p>当动画比较复杂时，比如涉及多个属性的变化时，如果仍然使用animate&#42;AsState那一坨，虽然也是可以行的，但会让代码和逻辑都混乱不堪，特别是如果要协调多个属性动画时就更为困难。这样实现还有一个更大的问题，那就是无法复用，理论上来说动画与UI应该解耦，即使没有动效UI也是可用的，动效也应该可以应用于不同的UI。</p>
-
-<p>这时就可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Transition">Transition</a>来管理和组合多个属性动画。但是Transition并不是像<a href="https://developer.android.com/reference/android/animation/AnimatorSet">AnimatorSet</a>那样的单纯的管理器，它其实是另一种概念的抽象，意为过渡，从一种状态过渡到另一种状态，状态变化的细节就是各种属性的变化。Transition支持泛型，也就是状态完全自定义，Transition定义了很多变更数值的方法如animateFloat，animateColor，animateDp等等可以用于更新不同的属性数值。前一篇文章中提到的所见即所得的动画函数（AnimatedVisibility，Crossfade和AnimatedContent）都是基于Transition来实现的。而Transition与属性动画函数animate&#42;AsState并不一样，是基于更底层的<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Animation">Animation</a>实现的。</p>
-
-<h3>Transition创建动画的具体步骤</h3>
-
-<p>Transition是对两个不同的状态之间过渡的封装，因此先要定义状态，基于动效的目标和特点定义状态即可，一般用枚举类型就行了，因为状态仅用于代表过渡中的一个时间点，并没有具体的意义。接下来，使用remember函数转成为Compose的State，以便能触发Recomposition，然后调用函数updateTransition来得到当前时刻的过渡状态：</p>
-
-<pre><code class="Kotlin">enum class BoxState {
-    Collapsed,
-    Expanded
-}
-var currentState by remember { mutableStateOf(BoxState.Collapsed) }
-val transition = updateTransition(currentState, label = "box state")
-</code></pre>
-
-<p>这三步是通用的，使用Transition时都一样。然后就是对于当前时刻过渡状态的去定义具体的属性数值，这步也是自定义的，看要实现的动效而定，可以使用扩展函数animate&#42;来得到的具体的数值：</p>
-
-<pre><code class="Kotlin">val rect by transition.animateRect(label = "rectangle") { state -&gt;
-    when (state) {
-        BoxState.Collapsed -&gt; Rect(0f, 0f, 100f, 100f)
-        BoxState.Expanded -&gt; Rect(100f, 100f, 300f, 300f)
-    }
-}
-val borderWidth by transition.animateDp(label = "border width") { state -&gt;
-    when (state) {
-        BoxState.Collapsed -&gt; 1.dp
-        BoxState.Expanded -&gt; 0.dp
-    }
-}
-</code></pre>
-
-<p>最后，把得到的属性数值rect和borderWidth应用到Composable上即可。</p>
-
-<h3>Transition是支持创建子Transition</h3>
-
-<p>对于Composable结构复杂的情况时，还可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Transition#(androidx.compose.animation.core.Transition">createChildTransition</a>.createChildTransition(kotlin.String,kotlin.Function1))来为子布局创建Transition。这样就能够把Transition也按树形关系组织起来，以能让动效更加的协调。</p>
-
-<h3>使用Transition来封装动画</h3>
-
-<p>使用Transition最大的好处在于能够把动效封装起来以能复用：</p>
-
-<pre><code class="Kotlin">enum class BoxState { Collapsed, Expanded }
-
-// Holds the animation values.
-private class TransitionData(
-    color: State&lt;Color&gt;,
-    size: State&lt;Dp&gt;
-) {
-    val color by color
-    val size by size
-}
-
-// Create a Transition and return its animation values.
-@Composable
-private fun updateTransitionData(boxState: BoxState): TransitionData {
-    val transition = updateTransition(boxState, label = "box state")
-    val color = transition.animateColor(label = "color") { state -&gt;
-        when (state) {
-            BoxState.Collapsed -&gt; Color.Gray
-            BoxState.Expanded -&gt; Color.Red
-        }
-    }
-    val size = transition.animateDp(label = "size") { state -&gt;
-        when (state) {
-            BoxState.Collapsed -&gt; 64.dp
-            BoxState.Expanded -&gt; 128.dp
-        }
-    }
-    return remember(transition) { TransitionData(color, size) }
-}
-</code></pre>
-
-<p>创建好的Transition可以用于任意的Composable：</p>
-
-<pre><code class="Kotlin">@Composable
-fun AnimatingBox(
-    modifier: Modifier = Modifier.fillMaxSize()
-) {
-    var boxState by remember { mutableStateOf(BoxState.Expanded) }
-    val transitionData = updateTransitionData(boxState)
-    // UI tree
-    Box(
-        modifier = Modifier
-            .background(transitionData.color)
-            .size(transitionData.size)
-            .clickable {
-                boxState =
-                    if (boxState == BoxState.Expanded) BoxState.Collapsed else BoxState.Expanded
-            }
-    )
-}
-
-@Composable
-fun AnimatingColumn(
-    modifier: Modifier = Modifier.fillMaxSize()
-) {
-    var boxState by remember { mutableStateOf(BoxState.Collapsed) }
-
-    LaunchedEffect(Unit) {
-        boxState = BoxState.Expanded
-    }
-
-    val transitionData = updateTransitionData(boxState)
-    Column(
-        modifier = Modifier
-            .background(transitionData.color)
-            .size(transitionData.size)
-    ) {
-        Text("Apply to a column")
-    }
-}
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/animation/anim_transition.gif" alt="transition_demo" /></p>
-
-<p>可以看一看<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/package-summary#AnimatedVisibility(kotlin.Boolean,androidx.compose.ui.Modifier,androidx.compose.animation.EnterTransition,androidx.compose.animation.ExitTransition,kotlin.Function1">AnimatedVisibility</a>)以及<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/package-summary#Crossfade(kotlin.Any,androidx.compose.ui.Modifier,androidx.compose.animation.core.FiniteAnimationSpec,kotlin.String,kotlin.Function1">Crossfade</a>)和<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/package-summary#AnimatedContent(kotlin.Any,androidx.compose.ui.Modifier,kotlin.Function1,androidx.compose.ui.Alignment,kotlin.Function2">AnimatedContent</a>)的实现，它们都是基于Transition实现的。</p>
-
-<h2>动画的底层API</h2>
-
-<p>到现在我们已经学习了很多创建动画的方式，从封装的层次来说，最上层是所见即所得动画函数如AnimatedVisibility，Crossfade和AnimatedContent，它们是基于<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Transition">Transition</a>实现的；属性动画函数animate&#42;AsState是基于Animatable实现的。这些函数都是Composables，也就是必须在Composition环境中才能使用。而Animatable和Transition都是基于最底层的Animation实现的，Animatable和Animation类似于View系统中的<a href="https://developer.android.com/reference/android/animation/Animator">Animator</a>，管理着某种值随时间在两个状态之间变化。它们两个只与值和时间有关，与Composition无关，因此可以在任意上下文中使用。可以用官方提供的一张图，来搞清楚API之间的关系：</p>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/animation-low-level.svg" alt="anim_api_level" /></p>
-
-<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Animation">Animation</a>是最为底层的API，它只管理着值随时间的变化，其余的事情像动画是否已开始，是否已结束都需要调用者自己管理。它使用起来相当的麻烦，除非有必要否则一般不建议直接使用这个对象，本文也不再讨论它。</p>
-
-<p>可以重点研究一下<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Animatable">Animatable</a>，它是基于Animation的，但是封装的较为完整。它是基于协程的单个数值变化动画，它能保证数值的变化是连续的，不过它的主要方法如<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Animatable#animateTo(kotlin.Any,androidx.compose.animation.core.AnimationSpec,kotlin.Any,kotlin.Function1">animateTo</a>)都是suspend的，意味着要在协程上下文中调用，比如启动动画就要用Animatable：</p>
-
-<pre><code class="Kotlin">val color = remember { Animatable(Color.Gray) }
-LaunchedEffect(ok) {
-    color.animateTo(if (ok) Color.Green else Color.Red)
-}
-Box(Modifier.fillMaxSize().background(color.value))
-</code></pre>
-
-<p>使用Animatable可以创建出很多富有创意的复杂动画，比如说多米诺式的顺次动画，以及并发动画。</p>
-
-<h3>多个部件顺次动画</h3>
-
-<p>多个部件的顺次动画也就是依次发生的动画，比如A，B，和C三个动画作用于不同的UI部件，A先启动，结束后B接着启动，结束后C再启动。比较常规的方式是使用动画回调，在前一个的结束回调中启动下一个，或者使用延时启动，B的启动延时设置为A的动画时长。</p>
-
-<p>借助于Animatable，可以有更为优雅的方案，在同一个协程中依次调用不同的Animatable的animateTo函数就可以，让几个不同的Animatable依次启动了：</p>
-
-<pre><code class="Kotlin">val alphaAnimation = remember { Animatable(0f) }
-val yAnimation = remember { Animatable(0f) }
-
-LaunchedEffect("animationKey") {
-    alphaAnimation.animateTo(1f)
-    yAnimation.animateTo(100f)
-    yAnimation.animateTo(500f, animationSpec = tween(100))
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/animations/multiple_properties_sequential.gif" alt="anim_sequential_flow" />
-注意，这个动图展示的是顺次动画的流程图，而非一个案例的效果。</p>
-
-<h3>多个部件并发动画</h3>
-
-<p>类似的还有并发动画，就是作用于多个不同的部件的动画同时启动，这个其实相较于顺次动画要容易一些，因为我们用Transition组合多个属性动画实际上就是并发动画。</p>
-
-<p>除了Transition以外，用多个Animatable也可以，我们只需要启动多个协程去执行animateTo即可：</p>
-
-<pre><code class="Kotlin">val alphaAnimation = remember { Animatable(0f) }
-val yAnimation = remember { Animatable(0f) }
-
-LaunchedEffect("animationKey") {
-    launch {
-        alphaAnimation.animateTo(1f)
-    }
-    launch {
-        yAnimation.animateTo(100f)
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/animations/multiple_properties.gif" alt="anim_concurrent_flow" />
-注意，这个是并发动画的流程图，而非动画效果。</p>
-
-<h2>集合性布局中的元素项动画</h2>
-
-<p>对于集合性布局来说，当其元素项发生变化时，会触发相应的动画效果，这就是<a href="https://developer.android.com/develop/ui/compose/lists#item-animations">item animations</a>。我们只需要1）为每个子元素项定义一个集合中唯一标识的key；2）然后再调用扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/LazyItemScope#(androidx.compose.ui.Modifier">Modifier.aniamteItem</a>.animateItem(androidx.compose.animation.core.FiniteAnimationSpec,androidx.compose.animation.core.FiniteAnimationSpec,androidx.compose.animation.core.FiniteAnimationSpec))；即可以在元素项变化时触发动画，它会子元素项出现，消失和发生替换时触发动画效果。</p>
-
-<h2>动画最佳实践</h2>
-
-<p>我们学习了这么多创建动画的方式，在实际项目中要遵守几个原则：1）尽可能优先使用Compose封装好的动画函数，不要重复造轮子；2）第二个就是要为每个动画设置一个label，所有的动画API都会有一个label参数，要尽可能为每个动画设置一个唯一的label，这个是用于Android Studio调试动画时的唯一标识。</p>
-
-<p>再有就是动画会触发Recomposition，re-layout和re-draw，为了尽可能的避免减少re-layout和re-draw，要尽可能的使用已封装好的函数来修改属性，比如使用Modifier的扩展函数（如<a href="https://developer.android.com/develop/ui/compose/graphics/draw/modifiers">Modifier.graphicsLayer {}</a>），而不是直接去改size或者padding。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://proandroiddev.com/animating-inside-and-outside-the-box-with-jetpack-compose-a56eba1b6af6">Animating Inside and Outside the Box with Jetpack Compose</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/animation/value-based">Value-based animations</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/animation/vectors">Animated vector images in Compose</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/animation/advanced">Advanced animation example: Gestures</a></li>
 </ul>
 
 ]]></content>
