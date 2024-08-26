@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-08-18T13:07:54+08:00</updated>
+  <updated>2024-08-26T21:31:10+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,363 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『龙战于野』| Side Effects]]></title>
+    <link href="http://toughcoder.net/blog/2024/08/23/jetpack-compose-side-effects/"/>
+    <updated>2024-08-23T07:56:53+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/08/23/jetpack-compose-side-effects</id>
+    <content type="html"><![CDATA[<blockquote><p>主要翻译自官方文档<a href="https://developer.android.com/develop/ui/compose/side-effects">Side-effects in Compose</a>，并不是直译，有些细微调整。</p></blockquote>
+
+<p>一个<strong>副作用</strong>是指发生在composable函数范围之外的应用状态的一个变化。由于composable函数的生命周期和诸如不可预测的重组，以不同的顺序执行composable的重组，或者重组可能会被跳过等性质，理论上composable应该<a href="https://juejin.cn/post/7379437165486112805">要是无副作用</a>的。</p>
+
+<p><a href=""><img src="https://ac.appcircle.io/wp-content/uploads/2022/10/compose-side-effects-state.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>然而，有些时候副作用是必要的，例如，触发一些诸如显示一个非干扰性提示（snackbar）或者在一定状态条件下跳转到另一个页面，等的一次性的事件时。这些行为应该在一个能够感知composable生命周期的可控的环境中调用。在本文中，你将学习Jetpack Compose提供的几种不同的副作用函数（side effect APIs）。</p>
+
+<h2>副作用的具体使用场景</h2>
+
+<p>如在文章<a href="https://juejin.cn/post/7379437165486112805">降Compose十八掌之『潜龙勿用』| Thinking in Compose</a>中提到的，composables应该尽可能的做到无副作用。当需要对应用状态进行修改时，应该使用副作用API，以便副作用函数以可预测的方式运行。</p>
+
+<blockquote><p><strong>关键点：</strong> 一个作用（effect）是指一个composable函数不会生成UI元素，而是当组合完成时生成副作用。</p></blockquote>
+
+<p>由于Compose中有多种作用，很容易被滥用。要确保在副作用中做的事情是UI相关的并且没有违反『单一数据流原则』。</p>
+
+<blockquote><p><strong>注意：</strong> 一个可响应的UI应该是异步的，Jetpack Compose解决异步的办法是在API级别结合协程而不是使用回调。想要了解更多的协程知识，可以参看<a href="https://juejin.cn/post/7329767824200826918">之前的文章</a>。</p></blockquote>
+
+<h3>LaunchedEffect：在composable的作用域内运行挂起函数</h3>
+
+<p>想要在一个composable的生命周期中执行操作并且需要调用挂起函数，就可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#LaunchedEffect(kotlin.Any,kotlin.coroutines.SuspendFunction1">LaunchedEffect</a>)。当LaunchedEffect进入组合时，它会使用作为参数传入的代码块来启动一个协程。如果LaucnhedEffect离开了组合协程会被取消。如果因不同的key LaunchedEffect被重组了（副作用的重启机制会在后面进行讲解），运行中的协程会被取消掉，一个新的协程会被启动以运行新的挂起函数。</p>
+
+<p>例如，一个可调节延迟的脉冲式透明度的动画：</p>
+
+<pre><code class="Kotlin">// 变化的速率可以调节，可以加快动画（减少间隔）
+var pulseRateMs by remember { mutableStateOf(3000L) }
+val alpha = remember { Animatable(1f) }
+LaunchedEffect(pulseRateMs) { // 速度作为key，这样速度变化时，会重启副作用，动画也会重启
+    while (isActive) {
+        delay(pulseRateMs) // 一定间隔之后显示脉冲动画
+        alpha.animateTo(0f)
+        alpha.animateTo(1f)
+    }
+}
+</code></pre>
+
+<p>在上面的代码中，动画使用了挂起函数<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/delay.html">delay</a>来等待一定的时间。然后，它依次使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Animatable#animateTo(kotlin.Any,androidx.compose.animation.core.AnimationSpec,kotlin.Any,kotlin.Function1">animateTo</a>)展现动画到不可见，再到可见。并在composable的生命周期中不断重复。</p>
+
+<h3>rememberCoroutineScope：获取一个可以在composable之外启动协程的可感知组合的协程作用域</h3>
+
+<p>因为LaunchedEffect是一个composable函数，所以它只能在其他composable函数中调用。如果想要在composable作用域之外启动协程，但又希望限制协程在一定的范围内，以便能在离开组合时协程自动被取消，可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#rememberCoroutineScope(kotlin.Function0">rememberCoroutineScope</a>)。在任何需要手动操控一个或者多个协程的生命周期的时候都应该使用rememberCorountineScope，比如说当用户事件发生时需要取消动画。</p>
+
+<p>rememberCoroutineScope是一个composable函数，返回一个协程作用域（CoroutineScope），这个作用域会被绑定到经组合中它被调用的地点。当离开组合时，这个协程作用域会被取消。</p>
+
+<blockquote><p><strong>译注：</strong> 如果对协程作用域不太熟悉的同学，可以参看<a href="https://juejin.cn/post/7324351711660048411">之前的文章</a>。</p></blockquote>
+
+<p>例如，可以用下面的代码，当点击按扭时显示一个Snackbar（译注：非干扰式提示，类似于Toast）：</p>
+
+<pre><code class="Kotlin">@Composable
+fun MoviesScreen(snackbarHostState: SnackbarHostState) {
+
+    // 创建一个绑定到MoviesScreen生命周期的协程作用域
+    val scope = rememberCoroutineScope()
+
+    Scaffold(
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        }
+    ) { contentPadding -&gt;
+        Column(Modifier.padding(contentPadding)) {
+            Button(
+                onClick = {
+                    // 在作用域中创建一个协程来显示提示。
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Something happened!")
+                    }
+                }
+            ) {
+                Text("Press me")
+            }
+        }
+    }
+}
+</code></pre>
+
+<h3>rememberUpdateState：指向即使值发生变化也不会重启的作用中的一个值</h3>
+
+<p>当参数key中的任何一个发生变化时LaunchedEffect就会重启。然而，在有些情况下我们希望捕获这样作用中的一个值，这个作用不会随着值变化而重启。为了达到这样的效果，需要使用rememberUpdatedState创建一个能被捕获和更新的值的引用。这个方式对于那些含有长时间运行，且重新创建或者重启都非常昂贵之类的操作的副作用是很有用的。</p>
+
+<p>例如，假设你的应用有一个一段时间内消失的加载页面（LandingScreen）。即使这个加载页面被重组了，等待时间副作用和通知已过去了多少时间副作用都不应该被重新启动：</p>
+
+<pre><code class="Kotlin">@Composable
+fun LandingScreen(onTimeout: () -&gt; Unit) {
+
+    // 这个状态永远指向LandingScreen重组后最新的onTimeout函数
+    val currentOnTimeout by rememberUpdatedState(onTimeout)
+
+    // 创建一个与LandingScreen生命周期一致的副作用。即使LandingScreen被重组了，这里的延迟不应该重新开始.
+    LaunchedEffect(true) {
+        delay(SplashWaitTimeMillis)
+        currentOnTimeout()
+    }
+
+    /* 加载页面的内容 */
+}
+</code></pre>
+
+<p>想要创建一个与调用点生命周期一至的副作用，可以把像Unit或者true等永不会改变的常量当作参数。在上面的例子中，使用了LaunchedEffect(true)。为了保证lambda onTimeout中总是包含LandingScreen被重组后的最新值，onTimeout需要使用rememberUpdatedState来包装。返回值，就是代码中的currentOnTimeout应该在副作用中使用。</p>
+
+<blockquote><p><strong>注意：</strong> LaunchedEffect(true)就像while(true)一样诡异。即使有具体的使用场景，也要三思后行，确保确实需要这样做。</p></blockquote>
+
+<h3>DisposableEffect：需要清理工作的副作用</h3>
+
+<p>对于当离开组合或者key发生变化时需要清朝工作的副作用，使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#DisposableEffect(kotlin.Any,kotlin.Function1">DisposableEffect</a>)。如果DisposableEffect的key发生变化，调用的composable需要进行清理副作用，并且重新调用。</p>
+
+<p>作为一个示例，通过使用<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleObserver">LifecycleObserver</a>，你也许想要发送基于平台生命周期事件（Lifecycle events）统计事件数据（译注：这里的生命周期是指Android平台组件的生命周期）。想要在Compose中监听这些事件，使用一个DisposableEffect来在需要时注册和反注册观察者：</p>
+
+<pre><code class="Kotlin">@Composable
+fun HomeScreen(
+    lifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current,
+    onStart: () -&gt; Unit, // 发送'started' 事件
+    onStop: () -&gt; Unit // 发磅 'stopped' 事件
+) {
+    // 保证当前的lambda是最新的
+    val currentOnStart by rememberUpdatedState(onStart)
+    val currentOnStop by rememberUpdatedState(onStop)
+
+    // 如果 `lifecycleOwner` 发生变化，清理并重置副作用函数
+    DisposableEffect(lifecycleOwner) {
+        // 创建一个观察者以触发我们的事件发送回调lambda
+        val observer = LifecycleEventObserver { _, event -&gt;
+            if (event == Lifecycle.Event.ON_START) {
+                currentOnStart()
+            } else if (event == Lifecycle.Event.ON_STOP) {
+                currentOnStop()
+            }
+        }
+
+        // 把观察者添加到生命周期观察者列表里
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        // 当离开组合时，进行清理工作，即把观察者从其列表中移除
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    /* Home screen content */
+}
+</code></pre>
+
+<p>在上面的代码中，副作用会添加一个观察者observer到lifecycleOwner上。如果lifecycleOwner有变动，副作用函数会被清理并且使用新的lifecycleOwner重启。</p>
+
+<p>一个DispoableEffect必须要包含一个onDispose语句作为其代码块的最后一个语句。否则会有编译错误。</p>
+
+<blockquote><p><strong>注意：</strong> 使用一个空的onDispose并不是一个好的做法。要多思考一下是否有更加符合使用场景的副作用函数。</p></blockquote>
+
+<h3>SideEffect：向非Comopse代码发布Compose的状态</h3>
+
+<p>要与非Compose管理的对象共享Compose状态时，使用composable <a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#SideEffect(kotlin.Function0">SideEffect</a>)。使用SideEffect能够保证副作用在每次成功重组后都能得到执行。另一方面，在一个重组保证成功之前执行一个副作用是不正确的，这种场景就会直接在composable中写入副作用。</p>
+
+<p>例如，你的分析库也许允许你通过给后面的统计数据添加自定义的meta data（在此例中是『user properties』）的方式来给用户数据分段。为了建立当前用户的用户类型与统计库之间的联系，可以使用SideEffect来更新此值：</p>
+
+<pre><code class="Kotlin">@Composable
+fun rememberFirebaseAnalytics(user: User): FirebaseAnalytics {
+    val analytics: FirebaseAnalytics = remember {
+        FirebaseAnalytics()
+    }
+
+    // 每次成功组合，用当前用户的用户类型来更新 FirebaseAnalytics，保证
+    // 后面的统计事件能带上userType
+    SideEffect {
+        analytics.setUserProperty("userType", user.userType)
+    }
+    return analytics
+}
+</code></pre>
+
+<h3>produceState：把非Compose状态转化为Compose状态</h3>
+
+<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#produceState(kotlin.Any,kotlin.coroutines.SuspendFunction1">produceState</a>)启动一个受组合管控的协程作用域，其中可以把值转化为状态。用它可以把非Compose状态转化为Compose状态，例如把外部由订阅驱动 的值如Flow，LiveData或者RxJava转化到组合中。</p>
+
+<p>当produceState进入组合时生产者就会被启动，然后当离开组合时被取消。返回的状态会合并：就是说相同的值不会再次触发重组。</p>
+
+<p>尽管produceState会创建协程，它也能用来监听非挂起数据。想要移除对数据的订阅，使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/ProduceStateScope#awaitDispose(kotlin.Function0">awaitDispose</a>)函数。</p>
+
+<p>下面的例子展示如何使用produceState来从网络加载图片。Composable函数loadNextworkImage返回一个可以用在其他composables中的状态：</p>
+
+<pre><code class="Kotlin">@Composable
+fun loadNetworkImage(
+    url: String,
+    imageRepository: ImageRepository = ImageRepository()
+): State&lt;Result&lt;Image&gt;&gt; {
+
+    // 用 Result.Loading 作为初值，创建一个状态 State&lt;T&gt;
+    // 如果 「url」或者「imageRepository」任何一个发生变化，运行中的生产者会被取消
+    // 使用新的输入被重启。
+    return produceState&lt;Result&lt;Image&gt;&gt;(initialValue = Result.Loading, url, imageRepository) {
+
+        // 在协程里，可以调用挂起函数
+        val image = imageRepository.load(url)
+
+        // 使用成功或者失败作为结果 来更新状态
+        // 这会触发读取此状态的composable的重组
+        value = if (image == null) {
+            Result.Error
+        } else {
+            Result.Success(image)
+        }
+    }
+}
+</code></pre>
+
+<blockquote><p><strong>注意：</strong> 带有返回值的composable函数应该以常规的Kotlin函数命名规范进行命名，以小写字符开头的驼峰式。</p></blockquote>
+
+<p><br/></p>
+
+<blockquote><p><strong>关键点：</strong> 进一步的了解，produceState使用了其他的副作用函数！它使用remember { mutableStateOf(initialValue) }来持有返回结果，然后在一个LaunchedEffect中触发生产者代码块。每当生产者代码块中更新了value的值，相应的状态也会被更新。
+开发者也可以基于现有的API来创造想要的副作用函数</p></blockquote>
+
+<h3>derivedStateOf：把一个或者多个状态对象转化为另一个状态</h3>
+
+<p>在Compose中，每次当被观察的状态对象发生变化或者composable的输入有变化时重组就会发生。状态对象或者输入可能变化次数的超过了UI实际的需要，导致了不必要的重组。</p>
+
+<p>当一个composable的输入变化超过了重组所需要时就应该使用函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#derivedStateOf(kotlin.Function0">deriveStateOf</a>)。比较觉的场景是当有些变量频繁的变动，比如滚动位置，但composable仅需要变动超过一定阈值时才需要对其响应。derivedStateOf创建一个新的仅在需要时更新的可观察Compose状态。这样，它就类似于Kotlin Flow中的操作符<a href="https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/distinct-until-changed.html">distinctUntilChanged</a>。</p>
+
+<blockquote><p><strong>注意：</strong> derivedStateOf是比较昂贵的（也即性能开销比较大），应该仅用来减少结果未变化时的不必要的重组。</p></blockquote>
+
+<h4>正确的使用</h4>
+
+<p>下面的代码片段展示一个恰当的使用derivedStateOf的场景：</p>
+
+<pre><code class="Kotlin">@Composable
+// 当参数 messages 变化时, MessageList会被重组. derivedStateOf不会影响这个重组
+fun MessageList(messages: List&lt;Message&gt;) {
+    Box {
+        val listState = rememberLazyListState()
+
+        LazyColumn(state = listState) {
+            // ...
+        }
+
+        // 当第一个可见的元素不是第一个元素时显示按扭。用一个被记忆的衍生状态来最小化不必要的重组
+        val showButton by remember {
+            derivedStateOf {
+                listState.firstVisibleItemIndex &gt; 0
+            }
+        }
+
+        AnimatedVisibility(visible = showButton) {
+            ScrollToTopButton()
+        }
+    }
+}
+</code></pre>
+
+<p>在这个代码片段中，每次第一个可见的元素变化时firstVisibleItemIndex都会变化。当滚动时，它的值会变成0，1，2，3，4，5等等。然而，仅当值大于0时才需要重组。这个更新频次的不匹配意味着是一个使用derivedStateOf的好的场景。</p>
+
+<h4>错误的使用</h4>
+
+<p>一个常见的错误是想当然的认为当需要合并两个状态时，就需要使用derivedStateOf，因为在创建衍生状态。然而这完全是凭空想像的也不是必须的，如下面代码所展示：</p>
+
+<blockquote><p><strong>注意：</strong> 下面的代码展示derivedStateOf不正确的用例。不要这样使用。</p></blockquote>
+
+<pre><code class="Kotlin">// 不要这样用，不正确的derivedStateOf的用法
+var firstName by remember { mutableStateOf("") }
+var lastName by remember { mutableStateOf("") }
+
+val fullNameBad by remember { derivedStateOf { "$firstName $lastName" } } // 很糟糕
+val fullNameCorrect = "$firstName $lastName" // 不正确
+</code></pre>
+
+<p>这段代码中，fullName的更新频次与firstName和lastName是一样的。因此，不会有不必要的重组发生，使用derivedStateOf是多余的。</p>
+
+<h3>snapshotFlow</h3>
+
+<p>使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#snapshotFlow(kotlin.Function0">snapshotFlow</a>)能把状态对象（<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/State">State<T></a> objects）转化为一个冷流（cold Flow）。当被订阅（collected）时snapshotFlow会运行代码块在其中发送它读取到的状态对象。当在snapshotFlow代码块中读取的状态对象发生变化时，Flow会发送新的数据给它的订阅者，如果这个新的数据没有被发送过（这个行为与<a href="https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/distinct-until-changed.html">Flow.distinctUntilChanged</a>是类似的）。</p>
+
+<blockquote><p><strong>译注：</strong> 对Flow不熟悉的同学可以参看<a href="https://juejin.cn/post/7336751931375648820">之前的文章</a>。</p></blockquote>
+
+<p>下面的例子展示一个副作用，用以记录当用户滑动超过列表中首个元素时的统计信息：</p>
+
+<pre><code class="Kotlin">val listState = rememberLazyListState()
+
+LazyColumn(state = listState) {
+    // ...
+}
+
+LaunchedEffect(listState) {
+    snapshotFlow { listState.firstVisibleItemIndex }
+        .map { index -&gt; index &gt; 0 }
+        .distinctUntilChanged()
+        .filter { it == true }
+        .collect {
+            MyAnalyticsService.sendScrolledPastFirstItemEvent()
+        }
+}
+</code></pre>
+
+<p>在上面的代码中，listState.firstVisibleItemIndex会被转化为一个Flow，方便使用Flow操作符带来的便利。</p>
+
+<h2>副作用的重启</h2>
+
+<p>Compose中的一些副作用，像LaunchedEffect，produceState，DispoableEffect，接收不定数量的参数keys，这些参数用于取消正在进行中的副作用和使用新的参数启动新的副作用。</p>
+
+<p>这些API的典型形式是：</p>
+
+<pre><code class="Kotlin">EffectName(restartIfThisKeyChanges, orThisKey, orThisKey, ...) { block }
+</code></pre>
+
+<p>由于这个行为的细微性质，如果用于重启副作用的参数并不是正确的参数时，就会产生问题：</p>
+
+<ul>
+<li>副作用重启次数少于预期可能会产生bug</li>
+<li>重启次数多于预期是冗余的，影响性能</li>
+</ul>
+
+
+<p>首要的原则是，在副作用代码块中使用的可变的和不可变的变量都应该当成composable函数的参数。此外，也可以添加更多的参数以强制重启副作用。如果一个变量的变化不应该导致重启副作用，那这个变量应该用rememberUpdateState包裹起来。如果一个变量因为包裹在remember时没有key而永远不会变化，那么这个变量就应该作为key传给副作用函数。</p>
+
+<blockquote><p><strong>关键点：</strong> 在副作用函数中使用的变量应该添加为函数的参数，或者使用rememberUpdateState包裹起来。</p></blockquote>
+
+<p>在上面展示的DisposbaleEffect代码中，在代码块中使用的变量lifecycleOwner作为副作用函数的一个参数，因为它们的任何变化都会引发重启副作用。</p>
+
+<pre><code class="Kotlin">@Composable
+fun HomeScreen(
+    lifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current,
+    onStart: () -&gt; Unit, // Send the 'started' analytics event
+    onStop: () -&gt; Unit // Send the 'stopped' analytics event
+) {
+    // 这些值在组合中永不会变化，因此用remember包裹起来，以免引发冗余重启
+    val currentOnStart by rememberUpdatedState(onStart)
+    val currentOnStop by rememberUpdatedState(onStop)
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -&gt;
+            /* ... */
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+}
+</code></pre>
+
+<p>currentOnState和currentOnStop不需要作为DisposableEffect的参数key，因为使用了rememberUpdateState它们在组合中始终不会变化。如果不把lifecycleOwner作为参数传递，然后它又发生了变化，HomeScreen会重组，但DisposableEffect不会被清理和重启。这会导致之后使用的都是错误的lifecyleOwner（译注：因为lifecycleOwner可能会发生变化）。</p>
+
+<h3>常量作为key</h3>
+
+<p>可以使用像true这样的常量当作副作用的key，以让它跟它所在的调用点有一样的生命周期。有一些场景适合这样用：比如前面例子中的LaunchedEffect。但是，在这样做之前还是要三思是否真的要这样。</p>
+
+<h2>总结</h2>
+
+<p>函数式编程的理想情况是每个函数都没有副作用，但实际情况副作用却是必须的。通过本文我们学习了如何使用Jetpack Compose提供的副作用函数以解决修改composable范围以外的状态的问题。副作用问题比较难以实现且容易产生难以debug的问题，要仔细分析问题的场景，根据场景选择合适的副作用函数。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『损则有孚』| Lifecycle]]></title>
@@ -1060,267 +1417,6 @@ private fun SwipeableSample() {
 <li><a href="https://fvilarino.medium.com/exploring-jetpack-compose-anchored-draggable-modifier-5fdb21a0c64c">Exploring Jetpack Compose Anchored Draggable Modifier</a></li>
 <li><a href="https://medium.com/@AungThiha3/jetpack-compose-anchored-draggable-item-in-motionlayout-part-1-8d5a1cde880f">Jetpack Compose: Anchored Draggable Item in MotionLayout Part 1</a></li>
 <li><a href="https://medium.com/@AungThiha3/jetpack-compose-anchored-draggable-item-in-motionlayout-part-2-c1fd94188e56">Jetpack Compose: Anchored Draggable Item in MotionLayout Part 2</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『双龙取水』| Text Edit]]></title>
-    <link href="http://toughcoder.net/blog/2024/07/24/text-edit-in-compose/"/>
-    <updated>2024-07-24T08:28:55+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/07/24/text-edit-in-compose</id>
-    <content type="html"><![CDATA[<p>文本是所有UI系统中非常重要的一个种元素，文本的输入在UI框架中的重要性也特别的高，因为这是最重要的一种用户输入。今天专注于文本的输入处理，包括文本输入框，以及文本的选择和富式点击处理。</p>
-
-<p><a href=""><img src="https://static.wixstatic.com/media/0d004d_ea93b43aabf348cb8f96c0dc94f85365~mv2.jpg/v1/fit/w_1000%2Ch_600%2Cal_c%2Cq_80/file.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>文本输入</h2>
-
-<p>Compose提供了符合<a href="https://material.io/components/text-fields">Material Design</a>的文本输入<a href="https://developer.android.com/reference/kotlin/androidx/compose/material/package-summary#TextField(androidx.compose.ui.text.input.TextFieldValue,kotlin.Function1,androidx.compose.ui.Modifier,kotlin.Boolean,kotlin.Boolean,androidx.compose.ui.text.TextStyle,kotlin.Function0,kotlin.Function0,kotlin.Function0,kotlin.Function0,kotlin.Boolean,androidx.compose.ui.text.input.VisualTransformation,androidx.compose.foundation.text.KeyboardOptions,androidx.compose.foundation.text.KeyboardActions,kotlin.Boolean,kotlin.Int,kotlin.Int,androidx.compose.foundation.interaction.MutableInteractionSource,androidx.compose.ui.graphics.Shape,androidx.compose.material.TextFieldColors">TextField</a>)，默认的实现是全填充的：</p>
-
-<pre><code class="Kotlin">@Composable
-fun SimpleFilledTextFieldSample() {
-    var text by remember { mutableStateOf("Hello") }
-
-    TextField(
-        value = text,
-        onValueChange = { text = it },
-        label = { Text("Label") }
-    )
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/text-textfield-hello.png" alt="textfield" />
-还有一个边框式的<a href="https://developer.android.com/reference/kotlin/androidx/compose/material/package-summary#OutlinedTextField(kotlin.String,kotlin.Function1,androidx.compose.ui.Modifier,kotlin.Boolean,kotlin.Boolean,androidx.compose.ui.text.TextStyle,kotlin.Function0,kotlin.Function0,kotlin.Function0,kotlin.Function0,kotlin.Boolean,androidx.compose.ui.text.input.VisualTransformation,androidx.compose.foundation.text.KeyboardOptions,androidx.compose.foundation.text.KeyboardActions,kotlin.Boolean,kotlin.Int,kotlin.Int,androidx.compose.foundation.interaction.MutableInteractionSource,androidx.compose.ui.graphics.Shape,androidx.compose.material.TextFieldColors">OutlinedTextField</a>)：</p>
-
-<pre><code class="Kotlin">@Composable
-fun SimpleOutlinedTextFieldSample() {
-    var text by remember { mutableStateOf("") }
-
-    OutlinedTextField(
-        value = text,
-        onValueChange = { text = it },
-        label = { Text("Label") }
-    )
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/text-outlinedtextfield.png" alt="outlined_textfield" />
-可以看到TextField函数最关键的有三个参数：文本框中的显示的文本text，文本变化回调onValueChange，提示标签label。需要注意传给text的变量要是状态（State），这样才会触发重组，否则TextField显示的文本不会发生变化。</p>
-
-<h3>定制TextField</h3>
-
-<p>可以通过其他的参数来控制输入框的行为，最为常用的就是行数限制singleLine和maxLines， 以及文本的样式控制textStyle，它可以控制文本颜色和字体：</p>
-
-<pre><code class="Kotlin">@Composable
-fun StyledTextField() {
-    var value by remember { mutableStateOf("Hello\nWorld\nInvisible") }
-
-    TextField(
-        value = value,
-        onValueChange = { value = it },
-        label = { Text("Enter text") },
-        maxLines = 2,
-        textStyle = TextStyle(color = Color.Blue, fontWeight = FontWeight.Bold),
-        modifier = Modifier.padding(20.dp)
-    )
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/text-textfield-multiline.png" alt="textfield_customize" />
-textStyle比较丰富，除了直接指定颜色以外，还可以用<a href="https://developer.android.com/develop/ui/compose/text/style-text#brush">Brush API</a>，以实现一些颜色渐变，渐变效果是针对整个输入框的，换言之不同的行效果是一样的：</p>
-
-<pre><code class="Kotlin">var text by remember { mutableStateOf("") }
-val brush = remember {
-    Brush.linearGradient(
-        colors = listOf(Color.RED, Color.YELLOW, Color.GREEN, Color.BLUE)
-    )
-}
-TextField(
-    value = text, onValueChange = { text = it }, textStyle = TextStyle(brush = brush)
-)
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/text-textfieldgradient.gif" alt="brush_textstyle" /></p>
-
-<h3>与键盘联动</h3>
-
-<p>TextField能够配置软件盘以实现特定输入样式，比如只输入数字，只有英文字符等等，通过TextField的keyboardOptions参数，传入一个<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/text/KeyboardOptions#KeyboardOptions(androidx.compose.ui.text.input.KeyboardCapitalization,kotlin.Boolean,androidx.compose.ui.text.input.KeyboardType,androidx.compose.ui.text.input.ImeAction">KeyboardOptions</a>)对象。常用的配置项有：</p>
-
-<ul>
-<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/text/input/KeyboardCapitalization">capitalization</a> 对于有大小写的语言来说，输入时词首自动大写</li>
-<li>autoCorrect 自动更正</li>
-<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/text/input/KeyboardType">keyboardType</a> 键盘类型，如纯字符，纯数字，E-mail地址，网址等等</li>
-<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/text/input/ImeAction">imeAction</a> 让键盘的显示输入完成后的行为相关的按扭，比如<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/text/input/ImeAction#Search(">『搜索（Search）』</a>)，<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/text/input/ImeAction#Send(">『发送（Send）』</a>)等</li>
-</ul>
-
-
-<p>当输入完成后，用户点了imeAction指定的按扭后，可以指定回调函数以执行相关的操作，通过keyboardActions参数指定一个<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/text/KeyboardActions">KeyboardActions</a>对象，里面可以指定对应于imeAction中的各种回调，如onSearch会在imeAction指定为Search时，用户点击后触发；onSend会在imeAction是Send时，用户点击触发，等等。</p>
-
-<h3>特殊形式的输入</h3>
-
-<p>有些特殊的场景是不能够直接把用户的输入文本直接的展现在框里，比如输入密码时，再比如像输入电话号码时，可能会自动在3个数字后面加上短横线。这时就需要用到<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/text/input/VisualTransformation">VisualTransformation</a>来对文本进行转换处理：</p>
-
-<pre><code class="Kotlin">@Composable
-fun PasswordTextField() {
-    var password by rememberSaveable { mutableStateOf("") }
-
-    TextField(
-        value = password,
-        onValueChange = { password = it },
-        label = { Text("Enter password") },
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
-    )
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/text-textfield-password.png" alt="password_textfield" /></p>
-
-<h3>文本状态管理</h3>
-
-<p>TextField的文本（text参数）是需要转换成状态的，这样才能更好的触发重组。基础的通用的TextField使用方式是，把文本转成状态，塞给TextField，然后在其onValueChange中再更新此状态：</p>
-
-<pre><code class="Kotlin">    // ...
-    var text by remember { mutableStateOf("") }
-
-    TextField(
-        value = text,
-        onValueChange = { text = it },
-    )
-    // ...
-</code></pre>
-
-<p>但现实的代码不可能这么简单，用户的输入必然会有业务逻辑去处理，所以onValueChange肯定会调用ViewModel去处理用户输入。那么自然也要从ViewModel处获得。但由于TextField的特殊性，仍然要把使用MutableState来定义状态，而不能用响应式的Reactive stream或者StateFlow：</p>
-
-<pre><code class="Kotlin">class SignUpViewModel(private val userRepository: UserRepository) : ViewModel() {
-
-    var username by mutableStateOf("")
-        private set
-
-    fun updateUsername(input: String) {
-        username = input
-    }
-}
-
-// SignUpScreen.kt
-
-@Composable
-fun SignUpScreen(/*...*/) {
-
-    OutlinedTextField(
-        value = viewModel.username,
-        onValueChange = { username -&gt; viewModel.updateUsername(username) }
-        /*...*/
-    )
-}
-</code></pre>
-
-<h2>文本的选择</h2>
-
-<p>除了文本输入以外，文本显示的选择也视为文字编辑的一种方式，因为选择之后就可以执行复制或者搜索等全局操作。Compose提供了细粒度的可交互式文本显示控制。Text本身是不支持选择的（Not Selectable），自然也就无法复制。可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/text/selection/package-summary#SelectionContainer(androidx.compose.ui.Modifier,kotlin.Function0">SelectableContainer</a>)来包裹Text以实现可选择（Selectable）：</p>
-
-<pre><code class="Kotlin">@Composable
-fun SelectableText() {
-    SelectionContainer {
-        Text("This text is selectable")
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/text-selected.png" alt="selectable_text" />
-并且，可选择区域可以跨多个Text。与之相对的，还有不可选择函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/text/selection/package-summary#DisableSelection(kotlin.Function0">DisableSelection</a>)，比如一大片可选择文本中，想让某一小块文本不能被选择，这时DisableSelection就派上用场了：</p>
-
-<pre><code class="Kotlin">@Composable
-fun PartiallySelectableText() {
-    SelectionContainer {
-        Column {
-            Text("This text is selectable")
-            Text("This one too")
-            Text("This one as well")
-            DisableSelection {
-                Text("But not this one")
-                Text("Neither this one")
-            }
-            Text("But again, you can select this one")
-            Text("And this one too")
-        }
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/text-partially-selected.png" alt="disable_selection" /></p>
-
-<p>可以看出对于文本的选择控制还是相当的灵活的（flexible）。</p>
-
-<h2>富式文本点击</h2>
-
-<p>对于针对 整个文本的点击事件可以用Modifier中的<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/package-summary#(androidx.compose.ui.Modifier">clickable</a>.clickable(kotlin.Boolean,kotlin.String,androidx.compose.ui.semantics.Role,kotlin.Function0))函数来处理，这跟常规的Composable没区别都一样的。但对于文本来说有更为细腻的点击事件处理，包括获取具体点击的光标位置，以及富式文本点击，也即针对 文本中不同部分的响应。</p>
-
-<h3>获取点击的光标位置</h3>
-
-<p>想要获取到文本中点击的光标位置，其实也就是点击的是第几个字符，可以用<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/text/package-summary#ClickableText(androidx.compose.ui.text.AnnotatedString,androidx.compose.ui.Modifier,androidx.compose.ui.text.TextStyle,kotlin.Boolean,androidx.compose.ui.text.style.TextOverflow,kotlin.Int,kotlin.Function1,kotlin.Function1">ClickableText</a>)，它有一个自己的onClick回调函数，里面的参数是一个offset表示被点击字符的索引：</p>
-
-<pre><code class="Kotlin">@Composable
-fun SimpleClickableText() {
-    ClickableText(text = AnnotatedString("Click Me"), onClick = { offset -&gt;
-        Log.d("ClickableText", "$offset -th character is clicked.")
-    })
-}
-</code></pre>
-
-<p>注意onClick的参数是文本字符串的索引，从0开始。这个索引一般用来确定点击的富文本中的某一个标记（Annotation）。</p>
-
-<h3>富文本的点击处理</h3>
-
-<p>Text是支持富文本的（基于<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/text/AnnotatedString">AnnotatedString</a>）。通过ClickableText中onClick的索引参数，就能知道点击的具体是哪个Annotation。比如一个超链接标记，具体的URL对用户是不可见的，作为额外的Tag信息在Annotation中，通过索引判断当点击到了超链接上面时，可以跳转到此URL：</p>
-
-<pre><code class="Kotlin">@Composable
-fun AnnotatedClickableText() {
-    val annotatedText = buildAnnotatedString {
-        append("Click ")
-
-        // We attach this *URL* annotation to the following content
-        // until `pop()` is called
-        pushStringAnnotation(
-            tag = "URL", annotation = "https://developer.android.com"
-        )
-        withStyle(
-            style = SpanStyle(
-                color = Color.Blue, fontWeight = FontWeight.Bold
-            )
-        ) {
-            append("here")
-        }
-
-        pop()
-    }
-
-    ClickableText(text = annotatedText, onClick = { offset -&gt;
-        // We check if there is an *URL* annotation attached to the text
-        // at the clicked position
-        annotatedText.getStringAnnotations(
-            tag = "URL", start = offset, end = offset
-        ).firstOrNull()?.let { annotation -&gt;
-            // If yes, we log its value
-            Log.d("Clicked URL", annotation.item)
-        }
-    })
-}
-</code></pre>
-
-<h2>总结</h2>
-
-<p>本文介绍了两种最常规的文本编辑，一是文本输入，一个是文本的选择和点击，这些都是日常项目开发中的非常常见的需求。Jetpack Compose对文本的操作提供了非常友好的支持，能够应付绝大部分的需求场景。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/text/user-input">Handle user input</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/text/user-interactions">Enable user interactions</a></li>
 </ul>
 
 ]]></content>

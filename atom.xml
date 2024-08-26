@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-08-18T13:07:54+08:00</updated>
+  <updated>2024-08-26T21:31:10+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,556 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『龙战于野』| Side Effects]]></title>
+    <link href="http://toughcoder.net/blog/2024/08/23/jetpack-compose-side-effects/"/>
+    <updated>2024-08-23T07:56:53+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/08/23/jetpack-compose-side-effects</id>
+    <content type="html"><![CDATA[<blockquote><p>主要翻译自官方文档<a href="https://developer.android.com/develop/ui/compose/side-effects">Side-effects in Compose</a>，并不是直译，有些细微调整。</p></blockquote>
+
+<p>一个<strong>副作用</strong>是指发生在composable函数范围之外的应用状态的一个变化。由于composable函数的生命周期和诸如不可预测的重组，以不同的顺序执行composable的重组，或者重组可能会被跳过等性质，理论上composable应该<a href="https://juejin.cn/post/7379437165486112805">要是无副作用</a>的。</p>
+
+<p><a href="http://toughcoder.net/blog/2024/08/23/jetpack-compose-side-effects/"><img src="https://ac.appcircle.io/wp-content/uploads/2022/10/compose-side-effects-state.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>然而，有些时候副作用是必要的，例如，触发一些诸如显示一个非干扰性提示（snackbar）或者在一定状态条件下跳转到另一个页面，等的一次性的事件时。这些行为应该在一个能够感知composable生命周期的可控的环境中调用。在本文中，你将学习Jetpack Compose提供的几种不同的副作用函数（side effect APIs）。</p>
+
+<h2>副作用的具体使用场景</h2>
+
+<p>如在文章<a href="https://juejin.cn/post/7379437165486112805">降Compose十八掌之『潜龙勿用』| Thinking in Compose</a>中提到的，composables应该尽可能的做到无副作用。当需要对应用状态进行修改时，应该使用副作用API，以便副作用函数以可预测的方式运行。</p>
+
+<blockquote><p><strong>关键点：</strong> 一个作用（effect）是指一个composable函数不会生成UI元素，而是当组合完成时生成副作用。</p></blockquote>
+
+<p>由于Compose中有多种作用，很容易被滥用。要确保在副作用中做的事情是UI相关的并且没有违反『单一数据流原则』。</p>
+
+<blockquote><p><strong>注意：</strong> 一个可响应的UI应该是异步的，Jetpack Compose解决异步的办法是在API级别结合协程而不是使用回调。想要了解更多的协程知识，可以参看<a href="https://juejin.cn/post/7329767824200826918">之前的文章</a>。</p></blockquote>
+
+<h3>LaunchedEffect：在composable的作用域内运行挂起函数</h3>
+
+<p>想要在一个composable的生命周期中执行操作并且需要调用挂起函数，就可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#LaunchedEffect(kotlin.Any,kotlin.coroutines.SuspendFunction1">LaunchedEffect</a>)。当LaunchedEffect进入组合时，它会使用作为参数传入的代码块来启动一个协程。如果LaucnhedEffect离开了组合协程会被取消。如果因不同的key LaunchedEffect被重组了（副作用的重启机制会在后面进行讲解），运行中的协程会被取消掉，一个新的协程会被启动以运行新的挂起函数。</p>
+
+<p>例如，一个可调节延迟的脉冲式透明度的动画：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 变化的速率可以调节，可以加快动画（减少间隔）</span>
+</span><span class='line'><span class="k">var</span> <span class="py">pulseRateMs</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">3000L</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="k">val</span> <span class="py">alpha</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">Animatable</span><span class="p">(</span><span class="m">1f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">pulseRateMs</span><span class="p">)</span> <span class="p">{</span> <span class="c1">// 速度作为key，这样速度变化时，会重启副作用，动画也会重启</span>
+</span><span class='line'>    <span class="k">while</span> <span class="p">(</span><span class="n">isActive</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="n">pulseRateMs</span><span class="p">)</span> <span class="c1">// 一定间隔之后显示脉冲动画</span>
+</span><span class='line'>        <span class="n">alpha</span><span class="p">.</span><span class="n">animateTo</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">alpha</span><span class="p">.</span><span class="n">animateTo</span><span class="p">(</span><span class="m">1f</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在上面的代码中，动画使用了挂起函数<a href="https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/delay.html">delay</a>来等待一定的时间。然后，它依次使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/Animatable#animateTo(kotlin.Any,androidx.compose.animation.core.AnimationSpec,kotlin.Any,kotlin.Function1">animateTo</a>)展现动画到不可见，再到可见。并在composable的生命周期中不断重复。</p>
+
+<h3>rememberCoroutineScope：获取一个可以在composable之外启动协程的可感知组合的协程作用域</h3>
+
+<p>因为LaunchedEffect是一个composable函数，所以它只能在其他composable函数中调用。如果想要在composable作用域之外启动协程，但又希望限制协程在一定的范围内，以便能在离开组合时协程自动被取消，可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#rememberCoroutineScope(kotlin.Function0">rememberCoroutineScope</a>)。在任何需要手动操控一个或者多个协程的生命周期的时候都应该使用rememberCorountineScope，比如说当用户事件发生时需要取消动画。</p>
+
+<p>rememberCoroutineScope是一个composable函数，返回一个协程作用域（CoroutineScope），这个作用域会被绑定到经组合中它被调用的地点。当离开组合时，这个协程作用域会被取消。</p>
+
+<blockquote><p><strong>译注：</strong> 如果对协程作用域不太熟悉的同学，可以参看<a href="https://juejin.cn/post/7324351711660048411">之前的文章</a>。</p></blockquote>
+
+<p>例如，可以用下面的代码，当点击按扭时显示一个Snackbar（译注：非干扰式提示，类似于Toast）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MoviesScreen</span><span class="p">(</span><span class="n">snackbarHostState</span><span class="p">:</span> <span class="n">SnackbarHostState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 创建一个绑定到MoviesScreen生命周期的协程作用域</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">scope</span> <span class="p">=</span> <span class="n">rememberCoroutineScope</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Scaffold</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">snackbarHost</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">SnackbarHost</span><span class="p">(</span><span class="n">hostState</span> <span class="p">=</span> <span class="n">snackbarHostState</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span> <span class="n">contentPadding</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">Column</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">contentPadding</span><span class="p">))</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="c1">// 在作用域中创建一个协程来显示提示。</span>
+</span><span class='line'>                    <span class="n">scope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">snackbarHostState</span><span class="p">.</span><span class="n">showSnackbar</span><span class="p">(</span><span class="s">&quot;Something happened!&quot;</span><span class="p">)</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Press me&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>rememberUpdateState：指向即使值发生变化也不会重启的作用中的一个值</h3>
+
+<p>当参数key中的任何一个发生变化时LaunchedEffect就会重启。然而，在有些情况下我们希望捕获这样作用中的一个值，这个作用不会随着值变化而重启。为了达到这样的效果，需要使用rememberUpdatedState创建一个能被捕获和更新的值的引用。这个方式对于那些含有长时间运行，且重新创建或者重启都非常昂贵之类的操作的副作用是很有用的。</p>
+
+<p>例如，假设你的应用有一个一段时间内消失的加载页面（LandingScreen）。即使这个加载页面被重组了，等待时间副作用和通知已过去了多少时间副作用都不应该被重新启动：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">LandingScreen</span><span class="p">(</span><span class="n">onTimeout</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 这个状态永远指向LandingScreen重组后最新的onTimeout函数</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">currentOnTimeout</span> <span class="k">by</span> <span class="n">rememberUpdatedState</span><span class="p">(</span><span class="n">onTimeout</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 创建一个与LandingScreen生命周期一致的副作用。即使LandingScreen被重组了，这里的延迟不应该重新开始.</span>
+</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="k">true</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="n">SplashWaitTimeMillis</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">currentOnTimeout</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="cm">/* 加载页面的内容 */</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>想要创建一个与调用点生命周期一至的副作用，可以把像Unit或者true等永不会改变的常量当作参数。在上面的例子中，使用了LaunchedEffect(true)。为了保证lambda onTimeout中总是包含LandingScreen被重组后的最新值，onTimeout需要使用rememberUpdatedState来包装。返回值，就是代码中的currentOnTimeout应该在副作用中使用。</p>
+
+<blockquote><p><strong>注意：</strong> LaunchedEffect(true)就像while(true)一样诡异。即使有具体的使用场景，也要三思后行，确保确实需要这样做。</p></blockquote>
+
+<h3>DisposableEffect：需要清理工作的副作用</h3>
+
+<p>对于当离开组合或者key发生变化时需要清朝工作的副作用，使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#DisposableEffect(kotlin.Any,kotlin.Function1">DisposableEffect</a>)。如果DisposableEffect的key发生变化，调用的composable需要进行清理副作用，并且重新调用。</p>
+
+<p>作为一个示例，通过使用<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleObserver">LifecycleObserver</a>，你也许想要发送基于平台生命周期事件（Lifecycle events）统计事件数据（译注：这里的生命周期是指Android平台组件的生命周期）。想要在Compose中监听这些事件，使用一个DisposableEffect来在需要时注册和反注册观察者：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">HomeScreen</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">lifecycleOwner</span><span class="p">:</span> <span class="n">LifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onStart</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span> <span class="c1">// 发送&#39;started&#39; 事件</span>
+</span><span class='line'>    <span class="n">onStop</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="c1">// 发磅 &#39;stopped&#39; 事件</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 保证当前的lambda是最新的</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">currentOnStart</span> <span class="k">by</span> <span class="n">rememberUpdatedState</span><span class="p">(</span><span class="n">onStart</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">currentOnStop</span> <span class="k">by</span> <span class="n">rememberUpdatedState</span><span class="p">(</span><span class="n">onStop</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 如果 `lifecycleOwner` 发生变化，清理并重置副作用函数</span>
+</span><span class='line'>    <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 创建一个观察者以触发我们的事件发送回调lambda</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">observer</span> <span class="p">=</span> <span class="n">LifecycleEventObserver</span> <span class="p">{</span> <span class="n">_</span><span class="p">,</span> <span class="n">event</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">event</span> <span class="p">==</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_START</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">currentOnStart</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">event</span> <span class="p">==</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_STOP</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">currentOnStop</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 把观察者添加到生命周期观察者列表里</span>
+</span><span class='line'>        <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">addObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 当离开组合时，进行清理工作，即把观察者从其列表中移除</span>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">removeObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="cm">/* Home screen content */</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在上面的代码中，副作用会添加一个观察者observer到lifecycleOwner上。如果lifecycleOwner有变动，副作用函数会被清理并且使用新的lifecycleOwner重启。</p>
+
+<p>一个DispoableEffect必须要包含一个onDispose语句作为其代码块的最后一个语句。否则会有编译错误。</p>
+
+<blockquote><p><strong>注意：</strong> 使用一个空的onDispose并不是一个好的做法。要多思考一下是否有更加符合使用场景的副作用函数。</p></blockquote>
+
+<h3>SideEffect：向非Comopse代码发布Compose的状态</h3>
+
+<p>要与非Compose管理的对象共享Compose状态时，使用composable <a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#SideEffect(kotlin.Function0">SideEffect</a>)。使用SideEffect能够保证副作用在每次成功重组后都能得到执行。另一方面，在一个重组保证成功之前执行一个副作用是不正确的，这种场景就会直接在composable中写入副作用。</p>
+
+<p>例如，你的分析库也许允许你通过给后面的统计数据添加自定义的meta data（在此例中是『user properties』）的方式来给用户数据分段。为了建立当前用户的用户类型与统计库之间的联系，可以使用SideEffect来更新此值：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberFirebaseAnalytics</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">):</span> <span class="n">FirebaseAnalytics</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">analytics</span><span class="p">:</span> <span class="n">FirebaseAnalytics</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">FirebaseAnalytics</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 每次成功组合，用当前用户的用户类型来更新 FirebaseAnalytics，保证</span>
+</span><span class='line'>    <span class="c1">// 后面的统计事件能带上userType</span>
+</span><span class='line'>    <span class="n">SideEffect</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">analytics</span><span class="p">.</span><span class="n">setUserProperty</span><span class="p">(</span><span class="s">&quot;userType&quot;</span><span class="p">,</span> <span class="n">user</span><span class="p">.</span><span class="n">userType</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">analytics</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>produceState：把非Compose状态转化为Compose状态</h3>
+
+<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#produceState(kotlin.Any,kotlin.coroutines.SuspendFunction1">produceState</a>)启动一个受组合管控的协程作用域，其中可以把值转化为状态。用它可以把非Compose状态转化为Compose状态，例如把外部由订阅驱动 的值如Flow，LiveData或者RxJava转化到组合中。</p>
+
+<p>当produceState进入组合时生产者就会被启动，然后当离开组合时被取消。返回的状态会合并：就是说相同的值不会再次触发重组。</p>
+
+<p>尽管produceState会创建协程，它也能用来监听非挂起数据。想要移除对数据的订阅，使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/ProduceStateScope#awaitDispose(kotlin.Function0">awaitDispose</a>)函数。</p>
+
+<p>下面的例子展示如何使用produceState来从网络加载图片。Composable函数loadNextworkImage返回一个可以用在其他composables中的状态：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">loadNetworkImage</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">url</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">imageRepository</span><span class="p">:</span> <span class="n">ImageRepository</span> <span class="p">=</span> <span class="n">ImageRepository</span><span class="p">()</span>
+</span><span class='line'><span class="p">):</span> <span class="n">State</span><span class="p">&lt;</span><span class="n">Result</span><span class="p">&lt;</span><span class="n">Image</span><span class="p">&gt;&gt;</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 用 Result.Loading 作为初值，创建一个状态 State&lt;T&gt;</span>
+</span><span class='line'>    <span class="c1">// 如果 「url」或者「imageRepository」任何一个发生变化，运行中的生产者会被取消</span>
+</span><span class='line'>    <span class="c1">// 使用新的输入被重启。</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">produceState</span><span class="p">&lt;</span><span class="n">Result</span><span class="p">&lt;</span><span class="n">Image</span><span class="p">&gt;&gt;(</span><span class="n">initialValue</span> <span class="p">=</span> <span class="n">Result</span><span class="p">.</span><span class="n">Loading</span><span class="p">,</span> <span class="n">url</span><span class="p">,</span> <span class="n">imageRepository</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 在协程里，可以调用挂起函数</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">image</span> <span class="p">=</span> <span class="n">imageRepository</span><span class="p">.</span><span class="n">load</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 使用成功或者失败作为结果 来更新状态</span>
+</span><span class='line'>        <span class="c1">// 这会触发读取此状态的composable的重组</span>
+</span><span class='line'>        <span class="n">value</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">image</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Result</span><span class="p">.</span><span class="n">Error</span>
+</span><span class='line'>        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Result</span><span class="p">.</span><span class="n">Success</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p><strong>注意：</strong> 带有返回值的composable函数应该以常规的Kotlin函数命名规范进行命名，以小写字符开头的驼峰式。</p></blockquote>
+
+<p><br/></p>
+
+<blockquote><p><strong>关键点：</strong> 进一步的了解，produceState使用了其他的副作用函数！它使用remember { mutableStateOf(initialValue) }来持有返回结果，然后在一个LaunchedEffect中触发生产者代码块。每当生产者代码块中更新了value的值，相应的状态也会被更新。
+开发者也可以基于现有的API来创造想要的副作用函数</p></blockquote>
+
+<h3>derivedStateOf：把一个或者多个状态对象转化为另一个状态</h3>
+
+<p>在Compose中，每次当被观察的状态对象发生变化或者composable的输入有变化时重组就会发生。状态对象或者输入可能变化次数的超过了UI实际的需要，导致了不必要的重组。</p>
+
+<p>当一个composable的输入变化超过了重组所需要时就应该使用函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#derivedStateOf(kotlin.Function0">deriveStateOf</a>)。比较觉的场景是当有些变量频繁的变动，比如滚动位置，但composable仅需要变动超过一定阈值时才需要对其响应。derivedStateOf创建一个新的仅在需要时更新的可观察Compose状态。这样，它就类似于Kotlin Flow中的操作符<a href="https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/distinct-until-changed.html">distinctUntilChanged</a>。</p>
+
+<blockquote><p><strong>注意：</strong> derivedStateOf是比较昂贵的（也即性能开销比较大），应该仅用来减少结果未变化时的不必要的重组。</p></blockquote>
+
+<h4>正确的使用</h4>
+
+<p>下面的代码片段展示一个恰当的使用derivedStateOf的场景：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="c1">// 当参数 messages 变化时, MessageList会被重组. derivedStateOf不会影响这个重组</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MessageList</span><span class="p">(</span><span class="n">messages</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Message</span><span class="p">&gt;)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">listState</span> <span class="p">=</span> <span class="n">rememberLazyListState</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">LazyColumn</span><span class="p">(</span><span class="n">state</span> <span class="p">=</span> <span class="n">listState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// ...</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 当第一个可见的元素不是第一个元素时显示按扭。用一个被记忆的衍生状态来最小化不必要的重组</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">showButton</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">derivedStateOf</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">listState</span><span class="p">.</span><span class="n">firstVisibleItemIndex</span> <span class="p">&gt;</span> <span class="m">0</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">AnimatedVisibility</span><span class="p">(</span><span class="n">visible</span> <span class="p">=</span> <span class="n">showButton</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">ScrollToTopButton</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在这个代码片段中，每次第一个可见的元素变化时firstVisibleItemIndex都会变化。当滚动时，它的值会变成0，1，2，3，4，5等等。然而，仅当值大于0时才需要重组。这个更新频次的不匹配意味着是一个使用derivedStateOf的好的场景。</p>
+
+<h4>错误的使用</h4>
+
+<p>一个常见的错误是想当然的认为当需要合并两个状态时，就需要使用derivedStateOf，因为在创建衍生状态。然而这完全是凭空想像的也不是必须的，如下面代码所展示：</p>
+
+<blockquote><p><strong>注意：</strong> 下面的代码展示derivedStateOf不正确的用例。不要这样使用。</p></blockquote>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 不要这样用，不正确的derivedStateOf的用法</span>
+</span><span class='line'><span class="k">var</span> <span class="py">firstName</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="k">var</span> <span class="py">lastName</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">fullNameBad</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">derivedStateOf</span> <span class="p">{</span> <span class="s">&quot;$firstName $lastName&quot;</span> <span class="p">}</span> <span class="p">}</span> <span class="c1">// 很糟糕</span>
+</span><span class='line'><span class="k">val</span> <span class="py">fullNameCorrect</span> <span class="p">=</span> <span class="s">&quot;$firstName $lastName&quot;</span> <span class="c1">// 不正确</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这段代码中，fullName的更新频次与firstName和lastName是一样的。因此，不会有不必要的重组发生，使用derivedStateOf是多余的。</p>
+
+<h3>snapshotFlow</h3>
+
+<p>使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#snapshotFlow(kotlin.Function0">snapshotFlow</a>)能把状态对象（<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/State">State<T></a> objects）转化为一个冷流（cold Flow）。当被订阅（collected）时snapshotFlow会运行代码块在其中发送它读取到的状态对象。当在snapshotFlow代码块中读取的状态对象发生变化时，Flow会发送新的数据给它的订阅者，如果这个新的数据没有被发送过（这个行为与<a href="https://kotlin.github.io/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/distinct-until-changed.html">Flow.distinctUntilChanged</a>是类似的）。</p>
+
+<blockquote><p><strong>译注：</strong> 对Flow不熟悉的同学可以参看<a href="https://juejin.cn/post/7336751931375648820">之前的文章</a>。</p></blockquote>
+
+<p>下面的例子展示一个副作用，用以记录当用户滑动超过列表中首个元素时的统计信息：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">listState</span> <span class="p">=</span> <span class="n">rememberLazyListState</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">LazyColumn</span><span class="p">(</span><span class="n">state</span> <span class="p">=</span> <span class="n">listState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">listState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">snapshotFlow</span> <span class="p">{</span> <span class="n">listState</span><span class="p">.</span><span class="n">firstVisibleItemIndex</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">map</span> <span class="p">{</span> <span class="n">index</span> <span class="p">-&gt;</span> <span class="n">index</span> <span class="p">&gt;</span> <span class="m">0</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">distinctUntilChanged</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span> <span class="p">==</span> <span class="k">true</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">collect</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">MyAnalyticsService</span><span class="p">.</span><span class="n">sendScrolledPastFirstItemEvent</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在上面的代码中，listState.firstVisibleItemIndex会被转化为一个Flow，方便使用Flow操作符带来的便利。</p>
+
+<h2>副作用的重启</h2>
+
+<p>Compose中的一些副作用，像LaunchedEffect，produceState，DispoableEffect，接收不定数量的参数keys，这些参数用于取消正在进行中的副作用和使用新的参数启动新的副作用。</p>
+
+<p>这些API的典型形式是：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">EffectName</span><span class="p">(</span><span class="n">restartIfThisKeyChanges</span><span class="p">,</span> <span class="n">orThisKey</span><span class="p">,</span> <span class="n">orThisKey</span><span class="p">,</span> <span class="p">...)</span> <span class="p">{</span> <span class="n">block</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>由于这个行为的细微性质，如果用于重启副作用的参数并不是正确的参数时，就会产生问题：</p>
+
+<ul>
+<li>副作用重启次数少于预期可能会产生bug</li>
+<li>重启次数多于预期是冗余的，影响性能</li>
+</ul>
+
+
+<p>首要的原则是，在副作用代码块中使用的可变的和不可变的变量都应该当成composable函数的参数。此外，也可以添加更多的参数以强制重启副作用。如果一个变量的变化不应该导致重启副作用，那这个变量应该用rememberUpdateState包裹起来。如果一个变量因为包裹在remember时没有key而永远不会变化，那么这个变量就应该作为key传给副作用函数。</p>
+
+<blockquote><p><strong>关键点：</strong> 在副作用函数中使用的变量应该添加为函数的参数，或者使用rememberUpdateState包裹起来。</p></blockquote>
+
+<p>在上面展示的DisposbaleEffect代码中，在代码块中使用的变量lifecycleOwner作为副作用函数的一个参数，因为它们的任何变化都会引发重启副作用。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">HomeScreen</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">lifecycleOwner</span><span class="p">:</span> <span class="n">LifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onStart</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span> <span class="c1">// Send the &#39;started&#39; analytics event</span>
+</span><span class='line'>    <span class="n">onStop</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="c1">// Send the &#39;stopped&#39; analytics event</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 这些值在组合中永不会变化，因此用remember包裹起来，以免引发冗余重启</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">currentOnStart</span> <span class="k">by</span> <span class="n">rememberUpdatedState</span><span class="p">(</span><span class="n">onStart</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">currentOnStop</span> <span class="k">by</span> <span class="n">rememberUpdatedState</span><span class="p">(</span><span class="n">onStop</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">observer</span> <span class="p">=</span> <span class="n">LifecycleEventObserver</span> <span class="p">{</span> <span class="n">_</span><span class="p">,</span> <span class="n">event</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="cm">/* ... */</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">addObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">removeObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>currentOnState和currentOnStop不需要作为DisposableEffect的参数key，因为使用了rememberUpdateState它们在组合中始终不会变化。如果不把lifecycleOwner作为参数传递，然后它又发生了变化，HomeScreen会重组，但DisposableEffect不会被清理和重启。这会导致之后使用的都是错误的lifecyleOwner（译注：因为lifecycleOwner可能会发生变化）。</p>
+
+<h3>常量作为key</h3>
+
+<p>可以使用像true这样的常量当作副作用的key，以让它跟它所在的调用点有一样的生命周期。有一些场景适合这样用：比如前面例子中的LaunchedEffect。但是，在这样做之前还是要三思是否真的要这样。</p>
+
+<h2>总结</h2>
+
+<p>函数式编程的理想情况是每个函数都没有副作用，但实际情况副作用却是必须的。通过本文我们学习了如何使用Jetpack Compose提供的副作用函数以解决修改composable范围以外的状态的问题。副作用问题比较难以实现且容易产生难以debug的问题，要仔细分析问题的场景，根据场景选择合适的副作用函数。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[贡献法算法总结]]></title>
@@ -5853,116 +6403,6 @@ textStyle比较丰富，除了直接指定颜色以外，还可以用<a href="ht
 <ul>
 <li><a href="https://www.promptingguide.ai/">Prompt Engineering Guide</a></li>
 <li><a href="https://gptpmt.com/">GPT Prompt</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[教你用最优雅的方式把玩大模型]]></title>
-    <link href="http://toughcoder.net/blog/2024/05/01/run-llm-locally/"/>
-    <updated>2024-05-01T23:04:34+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/05/01/run-llm-locally</id>
-    <content type="html"><![CDATA[<p><a href="https://www.cloudflare.com/learning/ai/what-is-artificial-intelligence/">人工智能（Artificial Intelligence）</a>几乎与计算机科学一样古老，在二十世纪50年代被首次提出，在60年代就已经形成比较成熟的理论。但受制于算力和数据，直到二十一世纪第一个10年后才有了重大突破（深度学习和CNN），并在第二个10年正式爆发（大模型）。2022年秋OpenAI的ChatGPT 3横空出世，让AI第一次达到「类人」层次，大语言模型（Large Language Model, LLM）也正式进入了公众的视野。自此，大模型开始刷屏和霸榜，人们言必之大模型。如果不折腾折腾大模型，似乎就是原始人，跟别人聊天都插不上话。痛定思痛，今天就来好好研究下大模型以跟上步伐。</p>
-
-<p><a href="http://toughcoder.net/blog/2024/05/01/run-llm-locally/"><img src="https://researchworld.com/uploads/attachments/clr4q0wj95yyf8otdekmzjfy0-large-language-models-for-aspect-based-sentiment-analysis.max.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>注意：常说的大模型是大语言模型的一种不严谨的简称，更为好的说法是<a href="https://www.cloudflare.com/learning/ai/what-is-large-language-model/">大语言模型（Large Langauge Model）</a>或者用其英文简写LLM，本文可能会混着用。</p>
-
-<p>要了解一个东西最好的方式就先学会使用它，所以我们先从使用大模型开始。</p>
-
-<h2>在本地部署LLM</h2>
-
-<p>体验大模型的方式有很多种，最方便的就是直接使用各大AI大厂提供的聊天机器人如ChatGPT或者ChatGLM。确实很有趣，可以发现LLM与以往的人工智障非常不同的地方在于，它能听懂人话了，并且说的也像人话，也就是说它真的达到了『类人』层次了。</p>
-
-<p>身为开发人猿，光这么把玩太无聊了，最适合开发人猿的玩法就是自己折腾，对的，我们要在本地部署LLM，这样玩起来才更过瘾。省流点说在本地部署有如下好处：</p>
-
-<ul>
-<li>可以深入了解LLM的技术栈，亲自折腾一遍才能知道到底有啥，需要啥。</li>
-<li>更加安全，且能保护个人隐私。不用多说，直接用Chat服务或者API确实方便，但都是把数据传到别人的服务器上。有些不方便说的话，不适合别人看的，那肯定就不能用了。但使用部署在本地的LLM就不用担心了。</li>
-<li>定制LLM以打造个人的知识库或者知识助手。</li>
-<li>进行模型微调和深入学习。</li>
-<li>积累经验，后续如果上云，有经验了就可以快速部署。</li>
-</ul>
-
-
-<p>在本地部署LLM好处简直不要太多，唯一的缺点就是LLM这玩意儿很费硬件，跑起来比较费钱，要跑的顺畅一些更是大把费钱。</p>
-
-<h2>开源LLM托管平台</h2>
-
-<p>很明显要想本地部署LLM，模型本身必须是开源的，因此只有开源的LLM才能在本地部部署，闭源的模型，只能通过其API使用。</p>
-
-<p>那么，在折腾之前必须要搞懂的事情就是到哪里去找开源的LLM。幸运的是不但现在有很多开源LLM，也有非常方便的LLM托管平台。LLM托管平台就像GitHub之于开源代码一样，各大公司研发和测试完成后就会把LLM发布到托管平台上面，以供人使用。</p>
-
-<p>最为著名的当属<a href="https://huggingface.co/models">HuggingFace</a>了，它不但提供LLM的托管，还有一个几乎成为业界标准的<a href="https://huggingface.co/spaces/HuggingFaceH4/open_llm_leaderboard">LLM评估系统</a>，定期发布最新模型的评估，以帮助大家选择合适的LLM。而且还提供了下载和使用LLM的Python库，即<a href="https://pypi.org/project/transformers/">著名的transformers</a>。但很可惜，我们无法访问（你懂得）。</p>
-
-<p>莫慌，对于无法访问的技术网站，一定有<a href="https://hf-mirror.com/">国内的镜像</a>的，非常的好用，而且访问速度很快。</p>
-
-<p><a href="https://mirrors.tuna.tsinghua.edu.cn/">清华大学</a>也曾有镜像，不过后来不能用了。</p>
-
-<h2>如何在本地运行LLM</h2>
-
-<p>下面介绍几种非常方便的，五分钟就能学会的本地部署和运行LLM的方式。</p>
-
-<h3>Ollama</h3>
-
-<p><img src="https://guidady.com/wp-content/uploads/2023/07/Ollama.png" alt="" /></p>
-
-<p>最为方便的方式就是使用<a href="https://ollama.com/">Ollama</a>，它使用起来特别的方便，<a href="https://github.com/ollama/ollama">安装好以后</a>，直接一句就能运行并使用LLM了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>ollama run llama3
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这就能运行Meta的最新的LLaMA3模型。当然了，运行具体模型前最好先读一读其文档，确认一下硬件配置是否满足模型要求。像家庭比较贫困的笔者用的是乞丐版的MBP（16G RAM+4G GPU）只能选择8B以内的模型，家庭条件比较好的可以上13B的模型，而33B的最好不要试了。</p>
-
-<p>Ollama非常的好用，它本身是C/S式的，也就是说它会启一个小型的HTTP server以运行LLM，除了直接使用Ollama自己的终端以外，也可以充当模型API给其他工具使用，比如像<a href="https://python.langchain.com/docs/get_started/introduction">LangChain</a>就可以无缝对接Ollama。</p>
-
-<p>它的缺点就是它是源于Mac，对Mac最为友好，其他系统如Windows和Linux是后来才支持的。另外就是使用起来比较简陋，仅有一个命令行终端，所以比较好的方式是使用Ollama来管理和运行LLM，但是再用其他工具来构建比较好用的终端。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://www.freecodecamp.org/news/how-to-run-open-source-llms-locally-using-ollama/">How to Run Open Source LLMs Locally Using Ollama</a></li>
-<li><a href="https://klu.ai/glossary/ollama">Ollama: Easily run LLMs locally</a></li>
-<li><a href="https://www.theregister.com/2024/03/17/ai_pc_local_llm/">How to run an LLM on your PC, not in the cloud, in less than 10 minutes</a></li>
-</ul>
-
-
-<h3>LM Studio</h3>
-
-<p><img src="https://lmstudio.ai/static/media/demo2.9df5a0e5a9f1d72715e0.gif" alt="" /></p>
-
-<p><a href="https://lmstudio.ai/">LM Studio</a>是一个集成化的，用户友好的，界面漂亮的开源LLM应用程序，它集LLM下载运行和使用于一体，且有着非常好用的图形化的终端。缺点就是对硬件要求较高，且不能当成API来使用，无法与其他工具对接。</p>
-
-<ul>
-<li><a href="https://www.kdnuggets.com/run-an-llm-locally-with-lm-studio">Run an LLM Locally with LM Studio</a></li>
-<li><a href="https://digitaconnect.com/how-to-locally-run-a-llm-on-your-pc/">How to Locally Run a LLM on Your PC</a></li>
-</ul>
-
-
-<h3>GPT4All</h3>
-
-<p><img src="https://img-blog.csdnimg.cn/img_convert/96470331467440dec2951abcac0dd195.png" alt="" /></p>
-
-<p><a href="https://gpt4all.io/index.html">GPT4All</a>是一个与LM Studio类似的集成化的用户友好的工具。除了方便下载外，它也提供了好用的图形化终端来使用LLM。它除了可以使用下载的LLM以外，也支持API，并且除了正常的Chat以外，还能直接处理文档，也就是把文档当作LLM的输入。它对硬件的要求不像LM Studio那样高，缺点是对Mac似乎不太友好，因为它要求必须是最新版本的MacOS。</p>
-
-<h2>总结</h2>
-
-<p>本文介绍了几种使用起来非常方便的在本地运行LLM的方式，根据工具的特点，如果您使用的是Mac，或者想要与其他工具结合使用，那建议最好使用Ollama，毕竟它是对Mac最为友好的；如果硬件比较好就用LM Studio，否则的话就用GTP4ALL。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://semaphoreci.com/blog/local-llm">6 Ways For Running A Local LLM (how to use HuggingFace)</a></li>
-<li><a href="https://www.infoworld.com/article/3705035/5-easy-ways-to-run-an-llm-locally.html">5 easy ways to run an LLM locally</a></li>
-<li><a href="https://python.langchain.com/docs/guides/development/local_llms/">Run LLMs locally</a></li>
-<li><a href="https://hackernoon.com/how-to-run-your-own-local-llm-updated-for-2024">How to Run Your Own Local LLM (Updated for 2024)</a></li>
-<li><a href="https://kleiber.me/blog/2024/01/07/six-ways-running-llm-locally/">Six Ways of Running Large Language Models (LLMs) Locally (January 2024)</a></li>
 </ul>
 
 ]]></content>
