@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-08-26T21:31:10+08:00</updated>
+  <updated>2024-08-30T22:44:08+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,330 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『履霜冰至』| Phases]]></title>
+    <link href="http://toughcoder.net/blog/2024/08/30/jetpack-compose-phases/"/>
+    <updated>2024-08-30T08:02:41+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/08/30/jetpack-compose-phases</id>
+    <content type="html"><![CDATA[<blockquote><p>这篇文章译自<a href="https://developer.android.com/develop/ui/compose/phases">Jetpack Compose phases</a></p></blockquote>
+
+<p>就像大多数其他的UI工具集一样，Compose渲染一帧也要经过几个不同的阶段。就比如说Android view系统，主要有三个阶段：测量（measure），版面编排（layout）和绘制（drawing）。Compose也非常的类似，但有一个特别重要的额外的阶段起始时的组合（composition）阶段。</p>
+
+<p><a href=""><img src="https://pbs.twimg.com/media/F3l9aWwWUAEDYxS.jpg:large" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>组合在我们前面的文章中有详细的描述，包括<a href="https://juejin.cn/post/7379437165486112805">降Compose十八掌之『潜龙勿用』| Thinking in Compose</a>和<a href="https://juejin.cn/post/7376094685495001139">降Compose十八掌之『鸿渐于陆』| State</a>。</p>
+
+<h2>每一帧的三个阶段</h2>
+
+<p>Compose有三个主要的阶段：</p>
+
+<ol>
+<li>组合（Composition）：要显示什么。Compose运行composable函数并创建UI的一个描述。</li>
+<li>版面编排（Layout）：在哪里显示。这个阶段包含两个步骤：测量（measurement）和放置（placement）。给布局树中的每个节点，在二维坐标中，布置元素的测量然后放置它们和它们的子元素。</li>
+<li>绘制（Drawing）：如何渲染。把UI元素绘制进一个Canvas，也就是设备的屏幕上。</li>
+</ol>
+
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/compose-phases.png" alt="three_phases" /></p>
+
+<blockquote><p>图1. Compose把数据转化为UI的三个阶段</p></blockquote>
+
+<p>这三个阶段的执行顺序是相同的，能够让数据从组合到版面编排再到绘制沿着一个方向流动，以生成一帧（也就是<a href="https://developer.android.com/develop/ui/compose/architecture#udf">「单向数据流」</a>）。需要特别注意的例外是<a href="https://developer.android.com/develop/ui/compose/layouts/basics#constraints">BoxWithConstraints</a>，<a href="https://developer.android.com/develop/ui/compose/lists#lazy">LazyColumn</a>和<a href="https://developer.android.com/develop/ui/compose/lists#lazy">LazyRow</a>，它们子节点的组合依赖于父节点的排版阶段。</p>
+
+<p>可以假定每一帧都会这三个阶段，但是基于性能的考量，在所有的阶段里，Compose会避免相同输入时计算结果相同的重复工作。如果一个composable函数能复用前一次的结果，Compose会跳过它的执行，并且如果没有必要，Compose UI并不会重新排版或者重新绘制整个UI树。Compose仅会做更新UI所必要的最少工作。因为Compose会在不同的阶段追踪状态读取，所以这种优化是可行的。</p>
+
+<h3>理解不同的阶段</h3>
+
+<p>这部分将详细的描述composables的三个渲染阶段是如何进行的。</p>
+
+<h4>组合（Composition）</h4>
+
+<p>在组合阶段，Compose运行时会执行composable函数然后输出一个能代表UI的树形结构。这个树形结构由包含着下一阶段所需要的信息的布局节点组成，如下面这个视频所示：</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/composition-ezgif.gif" alt="" /></p>
+
+<blockquote><p>图2. 在组合阶段创建的代表着你的UI的树形结构。</p></blockquote>
+
+<p>一小段代码和其树形会如下所示：</p>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/code-subsection.png" alt="ui_tree_vs_code" /></p>
+
+<blockquote><p>图3. UI树的一部分与其对应的代码。</p></blockquote>
+
+<p>在这些例子中，代码中的每个composable函数映射为一UI树中的一个布局节点。在更复杂的例子中，composables可包含逻辑和控制流程，在不同的状态下生成不同的树。</p>
+
+<h4>排版（Layout）</h4>
+
+<p>在排版阶段，Compose使用组合阶段生成的UI树作为输入。布局节点的集合包含了需要确定2D空间下每个节点大小和位置的所有需要的信息。</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/layout-ezgif.gif" alt="" /></p>
+
+<blockquote><p>图4. 在排版阶段UI树中每个布局节点的测量和放置。</p></blockquote>
+
+<p>在排版阶段，树用下面三步算法进行遍历：</p>
+
+<ol>
+<li>测量子节点：节点会测量其存在的子节点。</li>
+<li>决定自身大小：基于前面的测量，一个节点能决定它自身的大小。</li>
+<li>放置子节点：每个子节点以节点为参考进行放置。</li>
+</ol>
+
+
+<p>在这个阶段的最后，每个布局节点都有：</p>
+
+<ul>
+<li>一个确定的宽度（width）和高度（height）</li>
+<li>一个绘制的位置坐标x，y</li>
+</ul>
+
+
+<p>对于前一部分提到的UI树：</p>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/code-subsection.png" alt="" /></p>
+
+<p>对于这颗树，算法是这样工作的：</p>
+
+<ol>
+<li>Row测量它的子节点：Image和Column。</li>
+<li>Image测量过后。因为它没有子节点，所它决定自己的大小并把其大小报告给Row。</li>
+<li>接下来测量Column。它先测量它的两个子节点（两个Text函数）。</li>
+<li>第一个Text被测量。它没有子节点，所以决定自己大小并告诉给Column
+
+<ol type="a">
+<li>第二个Text被测量。它也没有子节点，所以决定自己大小后告诉给Column。</li>
+</ol>
+</li>
+<li>Column使用子节点的测量结果决定自己的大小。它用子节点的最大宽度（作为宽度）和高度之和（作为高度）。</li>
+<li>Column相对于自己来放置子节点，把它们垂直地放在下面。</li>
+<li>Row使用子节点的测量结果来决定自身大小。它使用子节点的最大高度作为高度，子节点宽度之和作为宽度。然后旋转子节点。</li>
+</ol>
+
+
+<p>注意每个节点仅访问一次。测量和放置所有节点时，Compose运行时仅需要访问一次UI树，这样做能提升性能。当树中的节点数量增加时，遍历所需要的时间仅线性增长。相反，如果每个节点访问多次，遍历时间将呈指数增长。</p>
+
+<h4>绘制（Drawing）</h4>
+
+<p>在绘制阶段，将从上到下的再次遍历树，每个节点依次的在屏幕上绘制其自身。</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/drawing-ezgif.gif" alt="" /></p>
+
+<blockquote><p>图5. 绘制阶段在屏幕上绘制像素点。</p></blockquote>
+
+<p>继续前面的例子，以如下方式绘制出树的内容：</p>
+
+<ol>
+<li>Row绘制它有的所有内容，如背景。</li>
+<li>Image绘制它自己。</li>
+<li>Column绘制它自己。</li>
+<li>第一个和第二个Text各自绘制它们自己。</li>
+</ol>
+
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/drawing-ui-tree-ezgif.gif" alt="" /></p>
+
+<blockquote><p>图6. UI树和它的渲染展示。</p></blockquote>
+
+<h2>状态读取</h2>
+
+<p>当你在上面列出的一个阶段中读取状态的值时，Compose会自动追踪值被读取时它在做的事情。这种追踪允许Compose在状态发生变化时重新执行读取者，这是Compose中状态的可观测性的基础。</p>
+
+<p>状态通常都是由mutableStateOf来创建的然后通过两种方式访问：直接读取其属性value或者通过Kotlin的属性委托。可以在文章<a href="https://juejin.cn/post/7376094685495001139">降Compose十八掌之『鸿渐于陆』| State</a>中了解更多的细节。在本文中，「状态读取」通指两种方法中的任意一种。</p>
+
+<pre><code class="Kotlin">// 直接读取状态的value
+val paddingState: MutableState&lt;Dp&gt; = remember { mutableStateOf(8.dp) }
+Text(
+    text = "Hello",
+    modifier = Modifier.padding(paddingState.value)
+)
+</code></pre>
+
+<pre><code class="Kotlin">// 通过属性委托来读取
+var padding: Dp by remember { mutableStateOf(8.dp) }
+Text(
+    text = "Hello",
+    modifier = Modifier.padding(padding)
+)
+</code></pre>
+
+<p>属性委托的背后，「getter」和「setter」函数用来访问和更新状态的value。这些getter和setter函数仅当你把属性当作一个值来引用时才会被调用，而不是委托被创建时，所以这就是上面两种方式是等价的原因。</p>
+
+<p>当一个被读取状态发生变化时都会被重新执行的每一个代码块都是一个重启作用域（restart scope）。在不同的阶段，Compose会追踪状态值的变化然后重启作用域。</p>
+
+<h2>分阶段的状态读取</h2>
+
+<p>如上面所提及，Compose中有三个主要的阶段，在每个阶段中，Compose会追踪哪些状态被读取了。这让Compose能够仅通知针对UI中受影响的元素需要采取措施的特定阶段。</p>
+
+<blockquote><p>注意：状态实例被创建和存储的地方对阶段几乎无影响，只有状态被读取的时间和地点才有重要影响。</p></blockquote>
+
+<p>我们来仔细检查每一个阶段，然后描述一下在其中当状态被读取时所发生的事情。</p>
+
+<h3>阶段一：组合</h3>
+
+<p>在一个&#64;Composable标注的函数里或者lambda代码块里读取状态会影响组合和后续阶段。当状态值发生变化，重组器（recomposer）会安排所有读取状态的composable函数的重新运行。注意如果函数的输入没有变化，运行时可能会跳过一些甚至所有的composable函数。想了解更多可以看文章<a href="https://juejin.cn/post/7401358349877346338">降Compose十八掌之『损则有孚』| Lifecycle</a>。</p>
+
+<p>取决于组合的结果，Compose UI在执行排版和绘制阶段，如果内容始终相同和大小以及布局未发生变化，它也许会跳过这些阶段。</p>
+
+<pre><code class="Kotlin">var padding by remember { mutableStateOf(8.dp) }
+Text(
+    text = "Hello",
+    // 当对象Modifier被构建时，状态`paddin`在组合阶段读取。
+    // 状态`padding`的变化会触发重组
+    modifier = Modifier.padding(padding)
+)
+</code></pre>
+
+<h3>阶段二：排版</h3>
+
+<p>排版阶段由两个步骤组成：测量和放置。测量步骤运行传递给composable函数的测量lambda，也即诸如接口LayoutModifier的MeasureScope.measure方法等的代码。放置步骤运行layout函数的放置代码块，也即诸如Modifier.offset {&hellip;}的代码块。</p>
+
+<p>这些步骤中的状态读取影响排版编排和后续的绘制阶段。当状态值发生变化，Compose UI会安排排版阶段。如果大小和位置发生变化，它也会执行绘制阶段。</p>
+
+<p>更准确的说，测量步骤和放置步骤有不同的重启作用域（restart scope），也就是说放置步骤中的状态读取不会重新触发它前面测量步骤。然而，这些步骤经常绞在一起，所以放置步骤中的状态读取可能会影响属于测量步骤中的其他重启作用域。</p>
+
+<pre><code class="Kotlin">var offsetX by remember { mutableStateOf(8.dp) }
+Text(
+    text = "Hello",
+    modifier = Modifier.offset {
+        // 当offset被计算时，状态`offsetX`在排版阶段中的放置步骤读取
+        // `offsetX`的变化会重启排版
+        IntOffset(offsetX.roundToPx(), 0)
+    }
+)
+</code></pre>
+
+<h3>阶段三：绘制</h3>
+
+<p>绘制过程中的状态读取影响绘制阶段。常见的例子包括Canvas()，Modifier.drawBehind和Modifer.drawWithContent函数。当状态值发生变化，Compose UI仅执行绘制阶段。</p>
+
+<pre><code class="Kotlin">var color by remember { mutableStateOf(Color.Red) }
+Canvas(modifier = modifier) {
+    // 当canvas被渲染时，状态`color`在绘制阶段读取
+    // 状态`color`变化重启绘制
+    drawRect(color)
+}
+</code></pre>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/phases-state-read-draw.svg" alt="phase_state_read_draw" /></p>
+
+<h2>优化状态读取</h2>
+
+<p>因为Compose进行本地化的状态读取追踪，我们可以通过在合适的阶段读取状态以最小化渲染工作量。</p>
+
+<p>我们来看一下下面的例子。这里有一个Image，使用了offset modifier来作为最终布局位置的偏移，实现一个用户滑动时的平行视觉差的效果：</p>
+
+<pre><code class="Kotlin">Box {
+    val listState = rememberLazyListState()
+
+    Image(
+        // ...
+        // 这不是一个最优的实现方式
+        Modifier.offset(
+            with(LocalDensity.current) {
+                // 在组合中读取状态firstVisibleItemScrollOffset
+                (listState.firstVisibleItemScrollOffset / 2).toDp()
+            }
+        )
+    )
+
+    LazyColumn(state = listState) {
+        // ...
+    }
+}
+</code></pre>
+
+<p>这个代码能行，但性能并不是最优的。上面的代码读取状态firstVisibleItemScrollOffset然后把它传给函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/layout/package-summary#(androidx.compose.ui.Modifier">Modifier.offset</a>.offset(androidx.compose.ui.unit.Dp,androidx.compose.ui.unit.Dp))。当用户滑动时firstVisibleItemScrollOffset的值会变化。我们知道，Compose会追踪任何状态读取以便它能重新执行进行读取的代码，也即例子中函数Box中的内容。</p>
+
+<p>这是一个在组合阶段读取状态的例子。这也并不是一无事处，因为这是重组的基础，让数据变化刷新UI。</p>
+
+<p>但这个例子不是最优做法，因为每次滚动都会导致整个composable函数被重新运行，也会重新测量，重新排版，然后最终重新绘制。尽管要显示的内容并没有真正变化，仅是要显示的位置在变化，但我们每个滚动都会触发Compose的所有阶段。我们可以优化状态读取以仅触发排版阶段。</p>
+
+<p>有offset modifier另外一个版本：<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/layout/package-summary#(androidx.compose.ui.Modifier">Modifier.offset(offset: Density.()-> IntOffset)</a>.offset(kotlin.Function1))。这个函数接收一个lambda作为参数，lambda代码块的返回结果作为最终的偏移量。我们来改一下前面的例子：</p>
+
+<pre><code class="Kotlin">Box {
+    val listState = rememberLazyListState()
+
+    Image(
+        // ...
+        Modifier.offset {
+            // 在排版阶段读取状态firstVisibleItemScrollOffset
+            IntOffset(x = 0, y = listState.firstVisibleItemScrollOffset / 2)
+        }
+    )
+
+    LazyColumn(state = listState) {
+        // ...
+    }
+}
+</code></pre>
+
+<p>为何这样就性能更优呢？我们提供给modifier的lambda代码块仅在排版阶段调用（具体来说是在排版阶段中的放置步骤），也就是说在组合阶段状态firstVisibleItemScrollOffset不用再被读取了。因为Compose追踪状态什么时候被读取，这次改动意味着如果状态firstVisibleItemScrollOffset值发生变化，Compose仅会重启排版和绘制阶段。</p>
+
+<blockquote><p><strong>注意：</strong> 你也许很好奇接收一个lambda作为参数与接收一个普通值参数相比是否有额外的开销。确实有。然而，在这个场景中，限制状态读取到排版阶段带来的收益要超过参数的开销。在滑动中firstVisibleItemScrollOffset的值每一帧都会发生变化，把状态读取延迟到排版阶段，能避免很多次重组。</p></blockquote>
+
+<p>虽然这个例子靠有不同的offset modifiers可以用来优化最终代码，但思路是通用的：尽可能把状态读取限制到最少的阶段中，让Compose做最少量的渲染工作。</p>
+
+<p>当然了，在组合阶段也常常绝对有必要读取状态。尽管如此，通过过滤状态变化，还是有可以最小化重组发生的场景。想要了解更多的这方面信息，可以读文章<a href="https://juejin.cn/post/7405158681078104127">降Compose十八掌之『龙战于野』| Side Effects</a>。</p>
+
+<h2>重组循环（循环阶段依赖）</h2>
+
+<p>早些时候我们提到过Compose的阶段总会以相同的顺序被调用，并且在一帧中是没有办法往回走的。然而，不同帧之间组合循环依然会发生。看这个例子：</p>
+
+<pre><code class="Kotlin">Box {
+    var imageHeightPx by remember { mutableStateOf(0) }
+
+    Image(
+        painter = painterResource(R.drawable.rectangle),
+        contentDescription = "I'm above the text",
+        modifier = Modifier
+            .fillMaxWidth()
+            .onSizeChanged { size -&gt;
+                // 不要这样做
+                imageHeightPx = size.height
+            }
+    )
+
+    Text(
+        text = "I'm below the image",
+        modifier = Modifier.padding(
+            top = with(LocalDensity.current) { imageHeightPx.toDp() }
+        )
+    )
+}
+</code></pre>
+
+<p>这里我们（以不好的方式）实现了一个垂直的列，图片在上面文字在其下面。使用Modifier.onSizeChanged感知图片的实际尺寸，然后通过Modifier.padding作用于文字以让其向下偏移。从Px到Dp的不自然转换已经表明了这段代码有问题。</p>
+
+<p>这个例子的问题在于无法通过一帧就达到最终的排列布局。代码依赖于多帧的绘制，进行了不必要的工作，导致UI会在屏幕上跳跃。</p>
+
+<p>让我们一帧帧的检查来看发生了什么：</p>
+
+<p>在第1帧的组合阶段，imageHeightPx值为0，文字拿到的是Modifier.padding(top = 0)。然后，到了排版阶段，modifier的onSizeChanged回调会被调用。这时imageHeightPx会被更新成为图片的实际高度。Compose为下一帧安排重组。在绘制阶段，文字使用padding 0来渲染，因为这时状态的值还没有被更新。</p>
+
+<p>然后Compose会启动因imageHeightPx的值变化而安排的第2帧渲染。状态是在Box内容代码块中读取，并且是在组合阶段调用的。这回，给到Text的padding是真实的图片的高度。在排版阶段，代码再次修改了imageHeightPx的值，但因为值没有发生变化，所以不会安排重组。</p>
+
+<p>最终，我们得到的text的期望的padding，但是耗费额外的一帧来传递padding值到不同的阶段并不是最优的做法，这会导致带有重叠内容的一帧。</p>
+
+<p><img src="https://developer.android.com/static/develop/ui/compose/images/phases-recomp-loop.svg" alt="" /></p>
+
+<p>这个例子也许显得有点做作，但要小心这种通用的模式：</p>
+
+<ul>
+<li>Modifier.onSizeChanged，onGloballyPositioned，或者一些其他的排版操作</li>
+<li>更新一些状态</li>
+<li>把状态当作排版modifier（padding(), height()或者类似的）的输入</li>
+<li>潜在的重复</li>
+</ul>
+
+
+<p>上面示例的修复办法是使用合适的排版原语。上面例子可以用一个普通的Column()来实现，但你也许会有需要一些定制的更复杂的场景，这些场景可能需要写一些定制化的布局。可以看<a href="https://developer.android.com/develop/ui/compose/layouts/custom">定制布局</a>文档以了解更多。</p>
+
+<p>这里通用的原则是对于需要相互之间测量和旋转的多个UI元素要保持单一数据来源。使用合适的排版原语或者创建一个定制化的布局就意味着最少化的共享父节点可以当作可以协调多个元素之间关联的单一数据源。而引入动态的状态会打破这一原则。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『龙战于野』| Side Effects]]></title>
@@ -1142,281 +1466,6 @@ private fun TransformableSample() {
 <li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/understand-gestures">Understand gestures</a></li>
 <li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/multi-touch">Multitouch: Panning, zooming, rotating</a></li>
 <li><a href="https://developer.android.com/develop/ui/compose/touch-input/user-interactions/handling-interactions">Handling user interactions</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『鱼跃于渊』| Gesture Handling]]></title>
-    <link href="http://toughcoder.net/blog/2024/07/29/pointer-event-in-compose/"/>
-    <updated>2024-07-29T20:41:20+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/07/29/pointer-event-in-compose</id>
-    <content type="html"><![CDATA[<p>UI是用户界面，一个最为基础的功能就是与用户进行交互，要具有可交互性。要想有可交互性就需要处理用户输入事件。手势是最为常见的一种用户输入，今天就来专门学习一下如何处理Jetpack Compose中最为常见的手势。</p>
-
-<p><a href=""><img src="https://koenig-media.raywenderlich.com/uploads/2022/10/GesturesInJetpackCompose-twitter.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>输入事件与手势概述</h2>
-
-<p>在开始学习之前有必要先澄清一些概念，以免混淆。与View系统不太一样的是，触摸事件在Jetpack Compose中称之为触点事件（Pointer event），对应的主体称之为触点（Pointer），一连串的触点事件就形成了手势（Gesture）。之所以叫触点，是因为并不总是由触摸屏幕触发事件，也可以是手写笔，（外接）鼠标或者（外接）触摸板，这些都是触控类的输入主体，它的最主要的特点是发生在屏幕上的一个坐标点。其具体的类型称之为触点类型（Pointer type）。</p>
-
-<p>事件处理最主要的是也就是要识别各种不同的触点手势，然后做出响应，以让UI具体可交互性。</p>
-
-<h2>点击事件（Tap and Press）</h2>
-
-<p>点击事件是最为常见，也是最为基础的一种手势了，可以简单的看成按下事件（pointer down）和抬起事件（pointer up）组成，但其实也会有移动（pointer move），只不过移动的位移特别小而已，这里我们不过多的纠结。点击事件分为单击，双击和长按，幸运的是在Compose中都有封装好的回调函数可以直接使用，我们一一来看一下。</p>
-
-<h3>单击（Tap/Click）</h3>
-
-<p>单击是最为常见的事件处理了，在之前的教程已经见过了，通过Modifier的扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/package-summary#(androidx.compose.ui.Modifier">Modifier.clickable</a>.clickable(kotlin.Boolean,kotlin.String,androidx.compose.ui.semantics.Role,kotlin.Function0))就可以为任意一个Composable设置单击事件处理函数。</p>
-
-<h3>双击（Double tap/Double click）和长按（LongPress/Long click）</h3>
-
-<p>对于双击和长按，并不像clickable那样常用，因此需要用到另外一个扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/package-summary#(androidx.compose.ui.Modifier">Modifier.combinedClickable</a>.combinedClickable(androidx.compose.foundation.interaction.MutableInteractionSource,androidx.compose.foundation.Indication,kotlin.Boolean,kotlin.String,androidx.compose.ui.semantics.Role,kotlin.String,kotlin.Function0,kotlin.Function0,kotlin.Function0))，这个函数可以设置多个点击事件处理函数，单击双击和长按都可以通过它来设置：</p>
-
-<pre><code class="Kotlin">    Box(
-        modifier = Modifier
-            .size(100.dp)
-            .background(Color.Yellow)
-            .combinedClickable(
-                onClick = { gotoDetail() },
-                onClickLabel = "Go to details",
-                onLongClick = { showContextMneu() },
-                onLongClickLabel = "Open context menu",
-                onDoubleClick = { shareContent() }
-            )
-    )
-</code></pre>
-
-<h2>滚动（Scroll）</h2>
-
-<p>滚动手势是指朝着某一固定的方向慢速的滑动，多用于查看屏幕之外的内容。像集合性布局设计的目的就是为了显示大量的同一类型的数据集合，天生就支持滚动。对于滚动手势需要处理的就是常规布局支持滚动，以及滚动的嵌套。</p>
-
-<h3>非集合性布局支持滚动</h3>
-
-<p>对于常规的非集合性布局（Box，Row和Column）正常情况下是不可滚动的，是没有办法查看超出其尺寸大小范围的内容的。想让这几个布局可滚动也不难，用Modifier的扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/package-summary#(androidx.compose.ui.Modifier">verticalScroll</a>.verticalScroll(androidx.compose.foundation.ScrollState,kotlin.Boolean,androidx.compose.foundation.gestures.FlingBehavior,kotlin.Boolean))和<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/package-summary#(androidx.compose.ui.Modifier">horizontalScroll</a>.horizontalScroll(androidx.compose.foundation.ScrollState,kotlin.Boolean,androidx.compose.foundation.gestures.FlingBehavior,kotlin.Boolean))就可以让不可滚动布局（Box，Row和Column）支持垂直方向滚动和水平方向滚动：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun ScrollBoxes() {
-    Column(
-        modifier = Modifier
-            .background(Color.LightGray)
-            .size(100.dp)
-            .verticalScroll(rememberScrollState())
-    ) {
-        repeat(10) {
-            Text("Item $it", modifier = Modifier.padding(2.dp))
-        }
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-simplescroll.gif" alt="scrollable_box" /></p>
-
-<p>大部分情况下，如果只是想让布局可滚动就不需要处理<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/ScrollState">ScrollState</a>，但如果想要获取滚位置，或者改变滚动位置，比如说页面进入时（Initial composition）自动滚动到某一们位置，可以通过修改<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/ScrollState">SrollState</a>来实现：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun ScrollBoxesSmooth() {
-    // 进入页面时就自动的平滑的滚动
-    val state = rememberScrollState()
-    LaunchedEffect(Unit) { state.animateScrollTo(100) }
-
-    Column(
-        modifier = Modifier
-            .background(Color.LightGray)
-            .size(100.dp)
-            .padding(horizontal = 8.dp)
-            .verticalScroll(state)
-    ) {
-        // ...
-    }
-}
-</code></pre>
-
-<h3>滚动手势处理</h3>
-
-<p>对于任意的Composable来文章，都可以通过Modifier的扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.Modifier">scrollable</a>.scrollable(androidx.compose.foundation.gestures.ScrollableState,androidx.compose.foundation.gestures.Orientation,kotlin.Boolean,kotlin.Boolean,androidx.compose.foundation.gestures.FlingBehavior,androidx.compose.foundation.interaction.MutableInteractionSource))来监听并处理滚动手势。需要注意的是，scrollable仅会告诉你有滚动手势发生和当前的滚动距离，但并不会直接修改布局，需要开发者去使用滑动距离进行布局的修改：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun ScrollableSample() {
-    // actual composable state
-    var offset by remember { mutableStateOf(0f) }
-    Box(
-        Modifier
-            .size(150.dp)
-            .scrollable(
-                orientation = Orientation.Vertical,
-                // Scrollable state: describes how to consume
-                // scrolling delta and update offset
-                state = rememberScrollableState { delta -&gt;
-                    offset += delta
-                    delta
-                }
-            )
-            .background(Color.LightGray),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(offset.toString())
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-numeric-offset.gif" alt="handle_scrollable" /></p>
-
-<p>如果让滚动对布局产生影响，可以用计算得到offset去改变布局的offset属性offset(y = offset.dp)就可以了。</p>
-
-<h3>滚动嵌套</h3>
-
-<p>手势处理最大的一个麻烦就是手势的嵌套，而又以滚动的嵌套最为麻烦，最为典型的就是同一方向的列表中套着列表，开发者必须手动处理滑动冲突。滚动冲突处理的策略并不难，优先由子View消费滚动事件，当子View还可以滚动时，就把事件消费掉；如果子View已到达边界，无法滚动时，视为事件未消费，把事件再传递给父View，由父View消费，这时父View会进行滚动；当然如果滑动事件没有发生在子View上面，那肯定 是父View滚动。</p>
-
-<p>策略虽然简单，但有魔鬼细节，传统的View必须要在onTouch和onInterceptTouch里面写上大坨大坨的逻辑，还要定义很多个全局变量。幸运的是，针对 于同方向的可滚动布局嵌套，Jetpack Compose已经帮我们处理了。对于使用verticalScroll，horizontalScroll，scrollable，集合性布局（LazyRow，LazyColumn和LazyGrid）和TextField实现的同方向滚动嵌套，不用再特殊处理，Compose已经按照前面说的策略处理好了，这就是<strong>自动嵌套滚动机制（Automatic nested scrolling）</strong>。来看一个例子：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun AutomaticNestedScroll() {
-    val gradient = Brush.verticalGradient(0f to Color.Yellow, 1000f to Color.Red)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(400.dp)
-            .background(Color.LightGray)
-            .verticalScroll(rememberScrollState())
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        repeat(6) {
-            Box(
-                modifier = Modifier
-                    .height(128.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text(
-                    "$it 滑动试试！",
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .border(12.dp, Color.DarkGray)
-                        .background(brush = gradient)
-                        .padding(24.dp)
-                        .height(150.dp)
-                )
-            }
-        }
-    }
-}
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/ascroll.gif" alt="nested_scrolling" />
-这个例子中外层Column支持垂直滚动，里面的每个Box也支持垂直滚动，当里面的Box自己消费滚动时，外层 是不会动的，而当里面的Box无法滚动时（overscrolled）事件就到了外层的Column，即Column会滚动。</p>
-
-<p><strong>注意：</strong>滚动嵌套并不是一个好的交互设计，尽管有技术手段解决，但用起来仍旧是怪怪的，操作起来也并不方便，误操作的可能性很大。不同方向的滚动嵌套在一起是比较好的方案，比如横向的Tab页代表不同的分类，竖向的内容页是一个分类中的具体内容，内容是竖向的，内容中仍旧可以有一些横向滑动的扩展内容，如图片库，tag标签等。</p>
-
-<h2>拖拽（Drag）</h2>
-
-<p>拖拽是指按住屏幕慢速移动，被点击到的UI元素应该跟随手势移动并停留在触点离开屏幕的地方。通过扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.Modifier">Modifier.draggable</a>.draggable(androidx.compose.foundation.gestures.DraggableState,androidx.compose.foundation.gestures.Orientation,kotlin.Boolean,androidx.compose.foundation.interaction.MutableInteractionSource,kotlin.Boolean,kotlin.coroutines.SuspendFunction2,kotlin.coroutines.SuspendFunction2,kotlin.Boolean))可以处理单一方向的拖拽手势。在draggable中我们可以用状态记录移动的距离，然后把距离应用到Composable的offset以生成拖拽后的效果：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun DraggableText() {
-    var offsetX by remember { mutableStateOf(0f) }
-    Text(
-        modifier = Modifier
-            .offset { IntOffset(offsetX.roundToInt(), 0) }
-            .background(Color.LightGray)
-            .padding(8.dp)
-            .draggable(
-                orientation = Orientation.Horizontal,
-                state = rememberDraggableState { delta -&gt;
-                    offsetX += delta
-                }
-            ),
-        text = "降Compose十八掌！",
-        style = MaterialTheme.typography.headlineLarge,
-        color = MaterialTheme.colorScheme.primary
-    )
-}
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/drag.gif" alt="drag_demo" /></p>
-
-<h2>滑动（Swipe/Fling）</h2>
-
-<p>滑动与拖拽的区别在于滑动是有速度的，滑动手势在触点离开屏幕后并不会立即停止，而且是会继续朝原方向减速直到速度变为0才停，最为常见的交互方式就是滑动删除（swipe-to-dismiss），以及像列表的Fling手势。</p>
-
-<p>使用Modifier的扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.Modifier">anchoredDraggable</a>.anchoredDraggable(androidx.compose.foundation.gestures.AnchoredDraggableState,androidx.compose.foundation.gestures.Orientation,kotlin.Boolean,kotlin.Boolean,androidx.compose.foundation.interaction.MutableInteractionSource))来处理滑动事件，定义一些<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/DraggableAnchors">锚点（DraggableAnchors）</a>，视为一个手势操作中的不同状态，比如像滑动开关，就是开和关，像滑动删除就是正常和已删除，再用一个<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/AnchoredDraggableState">AnchoredDraggableState</a>来追踪滑动的状态，这里面可以定义初始锚点，锚点值，和终止状态的阈值（positionalThreshold超过一定位置就认为到达终点锚点，velocityThreshold速度小于这个时就认为到达终点锚点），以及手势过程中的动画（animationSpec）。然后，再把AnchoredDraggableState中的滑动距离offset设置到Composable中即可。</p>
-
-<p>说的挺复杂，其实很直观，看一个例子就明了：</p>
-
-<pre><code class="Kotlin">enum class SwipeableSwitchState {
-    SWITCH_ON, SWITCH_OFF
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun SwipeableSample() {
-    val width = 128.dp
-    val squareSize = 64.dp
-
-    val density = LocalDensity.current
-    val sizePx = with(density) { squareSize.toPx() }
-    val anchors = DraggableAnchors {
-        SwipeableSwitchState.SWITCH_ON at sizePx
-        SwipeableSwitchState.SWITCH_OFF at 0f
-    }
-    val swipeableState = remember {
-        AnchoredDraggableState(
-            initialValue = SwipeableSwitchState.SWITCH_OFF,
-            anchors = anchors,
-            positionalThreshold = { d: Float -&gt; d * 0.4f },
-            velocityThreshold = { with(density) { 100.dp.toPx() } },
-            animationSpec = tween()
-        )
-    }
-    Box(
-        modifier = Modifier
-            .width(width)
-            .anchoredDraggable(
-                state = swipeableState,
-                orientation = Orientation.Horizontal,
-                startDragImmediately = false
-            )
-            .background(Color.LightGray)
-    ) {
-        Box(
-            Modifier
-                .offset {
-                    IntOffset(
-                        if (swipeableState.offset.isNaN()) 0 else swipeableState.offset.roundToInt(),
-                        0
-                    )
-                }
-                .size(squareSize)
-                .background(Color.DarkGray)
-        )
-    }
-}
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/swipe.gif" alt="swipe_demo" />
-这个例子展示了一个滑动开关的手势处理，滑动距离超过整体长度0.4时，或者速度小于100时就认为到达另一锚点状态。可以明显的看出与拖拽的区别，滑动后手可以离开，但手势仍在继续直到达到终点锚点。</p>
-
-<p><strong>注意：</strong>在Compose 1.6版本以前有另外一个扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/material/package-summary#(androidx.compose.ui.Modifier">swipeable</a>.swipeable(androidx.compose.material.SwipeableState,kotlin.collections.Map,androidx.compose.foundation.gestures.Orientation,kotlin.Boolean,kotlin.Boolean,androidx.compose.foundation.interaction.MutableInteractionSource,kotlin.Function2,androidx.compose.material.ResistanceConfig,androidx.compose.ui.unit.Dp))来处理滑动手势，但在1.6版本时已废弃，被anchoredDraggable取代，并且有一个<a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/migrate-swipeable">替换的教程</a>。</p>
-
-<h2>未完待续</h2>
-
-<p>事件处理对于UI来说是极其重要的，本篇重点讲述了Jetpack Compose中的最为基础和最为常见的事件处理方式，足以满足绝大多数应用场景。事件处理也是极其复杂的，对于交互极其复杂的页面来说，还需要进一步的了解更为底层的事件处理方法，以达到复杂交互的目的，将在后面的文章中继续深入探讨事件处理。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/tap-and-press">Tap and press</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/drag-swipe-fling">Drag, swipe, and fling</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/scroll">Scroll</a></li>
-<li><a href="https://canopas.com/how-to-implement-swipe-to-action-using-anchoreddraggable-in-jetpack-compose-cccb22e44dff">How to Implement Swipe-to-Action using AnchoredDraggable in Jetpack Compose</a></li>
-<li><a href="https://fvilarino.medium.com/exploring-jetpack-compose-anchored-draggable-modifier-5fdb21a0c64c">Exploring Jetpack Compose Anchored Draggable Modifier</a></li>
-<li><a href="https://medium.com/@AungThiha3/jetpack-compose-anchored-draggable-item-in-motionlayout-part-1-8d5a1cde880f">Jetpack Compose: Anchored Draggable Item in MotionLayout Part 1</a></li>
-<li><a href="https://medium.com/@AungThiha3/jetpack-compose-anchored-draggable-item-in-motionlayout-part-2-c1fd94188e56">Jetpack Compose: Anchored Draggable Item in MotionLayout Part 2</a></li>
 </ul>
 
 ]]></content>
