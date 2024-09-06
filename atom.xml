@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-08-30T22:44:08+08:00</updated>
+  <updated>2024-09-06T22:26:40+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,244 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『羝羊触蕃』| Handle Platform Lifecycles]]></title>
+    <link href="http://toughcoder.net/blog/2024/09/06/compose-interact-with-platforms/"/>
+    <updated>2024-09-06T22:21:49+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/09/06/compose-interact-with-platforms</id>
+    <content type="html"><![CDATA[<p>Jetpack Compose是一个独立的声明式UI框架，它并不受限于任何操作系统平台，从框架定位的角度来讲，它是跨平台的，也应该要跨平台。但是我们的应用程序必然是为某些操作系统平台（后面简称平台Platform）构建的，也就是说要运行在某些平台上面。这就免不了要与平台进行打交道。这篇文章将以Android平台为例，学习在Compose中如何处理平台的生命周期事件。</p>
+
+<p><a href="http://toughcoder.net/blog/2024/09/06/compose-interact-with-platforms/"><img src="https://www.ericthecoder.com/wp-content/uploads/2020/05/feature.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>感知平台生命周期事件</h2>
+
+<p>对于移动应用程序来说，感知平台的生命周期是非常重要的，比如最为典型的场景，对于一个新闻消息类的应用来说，当首次进入页面的时候肯定 要刷新拉取最新的消息，当用户切换到另外一个应用时，比如接了个电话，或者分享，之后再回到你的应用页面，这时也应该主动刷新消息，而不是要等着用户手动的去点击刷新按扭；再比如说当使用了硬件资源（位置，Camera或者Sensors等）时，更是要当离开应用页面的时候就应该立即释放硬件，以停止对硬件资源的占用。</p>
+
+<p>从前面的文章<a href="https://juejin.cn/post/7401358349877346338">降Compose十八掌之『损则有孚』| Lifecycle</a>中我们了解到Composable本身的生命周期与平台是无关的且非常不一致，光靠Compose自己的节奏是无法感知到在平台生命周期事件的。这就需要我们使用一些桥接工具来感知平台生命周期事件，以能让我们针对感兴趣的事件执行一些操作。</p>
+
+<h3>生命周期事件副作用函数（LifecycleEffects）</h3>
+
+<p>幸运的是Jetpack组件中的lifecycle已经添加了<a href="https://developer.android.com/topic/libraries/architecture/compose">对Compose的支持</a>，定义了一些<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event,androidx.lifecycle.LifecycleOwner,kotlin.Function0">生命周期副作用函数</a>)，在这些副作用函数中可以针对 不同的事件设置代码块，当相应的生命周期发生时就会执行这些代码块：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">LifecycleEventEffect</span><span class="p">(</span><span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_START</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="c1">// onStar时执行一些操作</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>上面的代码就是指定要在onStart时做一些事情。需要<strong>注意</strong>的是，无法监听onDestroy（即事件Lifecycle.Event.ON_DESTROY），因为Compose的<strong>组合会在onDestroy之前就结束</strong>了。</p>
+
+<p>除了上面的用法之外，还有更为为方便的<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleStartEffect(kotlin.Any,androidx.lifecycle.LifecycleOwner,kotlin.Function1">LifecycleStartEffect</a>)和<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleResumeEffect(kotlin.Any,androidx.lifecycle.LifecycleOwner,kotlin.Function1">LifecycleResumeEffect</a>)可以直接使用，它们是针对onStart/onStop和onResume/onPause两对事件的，因为生命周期中最为常用的就是这四个事件了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">LifecycleStartEffect</span> <span class="p">{</span>
+</span><span class='line'>  <span class="c1">// onStart中需要做的事情</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="n">onStopOrDispose</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// onStop需要做的事情</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">LifecycleResumeEffect</span> <span class="p">{</span>
+</span><span class='line'>  <span class="c1">// onResume需要做的事情</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="n">onPauseOrDispose</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// onPause需要做的事</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>需要注意，这两个副作用函数是针对事件对的，也就是说必须要带着后面的onStopOrDispose和onPauseOrDispose。如果仅对onStart感兴趣，而无须在onStop中做清理，那么应该直接使用LifecycleEventEffect(Lifecycle.Event.ON_START) {}（对于onResume也是同理）。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://medium.com/@nirazv/managing-lifecycles-events-on-jetpack-compose-bbecf804b43d">Managing Lifecycles Events on Jetpack Compose</a></li>
+<li><a href="https://developer.android.com/topic/libraries/architecture/compose">Integrate Lifecycle with Compose</a></li>
+</ul>
+
+
+<h3>监听生命周期事件</h3>
+
+<p>除了直接使用生命周期副作用函数以外，也可以用lifecycle原生的方式，直接向<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleOwner">LifecycleOwner</a>注册一个<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleEventObserver">LifecycleEventObserver</a>来监听生命周期。通过Compose提供的LifeCycleOwner.current可以获得当前的LifecycleOwner，然后向其注册一个LifecycleEventObserver，当平台生命周期发生变化时，就会带着事件类型回调给监听者，监听者可以针对感兴趣的事件做操作。还需要注意的是，需要在组合结束（离开）时反注册observer，因此这里要用DisposableEffect。对于副作用函数不熟悉的同学可以去复习一下<a href="https://juejin.cn/post/7405158681078104127">降Compose十八掌之『龙战于野』| Side Effects</a>。</p>
+
+<p>来看个简单的示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">observer</span> <span class="p">=</span> <span class="n">LifecycleEventObserver</span> <span class="p">{</span> <span class="n">_</span><span class="p">,</span> <span class="n">event</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="k">when</span> <span class="p">(</span><span class="n">event</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_CREATE</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* onCreate */</span> <span class="p">}</span>
+</span><span class='line'>                <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_START</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* onStart */</span> <span class="p">}</span>
+</span><span class='line'>                <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_RESUME</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* onResume */</span> <span class="p">}</span>
+</span><span class='line'>                <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_PAUSE</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* onPause */</span> <span class="p">}</span>
+</span><span class='line'>                <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_STOP</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* onStop */</span> <span class="p">}</span>
+</span><span class='line'>                <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_DESTROY</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* onDestroy */</span> <span class="p">}</span>
+</span><span class='line'>                <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_ANY</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* Any event */</span> <span class="p">}</span>
+</span><span class='line'>                <span class="k">else</span> <span class="p">-&gt;</span> <span class="p">{}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">addObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">removeObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这样就可以监听到生命周期事件，然后针对不同的事件做相应的操作。</p>
+
+<p>当然，如果事件不止做一件事情，或者说对事件的响应不光光是执行一些函数，可能还会有页面的修改，那么这时最好就是把事件保存为一个状态（State），更为方便：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">var</span> <span class="py">lifecycleEvent</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_ANY</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">DisposableEffect</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">observer</span> <span class="p">=</span> <span class="n">LifecycleEventObserver</span> <span class="p">{</span> <span class="n">_</span><span class="p">,</span> <span class="n">event</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">lifecycleEvent</span> <span class="p">=</span> <span class="n">event</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">addObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">removeObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">lifecycleEvent</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">lifecycleEvent</span> <span class="p">==</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_RESUME</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">refresh</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Column</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">lifecycleEvent</span> <span class="p">==</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_RESUME</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Welcome back&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://stackoverflow.com/questions/74780546/android-handle-lifecycle-event-on-jetpack-compose-screen">Android handle lifecycle event on Jetpack Compose Screen</a></li>
+<li><a href="https://proandroiddev.com/jetpack-compose-making-composable-lifecycle-aware-bde67437d2d0">Jetpack Compose — Making Composable lifecycle-aware</a></li>
+<li><a href="https://betterprogramming.pub/jetpack-compose-with-lifecycle-aware-composables-7bd5d6793e0">Jetpack Compose with Lifecycle-Aware Composables</a></li>
+</ul>
+
+
+<h3>以数据流的方式来处理生命周期事件</h3>
+
+<p>生命周期是由系统控制，不时发生变化，每次变化会向监听者回调一个事件，如果以一定的时间跨度来看待，这些事件就形成了一个数据流。因此，Lifecycle还提供了一个Flow接口，用以发送Lifecycle事件。可以当作状态（State）来收集此Flow，这样事件的变化就能驱动Compose的重组，进而感知到最新的生命周期事件：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'><span class="k">val</span> <span class="py">stateFlow</span> <span class="p">=</span> <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">currentStateFlow</span>
+</span><span class='line'><span class="k">val</span> <span class="py">currentLifecycleState</span> <span class="k">by</span> <span class="n">stateFlow</span><span class="p">.</span><span class="n">collectAsState</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 或者</span>
+</span><span class='line'><span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'><span class="k">val</span> <span class="py">currentLifecycleState</span> <span class="p">=</span> <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">currentStateAsState</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>注意：</strong> 对于Flow不熟悉的同学可以复习一下<a href="https://juejin.cn/post/7336751931375648820">包教包会的Kotlin Flow教程</a>。</p>
+
+<h3>不要在ViewModel中感知生命周期</h3>
+
+<p>根据<a href="https://developer.android.com/topic/architecture">现代安卓开发架构原则</a>，ViewModel应该处理与UI相关的业务逻辑，它应该独立于平台，因此，千万不要在ViewModel去感知生命周期，事实上你也做不到，因为ViewModel是没任何对平台的依赖的，非常独立的一个类型，也即拿不到LifecycleOwner。</p>
+
+<p>当然了，有同学说，我可以从Compose的Composable中把LifecycleOwner当作参数传给ViewModel，但仍然强烈不建议这样做。深层的原因在于，ViewModel是独立于平台的，它有自己的生命周周期，平台的组件（如Activity）是由系统控制的，但ViewModel是由我们自己控制的，它的生命周期要长于平台的组件，也就是说ViewModel的生命周期要长于它持有的LifecycleOwner，故LifecycleOwner可能会变得过时（非当前的Activity了），同时因为被更长生命的ViewModel持有，原LifecycleOwner可能无法被回收而引发内存泄漏。</p>
+
+<p>ViewModel只应该负责业务逻辑相关的事情，在Composable中监听生命周期事件很方便，也很合适，然后调用ViewModel的相应的接口（如refresh()）即可。</p>
+
+<h2>总结</h2>
+
+<p>得益于Jetpack中的Lifecycle组件，在Compose中感知生命周期没有想像中的那样难。在实际项目中，推荐使用更符合Compose的方式，也即生命周期副作用函数以及事件数据流。如果仅是在某些生命周期事件发生时执行一些操作，那就用LifecycleEventEffect函数；如果不止一处需要使用事件，那就用事件数据流。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『履霜冰至』| Phases]]></title>
@@ -6442,273 +6680,6 @@ textStyle比较丰富，除了直接指定颜色以外，还可以用<a href="ht
 <li><a href="https://9to5google.com/2024/05/14/google-io-2024-developer-recap/">What’s new for developers at Google I/O 2024</a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『亢龙有悔』]]></title>
-    <link href="http://toughcoder.net/blog/2024/05/15/compose-made-easy/"/>
-    <updated>2024-05-15T20:26:06+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/05/15/compose-made-easy</id>
-    <content type="html"><![CDATA[<p><a href="https://developer.android.com/develop/ui/compose">Jetpack Compose</a>是新一代的声明式的UI开发框架，由Google在2019年推出，最初是作为Android的新式UI开发框架，但它本质是一个声明式UI开发框架，并不受制于底层的平台，现在的Compose已有跨平台开发能力，但Android上的UI开发仍是最主要的使用领域，深受Android开发者喜爱。计划将用一系列文章，并开辟专栏来学习Compose，此为开篇。</p>
-
-<p><a href="http://toughcoder.net/blog/2024/05/15/compose-made-easy/"><img src="https://alexzh.com/content/images/2021/02/logo-1.65-1980-compressed-4.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>注意：最初是叫做Jetpack Compose，作为Jetpack套件中的一个，后来与Jetpack独立开来了，现在Compose发展成为一个独立的声明式的UI开发框架，与Jetpack中其他组件并不是同一个概念，也并不在Jetpack套件里面。所以现在更多的称为Compose，为了方便后续统一称为Compose。</p>
-
-<h2>Hello, Compose!</h2>
-
-<p>老规矩，先来个简单的『Hello, world!』，以快速上手体验：</p>
-
-<p>首先，用Android Studio创建一个新的项目，选择『Phone and Tablet』，选择『Empty Activity』，然后Next。</p>
-
-<p><img src="https://pic2.zhimg.com/80/v2-f1df667c79bf94aa44fe00bccdfbbb65_1440w.webp" alt="create project" /></p>
-
-<p>在项目配置页面填入项目名字和包名等信息，其余的用默认就好。</p>
-
-<p><img src="https://pic3.zhimg.com/80/v2-b76564a9cd826d2dfcc949105eb4bb5a_1440w.webp" alt="config project" /></p>
-
-<p>等一会儿后，项目就创建好了，与常规的Android项目一样的，也有AndroidManifest，是项目运行时的主要配置，以及一个系统组件MainActivity作为入口。打开MainActivity.kt，可以发现里面已经默认用了Compose，并且有东西，我们稍改一下，改成下面的样子：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MainActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">HelloComposeTheme</span> <span class="p">{</span>
-</span><span class='line'>                <span class="c1">// A surface container using the &#39;background&#39; color from the theme</span>
-</span><span class='line'>                <span class="n">Surface</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
-</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">background</span>
-</span><span class='line'>                <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">Greeting</span><span class="p">(</span><span class="s">&quot;Android with Compose!&quot;</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">Greeting</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Hello, $name&quot;</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Preview</span><span class="p">(</span><span class="n">showBackground</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">GreetingPreview</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">HelloComposeTheme</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Greeting</span><span class="p">(</span><span class="s">&quot;Android&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后构建并运行项目，就能得到一个『Hello, Android with Compose!』：</p>
-
-<p><img src="https://pic1.zhimg.com/80/v2-4325b9d9a0a3f1ebb8380dcdc7fe2bec_1440w.webp" height="480" width="320" alt="HelloCompose" /></p>
-
-<p>样子略丑，我们来优化一下，修改Greeting函数：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">Greeting</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Hello, $name&quot;</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">align</span><span class="p">(</span><span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">headlineLarge</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">inverseSurface</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这下好了一丢丢！</p>
-
-<p><img src="https://pic4.zhimg.com/80/v2-efc8c9e62e38c02e6f18665d71862c97_1440w.webp" height="480" width="320" alt="HelloCompose v2" /></p>
-
-<p>除了在手机或者模拟器运行应用以外，还可以直接用Android Studio进行预览（用&#64;Preview标记的函数才会被预览），不过这不算新功能，因为很久以前打开一个XML文件（如布局），也可以直接在AS里预览的：</p>
-
-<p><img src="https://pic1.zhimg.com/80/v2-aa68d4eb84bf1bd130ca896c05371990_1440w.webp" alt="preview" /></p>
-
-<p>好了，现在我们已经成功学会用Compose来撸安卓UI了。如果有时间还可以试试<a href="https://developer.android.com/develop/ui/compose/tutorial">官方的入门Demo</a>。</p>
-
-<p>注意：不同版本的Android Studio可能会略不一样。详见下节『开发环境配置』。</p>
-
-<h2>配置开发环境</h2>
-
-<p>新一点的Android Studio如Giraffe，如果是新建的项目，默认就是用Compose了，不用再怎么搞（如果是上古时代的AS估计还是View的，建议直接升级AS吧都4202年了）。</p>
-
-<p>如果是现有的项目，想要添加Compose支持，可以这样做，先给android的buildFeatures中添加compose为true，并指定kotlin compiler extension的版本，注意这个并不是kotlin的版本，跟它没关系：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">android</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">buildFeatures</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">compose</span> <span class="p">=</span> <span class="k">true</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">composeOptions</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">kotlinCompilerExtensionVersion</span> <span class="p">=</span> <span class="s">&quot;1.5.13&quot;</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后再配置一坨依赖：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">composeBom</span> <span class="p">=</span> <span class="n">platform</span><span class="p">(</span><span class="s">&quot;androidx.compose:compose-bom:2024.05.00&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">composeBom</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.compose.ui:ui&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.compose.ui:ui-graphics&quot;</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Material Design 3</span>
-</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.compose.material3:material3&quot;</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Android Studio Preview support</span>
-</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.compose.ui:ui-tooling-preview&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">debugImplementation</span><span class="p">(</span><span class="s">&quot;androidx.compose.ui:ui-tooling&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>为了方便管理Compose依赖的版本，谷歌搞了一个叫做『物料清单』（Bill of Materials BOM），简单来说就是把Compose所有library的版本放到一个叫做BOM的library中，我们只需要指定一个BOM，这样，就能指定一坨Compose libraries的版本。详细的内容以及困难解决可以<a href="https://developer.android.com/develop/ui/compose/setup#kotlin">参考官方文档</a>。</p>
-
-<h2>理解Compose的基本原理</h2>
-
-<p>从我们的『HelloCompose』中可以看出Compose的特点，它是纯代码，Compose就是一个坨函数声明，不用再撸XML了；它是声明式的，也就是说你只是告诉框架需要什么，期望的样子是什么；它是响应式的，也就是说拿到最新的数据和状态，然后用相应的UI元素进行展示。这与以往用XML写UI是完全不同的，用XML是命令式的，你要拿到View，设置具体的细节。</p>
-
-<p>用Compose撸UI主要分为两部分，一是元素，如布局和具体的渲染元素如文字图片；另一个则是样式控制，所有元素都能接受一个Modifier对象来控制元素的样式，如大小，位置，偏移，对齐等等。会在后面的文章中对这些概念进行详细的讨论。</p>
-
-<p>另外需要注意，Compose就是一坨函数，上面例子中看到的『setContent』，『HelloComposeTheme』，『Suface』，『 Greeting』，『GreetingPreview』，『Box』，『Text』都是函数，虽然它们不符合Kotlin的函数命令规范。这里面套娃式的结构如：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">HelloComposeTheme</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// A surface container using the &#39;background&#39; color from the theme</span>
-</span><span class='line'>        <span class="n">Surface</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">background</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>             <span class="n">Greeting</span><span class="p">(</span><span class="s">&quot;Android with Compose!&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>   <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>是借助于尾部lambda实现的内部DSL，本质上也都是函数调用，视为函数调用就好了。感觉不熟悉的同学可以看看<a href="https://juejin.cn/post/7321550265610108979">前面的文章</a>以加深理解。</p>
-
-<h2>为啥要使用Compose</h2>
-
-<p>就Android开发来说明明已经有比较完善的View和XML来撸UI，为啥还要搞一个Compose呢？</p>
-
-<p>首先，声明式编程范式是最新式的UI构建方式，较原始方式（View和XML）它更加接近于人的思维。开发者只需要告诉架构『我要什么』以及『该如何响应』就可以了，其他事情都交给框架。像Flutter， React， SwiftUI等都是声明式的。一旦我们熟悉了以后，就会发现声明式UI可以极大的提高开发效率，最重要的是它能提高可扩展性（Scalability）。</p>
-
-<p>再有，Compose与各种最新的libraries粘合的特别好，像<a href="https://developer.android.com/jetpack">Jetpack</a>，<a href="https://m3.material.io/">MaterialDesign</a>等等，都可以直接在Compose中使用，非常的方便。</p>
-
-<p>最后，最重要的原因是Google在大力的布道Compose，已经把Compose设置为默认的UI开发方式，作为<a href="https://developer.android.com/modern-android-development">MAD（Modern Android Development）</a>的一块拼盘，新推出的有关于UI的文章都是基于Compose的。并且Google还在不断大力开发Compose，推出新功能以及提升渲染性能。从前面的例子也可以看出，现在默认新建一个项目就是用的Compose，相反，如果想要弄一个只用View的项目，还比较麻烦，要去除一系列配置参数。</p>
-
-<p>作为开发者，肯定要顺应潮流，迎头敢上（对的，是敢而不是赶）。</p>
-
-<h2>迁移建议</h2>
-
-<p>Compose虽然新式且好用，但我们在做迁移的时候要谨慎。对于新的技术（无论是新的编程语言，新的框架，还是新的编程范式）切忌不要一刀切或者搞大跃进。对于，纯新的功能，或者说纯新的项目，当然可以直接就用Compose来开发；但是对于现有的功能，暂时不要去动它，万不可上来就想着用Compose重写一遍。等到对Compose比较熟悉了，人力较富余时，以及现在功能仍会有新的较大的改动时才考虑去重写。对于比较成熟且稳定的功能，建议就不要去折腾它了，因为不会带来价值和收益。</p>
-
-<p><a href="https://developer.android.com/develop/ui/compose/migrate">官方也有迁移建议</a>，可以看一看。</p>
-
-<h2>优质教程与实例</h2>
-
-<p>Google对Compose还是很上心的，写了<a href="https://developer.android.com/develop/ui/compose/documentation">大量的文档</a>，此外还有<a href="https://developer.android.com/courses/jetpack-compose/course">很多教程（CodeLabs）</a>，以及<a href="https://developer.android.com/samples">很多Demo app</a>。并且Compose作为MAD的一块拼盘，也融合进了MAD里面，特别是<a href="https://developer.android.com/develop/ui/compose/architecture">架构层面</a>的文章中用的都是Compose。</p>
-
-<h2>未完，待续</h2>
-
-<p>本文从快速上手的Demo开始，解释一些核心概念，并给出一些有用的资源链接。相信通过此文，能对Compose有一个很好的了解。后续会继续深入探讨各个话题，以练成降Compose十八掌！</p>
 ]]></content>
   </entry>
   

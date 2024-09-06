@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-08-30T22:44:08+08:00</updated>
+  <updated>2024-09-06T22:26:40+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,165 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[降Compose十八掌之『羝羊触蕃』| Handle Platform Lifecycles]]></title>
+    <link href="http://toughcoder.net/blog/2024/09/06/compose-interact-with-platforms/"/>
+    <updated>2024-09-06T22:21:49+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/09/06/compose-interact-with-platforms</id>
+    <content type="html"><![CDATA[<p>Jetpack Compose是一个独立的声明式UI框架，它并不受限于任何操作系统平台，从框架定位的角度来讲，它是跨平台的，也应该要跨平台。但是我们的应用程序必然是为某些操作系统平台（后面简称平台Platform）构建的，也就是说要运行在某些平台上面。这就免不了要与平台进行打交道。这篇文章将以Android平台为例，学习在Compose中如何处理平台的生命周期事件。</p>
+
+<p><a href=""><img src="https://www.ericthecoder.com/wp-content/uploads/2020/05/feature.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>感知平台生命周期事件</h2>
+
+<p>对于移动应用程序来说，感知平台的生命周期是非常重要的，比如最为典型的场景，对于一个新闻消息类的应用来说，当首次进入页面的时候肯定 要刷新拉取最新的消息，当用户切换到另外一个应用时，比如接了个电话，或者分享，之后再回到你的应用页面，这时也应该主动刷新消息，而不是要等着用户手动的去点击刷新按扭；再比如说当使用了硬件资源（位置，Camera或者Sensors等）时，更是要当离开应用页面的时候就应该立即释放硬件，以停止对硬件资源的占用。</p>
+
+<p>从前面的文章<a href="https://juejin.cn/post/7401358349877346338">降Compose十八掌之『损则有孚』| Lifecycle</a>中我们了解到Composable本身的生命周期与平台是无关的且非常不一致，光靠Compose自己的节奏是无法感知到在平台生命周期事件的。这就需要我们使用一些桥接工具来感知平台生命周期事件，以能让我们针对感兴趣的事件执行一些操作。</p>
+
+<h3>生命周期事件副作用函数（LifecycleEffects）</h3>
+
+<p>幸运的是Jetpack组件中的lifecycle已经添加了<a href="https://developer.android.com/topic/libraries/architecture/compose">对Compose的支持</a>，定义了一些<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event,androidx.lifecycle.LifecycleOwner,kotlin.Function0">生命周期副作用函数</a>)，在这些副作用函数中可以针对 不同的事件设置代码块，当相应的生命周期发生时就会执行这些代码块：</p>
+
+<pre><code class="Kotlin">LifecycleEventEffect(Lifecycle.Event.ON_START) {
+  // onStar时执行一些操作
+}
+</code></pre>
+
+<p>上面的代码就是指定要在onStart时做一些事情。需要<strong>注意</strong>的是，无法监听onDestroy（即事件Lifecycle.Event.ON_DESTROY），因为Compose的<strong>组合会在onDestroy之前就结束</strong>了。</p>
+
+<p>除了上面的用法之外，还有更为为方便的<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleStartEffect(kotlin.Any,androidx.lifecycle.LifecycleOwner,kotlin.Function1">LifecycleStartEffect</a>)和<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleResumeEffect(kotlin.Any,androidx.lifecycle.LifecycleOwner,kotlin.Function1">LifecycleResumeEffect</a>)可以直接使用，它们是针对onStart/onStop和onResume/onPause两对事件的，因为生命周期中最为常用的就是这四个事件了：</p>
+
+<pre><code class="Kotlin">LifecycleStartEffect {
+  // onStart中需要做的事情
+
+  onStopOrDispose {
+    // onStop需要做的事情
+  }
+}
+
+LifecycleResumeEffect {
+  // onResume需要做的事情
+
+  onPauseOrDispose {
+    // onPause需要做的事
+  }
+}
+</code></pre>
+
+<p>需要注意，这两个副作用函数是针对事件对的，也就是说必须要带着后面的onStopOrDispose和onPauseOrDispose。如果仅对onStart感兴趣，而无须在onStop中做清理，那么应该直接使用LifecycleEventEffect(Lifecycle.Event.ON_START) {}（对于onResume也是同理）。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://medium.com/@nirazv/managing-lifecycles-events-on-jetpack-compose-bbecf804b43d">Managing Lifecycles Events on Jetpack Compose</a></li>
+<li><a href="https://developer.android.com/topic/libraries/architecture/compose">Integrate Lifecycle with Compose</a></li>
+</ul>
+
+
+<h3>监听生命周期事件</h3>
+
+<p>除了直接使用生命周期副作用函数以外，也可以用lifecycle原生的方式，直接向<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleOwner">LifecycleOwner</a>注册一个<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleEventObserver">LifecycleEventObserver</a>来监听生命周期。通过Compose提供的LifeCycleOwner.current可以获得当前的LifecycleOwner，然后向其注册一个LifecycleEventObserver，当平台生命周期发生变化时，就会带着事件类型回调给监听者，监听者可以针对感兴趣的事件做操作。还需要注意的是，需要在组合结束（离开）时反注册observer，因此这里要用DisposableEffect。对于副作用函数不熟悉的同学可以去复习一下<a href="https://juejin.cn/post/7405158681078104127">降Compose十八掌之『龙战于野』| Side Effects</a>。</p>
+
+<p>来看个简单的示例：</p>
+
+<pre><code class="Kotlin">val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -&gt;
+            when (event) {
+                Lifecycle.Event.ON_CREATE -&gt; { /* onCreate */ }
+                Lifecycle.Event.ON_START -&gt; { /* onStart */ }
+                Lifecycle.Event.ON_RESUME -&gt; { /* onResume */ }
+                Lifecycle.Event.ON_PAUSE -&gt; { /* onPause */ }
+                Lifecycle.Event.ON_STOP -&gt; { /* onStop */ }
+                Lifecycle.Event.ON_DESTROY -&gt; { /* onDestroy */ }
+                Lifecycle.Event.ON_ANY -&gt; { /* Any event */ }
+                else -&gt; {}
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+</code></pre>
+
+<p>这样就可以监听到生命周期事件，然后针对不同的事件做相应的操作。</p>
+
+<p>当然，如果事件不止做一件事情，或者说对事件的响应不光光是执行一些函数，可能还会有页面的修改，那么这时最好就是把事件保存为一个状态（State），更为方便：</p>
+
+<pre><code class="Kotlin">    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var lifecycleEvent by remember { mutableStateOf(Lifecycle.Event.ON_ANY) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -&gt;
+            lifecycleEvent = event
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(lifecycleEvent) {
+        if (lifecycleEvent == Lifecycle.Event.ON_RESUME) {
+            viewModel.refresh()
+        }
+    }
+
+    Column() {
+        if (lifecycleEvent == Lifecycle.Event.ON_RESUME) {
+            Text("Welcome back")
+        }
+    }
+</code></pre>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://stackoverflow.com/questions/74780546/android-handle-lifecycle-event-on-jetpack-compose-screen">Android handle lifecycle event on Jetpack Compose Screen</a></li>
+<li><a href="https://proandroiddev.com/jetpack-compose-making-composable-lifecycle-aware-bde67437d2d0">Jetpack Compose — Making Composable lifecycle-aware</a></li>
+<li><a href="https://betterprogramming.pub/jetpack-compose-with-lifecycle-aware-composables-7bd5d6793e0">Jetpack Compose with Lifecycle-Aware Composables</a></li>
+</ul>
+
+
+<h3>以数据流的方式来处理生命周期事件</h3>
+
+<p>生命周期是由系统控制，不时发生变化，每次变化会向监听者回调一个事件，如果以一定的时间跨度来看待，这些事件就形成了一个数据流。因此，Lifecycle还提供了一个Flow接口，用以发送Lifecycle事件。可以当作状态（State）来收集此Flow，这样事件的变化就能驱动Compose的重组，进而感知到最新的生命周期事件：</p>
+
+<pre><code class="Kotlin">val lifecycleOwner = LocalLifecycleOwner.current
+val stateFlow = lifecycleOwner.lifecycle.currentStateFlow
+val currentLifecycleState by stateFlow.collectAsState()
+
+// 或者
+val lifecycleOwner = LocalLifecycleOwner.current
+val currentLifecycleState = lifecycleOwner.lifecycle.currentStateAsState()
+</code></pre>
+
+<p><strong>注意：</strong> 对于Flow不熟悉的同学可以复习一下<a href="https://juejin.cn/post/7336751931375648820">包教包会的Kotlin Flow教程</a>。</p>
+
+<h3>不要在ViewModel中感知生命周期</h3>
+
+<p>根据<a href="https://developer.android.com/topic/architecture">现代安卓开发架构原则</a>，ViewModel应该处理与UI相关的业务逻辑，它应该独立于平台，因此，千万不要在ViewModel去感知生命周期，事实上你也做不到，因为ViewModel是没任何对平台的依赖的，非常独立的一个类型，也即拿不到LifecycleOwner。</p>
+
+<p>当然了，有同学说，我可以从Compose的Composable中把LifecycleOwner当作参数传给ViewModel，但仍然强烈不建议这样做。深层的原因在于，ViewModel是独立于平台的，它有自己的生命周周期，平台的组件（如Activity）是由系统控制的，但ViewModel是由我们自己控制的，它的生命周期要长于平台的组件，也就是说ViewModel的生命周期要长于它持有的LifecycleOwner，故LifecycleOwner可能会变得过时（非当前的Activity了），同时因为被更长生命的ViewModel持有，原LifecycleOwner可能无法被回收而引发内存泄漏。</p>
+
+<p>ViewModel只应该负责业务逻辑相关的事情，在Composable中监听生命周期事件很方便，也很合适，然后调用ViewModel的相应的接口（如refresh()）即可。</p>
+
+<h2>总结</h2>
+
+<p>得益于Jetpack中的Lifecycle组件，在Compose中感知生命周期没有想像中的那样难。在实际项目中，推荐使用更符合Compose的方式，也即生命周期副作用函数以及事件数据流。如果仅是在某些生命周期事件发生时执行一些操作，那就用LifecycleEventEffect函数；如果不止一处需要使用事件，那就用事件数据流。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『履霜冰至』| Phases]]></title>
@@ -1227,245 +1386,6 @@ data class Profile(val id: String)
 <ul>
 <li><a href="https://developer.android.com/develop/ui/compose/navigation">Navigation with Compose</a></li>
 <li><a href="https://developer.android.com/guide/navigation">Navigation</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『时乘六龙』| Advanced Gestures]]></title>
-    <link href="http://toughcoder.net/blog/2024/08/02/advanced-gesture-in-compose/"/>
-    <updated>2024-08-02T07:46:30+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/08/02/advanced-gesture-in-compose</id>
-    <content type="html"><![CDATA[<p>通过<a href="https://juejin.cn/post/7395020728623480841">前面的一篇文章</a>我们学会了如何用各种高级别抽象的扩展函数来进行手势处理。像clickable，draggable，scrollable和anchoredDraggable都是类似于View系统中的各种回调（如onClick或者onScroll）是高级别的抽象，这里我们只能处理手势，大部分情况下这也够用了。</p>
-
-<p><a href=""><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/advanced_gesture.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>但是，对于一些复杂的交互 场景需要我们先识别手势，然后再处理手势，这时就不能再用封装好的扩展函数了，而必须要用到像View系统中的onTouchEvent那样的低级别的回调，直接拿到触点事件，然后再识别手势，最后再处理手势。这篇文章就学习一下如何使用Jetpack Compose中的低级别函数来识别和处理手势。</p>
-
-<h2>处理原始触点事件</h2>
-
-<p>除了使用一些封装好了的扩展函数来直接处理某个手势以外，还可以直接接收原始的事件输入。</p>
-
-<p>Jetpack Compose在Modifier中提供了扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/package-summary#(androidx.compose.ui.Modifier">pointerInput</a>.pointerInput(kotlin.Any,kotlin.Any,kotlin.coroutines.SuspendFunction1))来接收原始的触点事件，与View系统中的<a href="https://developer.android.com/reference/android/view/View.OnTouchListener">onTouch</a>是类似的，这是触点事件的低级别的API。通过此API能获得触点事件，之后可以进行手势识别和手势处理，因为拿到的是原始的触点事件，所以很多逻辑要自己写，有些麻烦，但因为完全可控，所以可以实现一些更为复杂的手势识别和手势处理，比如任意方向的拖拽和滑动，长按后的拖拽，多点触控等等。</p>
-
-<h3>接收触点事件</h3>
-
-<p>扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/package-summary#(androidx.compose.ui.Modifier">pointerInput</a>.pointerInput(kotlin.Any,kotlin.Any,kotlin.coroutines.SuspendFunction1))接收三个参数，前两个都是作为<strong>事件处理回调的标识（keys）</strong>，第三个参数是<strong>事件处理回调</strong>，是一个尾部lambda，当某个key发生变化，这个lambda会重新执行，否则即使发生重组（Recomposition），这个lambda也会不会重新执行。</p>
-
-<pre><code class="Kotlin">fun Modifier.pointerInput(key1: Any?, key2: Any?, block: suspend PointerInputScope.() -&gt; Unit): Modifier
-</code></pre>
-
-<p>第三参数就是我们要提供的事件处理回调，它是运行在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputScope">PointerInputScope</a>上下文中的lambda，这个上下文作用域里面有很多扩展函数可以直接使用。仔细看这个lambda是suspend的，这是因为输入事件可能不是即时的，可能会有等待的情况，也就是说lambda是在有事件的时候才会执行。PointerInputScope中的函数也都定义为suspend的，这些函数在lambda中可以直接调用，所以lambda本身也必须 是suspend的。</p>
-
-<p>比如说想要打印触点事件，就可以这样写：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun LogPointerEvents(filter: PointerEventType? = null) {
-    var log by remember { mutableStateOf("") }
-    Column {
-        Text(log)
-        Box(
-            Modifier
-                .size(100.dp)
-                .background(Color.Red)
-                .pointerInput(filter) {
-                    awaitPointerEventScope {
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            // handle pointer event
-                            if (filter == null || event.type == filter) {
-                                log = "${event.type}, ${event.changes.first().position}"
-                            }
-                        }
-                    }
-                }
-        )
-    }
-}
-</code></pre>
-
-<p>filter是一个事件的类型参数当作key，也当作过滤条件。在事件处理回调lambda中，用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/AwaitPointerEventScope#awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass">awaitPointerEvent</a>)获得每一个触点事件，然后打印出来，<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/AwaitPointerEventScope">awaitPoniterEventScope</a>函数是创建一个协程上下文作用域用以等待事件输入，在其内调用awaitPointerEvent来获得事件。</p>
-
-<h3>识别手势</h3>
-
-<p>虽然pointerInput是一个低级别的接口，但也并不意味着所有的逻辑都必须从头写，在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputScope">PointerInputScope</a>中已经定义了大量的函数可以识别大部分手势：</p>
-
-<ul>
-<li>非连续性手势如单击（tap），双击（double tap）和长按（long press）：<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTapGestures</a>.detectTapGestures(kotlin.Function1,kotlin.Function1,kotlin.coroutines.SuspendFunction2,kotlin.Function1))</li>
-<li>拖拽（drag）：<a href="">detectDragGestures</a>，<a href="">detectDragGesturesAfterLongPress</a>，以及固定方向拖拽<a href="">detectHorizontalDragGestures</a>和<a href="">detectVerticalDragGestures</a></li>
-<li>多点触控变幻的手势识别（旋转，平移和缩放）：<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTransformGestures</a>.detectTransformGestures(kotlin.Boolean,kotlin.Function4))</li>
-</ul>
-
-
-<p>比如像<a href="https://juejin.cn/post/7395020728623480841">前面文章中</a>提到的拖拽也可以用pointerInput实现：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun DraggableTextLowLevel() {
-    Box(modifier = Modifier.fillMaxSize()) {
-        var offsetX by remember { mutableStateOf(0f) }
-        var offsetY by remember { mutableStateOf(0f) }
-
-        Box(
-            Modifier
-                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
-                .background(Color.Blue)
-                .size(50.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount -&gt;
-                        change.consume()
-                        offsetX += dragAmount.x
-                        offsetY += dragAmount.y
-                    }
-                }
-        )
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-drag.gif" alt="detect_drag_demo" /></p>
-
-<p>前面提到了像detectTapGestures和detectDragGestures都是suspend的函数，所以在一个pointerInter的lambda中只能有一个，比如像下面这样写detectDragGestures不会得到执行：</p>
-
-<pre><code class="Kotlin">var log by remember { mutableStateOf("") }
-Column {
-    Text(log)
-    Box(
-        Modifier
-            .size(100.dp)
-            .background(Color.Red)
-            .pointerInput(Unit) {
-                detectTapGestures { log = "Tap!" }
-                // 不会得到执行，走不到这里，前面一个是suspend的
-                detectDragGestures { _, _ -&gt; log = "Dragging" }
-            }
-    )
-}
-</code></pre>
-
-<p>一个可行的解决办法就是可以写多个pointerInput，每个ponterInput处理一种手势：</p>
-
-<pre><code class="Kotlin">var log by remember { mutableStateOf("") }
-Column {
-    Text(log)
-    Box(
-        Modifier
-            .size(100.dp)
-            .background(Color.Red)
-            .pointerInput(Unit) {
-                detectTapGestures { log = "Tap!" }
-            }
-            .pointerInput(Unit) {
-                // These drag events will correctly be triggered
-                detectDragGestures { _, _ -&gt; log = "Dragging" }
-            }
-    )
-}
-</code></pre>
-
-<h3>直接处理事件</h3>
-
-<p>遇到交互比较复杂的场景，或者当PointerInputScope中提供的识别函数不能解决问题时，或者需要把几种不同的手势组合在一起时，就需要直接处理事件。像View系统中的onTouch一样，我们需要知道不同的事件类型，比如pointer down，pointer move和pointer up等。PointerInputScope中提供了一个函数awaitEachGesture可以取代while (true)来获得每个事件；awaitFirstDown，是手势的开始相当于ACTION&#95;DOWN；waitForUpOrCancellation是事件结束，相当于ACTION&#95;UP和ACTION&#95;CANCEL；drag相当于ACTION&#95;MOVE。我们来看一个例子：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun LogPointerEvents() {
-    var log by remember { mutableStateOf("") }
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text(log)
-        Box(
-            Modifier
-                .size(240.dp)
-                .background(Color.DarkGray)
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown().also {
-                            log = "Action Down"
-                        }
-                        var change = awaitTouchSlopOrCancellation(down.id) { ch, _ -&gt;
-                            ch.consume()
-                        }
-                        while (change != null &amp;&amp; change.pressed) {
-                            change = awaitDragOrCancellation(change.id)
-                            if (change != null &amp;&amp; change.pressed) {
-                                log = "Action Move ${change.type} ${change.position}"
-                            }
-                        }
-                        log = "Action Up"
-                    }
-                }
-        )
-    }
-}
-</code></pre>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/gesture/event.gif" alt="event_demo" /></p>
-
-<p>需要注意的是这些函数都是suspend的，也就是说当预期的行为发生时才会带着结果返回，比如awaitFirstDown()当有第一个触点事件发生时结束suspend然后返回；awaitTouchSlopOrCancellation当有超过拖拽阈值时结束suspend然后返回；awaitDragOrCancellation当有拖拽发生时结束suspend返回。</p>
-
-<h2>触点事件的派发流程</h2>
-
-<p>为了更好的处理事件，需要了解一下Jetpack Compose的事件派发流程，与View系统是类似的，事件派发的过程也是沿着Composable的树形结构，从父Composable到子Composable，同一层级的顺序则是从上到下，从前到后（Z轴方向），依次做『Hit test』，直到事件被消费，就停止派发。</p>
-
-<p>事件的消费过程则是反过来，子Composable如果未消费就返回给父Composable，前面的Composable未消费，就继续向下传递，直到事件被消费。</p>
-
-<p>如果是自己在pointerInput中直接处理事件，就要特别注意手动的把事件给消费掉，否则可能会继续传递。像awaitPointerEvent，awaitFirstDown，awaitDragOrCancellation等返回的都是<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputChange">PointerInputChange</a>对象，调用它的<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/input/pointer/PointerInputChange#consume(">consume()</a>)方法即可把事件消费掉。再比如像上面的例子awaitTouchSlopOrCancellation中，也需要手动的把事件给消费掉，如果把ch.consume()这句删除，就会发现awaitDragOrCancellation不会得到执行，这是因为awaitTouchSlopOrCancellation这个方法还在执行中，调用ch.consume()把事件消费掉，这个函数才会返回。</p>
-
-<p>这也说明了，还是要尽量用系统封装好的手势识别和手势处理函数，不到万不得已不要直接处理原始事件，因为逻辑写起来肯定相当复杂。</p>
-
-<h2>多点触控</h2>
-
-<p>多点触控是超过一个触点同时在屏幕上操作，最为常见的手势就是旋转和缩放，可以使用扩展函数<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#(androidx.compose.ui.Modifier">transformable</a>.transformable(androidx.compose.foundation.gestures.TransformableState,kotlin.Boolean,kotlin.Boolean))监听旋转，平移和缩放手势，其中平移单个触点也能触发，缩放和旋转则需要两个触点，当超过3个触点时这个函数不会回调，也即不会触发任何手势：</p>
-
-<pre><code class="Kotlin">@Composable
-private fun TransformableSample() {
-    // set up all transformation states
-    var scale by remember { mutableStateOf(1f) }
-    var rotation by remember { mutableStateOf(0f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    val state = rememberTransformableState { zoomChange, offsetChange, rotationChange -&gt;
-        scale *= zoomChange
-        rotation += rotationChange
-        offset += offsetChange
-    }
-    Box(
-        Modifier
-            // 把参数应用到图层去做变幻
-            .graphicsLayer(
-                scaleX = scale,
-                scaleY = scale,
-                rotationZ = rotation,
-                translationX = offset.x,
-                translationY = offset.y
-            )
-            // 接收变幻手势
-            .transformable(state = state)
-            .background(Color.Blue)
-            .fillMaxSize()
-    )
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/gestures-multitouch.gif" alt="multi_touch_demo" /></p>
-
-<p>除了直接使用Modifier.transformable以外，还可以用前面提到过的pointerInput中的<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/gestures/package-summary#(androidx.compose.ui.input.pointer.PointerInputScope">detectTransformGestures</a>.detectTransformGestures(kotlin.Boolean,kotlin.Function4))这个函数也能得到平移，旋转和缩放的变化数值，把这些数值应用到graphicsLayer去做变幻就可以了，使用detectTransformGestures的另一个好处是可以与其他的手势结合起来。</p>
-
-<h2>总结</h2>
-
-<p>通过本文我们学习如何得到原始的触点事件，以及如何识别手势，相信对触点事件以及手势识别有了更深入的理解，并且借助这些扩展函数就可以写出交互性更好的应用程序界面。即使遇到一些复杂的交互 场景，或者需要组合多种手势时，也都能从容应对。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/understand-gestures">Understand gestures</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/touch-input/pointer-input/multi-touch">Multitouch: Panning, zooming, rotating</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/touch-input/user-interactions/handling-interactions">Handling user interactions</a></li>
 </ul>
 
 ]]></content>
