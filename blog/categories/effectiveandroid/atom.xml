@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-09-19T21:45:29+08:00</updated>
+  <updated>2024-09-21T11:09:21+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,203 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[轻松解决Jetpack Compose中的一些痛点问题]]></title>
+    <link href="http://toughcoder.net/blog/2024/09/21/compose-best-practices/"/>
+    <updated>2024-09-21T10:59:35+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/09/21/compose-best-practices</id>
+    <content type="html"><![CDATA[<p>暑去秋来，金桂飘香，不知不觉中我们已经练完了<a href="https://juejin.cn/column/7367555191338467337">『降Compose十八掌』</a>，相信通过这一系列文章能够对Jetpack Compose有足够的理解，并能在实际项目中进行运用。今天将继续Compose之旅，总结一下Compose使用过程中经常会遇到的一些痛点问题，并学会如何优雅的解决这些问题。</p>
+
+<p><a href=""><img src="https://innovationm.co/wp-content/uploads/2021/05/Jetpack-compose.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>定义slot时要注明布局作用域</h2>
+
+<p>先来看一个比较常规的问题，Compose开发过程中，非常鼓励开发者把可以复用的部分抽象成为一个函数，然后接收一个尾部lambda作为参数进行差异化的定制。这种范式叫做<a href="https://developer.android.com/develop/ui/compose/layouts/basics#slot-based-layouts">slot模式</a>，slot模式的好处在于能够大大加强代码复用，开发者在构建UI的时候，像搭积木那样把一个一个的slot叠在一起。Compose自己的API中都大量的采用了这种模式。</p>
+
+<p>为了让slot更加的通用，我们需要<strong>明确传入的lambda与slot之间的约定</strong>，这就要求我们对lamdba的类型进行严格的限制。</p>
+
+<p>首先要添加注解&#64;Composable，这个是显而易见的，因为slot是为了绘制一些自定义UI元素而准备的，所以肯定是要加上&#64;Composable，否则在lambda中无法写UI，因为非Composable不能调用Compose的方法。</p>
+
+<p>另外，不是那么明显的就是这个lamdba的类型，要指定<a href="https://kotlinlang.org/docs/lambdas.html#function-literals-with-receiver">其Receiver</a>，以限定它所在的布局。比如说slot是用在一个Column里面的，那么要给lamdba指定ColumnScope作为receiver，这样在实现lambada的时候就知道是作为Column的一部分，并且可以使用Column布局的特有相关参数，如左右居中和垂直排列：</p>
+
+<pre><code class="Kotlin">@Composable
+MyLayout(
+     modifier: Modifier,
+     content: @Composable ColumnScope.()-&gt;Unit
+) {
+     Column() {
+          // 共用的一部分
+
+          content()
+     }
+}
+
+// 调用的地方
+MyLayout { // this = ColumnScope
+     // 隐式this指针指向一个ColumnScope对象，就像在一个Column中一样
+     // 定制的部分
+}
+</code></pre>
+
+<p>UI元素很多都会涉及到居中，对齐的调整，以及内部元素的排列，而对齐和排列又会明确的受到所在父布局的影响，比如说Box与Column的对齐和排列方式就是不同的。所以在使用slot时一定要明确 标注它所在的布局，以让调用者能够明确地知道lambda所在的布局作用域。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://chrisbanes.me/posts/slotting-in-with-compose-ui/">Slotting in with Compose UI</a></li>
+<li><a href="https://www.valueof.io/blog/compose-slot-api-example-composable-content-lambda">Practical Compose Slot API example</a></li>
+<li><a href="https://proandroiddev.com/designing-slot-apis-in-jetpack-compose-4a981ddbc776">Designing Slot APIs in Jetpack Compose</a></li>
+<li><a href="https://tech.pic-collage.com/%E5%88%9D%E6%8E%A2-jetpack-compose-slot-api-8d3f153f77e3">初探 Jetpack Compose — Slot API</a></li>
+</ul>
+
+
+<h2>如何在ViewModel中使用平台相关的资源</h2>
+
+<p>我们在<a href="https://juejin.cn/post/7411812014047461387">降Compose十八掌之『神龙摆尾』| Architecture</a>中讨论过，ViewModel作为Domain层，目的是把逻辑尽可能的从UI层中抽出来，让UI尽可能的只做UI渲染。ViewModel也要做到平台独立，这样才方便移植和测试。ViewModel中吐出来的数据要是加工过的可以直接方便地在UI层展示的数据，如字符串或者图片。</p>
+
+<p>但有一个问题，资源文件如何管理都是平台强相关的。对于要展示给用户的文案，也不可能直接把字符串传给UI，因为UI语言都要能够本地化以适应不同的国家和地区，当然了如果说不需要考虑多语言的问题，比如我的应用只给某一个语言使用，那当然也可以直接把处理好的字符串当作UiState传给UI层。</p>
+
+<p>最为理想的解决方案就是ViewModel层定义一些<strong>状态码</strong>，对应着不同的提示语言，由UI负责一一对应的，把状态码再转成字符串。对于其他的资源也可以采用类似方式处理。这是从ViewModel输出到UI层的情况。</p>
+
+<p>还会反过来，对于需要从UI层输入到ViewModel的资源，也是要<strong>去除平台的相关性</strong>，比如转成ViewModel中定义的状态码，或者转成原始数据类型String，或者转成平台无关的输入输出流等等。</p>
+
+<h3>字符串资源</h3>
+
+<p>对于Android平台来说，可以用一个简单的方式来解决字符串资源问题，因为资源的引用是一个整数，所以可以直接把资源的ID当作字段传给UI，Compose拿到后直接用函数stringResource取出来就可以了：</p>
+
+<pre><code class="Kotlin">data class UiState(
+     val loading: Boolean = false,
+     @StringRes val errorMsg: Int = 0
+)
+
+class HomeViewModel {
+     val timeout = UiState(false, R.string.error_message_timeout)
+     _state.update(timeout)
+}
+
+// 在Compose中
+HomeScreen() {
+    Text(stringResource(uiState.errorMsg))
+}
+</code></pre>
+
+<p>虽然说这并不太通用，因为换成其他平台时可能不是用资源ID来获取资源，但转成状态码的方式也会很容易，所以问题不大。</p>
+
+<p>如果是输入的话，在Compose中直接读取资源变成String传给ViewModel就好了。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://stackoverflow.com/questions/47628646/how-should-i-get-resourcesr-string-in-viewmodel-in-android-mvvm-and-databindi">How should I get Resources(R.string) in viewModel in Android (MVVM and databinding)</a></li>
+<li><a href="https://medium.com/@margin555/using-string-resources-in-a-viewmodel-e334611b73da">Using String Resources in a ViewModel</a></li>
+</ul>
+
+
+<h3>图片资源</h3>
+
+<p>图片资源一般来说都是UI自己指定，但有些时候可能会有逻辑，比如一些需要经过运算才能得到的复杂的状态，其代表的Icon，由ViewModel来直接指定要好一些。图片资源也可以直接使用资源ID，然后在Compose中使用painterResource来获取：</p>
+
+<pre><code class="Kotlin">data class UiState(
+     @DrawableRes val icon: Int = 0
+)
+
+// in ViewModel
+val state = UiState(R.drawable.ic_windy)
+
+// in Compose
+Icon(painterResource(uiState.icon))
+</code></pre>
+
+<p>如果是输入的话，可以在Compose中把图片资源转成输入流传给ViewModel去处理。</p>
+
+<h3>其他资源</h3>
+
+<p>其他资源如dimen或者color，也可以如法炮制。</p>
+
+<p>输入的话，对于普通的资源像字符串资源，dimen或者color等读出来转成基础数据类型String，Int或者Array传给ViewModel就好。而像比较麻烦的资源，如Assets中的资源，就转成输入流传给ViewModel处理。</p>
+
+<h2>如何在常规函数中调用Composables</h2>
+
+<p>在Compose的开发过程中最为令人不爽的地方在于Compose 的API，只能在被注解&#64;Composable标注的函数中调用，其他地方是无法调用的。一般来说，这个问题也不大，因为Compose的入口是肯定是一个composable啊，一坨坨的composables的调用最终<a href="https://juejin.cn/post/7407643004490956810">会生成UI树</a>。</p>
+
+<p>但有些地方却跑出了Composable之外，比如像很多UI元素的事件响应，比如<a href="https://developer.android.com/develop/ui/compose/components/button">Button</a>，它的事件响应onClick接收的就是一个普通的lambda：</p>
+
+<pre><code class="Kotlin">@Composable
+fun MainContent(
+    modifier: Modifier = Modifier,
+    serviceOn: Boolean,
+    context: Context
+) {
+    Column() {
+        Button(
+            onClick = { AccessibilityHelper.gotoChronosSettings(context) },
+        ) {
+            Text(stringResource(if (serviceOn) R.string.turn_off_service else R.string.enable_service))
+        }
+    }
+}
+</code></pre>
+
+<p>在Button的onClick里面可以执行一些普通函数调用，比如调用ViewModel等，但是不可以调用Compose的API，因为它是非Composable的，已经跑到了Composable之外。有些场景，这会带来比较大的不方便。</p>
+
+<p>响应点击按扭的方式可能有很多，有些是执行一些普通函数调用，但有些时候也会修改UI，大部分时候也会创建新UI，比如说会弹出对话框。对于修改UI，可以直接通过修改状态的值，状态的值发生改变会触发重组，进而UI状态就会改变（通过读取状态的值显示 不同的UI）。</p>
+
+<p>对话框<a href="https://developer.android.com/develop/ui/compose/components/dialog">Dialog</a>也是一个Composable，它只能被Composable调用，无法在Button的onClick中直接调用Dialog。解决的办法依旧是借助状态，用一个Boolean型值的状态，当其为true时显示Dialog，在Button的onClick中更改此状态为true，状态变了触发重组，在重组时值为true就会显示Dialog了：</p>
+
+<pre><code class="Kotlin">@Composable
+fun InputSettingsEntry(
+    label: String,
+    description: String,
+    value: String,
+    onChange: (String)-&gt;Unit
+) {
+    var showing by remember { mutableStateOf(false) }
+     Button(onClick = { showing = true }) {
+          Text(value)
+     }
+
+    if (showing) {
+        InputDialog(
+            title = label,
+            message = description,
+            value = value,
+            onDismiss = { showing = false },
+            onConfirm = {
+                onChange(it)
+                showing = false
+            }
+        )
+    }
+}
+</code></pre>
+
+<p>另外，其实Dialog本身的一些事件响应也都是非Composable的，都是通过状态来控制Dialog的显示与否。</p>
+
+<p>扩展阅读：</p>
+
+<ul>
+<li><a href="https://stackoverflow.com/questions/66952179/not-able-to-show-alertdialog-from-onclick-in-jetpack-compose">Not able to show AlertDialog from onClick in Jetpack Compose</a></li>
+<li><a href="https://medium.com/@esthcarelle/alert-dialog-with-jetpack-compose-a-step-by-step-guide-04dc3e9dfc1d">Alert Dialog with Jetpack compose: A Step-by-Step Guide</a></li>
+</ul>
+
+
+<h2>总结</h2>
+
+<p>Jetpack Compose博大精深，看似简单就是一坨函数，但在实际项目使用中会遇到各种细节问题。遇到问题也不用慌，用我们的<a href="https://juejin.cn/column/7367555191338467337">『降Compose十八掌』</a>都能解决，没事就多读一读，理解了Compose的思想与原理，做到心中无剑，很多问题都能迎刃而解。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://climbtheladder.com/10-android-jetpack-compose-best-practices/">10 Android Jetpack Compose Best Practices</a></li>
+<li><a href="https://getstream.io/blog/jetpack-compose-guidelines/">6 Jetpack Compose Best Practices for Optimizing Your App Performance</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[降Compose十八掌之『神龙摆尾』| Architecture]]></title>
@@ -1057,240 +1254,6 @@ fun HomeScreen(
 <h2>总结</h2>
 
 <p>函数式编程的理想情况是每个函数都没有副作用，但实际情况副作用却是必须的。通过本文我们学习了如何使用Jetpack Compose提供的副作用函数以解决修改composable范围以外的状态的问题。副作用问题比较难以实现且容易产生难以debug的问题，要仔细分析问题的场景，根据场景选择合适的副作用函数。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『损则有孚』| Lifecycle]]></title>
-    <link href="http://toughcoder.net/blog/2024/08/18/jetpack-compose-lifecycle/"/>
-    <updated>2024-08-18T12:14:35+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/08/18/jetpack-compose-lifecycle</id>
-    <content type="html"><![CDATA[<blockquote><p>这篇文章大部分是<a href="https://developer.android.com/develop/ui/compose/lifecycle">官方文档</a>的翻译，但并不是严格的翻译，同时也加入了笔者自己的理解。</p></blockquote>
-
-<p>通过前面的一系列文章我们已经基本掌握了使用Jetpack Compose来构建UI的方法，在接下来的几篇文章中将重点转移到Compose本身，理解一下Compose是如何把一坨坨的函数（Composables）转化成为目标平台UI的。先从composable的生命周期开始。</p>
-
-<p><a href=""><img src="https://koenig-media.raywenderlich.com/uploads/2022/05/LifecycleOfComposablesInJetpackCompose-twitter.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p><strong>注意：</strong> 这里的生命周期是指Compose中的基本单元composable函数的生命周期，与目标平台（如Android）的生命周期不是一个概念，没有关系。</p>
-
-<h2>概述</h2>
-
-<p>在前面<a href="https://juejin.cn/post/7376094685495001139">讲解状态（State）的文章</a>中提到过，composable函数是Jetpack Compose的基本单元，运行composables就是组合（Composition），组合将会变成应用的UI。</p>
-
-<p>当Jetpack Compose首次运行composables时，也即首次组合（Initial composition），它会追踪在组合中用来描述UI的composables。之后，当有状态变化时，Jetpack Compose会安排重组。重组就是重新执行状态发生变化的composables以作为对状态变化的响应，然后再更新组合体现变更。</p>
-
-<p>组合仅能在首次组合过程中生成然后在重组中更新。修改组合的唯一方式就是通过重组。</p>
-
-<h2>生命周期定义</h2>
-
-<p>一个composable的生命周期可以用三个事件来定义：进入组合，重组，离开组合。</p>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-composition.png" alt="lifecycle" /></p>
-
-<blockquote><p>图1. 组合中的一个composable的生命周期：进入组合，没有重组或者重组多次，最后离开组合。</p></blockquote>
-
-<p>重组通常都是由状态对象发生变化触发的。Compose会追踪这些状态然后执行在组合中读取这些状态的所有composables，以及被这些composables调用的且无法被跳过的composables。</p>
-
-<p><strong>注意：</strong> Composable的生命周期较View系统和Android平台的Activity以及Fragment要相对简单一些。如果一个composable需要处理外部的资源或者管理更为复杂的生命周期，可以使用副作用（Side Effects）。</p>
-
-<p>如果一个composable被调用了多次，就会有多个实例被放入到组合之中。每一次调用都有独立的属于它自己的生命周期。来看一个例子：</p>
-
-<pre><code class="Kotlin">@Composable
-fun MyComposable() {
-    Column {
-        Text("Hello")
-        Text("World")
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-hierarchy.png" alt="composition" /></p>
-
-<blockquote><p>图2. 在组合中MyComposable的可视化表示。如果一个composable被调用了多次，会在组合中生成多个实例。图中不同颜色的元素代表不同的实例。</p></blockquote>
-
-<h2>剖析组合中的composables</h2>
-
-<p>组合中一个composable实例是用其调用点来标识的。Compose编译器认为每个调用点都是不一样的。从多个调用点调用composables会在组合中创建多个实例。</p>
-
-<p><strong>关键术语：</strong> 调用点指的是composable被调用的代码位置。调用点会影响组合，进而影响最终UI。</p>
-
-<p>在重组过程中，如果一个composable调用了与其上一次重组中调用的不同的composables，Compose会标识出哪些composables已调用过，哪些还未被调用过，对于两次组合中都调用了的composables，如果它们的输入没有变化则Compose不会予以执行。</p>
-
-<p>因此，给关联到composable的副作用（各种Side Effects）指定标识就显得龙为重要，这样它们能成功的执行完成，而不是每次重组时都重新启动。</p>
-
-<p>对于下面这个例子：</p>
-
-<pre><code class="Kotlin">@Composable
-fun LoginScreen(showError: Boolean) {
-    if (showError) {
-        LoginError()
-    }
-    LoginInput() // This call site affects where LoginInput is placed in Composition
-}
-
-@Composable
-fun LoginInput() { /* ... */ }
-
-@Composable
-fun LoginError() { /* ... */ }
-</code></pre>
-
-<p>上面的代码中，函数LoginScreen会在一定条件下调用函数LogginError，并且总是会调用函数LoginInput。每个调用都有一个独一无二的调用点和代码位置，编译器正是用这些信息来独一无二的标识每个composable。
-<img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-showerror.png" alt="recomposition" /></p>
-
-<blockquote><p>图3. 在组合中，当有状态变化和重组发生时，LoginScreen的可视化展示。相同的颜色元素代表没有被重组。</p></blockquote>
-
-<p>尽管LoginInput从第一个被调用的函数变成了第二个被调用的函数，它的实例在重组中得以留存。并且，因为LoginInput并没有在重组之间发生变化的参数，Compose会跳过对LoginInput的再次调用。</p>
-
-<h2>提供额外的信息以优化重组</h2>
-
-<p>多次调用一个composable会在组合中添加多个实例。当在同一个调用点多次调用同一个composable时，因为Compose没有可用的信息来独一无二的标识每个调用，所以composable的执行顺序被用以区别这些composable实例。有些时候这也够用了，但有些时候这会导致一些非预期的行为。</p>
-
-<pre><code class="Kotlin">@Composable
-fun MoviesScreen(movies: List&lt;Movie&gt;) {
-    Column {
-        for (movie in movies) {
-            // MovieOverview composables are placed in Composition given its
-            // index position in the for loop
-            MovieOverview(movie)
-        }
-    }
-}
-</code></pre>
-
-<p>在上面的代码中，Compose会用执行顺序来区别调用的composable实例。如果一个新的数据元素movie被添加到了列表的底部（最后面），Compose可以复用已经在组合中的实例，因为它们的位次没有变化，故而这些composable的输入数据元素movie并不会变化，也就是说因为只在最后添加，先前存在的实例与其数据还是能够对应得上的。</p>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-newelement-bottom.png" alt="no_key" /></p>
-
-<blockquote><p>图4. 当一个新数据元素moviei添加到列表底部后时，组合中MovieScreen的可视化表示。组合中函数MovieOverview的实例会被复用。相同颜色的元素表示未被重组。</p></blockquote>
-
-<p>然而，如果输入列表的变化是在其顶部添加新元素，或者在中间添加新元素，或者有移除，或者变化元素顺序时，就会对列表中位置发生变化的所有MovieOverview进行重组。如果有储如在MovieOverview中获取电影图片的副作用函数的话，这些仅因位置改变而发生的重组就特别重要了。因为重组会影响副作用函数，如果副作用正在进行中，会被取消然后重新启动。</p>
-
-<pre><code class="Kotlin">@Composable
-fun MovieOverview(movie: Movie) {
-    Column {
-        // Side effect explained later in the docs. If MovieOverview
-        // recomposes, while fetching the image is in progress,
-        // it is cancelled and restarted.
-        val image = loadNetworkImage(movie.url)
-        MovieHeader(image)
-
-        /* ... */
-    }
-}
-</code></pre>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-newelement-top-all-recompose.png" alt="side_effect" /></p>
-
-<blockquote><p>图5. 新元素添加到列表中时组合中MovieScreen的可视化表示。MovieScreen实例无法复用，所有的副作用会重启。不同的颜色代表发生了重组。</p></blockquote>
-
-<p>理想情况下，应该让函数MovieScreen的实例标识与其数据项的标识联系起来。如果列表数据项顺序有变化，最为想理的办法是也把组合树中的对应的函数实例进行次序调整，而不是进行重组（前面说了次序作为函数实例的标识，次序变了，就要使用新位置的数据项调用composable进行重组）。Compose给我们提供了一个方法用以标识组会树中的函数实例：即<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#key(kotlin.Array,kotlin.Function0">函数key</a>)。</p>
-
-<p>把代码块放入函数key里面，再传给函数key一些数据，这些数据会被组合起来以标识组合中的函数实例。传给函数key的数据不必是全局唯一的，它只需要在key所在的调用点是唯一的就行。比如在前面例子中，每个数据项movie需要有一个唯一的标识，它能在这个列表中唯一标识一部电影就可以了：</p>
-
-<pre><code class="Kotlin">@Composable
-fun MoviesScreenWithKey(movies: List&lt;Movie&gt;) {
-    Column {
-        for (movie in movies) {
-            key(movie.id) { // Unique ID for this movie
-                MovieOverview(movie)
-            }
-        }
-    }
-}
-</code></pre>
-
-<p>像上面用了key以后，无论列表怎么变化，Compose都能辩识出具体composable实例，然后加以复用：
-<img src="https://developer.android.com/static/develop/ui/compose/images/lifecycle-newelement-top-keys.png" alt="key" /></p>
-
-<blockquote><p>图6. 当新数据元素添加到列表时组合中MovieScreen的可视化展示。因为有了唯一标识，Compose能识别出哪些实例未发生变化，加以复用，它们附带的副作用会继续执行。</p></blockquote>
-
-<p><strong>关键点：</strong> 适度的使用函数key来帮助Compose唯一标识函数实例。特别是针对在同一个调用点大量调用同一个composable时，比如在各种集合性布局中。</p>
-
-<p>有些composable有更为友好的key支持方法。比如像LazyColumn它可以直接在其items DSL中传入一个lambda作为key：</p>
-
-<pre><code class="Kotlin">@Composable
-fun MoviesScreenLazy(movies: List&lt;Movie&gt;) {
-    LazyColumn {
-        items(movies, key = { movie -&gt; movie.id }) { movie -&gt;
-            MovieOverview(movie)
-        }
-    }
-}
-</code></pre>
-
-<h2>重组时跳过composable的策略</h2>
-
-<p>在重组过程中，一些具备条件的composable函数可以让Compose跳过他们的执行，如果它们的输入参数较前一次组合时没有任何变化。
-除了以下情况外，就可以说一个composable函数具备跳过条件：</p>
-
-<ul>
-<li>函数有返回值（non-Unit return type）</li>
-<li>函数使用了注解&#64;NonRestartableComposable或者&#64;NonSkippableComposable修饰</li>
-<li>必需的参数是一个非稳定类型（non-stable type）</li>
-</ul>
-
-
-<p>前两个都好理解，接下来重点看第三个情况。一个类型要想成为稳定的（stable），必须符合以下约定：</p>
-
-<ul>
-<li>对于两个相内实例来说，对其们使用equals方法的返回值必须永远相同</li>
-<li>如果一个类型的公开属性发生变化，组合会得到通知</li>
-<li>所有公开属性类型也必须是稳定的</li>
-</ul>
-
-
-<p>有一些重要的常见类型符合这个约定，Compose编译器会把它们当成稳定的类型，尽管他们并没有使用注解&#64;Stable显式地标注为稳定的：</p>
-
-<ul>
-<li>所有的基础数据类型：布尔（Boolean），整数（Int），长整数（Long），浮点（Float），字符（Char）等</li>
-<li>字符串（String）</li>
-<li>所有的函数类型（lambdas）</li>
-</ul>
-
-
-<p>所有这些类型都能符合稳定约定，因为他们都是不可变类型。因为不可变类型实例不会改变，它们不会通知组合说值有所改变，因此就能符合上述约定。</p>
-
-<p><strong>注意：</strong> 所有的整体不可变类型都可以安全地当成稳定的类型。</p>
-
-<p>一个值得注意的类型是可变状态类型（MutableState），虽然是稳定的但却可变可修改。如果MutableState中持有一个值，这个状态对象被认为是稳定的，因为State属性.value发生的任何变化都会通知给Compose。</p>
-
-<p>当作为传递给一个composable函数参数的所有类型都是稳定的（stable）时，这些参数的值会基于它们在UI树中的函数位置进行等值比较（equality）。从前一次组合起如果值未变化就会跳过其重组。换句话说输入参数的类型是稳定的（stable）是一个大前提，只有稳定的类型比较等值才有意义。</p>
-
-<p><strong>关键点：</strong> 如果一个composable的输入是稳定的且未有变化，Compose就会跳过它的重组。等值比较使用的是方法equals。</p>
-
-<p>仅当Compose能够证明一个类型是稳定的时，才会把一个类型当作稳定的。例如，接口（interface）通常认为是不稳定的，拥有可变公开属性的类型，虽然这些属性的实现可以是不可变的，但这种类型也认为是不稳定的。</p>
-
-<p>如果Compose无法推断出一个类型是不是稳定的，但是想强制它被当作稳定的类型，可以使用注解&#64;Stable来标注。</p>
-
-<pre><code class="Kotlin">// Marking the type as stable to favor skipping and smart recompositions.
-@Stable
-interface UiState&lt;T : Result&lt;T&gt;&gt; {
-    val value: T?
-    val exception: Throwable?
-
-    val hasError: Boolean
-        get() = exception != null
-}
-</code></pre>
-
-<p>上面的代码片段中，因为UiState是一个接口，会被当成不稳定的类型。通过添加注解&#64;Stable，告诉Compose它是稳定的，让Compose进行智能重组。这也意味着，当接口类型用于参数类型时，Compose会把接口的所有具体实现当成稳定的类型。</p>
-
-<p><strong>关键点：</strong> 如果Compose无法推断出类型的稳定性，使用注解&#64;Stable来标注以让Compose进行智能重组。</p>
-
-<h2>总结</h2>
-
-<p>Composable函数是Compose的基本单元，通过此文我们理解了一个composable的生命周期，并对Compose的重组机制做了介绍，以及如何更好的让Compose做智能重组。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/lifecycle">Lifecycle of composables</a></li>
-</ul>
-
 ]]></content>
   </entry>
   
