@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="http://toughcoder.net/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-10-11T22:42:22+08:00</updated>
+  <updated>2024-10-14T22:25:56+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,310 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[让Activity更加优雅地跳转]]></title>
+    <link href="http://toughcoder.net/blog/2024/10/14/activity-result-launcher/"/>
+    <updated>2024-10-14T22:24:55+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/10/14/activity-result-launcher</id>
+    <content type="html"><![CDATA[<p>有过Android开发经验的小伙伴对<a href="https://developer.android.com/reference/android/app/Activity#startActivityForResult(android.content.Intent,%20int">startActivityForResult</a>)以及<a href="https://developer.android.com/reference/android/app/Activity#onActivityResult(int,%20int,%20android.content.Intent,%20android.app.ComponentCaller">onActivityResult</a>)一定不陌生，正是这一对API让组件 的复用变成可能。今天就来学习一下如何在函数式的范式中驾驭Activity的跳转。</p>
+
+<p><a href="http://toughcoder.net/blog/2024/10/14/activity-result-launcher/"><img src="https://akexorcist.dev/content/images/size/w2000/2021/12/activity_result_api-header.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>缘起</h2>
+
+<p>系统组件复用，特别是Activity的复用，是Android系统中非常重要的一个设计理念。组件复用打破了应用程序之间的壁垒，在整个系统范围内可以共享和复用一些公共的组件，比如像打开网页，拍照片，查看图片等等，开发者不必再用原始API去实现一套，直接使用startActivityForResult和onActivityResult就可以取到需要的资源。</p>
+
+<p>这套API最大的问题在于它并不是常规的异步式的回调，调用了startActivityForResult后，结果的处理，必须要在Activity的继承体系内覆写onActivityResult，并且因为Activity实例只能由系统创建，这就导致了组件复用的逻辑必须都在Activity内部。这就导致了Activity的体积通常会相当的臃肿，上千行，甚至大几千行的Activity随处可见。理想的情况下Activity，作为一个系统的容器和接口，应该越薄越好，但要能把逻辑移出Activity才行。</p>
+
+<p>另一方面，onActivityResult无法在函数式的情境中使用，因为它会跑到函数外面去，比如在Jetpack Compose中就无法直接使用startActivityForResult和onActivityResult。</p>
+
+<p>为了解决这两个问题，就需要使用到Jetpack中的<a href="https://developer.android.com/reference/androidx/activity/result/package-summary">Activity Result API</a>了。</p>
+
+<h2>Activity Result API的使用方法</h2>
+
+<p>在Jetpack的AndroidX中的<a href="https://developer.android.com/jetpack/androidx/releases/activity">Activity</a>和<a href="https://developer.android.com/jetpack/androidx/releases/fragment">Fragment</a>中，可以像常规的回调那样向系统注册一个处理result的回调，一旦系统派发了activity result就能被系统回调到。</p>
+
+<p><strong>注意：</strong> 这里提到的方法都在AndroidX中的<a href="https://developer.android.com/reference/androidx/activity/ComponentActivity">ComponentActivity</a>和<a href="https://developer.android.com/reference/androidx/fragment/app/Fragment">Fragment</a>里面，也就是说要继承AndroidX中的组件才可以。</p>
+
+<h3>注册一个activity result回调</h3>
+
+<p>这套API的方式是在ComponentActivity和Fragment中，提供了一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultCaller#public-methods_1">registerForActivityResult</a>方法用于注册activity result的回调。参数是一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract">ActivityResultContract</a>实例和一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultCallback">ActivityResultCallback</a>实例。返回的是一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher">ActivityResultLauncher</a>，这个launcher可以用来启动目标Activity，也即触发获取资源的流程，相当于原来的startActivityForResult：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">getContent</span> <span class="p">=</span> <span class="n">registerForActivityResult</span><span class="p">(</span><span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span><span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="c1">// 处理结果</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>一个ActivityResultContract，如它的名字所示，定义着组件复用的的接口，即输入类型和输出类型。API中定义了<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts">大量的现成可用的，也是常见的接口</a>，比如拍照，权限请求等等。当然也可以创建<a href="https://developer.android.com/training/basics/intents/result#custom">自定义接口</a>。</p>
+
+<p>回调ActivityResultCallback是只有一个方法onActivityResult()的接口，此方法的参数由ActivityResultContract来定义。</p>
+
+<h3>启动目标Activity</h3>
+
+<p>当调用registerForActivityResult时，能拿到一个launcher，但此API仅是向系统注册一个回调，这时还没有启动目标（即还没有发起请求）。发起请求需要使用ActivityResultLauncher来完成。</p>
+
+<p>调用其<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher#launch(I">方法launch</a>)就会发起请求，启动目标Activity，开启获取结果的流程。如果给launch传递了参数，会依据ActivityResultContract做进一步的匹配（其实这些输入最终会转化为Intent对象提供给startActivityForResult）。用户在目标Activity页面完成了操作后，就会返回到当前页面，回调ActivityResultCallback的方法onActivityResult就会被执行：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">getContent</span> <span class="p">=</span> <span class="n">registerForActivityResult</span><span class="p">(</span><span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span><span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="c1">// 处理结果，即返回的Uri</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">selectButton</span> <span class="p">=</span> <span class="n">findViewById</span><span class="p">&lt;</span><span class="n">Button</span><span class="p">&gt;(</span><span class="n">R</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">select_button</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">selectButton</span><span class="p">.</span><span class="n">setOnClickListener</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 接口是获取内空，这里传mime type作为参数，那么就是要获取一个图片内容</span>
+</span><span class='line'>        <span class="n">getContent</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="s">&quot;image/*&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果需要多个组件复用，那就传递不同的参数多次调用registerForActivityResult。并且registerForActivityResult可以在任何时候调用，在onCreate之前调用也是安全的，所以可以在声明ActivityResultLauncher的时候就直接调用，这样可以直接初始化。</p>
+
+<p>但是要特别注意，使用launcher来启动Activity则必须在onCreate之后。</p>
+
+<p>还有一点需要特别注意，因为launch之后，onActivityResult之前这段时间会离开当前的Activity，这个时间内Activity可能会被系统回收，也即触发了状态恢复。所以处理结果时，也即onActivityResult中的逻辑，如果有依赖其他状态，这些状态需要在onSaveInstanceState中进行保存。</p>
+
+<h3>处理结果</h3>
+
+<p>结果的处理就在ActivityResultCallback中的方法onActivityResult，这里使用返回的参数就可以了。</p>
+
+<h2>在Activity之外使用</h2>
+
+<p>如前面所述，使用这套Result API的最大的好处在于把结果的处理从Activity中解耦出来，因此，最为理想的方式是能在独立的class中做这些事情。</p>
+
+<p>这就需要使用<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultRegistry">ActivityResultRegistry</a>，它才是核心，另外三个类（launcher，contract和callback）都是一些封装，事实上Activity和Fragment里面的方法registerForActivityResult其实也是使用这个registry来实现的。从Activity中可以拿到registry的实例，以此作为参数，就可以在自定义的class中使用Result APIs了。</p>
+
+<p>比如单独封装获取图片的流程可以这样写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyLifecycleObserver</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">registry</span> <span class="p">:</span> <span class="n">ActivityResultRegistry</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">:</span> <span class="n">DefaultLifecycleObserver</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">lateinit</span> <span class="k">var</span> <span class="py">getContent</span> <span class="p">:</span> <span class="n">ActivityResultLauncher</span><span class="p">&lt;</span><span class="n">String</span><span class="p">&gt;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">owner</span><span class="p">:</span> <span class="n">LifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">getContent</span> <span class="p">=</span> <span class="n">registry</span><span class="p">.</span><span class="n">register</span><span class="p">(</span><span class="s">&quot;key&quot;</span><span class="p">,</span> <span class="n">owner</span><span class="p">,</span> <span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="c1">// Handle the returned Uri</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">selectImage</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">getContent</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="s">&quot;image/*&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">MyFragment</span> <span class="p">:</span> <span class="n">Fragment</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">lateinit</span> <span class="k">var</span> <span class="py">observer</span> <span class="p">:</span> <span class="n">MyLifecycleObserver</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">observer</span> <span class="p">=</span> <span class="n">MyLifecycleObserver</span><span class="p">(</span><span class="n">requireActivity</span><span class="p">().</span><span class="n">activityResultRegistry</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">lifecycle</span><span class="p">.</span><span class="n">addObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onViewCreated</span><span class="p">(</span><span class="n">view</span><span class="p">:</span> <span class="n">View</span><span class="p">,</span> <span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">selectButton</span> <span class="p">=</span> <span class="n">view</span><span class="p">.</span><span class="n">findViewById</span><span class="p">&lt;</span><span class="n">Button</span><span class="p">&gt;(</span><span class="n">R</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">select_button</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">selectButton</span><span class="p">.</span><span class="n">setOnClickListener</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// 触发获取图片的流程</span>
+</span><span class='line'>            <span class="n">observer</span><span class="p">.</span><span class="n">selectImage</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个示例把获取图片的流程（发起和结果处理）都封装在了一个单独的类中，同时又是明是监听了Activity组件的生命周期。谷歌是强烈建议同时要<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/LifecycleObserver">监听生命周期</a>（通过扩展LifecycleObserver），这是因为<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleOwner">LifecycleOwner</a>会在destroy时自动帮你反注册ActivityResultLauncher，不然的话就要手动的<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher#unregister(">反注册</a>)。</p>
+
+<h2>自定义Contract</h2>
+
+<p>尽管谷歌已经在<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts">ActivityResultContracts</a>中已经预定义了大量的contracts可以使用，但仍然会有一些特殊的场景因预定义的contract无法满足需求而需要自定义一个contract。这个contract实际上就是约定了组件复用的接口，就像普通的interface一样，定义好输入与输出的类型就可以了，所以需要给contract提供输入输出的类型，如果不需要输入或者输出就使用Void?或者Unit。</p>
+
+<p>此外还需要实现一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract#createIntent(android.content.Context,kotlin.Any">createIntent方法</a>)，这个方法接收一个Context和其他输入（即contract约定的输入，最终是由ActivityResultLauncher中方法launch时提供）作为参数并返回一个Intent对象，此Intent会是startActivityForResult的输入参数。同时还需要实现另外一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract#parseResult(kotlin.Int,android.content.Intent">方法parseIntent</a>)，此方法将<a href="https://developer.android.com/reference/android/app/Activity#onActivityResult(int,%20int,%20android.content.Intent,%20android.app.ComponentCaller">Activity的标准钩子onActivityResult</a>)中的参数resultCode和Intent转化为contract中约定的输出（此输出会作为回调ActivityResultCallback函数方法onActivityResult的输入参数）。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">PickRingtone</span> <span class="p">:</span> <span class="n">ActivityResultContract</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">,</span> <span class="n">Uri</span><span class="p">?&gt;()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">createIntent</span><span class="p">(</span><span class="n">context</span><span class="p">:</span> <span class="n">Context</span><span class="p">,</span> <span class="n">ringtoneType</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">Intent</span><span class="p">(</span><span class="n">RingtoneManager</span><span class="p">.</span><span class="n">ACTION_RINGTONE_PICKER</span><span class="p">).</span><span class="n">apply</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">putExtra</span><span class="p">(</span><span class="n">RingtoneManager</span><span class="p">.</span><span class="n">EXTRA_RINGTONE_TYPE</span><span class="p">,</span> <span class="n">ringtoneType</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">parseResult</span><span class="p">(</span><span class="n">resultCode</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span> <span class="n">result</span><span class="p">:</span> <span class="n">Intent</span><span class="p">?)</span> <span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">resultCode</span> <span class="p">!=</span> <span class="n">Activity</span><span class="p">.</span><span class="n">RESULT_OK</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">return</span> <span class="k">null</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">result</span><span class="o">?.</span><span class="n">getParcelableExtra</span><span class="p">(</span><span class="n">RingtoneManager</span><span class="p">.</span><span class="n">EXTRA_RINGTONE_PICKED_URI</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果现有的contracts不满足需求，且也无具体的输入输出要求，那么可以用一个万用contract，即<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts.StartActivityForResult">StartActivityForResult</a>。这个万用contract的输入是一个Intent，输出是一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResult">ActivityResult</a>，在回调方法onActivityResult中可以直接从ActivityResult实例中取出resultCode和目标返回的Intent对象：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">startForResult</span> <span class="p">=</span> <span class="n">registerForActivityResult</span><span class="p">(</span><span class="n">StartActivityForResult</span><span class="p">())</span> <span class="p">{</span> <span class="n">result</span><span class="p">:</span> <span class="n">ActivityResult</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">resultCode</span> <span class="p">==</span> <span class="n">Activity</span><span class="p">.</span><span class="n">RESULT_OK</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">intent</span> <span class="p">=</span> <span class="n">result</span><span class="p">.</span><span class="n">data</span>
+</span><span class='line'>        <span class="c1">// 处理目标返回的Intent</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">startButton</span> <span class="p">=</span> <span class="n">findViewById</span><span class="p">(</span><span class="n">R</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">start_button</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">startButton</span><span class="p">.</span><span class="n">setOnClickListener</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 传入想要启动的Intent对象</span>
+</span><span class='line'>        <span class="n">startForResult</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="n">Intent</span><span class="p">(</span><span class="k">this</span><span class="p">,</span> <span class="n">ResultProducingActivity</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">))</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>从这里我们可以看出，这套Result API本质上仍是依赖于原始的startActivityForResult和onActivityResult。</p>
+
+<h2>在Compose中使用Result API</h2>
+
+<p>接下来我们看看如何在Jetpack Compose使用这套API，这套API与Activity彻底解耦且支持函数式写法，所以可以在Compose中使用。这套API的核心是ActivityResultRegistry，有了它其他几个就可以使用起来了，而它的实例可以直接从Activity中取出来，所以这套API在Compose中完全可以用起来，与前面讲到的在Activity之外的逻辑完全一样：获取此对象用于register一个contract，同时得到一个launcher对象，在回调中处理结果，在合适的时机触发launch。</p>
+
+<p>幸运的是完全用不着自己折腾，Compose中已经做好了封装，直接使用<a href="https://developer.android.com/reference/kotlin/androidx/activity/compose/package-summary#rememberlauncherforactivityresult">rememberLauncherForActivityResult</a>即可：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">GetContentExample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">imageUri</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">&lt;</span><span class="n">Uri</span><span class="p">?&gt;(</span><span class="k">null</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">launcher</span> <span class="p">=</span> <span class="n">rememberLauncherForActivityResult</span><span class="p">(</span><span class="n">ActivityResultContracts</span><span class="p">.</span><span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span><span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">imageUri</span> <span class="p">=</span> <span class="n">uri</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">launcher</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="s">&quot;image/*&quot;</span><span class="p">)</span> <span class="p">})</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Load Image&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">Image</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">painter</span> <span class="p">=</span> <span class="n">rememberAsyncImagePainter</span><span class="p">(</span><span class="n">imageUri</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;My Image&quot;</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>今天我们学习了Jetpack中提供的新式处理activity result的方法，这不仅能让在函数式编程范式中复用组件变成可能，也可以把很多逻辑从Activity中抽离出来，能给Activity瘦身，让组件跳转变得更为优雅。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://blog.dogukangun.de/the-usage-of-activity-result-launcher-9c3d2241ec8">The Usage of Activity Result Launcher</a></li>
+<li><a href="https://developer.android.com/training/basics/intents/result">Get a result from an activity</a></li>
+<li><a href="https://stackoverflow.com/questions/64721218/jetpack-compose-launch-activityresultcontract-request-from-composable-function">Jetpack Compose: Launch ActivityResultContract request from Composable function</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/libraries">Compose and other libraries</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[喜迎国庆，用Compose赶制一面五星红旗]]></title>
@@ -7208,70 +7512,6 @@ textStyle比较丰富，除了直接指定颜色以外，还可以用<a href="ht
 <li><a href="https://proandroiddev.com/why-we-adopted-jetpack-compose-b66bfd3dbde5">Why We Adopted Jetpack Compose</a></li>
 <li><a href="https://medium.com/israeli-tech-radar/declarative-ui-what-how-and-why-13e092a7516f">Declarative UI — What, How, and Why?</a></li>
 <li><a href="https://www.rootstrap.com/blog/imperative-v-declarative-ui-design-is-declarative-programming-the-future">Imperative v Declarative UI Design - Is Declarative Programming the future?</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Principle of Inclusion Exclusion Made Easy]]></title>
-    <link href="http://toughcoder.net/blog/2024/06/13/inclusion-exclusion-principle/"/>
-    <updated>2024-06-13T20:45:29+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/06/13/inclusion-exclusion-principle</id>
-    <content type="html"><![CDATA[<p><a href="https://oi-wiki.org/math/combinatorics/inclusion-exclusion-principle/">容斥原理</a>，是指在计数的时候，先不考虑重复问题，先把包含某种对象的统计出来，再把重复的排除掉。</p>
-
-<p><a href="http://toughcoder.net/blog/2024/06/13/inclusion-exclusion-principle/"><img src="https://tse2-mm.cn.bing.net/th/id/OIP-C.oW-5-IkJnUeOjVM7ZBtMAwAAAA?rs=1&pid=ImgDetMain" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>比如说，考试，15人数学满分，12人语文满分，并且有4人语文和数学都满分，求至少有一个人满分的同学有多少个？</p>
-
-<p>答案是15 + 12 - 4。</p>
-
-<p>理解起来就是，重复的部分被多加了一次，最后再减去重复的人即可。</p>
-
-<p>再如小于某个数x中，能被3或者5整除的数有多少？答案是 x/3 + x / 5 - x /3x5。同样是重复的计算了两次，减去一次即可。</p>
-
-<p>容斥原理，不复杂，也不能单独用来求解问题，一般都是用于统计计数。</p>
-
-<h3>相关问题</h3>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;"> 题目 </th>
-<th style="text-align:left;"> 题解 </th>
-<th style="text-align:left;"> 说明 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/nth-magical-number/description/">878. 第 N 个神奇数字</a></td>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/nth-magical-number/solutions/2808476/xi-you-yuan-su-878-di-n-ge-shen-qi-shu-z-udgp/">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/ugly-number-iii/description/">1201. 丑数 III</a></td>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/ugly-number-iii/solutions/2808790/xi-you-yuan-su-1201-chou-shu-iiishu-xue-wha7w/">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href=""></a></td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-</tbody>
-</table>
-
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://brilliant.org/wiki/principle-of-inclusion-and-exclusion-pie/">Principle of Inclusion and Exclusion (PIE)</a></li>
-<li><a href="https://mathworld.wolfram.com/Inclusion-ExclusionPrinciple.html">Inclusion-Exclusion Principle</a></li>
-<li><a href="https://www.geeksforgeeks.org/inclusion-exclusion-various-applications/">Inclusion-Exclusion and its various Applications</a></li>
-<li><a href="https://www.cut-the-knot.org/arithmetic/combinatorics/InclusionExclusion.shtml">The Inclusion-Exclusion Principle</a></li>
 </ul>
 
 ]]></content>

@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="http://toughcoder.net/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="http://toughcoder.net/"/>
-  <updated>2024-10-11T22:42:22+08:00</updated>
+  <updated>2024-10-14T22:25:56+08:00</updated>
   <id>http://toughcoder.net/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,207 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[让Activity更加优雅地跳转]]></title>
+    <link href="http://toughcoder.net/blog/2024/10/14/activity-result-launcher/"/>
+    <updated>2024-10-14T22:24:55+08:00</updated>
+    <id>http://toughcoder.net/blog/2024/10/14/activity-result-launcher</id>
+    <content type="html"><![CDATA[<p>有过Android开发经验的小伙伴对<a href="https://developer.android.com/reference/android/app/Activity#startActivityForResult(android.content.Intent,%20int">startActivityForResult</a>)以及<a href="https://developer.android.com/reference/android/app/Activity#onActivityResult(int,%20int,%20android.content.Intent,%20android.app.ComponentCaller">onActivityResult</a>)一定不陌生，正是这一对API让组件 的复用变成可能。今天就来学习一下如何在函数式的范式中驾驭Activity的跳转。</p>
+
+<p><a href=""><img src="https://akexorcist.dev/content/images/size/w2000/2021/12/activity_result_api-header.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>缘起</h2>
+
+<p>系统组件复用，特别是Activity的复用，是Android系统中非常重要的一个设计理念。组件复用打破了应用程序之间的壁垒，在整个系统范围内可以共享和复用一些公共的组件，比如像打开网页，拍照片，查看图片等等，开发者不必再用原始API去实现一套，直接使用startActivityForResult和onActivityResult就可以取到需要的资源。</p>
+
+<p>这套API最大的问题在于它并不是常规的异步式的回调，调用了startActivityForResult后，结果的处理，必须要在Activity的继承体系内覆写onActivityResult，并且因为Activity实例只能由系统创建，这就导致了组件复用的逻辑必须都在Activity内部。这就导致了Activity的体积通常会相当的臃肿，上千行，甚至大几千行的Activity随处可见。理想的情况下Activity，作为一个系统的容器和接口，应该越薄越好，但要能把逻辑移出Activity才行。</p>
+
+<p>另一方面，onActivityResult无法在函数式的情境中使用，因为它会跑到函数外面去，比如在Jetpack Compose中就无法直接使用startActivityForResult和onActivityResult。</p>
+
+<p>为了解决这两个问题，就需要使用到Jetpack中的<a href="https://developer.android.com/reference/androidx/activity/result/package-summary">Activity Result API</a>了。</p>
+
+<h2>Activity Result API的使用方法</h2>
+
+<p>在Jetpack的AndroidX中的<a href="https://developer.android.com/jetpack/androidx/releases/activity">Activity</a>和<a href="https://developer.android.com/jetpack/androidx/releases/fragment">Fragment</a>中，可以像常规的回调那样向系统注册一个处理result的回调，一旦系统派发了activity result就能被系统回调到。</p>
+
+<p><strong>注意：</strong> 这里提到的方法都在AndroidX中的<a href="https://developer.android.com/reference/androidx/activity/ComponentActivity">ComponentActivity</a>和<a href="https://developer.android.com/reference/androidx/fragment/app/Fragment">Fragment</a>里面，也就是说要继承AndroidX中的组件才可以。</p>
+
+<h3>注册一个activity result回调</h3>
+
+<p>这套API的方式是在ComponentActivity和Fragment中，提供了一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultCaller#public-methods_1">registerForActivityResult</a>方法用于注册activity result的回调。参数是一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract">ActivityResultContract</a>实例和一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultCallback">ActivityResultCallback</a>实例。返回的是一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher">ActivityResultLauncher</a>，这个launcher可以用来启动目标Activity，也即触发获取资源的流程，相当于原来的startActivityForResult：</p>
+
+<pre><code class="Kotlin">val getContent = registerForActivityResult(GetContent()) { uri: Uri? -&gt;
+    // 处理结果
+}
+</code></pre>
+
+<p>一个ActivityResultContract，如它的名字所示，定义着组件复用的的接口，即输入类型和输出类型。API中定义了<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts">大量的现成可用的，也是常见的接口</a>，比如拍照，权限请求等等。当然也可以创建<a href="https://developer.android.com/training/basics/intents/result#custom">自定义接口</a>。</p>
+
+<p>回调ActivityResultCallback是只有一个方法onActivityResult()的接口，此方法的参数由ActivityResultContract来定义。</p>
+
+<h3>启动目标Activity</h3>
+
+<p>当调用registerForActivityResult时，能拿到一个launcher，但此API仅是向系统注册一个回调，这时还没有启动目标（即还没有发起请求）。发起请求需要使用ActivityResultLauncher来完成。</p>
+
+<p>调用其<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher#launch(I">方法launch</a>)就会发起请求，启动目标Activity，开启获取结果的流程。如果给launch传递了参数，会依据ActivityResultContract做进一步的匹配（其实这些输入最终会转化为Intent对象提供给startActivityForResult）。用户在目标Activity页面完成了操作后，就会返回到当前页面，回调ActivityResultCallback的方法onActivityResult就会被执行：</p>
+
+<pre><code class="Kotlin">val getContent = registerForActivityResult(GetContent()) { uri: Uri? -&gt;
+    // 处理结果，即返回的Uri
+}
+
+override fun onCreate(savedInstanceState: Bundle?) {
+    // ...
+
+    val selectButton = findViewById&lt;Button&gt;(R.id.select_button)
+
+    selectButton.setOnClickListener {
+        // 接口是获取内空，这里传mime type作为参数，那么就是要获取一个图片内容
+        getContent.launch("image/*")
+    }
+}
+</code></pre>
+
+<p>如果需要多个组件复用，那就传递不同的参数多次调用registerForActivityResult。并且registerForActivityResult可以在任何时候调用，在onCreate之前调用也是安全的，所以可以在声明ActivityResultLauncher的时候就直接调用，这样可以直接初始化。</p>
+
+<p>但是要特别注意，使用launcher来启动Activity则必须在onCreate之后。</p>
+
+<p>还有一点需要特别注意，因为launch之后，onActivityResult之前这段时间会离开当前的Activity，这个时间内Activity可能会被系统回收，也即触发了状态恢复。所以处理结果时，也即onActivityResult中的逻辑，如果有依赖其他状态，这些状态需要在onSaveInstanceState中进行保存。</p>
+
+<h3>处理结果</h3>
+
+<p>结果的处理就在ActivityResultCallback中的方法onActivityResult，这里使用返回的参数就可以了。</p>
+
+<h2>在Activity之外使用</h2>
+
+<p>如前面所述，使用这套Result API的最大的好处在于把结果的处理从Activity中解耦出来，因此，最为理想的方式是能在独立的class中做这些事情。</p>
+
+<p>这就需要使用<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultRegistry">ActivityResultRegistry</a>，它才是核心，另外三个类（launcher，contract和callback）都是一些封装，事实上Activity和Fragment里面的方法registerForActivityResult其实也是使用这个registry来实现的。从Activity中可以拿到registry的实例，以此作为参数，就可以在自定义的class中使用Result APIs了。</p>
+
+<p>比如单独封装获取图片的流程可以这样写：</p>
+
+<pre><code class="Kotlin">class MyLifecycleObserver(private val registry : ActivityResultRegistry)
+        : DefaultLifecycleObserver {
+    lateinit var getContent : ActivityResultLauncher&lt;String&gt;
+
+    override fun onCreate(owner: LifecycleOwner) {
+        getContent = registry.register("key", owner, GetContent()) { uri -&gt;
+            // Handle the returned Uri
+        }
+    }
+
+    fun selectImage() {
+        getContent.launch("image/*")
+    }
+}
+
+class MyFragment : Fragment() {
+    lateinit var observer : MyLifecycleObserver
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // ...
+
+        observer = MyLifecycleObserver(requireActivity().activityResultRegistry)
+        lifecycle.addObserver(observer)
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        val selectButton = view.findViewById&lt;Button&gt;(R.id.select_button)
+
+        selectButton.setOnClickListener {
+            // 触发获取图片的流程
+            observer.selectImage()
+        }
+    }
+}
+</code></pre>
+
+<p>这个示例把获取图片的流程（发起和结果处理）都封装在了一个单独的类中，同时又是明是监听了Activity组件的生命周期。谷歌是强烈建议同时要<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/LifecycleObserver">监听生命周期</a>（通过扩展LifecycleObserver），这是因为<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleOwner">LifecycleOwner</a>会在destroy时自动帮你反注册ActivityResultLauncher，不然的话就要手动的<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher#unregister(">反注册</a>)。</p>
+
+<h2>自定义Contract</h2>
+
+<p>尽管谷歌已经在<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts">ActivityResultContracts</a>中已经预定义了大量的contracts可以使用，但仍然会有一些特殊的场景因预定义的contract无法满足需求而需要自定义一个contract。这个contract实际上就是约定了组件复用的接口，就像普通的interface一样，定义好输入与输出的类型就可以了，所以需要给contract提供输入输出的类型，如果不需要输入或者输出就使用Void?或者Unit。</p>
+
+<p>此外还需要实现一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract#createIntent(android.content.Context,kotlin.Any">createIntent方法</a>)，这个方法接收一个Context和其他输入（即contract约定的输入，最终是由ActivityResultLauncher中方法launch时提供）作为参数并返回一个Intent对象，此Intent会是startActivityForResult的输入参数。同时还需要实现另外一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract#parseResult(kotlin.Int,android.content.Intent">方法parseIntent</a>)，此方法将<a href="https://developer.android.com/reference/android/app/Activity#onActivityResult(int,%20int,%20android.content.Intent,%20android.app.ComponentCaller">Activity的标准钩子onActivityResult</a>)中的参数resultCode和Intent转化为contract中约定的输出（此输出会作为回调ActivityResultCallback函数方法onActivityResult的输入参数）。</p>
+
+<pre><code class="Kotlin">class PickRingtone : ActivityResultContract&lt;Int, Uri?&gt;() {
+    override fun createIntent(context: Context, ringtoneType: Int) =
+        Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, ringtoneType)
+        }
+
+    override fun parseResult(resultCode: Int, result: Intent?) : Uri? {
+        if (resultCode != Activity.RESULT_OK) {
+            return null
+        }
+        return result?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+    }
+}
+</code></pre>
+
+<p>如果现有的contracts不满足需求，且也无具体的输入输出要求，那么可以用一个万用contract，即<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts.StartActivityForResult">StartActivityForResult</a>。这个万用contract的输入是一个Intent，输出是一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResult">ActivityResult</a>，在回调方法onActivityResult中可以直接从ActivityResult实例中取出resultCode和目标返回的Intent对象：</p>
+
+<pre><code class="Kotlin">val startForResult = registerForActivityResult(StartActivityForResult()) { result: ActivityResult -&gt;
+    if (result.resultCode == Activity.RESULT_OK) {
+        val intent = result.data
+        // 处理目标返回的Intent
+    }
+}
+
+override fun onCreate(savedInstanceState: Bundle) {
+    // ...
+
+    val startButton = findViewById(R.id.start_button)
+
+    startButton.setOnClickListener {
+        // 传入想要启动的Intent对象
+        startForResult.launch(Intent(this, ResultProducingActivity::class.java))
+    }
+}
+</code></pre>
+
+<p>从这里我们可以看出，这套Result API本质上仍是依赖于原始的startActivityForResult和onActivityResult。</p>
+
+<h2>在Compose中使用Result API</h2>
+
+<p>接下来我们看看如何在Jetpack Compose使用这套API，这套API与Activity彻底解耦且支持函数式写法，所以可以在Compose中使用。这套API的核心是ActivityResultRegistry，有了它其他几个就可以使用起来了，而它的实例可以直接从Activity中取出来，所以这套API在Compose中完全可以用起来，与前面讲到的在Activity之外的逻辑完全一样：获取此对象用于register一个contract，同时得到一个launcher对象，在回调中处理结果，在合适的时机触发launch。</p>
+
+<p>幸运的是完全用不着自己折腾，Compose中已经做好了封装，直接使用<a href="https://developer.android.com/reference/kotlin/androidx/activity/compose/package-summary#rememberlauncherforactivityresult">rememberLauncherForActivityResult</a>即可：</p>
+
+<pre><code class="Kotlin">@Composable
+fun GetContentExample() {
+    var imageUri by remember { mutableStateOf&lt;Uri?&gt;(null) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? -&gt;
+        imageUri = uri
+    }
+    Column {
+        Button(onClick = { launcher.launch("image/*") }) {
+            Text(text = "Load Image")
+        }
+        Image(
+            painter = rememberAsyncImagePainter(imageUri),
+            contentDescription = "My Image"
+        )
+    }
+}
+</code></pre>
+
+<p>今天我们学习了Jetpack中提供的新式处理activity result的方法，这不仅能让在函数式编程范式中复用组件变成可能，也可以把很多逻辑从Activity中抽离出来，能给Activity瘦身，让组件跳转变得更为优雅。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://blog.dogukangun.de/the-usage-of-activity-result-launcher-9c3d2241ec8">The Usage of Activity Result Launcher</a></li>
+<li><a href="https://developer.android.com/training/basics/intents/result">Get a result from an activity</a></li>
+<li><a href="https://stackoverflow.com/questions/64721218/jetpack-compose-launch-activityresultcontract-request-from-composable-function">Jetpack Compose: Launch ActivityResultContract request from Composable function</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/libraries">Compose and other libraries</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[喜迎国庆，用Compose赶制一面五星红旗]]></title>
@@ -1032,165 +1233,6 @@ fun Header(news: NewsUiState) {
 <li><a href="https://www.geeksforgeeks.org/separation-of-concerns-soc/">Separation of Concerns (SoC)</a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『羝羊触蕃』| Handle Platform Lifecycles]]></title>
-    <link href="http://toughcoder.net/blog/2024/09/06/compose-interact-with-platforms/"/>
-    <updated>2024-09-06T22:21:49+08:00</updated>
-    <id>http://toughcoder.net/blog/2024/09/06/compose-interact-with-platforms</id>
-    <content type="html"><![CDATA[<p>Jetpack Compose是一个独立的声明式UI框架，它并不受限于任何操作系统平台，从框架定位的角度来讲，它是跨平台的，也应该要跨平台。但是我们的应用程序必然是为某些操作系统平台（后面简称平台Platform）构建的，也就是说要运行在某些平台上面。这就免不了要与平台进行打交道。这篇文章将以Android平台为例，学习在Compose中如何处理平台的生命周期事件。</p>
-
-<p><a href=""><img src="https://www.ericthecoder.com/wp-content/uploads/2020/05/feature.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>感知平台生命周期事件</h2>
-
-<p>对于移动应用程序来说，感知平台的生命周期是非常重要的，比如最为典型的场景，对于一个新闻消息类的应用来说，当首次进入页面的时候肯定 要刷新拉取最新的消息，当用户切换到另外一个应用时，比如接了个电话，或者分享，之后再回到你的应用页面，这时也应该主动刷新消息，而不是要等着用户手动的去点击刷新按扭；再比如说当使用了硬件资源（位置，Camera或者Sensors等）时，更是要当离开应用页面的时候就应该立即释放硬件，以停止对硬件资源的占用。</p>
-
-<p>从前面的文章<a href="https://juejin.cn/post/7401358349877346338">降Compose十八掌之『损则有孚』| Lifecycle</a>中我们了解到Composable本身的生命周期与平台是无关的且非常不一致，光靠Compose自己的节奏是无法感知到在平台生命周期事件的。这就需要我们使用一些桥接工具来感知平台生命周期事件，以能让我们针对感兴趣的事件执行一些操作。</p>
-
-<h3>生命周期事件副作用函数（LifecycleEffects）</h3>
-
-<p>幸运的是Jetpack组件中的lifecycle已经添加了<a href="https://developer.android.com/topic/libraries/architecture/compose">对Compose的支持</a>，定义了一些<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event,androidx.lifecycle.LifecycleOwner,kotlin.Function0">生命周期副作用函数</a>)，在这些副作用函数中可以针对 不同的事件设置代码块，当相应的生命周期发生时就会执行这些代码块：</p>
-
-<pre><code class="Kotlin">LifecycleEventEffect(Lifecycle.Event.ON_START) {
-  // onStar时执行一些操作
-}
-</code></pre>
-
-<p>上面的代码就是指定要在onStart时做一些事情。需要<strong>注意</strong>的是，无法监听onDestroy（即事件Lifecycle.Event.ON_DESTROY），因为Compose的<strong>组合会在onDestroy之前就结束</strong>了。</p>
-
-<p>除了上面的用法之外，还有更为为方便的<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleStartEffect(kotlin.Any,androidx.lifecycle.LifecycleOwner,kotlin.Function1">LifecycleStartEffect</a>)和<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#LifecycleResumeEffect(kotlin.Any,androidx.lifecycle.LifecycleOwner,kotlin.Function1">LifecycleResumeEffect</a>)可以直接使用，它们是针对onStart/onStop和onResume/onPause两对事件的，因为生命周期中最为常用的就是这四个事件了：</p>
-
-<pre><code class="Kotlin">LifecycleStartEffect {
-  // onStart中需要做的事情
-
-  onStopOrDispose {
-    // onStop需要做的事情
-  }
-}
-
-LifecycleResumeEffect {
-  // onResume需要做的事情
-
-  onPauseOrDispose {
-    // onPause需要做的事
-  }
-}
-</code></pre>
-
-<p>需要注意，这两个副作用函数是针对事件对的，也就是说必须要带着后面的onStopOrDispose和onPauseOrDispose。如果仅对onStart感兴趣，而无须在onStop中做清理，那么应该直接使用LifecycleEventEffect(Lifecycle.Event.ON_START) {}（对于onResume也是同理）。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://medium.com/@nirazv/managing-lifecycles-events-on-jetpack-compose-bbecf804b43d">Managing Lifecycles Events on Jetpack Compose</a></li>
-<li><a href="https://developer.android.com/topic/libraries/architecture/compose">Integrate Lifecycle with Compose</a></li>
-</ul>
-
-
-<h3>监听生命周期事件</h3>
-
-<p>除了直接使用生命周期副作用函数以外，也可以用lifecycle原生的方式，直接向<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleOwner">LifecycleOwner</a>注册一个<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleEventObserver">LifecycleEventObserver</a>来监听生命周期。通过Compose提供的LifeCycleOwner.current可以获得当前的LifecycleOwner，然后向其注册一个LifecycleEventObserver，当平台生命周期发生变化时，就会带着事件类型回调给监听者，监听者可以针对感兴趣的事件做操作。还需要注意的是，需要在组合结束（离开）时反注册observer，因此这里要用DisposableEffect。对于副作用函数不熟悉的同学可以去复习一下<a href="https://juejin.cn/post/7405158681078104127">降Compose十八掌之『龙战于野』| Side Effects</a>。</p>
-
-<p>来看个简单的示例：</p>
-
-<pre><code class="Kotlin">val lifecycleOwner = LocalLifecycleOwner.current
-
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event -&gt;
-            when (event) {
-                Lifecycle.Event.ON_CREATE -&gt; { /* onCreate */ }
-                Lifecycle.Event.ON_START -&gt; { /* onStart */ }
-                Lifecycle.Event.ON_RESUME -&gt; { /* onResume */ }
-                Lifecycle.Event.ON_PAUSE -&gt; { /* onPause */ }
-                Lifecycle.Event.ON_STOP -&gt; { /* onStop */ }
-                Lifecycle.Event.ON_DESTROY -&gt; { /* onDestroy */ }
-                Lifecycle.Event.ON_ANY -&gt; { /* Any event */ }
-                else -&gt; {}
-            }
-        }
-
-        lifecycleOwner.lifecycle.addObserver(observer)
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-</code></pre>
-
-<p>这样就可以监听到生命周期事件，然后针对不同的事件做相应的操作。</p>
-
-<p>当然，如果事件不止做一件事情，或者说对事件的响应不光光是执行一些函数，可能还会有页面的修改，那么这时最好就是把事件保存为一个状态（State），更为方便：</p>
-
-<pre><code class="Kotlin">    val lifecycleOwner = LocalLifecycleOwner.current
-
-    var lifecycleEvent by remember { mutableStateOf(Lifecycle.Event.ON_ANY) }
-
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event -&gt;
-            lifecycleEvent = event
-        }
-
-        lifecycleOwner.lifecycle.addObserver(observer)
-
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
-
-    LaunchedEffect(lifecycleEvent) {
-        if (lifecycleEvent == Lifecycle.Event.ON_RESUME) {
-            viewModel.refresh()
-        }
-    }
-
-    Column() {
-        if (lifecycleEvent == Lifecycle.Event.ON_RESUME) {
-            Text("Welcome back")
-        }
-    }
-</code></pre>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://stackoverflow.com/questions/74780546/android-handle-lifecycle-event-on-jetpack-compose-screen">Android handle lifecycle event on Jetpack Compose Screen</a></li>
-<li><a href="https://proandroiddev.com/jetpack-compose-making-composable-lifecycle-aware-bde67437d2d0">Jetpack Compose — Making Composable lifecycle-aware</a></li>
-<li><a href="https://betterprogramming.pub/jetpack-compose-with-lifecycle-aware-composables-7bd5d6793e0">Jetpack Compose with Lifecycle-Aware Composables</a></li>
-</ul>
-
-
-<h3>以数据流的方式来处理生命周期事件</h3>
-
-<p>生命周期是由系统控制，不时发生变化，每次变化会向监听者回调一个事件，如果以一定的时间跨度来看待，这些事件就形成了一个数据流。因此，Lifecycle还提供了一个Flow接口，用以发送Lifecycle事件。可以当作状态（State）来收集此Flow，这样事件的变化就能驱动Compose的重组，进而感知到最新的生命周期事件：</p>
-
-<pre><code class="Kotlin">val lifecycleOwner = LocalLifecycleOwner.current
-val stateFlow = lifecycleOwner.lifecycle.currentStateFlow
-val currentLifecycleState by stateFlow.collectAsState()
-
-// 或者
-val lifecycleOwner = LocalLifecycleOwner.current
-val currentLifecycleState = lifecycleOwner.lifecycle.currentStateAsState()
-</code></pre>
-
-<p><strong>注意：</strong> 对于Flow不熟悉的同学可以复习一下<a href="https://juejin.cn/post/7336751931375648820">包教包会的Kotlin Flow教程</a>。</p>
-
-<h3>不要在ViewModel中感知生命周期</h3>
-
-<p>根据<a href="https://developer.android.com/topic/architecture">现代安卓开发架构原则</a>，ViewModel应该处理与UI相关的业务逻辑，它应该独立于平台，因此，千万不要在ViewModel去感知生命周期，事实上你也做不到，因为ViewModel是没任何对平台的依赖的，非常独立的一个类型，也即拿不到LifecycleOwner。</p>
-
-<p>当然了，有同学说，我可以从Compose的Composable中把LifecycleOwner当作参数传给ViewModel，但仍然强烈不建议这样做。深层的原因在于，ViewModel是独立于平台的，它有自己的生命周周期，平台的组件（如Activity）是由系统控制的，但ViewModel是由我们自己控制的，它的生命周期要长于平台的组件，也就是说ViewModel的生命周期要长于它持有的LifecycleOwner，故LifecycleOwner可能会变得过时（非当前的Activity了），同时因为被更长生命的ViewModel持有，原LifecycleOwner可能无法被回收而引发内存泄漏。</p>
-
-<p>ViewModel只应该负责业务逻辑相关的事情，在Composable中监听生命周期事件很方便，也很合适，然后调用ViewModel的相应的接口（如refresh()）即可。</p>
-
-<h2>总结</h2>
-
-<p>得益于Jetpack中的Lifecycle组件，在Compose中感知生命周期没有想像中的那样难。在实际项目中，推荐使用更符合Compose的方式，也即生命周期副作用函数以及事件数据流。如果仅是在某些生命周期事件发生时执行一些操作，那就用LifecycleEventEffect函数；如果不止一处需要使用事件，那就用事件数据流。</p>
 ]]></content>
   </entry>
   
