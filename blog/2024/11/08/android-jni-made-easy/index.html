@@ -1,0 +1,665 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>给Jetpack Compose添加Native支持 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="学会给Jetpack Compose项目添加native支持，也即如何添加C和C++代码到项目中去。">
+  <meta name="keywords" content="Native, JNI, Android">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2024/11/08/android-jni-made-easy">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">给Jetpack Compose添加Native支持</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2024-11-08T22:40:32+08:00'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>8</span><span class='date-suffix'>th</span>, <span class='date-year'>2024</span></span> <span class='time'>10:40 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>Jetpack Compose是一个声明式的UI框架，但一个项目不可能光有UI，还需要有业务逻辑。Compose所用的编程语言是Kotlin，一种基于JVM的多范式通用编程语言，尽管非常强大，但因为现代的项目都非常复杂，多语言混合，有些东西用Kotlin没法实现，或者有些现成的C/C++代码可以复用，这时就需要能把native代码集成到Compose项目中去。</p>
+
+<p><a href="/blog/2024/11/08/android-jni-made-easy/"><img src="https://questdot.com/wp-content/uploads/2016/07/ndkjni-720x340.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>想要在Compose中使用native代码是完全可行的，这是因为Compose是基于Kotlin的，而Kotlin本质上是JVM的字节码，也就是运行在虚拟机之上的语言。Java的Native接口，即JNI其实是虚拟机开出的口子，只要能在JVM上运行就可以用JNI，所以标准的Java JNI是完全可以用在Compose里面的。</p>
+
+<p><strong>注意：</strong> native代码（原生代码）在不同的语境有不同的意思，它通常指操作系统直接支持的可执行程序。Java（字节码）是运行在虚拟机上的，操作系统被虚拟机给隔离了，对Java是透明的，这时像可以编译为直接在操作系统上运行的代码（如C/C++）称为native代码；假如换个语境，如运行在WebView中的Web前端，则可以直接运行在Android上的或者iOS上的原生SDK代码则称为native代码。</p>
+
+<p>先来看一下如何在Compose项目中添加native支持。</p>
+
+<h2>新项目</h2>
+
+<p>新的项目在创建项目的时候可以选择C++，无论是Kotlin的类，以及C++的实现，以及配置文件都会有模板。但除了demo以外，一般不会有新建项目的机会，极少项目是从0开始。绝大多数情况都是在现有项目中添加native支持，所以我们重点看看如何在现有项目中添加native支持。</p>
+
+<h2>现有项目添加JNI支持</h2>
+
+<p>现在的Android Studio已经对JNI有了很好的支持，AGP中也提供了支持，所以可以不用NDK中命令行式的ndk-build了。对于现有项目想添加JNI支持也不麻烦，有两种方式：一种是添加一个native的Module，新建Module时选择native library就可以了，这个Module里面与新建的Native项目是差不多的。这种方式适合于比较独立的一个新的需要native支持的模块，然后此模块再作为主模块的依赖，比较合适的场景是一个独立的功能模块；</p>
+
+<p>第二种方式就是，像新建 的native项目那样，直接添加native支持：</p>
+
+<h3>Step 1 添加C/C++源码目录</h3>
+
+<p>先在对应的module如app中添加cpp源码目录，要放在与java或者kotlin同级别的目录，如app/src/main/下面，之后所有native层的东西都在app/src/main/cpp下面。</p>
+
+<h3>Step 2 设置CMake</h3>
+
+<p>在建 好的目录下面添加源码LocalJNI.cpp和编译文件CMakeLists.txt。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'>cmake_minimum_required<span class="o">(</span>VERSION 3.22.1<span class="o">)</span>
+</span><span class='line'>
+</span><span class='line'>project<span class="o">(</span><span class="s2">&quot;effectivejni&quot;</span><span class="o">)</span>
+</span><span class='line'>
+</span><span class='line'>add_library<span class="o">(</span><span class="k">${</span><span class="nv">CMAKE_PROJECT_NAME</span><span class="k">}</span> SHARED
+</span><span class='line'>        <span class="c"># List C/C++ source files with relative paths to this CMakeLists.txt.</span>
+</span><span class='line'>        LocalJNI.cpp<span class="o">)</span>
+</span><span class='line'>target_link_libraries<span class="o">(</span><span class="k">${</span><span class="nv">CMAKE_PROJECT_NAME</span><span class="k">}</span>
+</span><span class='line'>        <span class="c"># List libraries link to the target library</span>
+</span><span class='line'>        android
+</span><span class='line'>        log<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>CMake是一个跨平台的C/C++编译系统，可以参考 <a href="https://cmake.org/">其官文档</a>了解详细信息。</p>
+
+<h3>Step 3 在Gradle脚本中添加native build关联</h3>
+
+<p>在android块中加入externalNativeBuild：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">android</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>    <span class="n">externalNativeBuild</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">cmake</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">path</span><span class="p">(</span><span class="s">&quot;src/main/cpp/CMakeLists.txt&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">version</span> <span class="p">=</span> <span class="s">&quot;3.22.1&quot;</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>Step 4 添加带有native方法的类</h3>
+
+<p>这一步要特别注意，因为JNI是Java Native Interface，所以必须要严格符合Java的方式，native方法的声明必须是某个类的方法；另外，JNI调用Java时也必须先找到某个类，然后再调用它的方法。所以必须 要有一个Java的public类：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">package</span> <span class="nn">net.toughcoder.effectivejni</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">LocalJNI</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">external</span> <span class="k">fun</span> <span class="nf">stringFromLocal</span><span class="p">():</span> <span class="n">String</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">companion</span> <span class="k">object</span> <span class="err">{</span>
+</span><span class='line'>        <span class="n">init</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">System</span><span class="p">.</span><span class="n">loadLibrary</span><span class="p">(</span><span class="s">&quot;effectivejni&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>当然，这个类可以放在任何文件中。因为Kotlin放宽了Java的限制，在Java中每一个public的类必须要放在一个名字一样的文件中，但Kotlin的文件与类没有对应的关系，所以可以把这个类放在任何文件中，当然了package要指明，因为在JNI中查找class时，要指定package name。</p>
+
+<h3>Step 5 实现native方法</h3>
+
+<p>具体native方法的实现就看具体要做什么了。这里只是演示所以简单返回一个字符串。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='C++'><span class='line'><span class="cp">#include &lt;jni.h&gt;</span>
+</span><span class='line'><span class="cp">#include &lt;string&gt;</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">extern</span> <span class="s">&quot;C&quot;</span> <span class="n">JNIEXPORT</span> <span class="n">jstring</span> <span class="n">JNICALL</span>
+</span><span class='line'><span class="n">Java_net_toughcoder_effectivejni_LocalJNI_stringFromJNI</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">JNIEnv</span><span class="o">*</span> <span class="n">env</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">jobject</span> <span class="cm">/* this */</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">hello</span> <span class="o">=</span> <span class="s">&quot;Hello from C++ with static mapping&quot;</span><span class="p">;</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">env</span><span class="o">-&gt;</span><span class="n">NewStringUTF</span><span class="p">(</span><span class="n">hello</span><span class="p">.</span><span class="n">c_str</span><span class="p">());</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>注意：</strong> 虽然Compose使用的编程语言是Kotlin，但毕竟Kotlin是JVM语言，也与Java可以相互替换。对于JNI来说，Kotlin与Java无区别，所以后面会以Java来统一当作native的另一端。</p>
+
+<h2>JNI注册</h2>
+
+<p>无论是用C/C++去实现native接口，还是复用现成的native方法，都需要要把native方法与Java层声明的方法进行关联映射，以让JVM能找到此方法的实现，这也即所谓的JNI注册。有两种方式进行JNI注册。</p>
+
+<p>静态方式，其实就是Java默认支持的方式，它要求Native的实现函数是纯C的，要用『extern C』包裹起来，还有就是方法的名字要是Java&#95;包名&#95;类名&#95;方法名，比较严格。前面的示例用的就是静态注册。</p>
+
+<p>动态注册的原理是加载so的时候，当虚拟机在找到so以后，会查找里面一个叫做JNI&#95;OnLoad的函数指针，然后执行此函数。那么，在so的实现中，写一个叫做JNI&#95;OnLoad的函数，在里面手动进行Native方法注册，然后当so被加载时JNI&#95;OnLoad就会被执行，JNI方法就注册好了。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+</pre></td><td class='code'><pre><code class='C++'><span class='line'><span class="cp">#include &lt;jni.h&gt;</span>
+</span><span class='line'><span class="cp">#include &lt;string&gt;</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Method declaration</span>
+</span><span class='line'><span class="n">jstring</span> <span class="nf">dynamicString</span><span class="p">(</span><span class="n">JNIEnv</span> <span class="o">*</span><span class="n">env</span><span class="p">,</span> <span class="n">jobject</span> <span class="n">thiz</span><span class="p">);</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// JNI wrapper</span>
+</span><span class='line'><span class="k">const</span> <span class="kt">char</span> <span class="n">className</span><span class="p">[]</span> <span class="o">=</span> <span class="s">&quot;net/toughcoder/effectivejni/LocalJNI&quot;</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">const</span> <span class="n">JNINativeMethod</span> <span class="n">methods</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="p">{</span><span class="s">&quot;stringFromJNI&quot;</span><span class="p">,</span> <span class="s">&quot;()Ljava/lang/String;&quot;</span><span class="p">,</span> <span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="kt">void</span> <span class="o">*&gt;</span><span class="p">(</span><span class="n">dynamicString</span><span class="p">)}</span>
+</span><span class='line'><span class="p">};</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">JNIEXPORT</span> <span class="n">jint</span> <span class="n">JNICALL</span> <span class="nf">JNI_OnLoad</span><span class="p">(</span><span class="n">JavaVM</span> <span class="o">*</span><span class="n">vm</span><span class="p">,</span> <span class="kt">void</span> <span class="o">*</span><span class="n">reserved</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">JNIEnv</span> <span class="o">*</span><span class="n">env</span><span class="p">;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">vm</span><span class="o">-&gt;</span><span class="n">GetEnv</span><span class="p">(</span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="kt">void</span> <span class="o">**&gt;</span><span class="p">(</span><span class="o">&amp;</span><span class="n">env</span><span class="p">),</span> <span class="n">JNI_VERSION_1_6</span><span class="p">)</span> <span class="o">!=</span> <span class="n">JNI_OK</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">JNI_ERR</span><span class="p">;</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">jclass</span> <span class="n">clazz</span> <span class="o">=</span> <span class="n">env</span><span class="o">-&gt;</span><span class="n">FindClass</span><span class="p">(</span><span class="n">className</span><span class="p">);</span>
+</span><span class='line'>    <span class="n">env</span><span class="o">-&gt;</span><span class="n">RegisterNatives</span><span class="p">(</span><span class="n">clazz</span><span class="p">,</span> <span class="n">methods</span><span class="p">,</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span> <span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="n">methods</span><span class="p">)</span> <span class="o">/</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">methods</span><span class="p">[</span><span class="mi">0</span><span class="p">])));</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">return</span> <span class="n">JNI_VERSION_1_6</span><span class="p">;</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// The implementation</span>
+</span><span class='line'><span class="n">jstring</span> <span class="nf">dynamicString</span><span class="p">(</span><span class="n">JNIEnv</span> <span class="o">*</span><span class="n">env</span><span class="p">,</span> <span class="n">jobject</span> <span class="n">thiz</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="n">str</span> <span class="o">=</span> <span class="s">&quot;String from JNI via dynamic mapping.&quot;</span><span class="p">;</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">env</span><span class="o">-&gt;</span><span class="n">NewStringUTF</span><span class="p">(</span><span class="n">str</span><span class="p">.</span><span class="n">c_str</span><span class="p">());</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个JNI&#95;OnLoad的方法的参数很有意思是一个JavaVM对象指针，JavaVM对象每个应用进程只有一个，可以认为就是应用的虚拟机。但每个JNI方法都有一个JNIEnv对象指针，它给native方法提供一个JNI上下文，这个则是每个线程都有一个。</p>
+
+<p>推荐使用动态注册方式进行JNI注册，这是因为这种方式更为灵活，不必写繁琐的方法声明，也不必用extern C限制，可以是常规的C++函数。</p>
+
+<h2>JNI是一个接口层</h2>
+
+<p>JNI是一个口子，可以让Java调用native代码，也能让native代码调用Java代码，调用Java代码就相当于反射。JNI是一个传送门，虽然入口处有一些限制，但深入到native里面就是完全的C和C++世界了，只要是C和C++能实现的事情都可以做。</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/JNI.svg" alt="图1. JNI是一个传送门" /></p>
+
+<h2>JNI线程</h2>
+
+<p>需要注意的是结构体JavaVM是所有线程共享，它代表着进程所在的虚拟机。但结构体JNIEnv则是代表着栈中的执行环境（因为JNI仅一个方法，而方法必然运行在某个线程之中），每个线程有一个。创建的局部引用也不能跨线程使用。</p>
+
+<p>从JNIEnv获取JavaVM：env->GetJavaVM(&amp;vm)</p>
+
+<p>从JavaVM获得当前JNIENV：vm->AttachCurrentThread(&amp;env, null)</p>
+
+<p>最好都从Java层来管理线程，JNI只是某些方法的实现。</p>
+
+<p>如果JNI的native代码也很复杂需要线程的话，也可以用pthread创建线程，但也应该维持在一定的作用域范围内，不应该再从此线程去调用Java。这样只会制造混乱。</p>
+
+<h2>两个世界的对象连接</h2>
+
+<p>需要注意JNI是纯C接口，没有对象的概念，入口处的native方法不属于任何C++对象。假如native深入层足够复杂也有一套对象，如何建立起 Java层对象和native对象的连接呢？可以参考Android frameworks的作法，它通常会给Java层的对象有一个整形域变量，用以存放native层对象指针，这样就能建立起来对象与对象的一一对应关系。</p>
+
+<h2>添加已编译好的native库</h2>
+
+<p>JNI是连接Java层与C/C++层的传送门，除了新写的native代码，也可以直接使用已编译好的C/C++的库，静态库libxxx.a和动态库libxxx.so。</p>
+
+<p>预编译的库通常作为JNI的依赖，当然也可以直接加载，前提是so里面已包含了JNI接口。但需要特别注意的是静态的库.a是无法直接在Java中加载的，也即无法通过System.loadLibrary()来加载native的静态库。因此静态库只能作为依赖，要包一层，写一个Wrapper层编译为so，静态库作为so的依赖，然后把so加载为JNI。</p>
+
+<p>通过CMake中的add_library指令来添加预编译好的库，具体可以 <a href="https://cmake.org/cmake/help/latest/command/add_library.html">参考其文档</a>。</p>
+
+<h2>NDK的版本</h2>
+
+<p>在项目的配置gradle文件中可以指定具体的NDK版本：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">android</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">ndkVersion</span> <span class="p">=</span> <span class="s">&quot;28.0.12433566&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>NDK的版本可以看<a href="https://developer.android.com/ndk/downloads/revision_history">官方发布历史</a>，NDK主要是指Android提供的native API（C/C++ API），主要是一些系统提供的能力，如音频视频能力，图形图像能力等，可以看<a href="https://developer.android.com/ndk/guides/stable_apis">其接口说明文档</a>，以及<a href="https://developer.android.com/ndk/reference">NDK开发文档</a>。</p>
+
+<h2>C/C++的版本指定</h2>
+
+<p>C++语言自从其诞生，在Java和新一代编程语言出现后，曾一度长期停滞，在泛型，函数式编程，并发上面落后于其他语言，并被诟病。但从C++11开始，（C++语言的版本以年份的后两位来命名，如C++11是指2011年发布的版本，C++17指2017年发布的，以此类推）这门古老的语言焕然一新，增加了很多新时代编程语言的特性，其后的C++17继续前进，到现在的C++20已经完全是一个现代化的编程语言了，lambda，函数式，泛型和并发都有了非常好的支持，甚至已经超越了老对手Java。因此，C++11以后的版本也称为『现代C++（Modern C++）』。</p>
+
+<p>都4202年了，肯定要用最新的C++20才行啊。CMake使用的是LLVM编译器，而LLVM已经完全支持C++20了，但默认的版本使用的是C++17，想要特别的版本，就需要在CMakefile.txt中进行指定，也即通过添加编译选项来指定C++的版本：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'><span class="nb">set</span><span class="o">(</span>CMAKE_ANDROID_STL_TYPE <span class="s2">&quot;c++_shared&quot;</span><span class="o">)</span>
+</span><span class='line'><span class="nb">set</span><span class="o">(</span>CMAKE_C_FLAGS <span class="s2">&quot;${CMAKE_C_FLAGS} -std=c99&quot;</span><span class="o">)</span>
+</span><span class='line'><span class="nb">set</span><span class="o">(</span>CMAKE_CXX_FLAGS <span class="s2">&quot;${CMAKE_CXX_FLAGS} -std=c++20&quot;</span><span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>JNI内存管理</h2>
+
+<p>Java层是自动档（自动内存管理），但C/C++是手动档，因此穿过JNI后就需要特别小心内存管理。有一些注意事项：</p>
+
+<ul>
+<li>Java 层传过来的对象，不需要手动去释放。比如说传过来的数组或者字符串。</li>
+<li>传回给Java层的对象，也不需要手动释放。比如像上面的例子新创建出来的字符串，尽管使用了New，但不需要管。GC会追踪。而且你也没法释放，创建完对象交给Java层了，不确定Java还在不在使用中呢，你咋delete？</li>
+<li>只应该管理生命周期全都在native的new出来的对象，和引用。</li>
+<li>需要特别注意方法运行的上下文，也即JNIEnv，这个东西每个线程有一个，且是不同的。要保证在同一个JNIEnv中管理内存，不同的JNIEnv无法共享创建出来的对象和引用，不能交叉使用，更不能交叉式的释放。</li>
+</ul>
+
+
+<h2>JNI能做什么</h2>
+
+<p>JNI是一个接口层，能够让Java进入C/C++世界，调用C/C++的代码，包括现有代码。所以只要编译出来了目标平台（ARM）的so，就可以在JNI中用。</p>
+
+<p>当然了，为了兼容性，使用的so最好用NDK进行编译。</p>
+
+<p>因为Android是Linux内核的，所以，理论上Linux系统调用支持的东西全都能在JNI里面搞。当然，使用native最为正确的体位是使用NDK来实现想要的功能，可以查看<a href="https://developer.android.com/ndk/reference">NDK的开发文档</a>来明确可以做哪些事情。</p>
+
+<h2>使用JNI的正确姿式</h2>
+
+<p>JNI虽好，但不要滥用，不能单单以『C/C++语言性能高于Java（JVM）』为理由就去使用JNI。JNI本身是一个口子，单从方法调用角度讲，从Java层调用过来要有历经查询和数据转换，不见得会比Java方法高效到哪里去。而且JNI在线程调度，异常管理和内存管理上面都较Java层相比非常的不方便，那点看起来的性能优势的代价是很大的，所以说能不用JNI就别用。</p>
+
+<p>使用JNI的正确理由：</p>
+
+<ol>
+<li>做一些Java层无法做到的事情，比如一些底层的系统调用（System calls），Java层做不到，那自然得用C/C++</li>
+<li>使用一些现有的C/C++代码，这个是最为正统的理由</li>
+<li>基于安全角度考量，把一些关键的实现放在C/C++层，这个也合理，因为C/C++相较于Java字节码要略难破解一些</li>
+<li>基于跨平台角度考虑，把一些与平台关联密切的，且独立的模块用C/C++实现，比如像通信协议，或者加密，或者压缩之类的非常独立的功能模块，用C/C++来实现，屏蔽名个平台的不同，这会让Java层更加的简单</li>
+</ol>
+
+
+<p>除此之外，似乎没有理由使用JNI。另外，在使用的时候也要注意尽可能的单进单出，也就是说从Java层调用native方法，进去后一直在native运算，得到结果后返回给Java。而不应该频繁的有交互，比如说Java层调用进了native方法，但在native中又频繁 的调用Java层的方法。这明显是设计不合理，应该在Java层把需要的数据准备齐全后，再调用native层。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://juejin.cn/post/7382893339098906665">Android JNI入门</a></li>
+<li><a href="https://juejin.cn/post/7302684536148230194">一、Android-JNI开发</a></li>
+<li><a href="https://juejin.cn/post/6844903933375152136">Android NDK-深入理解JNI</a></li>
+<li><a href="https://cloud.tencent.com/developer/article/1666741">JNI线程相关</a></li>
+<li><a href="https://developer.android.com/studio/projects/add-native-code">Add C and C++ code to your project</a></li>
+<li><a href="https://developer.android.com/training/articles/perf-jni">JNI tips</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2024-11-08T22:40:32+08:00'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>8</span><span class='date-suffix'>th</span>, <span class='date-year'>2024</span></span> <span class='time'>10:40 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2024/10/14/activity-result-launcher/" title="Previous Post: 让Activity更加优雅地跳转">&laquo; 让Activity更加优雅地跳转</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2024 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

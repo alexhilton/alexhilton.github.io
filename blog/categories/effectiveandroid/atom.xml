@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2024-11-08T21:24:43+08:00</updated>
+  <updated>2024-11-08T22:41:54+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,255 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[给Jetpack Compose添加Native支持]]></title>
+    <link href="https://alexhilton.github.io/blog/2024/11/08/android-jni-made-easy/"/>
+    <updated>2024-11-08T22:40:32+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2024/11/08/android-jni-made-easy</id>
+    <content type="html"><![CDATA[<p>Jetpack Compose是一个声明式的UI框架，但一个项目不可能光有UI，还需要有业务逻辑。Compose所用的编程语言是Kotlin，一种基于JVM的多范式通用编程语言，尽管非常强大，但因为现代的项目都非常复杂，多语言混合，有些东西用Kotlin没法实现，或者有些现成的C/C++代码可以复用，这时就需要能把native代码集成到Compose项目中去。</p>
+
+<p><a href=""><img src="https://questdot.com/wp-content/uploads/2016/07/ndkjni-720x340.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>想要在Compose中使用native代码是完全可行的，这是因为Compose是基于Kotlin的，而Kotlin本质上是JVM的字节码，也就是运行在虚拟机之上的语言。Java的Native接口，即JNI其实是虚拟机开出的口子，只要能在JVM上运行就可以用JNI，所以标准的Java JNI是完全可以用在Compose里面的。</p>
+
+<p><strong>注意：</strong> native代码（原生代码）在不同的语境有不同的意思，它通常指操作系统直接支持的可执行程序。Java（字节码）是运行在虚拟机上的，操作系统被虚拟机给隔离了，对Java是透明的，这时像可以编译为直接在操作系统上运行的代码（如C/C++）称为native代码；假如换个语境，如运行在WebView中的Web前端，则可以直接运行在Android上的或者iOS上的原生SDK代码则称为native代码。</p>
+
+<p>先来看一下如何在Compose项目中添加native支持。</p>
+
+<h2>新项目</h2>
+
+<p>新的项目在创建项目的时候可以选择C++，无论是Kotlin的类，以及C++的实现，以及配置文件都会有模板。但除了demo以外，一般不会有新建项目的机会，极少项目是从0开始。绝大多数情况都是在现有项目中添加native支持，所以我们重点看看如何在现有项目中添加native支持。</p>
+
+<h2>现有项目添加JNI支持</h2>
+
+<p>现在的Android Studio已经对JNI有了很好的支持，AGP中也提供了支持，所以可以不用NDK中命令行式的ndk-build了。对于现有项目想添加JNI支持也不麻烦，有两种方式：一种是添加一个native的Module，新建Module时选择native library就可以了，这个Module里面与新建的Native项目是差不多的。这种方式适合于比较独立的一个新的需要native支持的模块，然后此模块再作为主模块的依赖，比较合适的场景是一个独立的功能模块；</p>
+
+<p>第二种方式就是，像新建 的native项目那样，直接添加native支持：</p>
+
+<h3>Step 1 添加C/C++源码目录</h3>
+
+<p>先在对应的module如app中添加cpp源码目录，要放在与java或者kotlin同级别的目录，如app/src/main/下面，之后所有native层的东西都在app/src/main/cpp下面。</p>
+
+<h3>Step 2 设置CMake</h3>
+
+<p>在建 好的目录下面添加源码LocalJNI.cpp和编译文件CMakeLists.txt。</p>
+
+<pre><code class="Bash">cmake_minimum_required(VERSION 3.22.1)
+
+project("effectivejni")
+
+add_library(${CMAKE_PROJECT_NAME} SHARED
+        # List C/C++ source files with relative paths to this CMakeLists.txt.
+        LocalJNI.cpp)
+target_link_libraries(${CMAKE_PROJECT_NAME}
+        # List libraries link to the target library
+        android
+        log)
+</code></pre>
+
+<p>CMake是一个跨平台的C/C++编译系统，可以参考 <a href="https://cmake.org/">其官文档</a>了解详细信息。</p>
+
+<h3>Step 3 在Gradle脚本中添加native build关联</h3>
+
+<p>在android块中加入externalNativeBuild：</p>
+
+<pre><code class="Kotlin">android {
+    // ...
+    externalNativeBuild {
+        cmake {
+            path("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+}
+</code></pre>
+
+<h3>Step 4 添加带有native方法的类</h3>
+
+<p>这一步要特别注意，因为JNI是Java Native Interface，所以必须要严格符合Java的方式，native方法的声明必须是某个类的方法；另外，JNI调用Java时也必须先找到某个类，然后再调用它的方法。所以必须 要有一个Java的public类：</p>
+
+<pre><code class="Kotlin">package net.toughcoder.effectivejni
+
+class LocalJNI {
+
+    external fun stringFromLocal(): String
+
+    companion object {
+        init {
+            System.loadLibrary("effectivejni")
+        }
+    }
+}
+</code></pre>
+
+<p>当然，这个类可以放在任何文件中。因为Kotlin放宽了Java的限制，在Java中每一个public的类必须要放在一个名字一样的文件中，但Kotlin的文件与类没有对应的关系，所以可以把这个类放在任何文件中，当然了package要指明，因为在JNI中查找class时，要指定package name。</p>
+
+<h3>Step 5 实现native方法</h3>
+
+<p>具体native方法的实现就看具体要做什么了。这里只是演示所以简单返回一个字符串。</p>
+
+<pre><code class="C++">#include &lt;jni.h&gt;
+#include &lt;string&gt;
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_toughcoder_effectivejni_LocalJNI_stringFromJNI(
+        JNIEnv* env,
+        jobject /* this */) {
+    std::string hello = "Hello from C++ with static mapping";
+    return env-&gt;NewStringUTF(hello.c_str());
+}
+</code></pre>
+
+<p><strong>注意：</strong> 虽然Compose使用的编程语言是Kotlin，但毕竟Kotlin是JVM语言，也与Java可以相互替换。对于JNI来说，Kotlin与Java无区别，所以后面会以Java来统一当作native的另一端。</p>
+
+<h2>JNI注册</h2>
+
+<p>无论是用C/C++去实现native接口，还是复用现成的native方法，都需要要把native方法与Java层声明的方法进行关联映射，以让JVM能找到此方法的实现，这也即所谓的JNI注册。有两种方式进行JNI注册。</p>
+
+<p>静态方式，其实就是Java默认支持的方式，它要求Native的实现函数是纯C的，要用『extern C』包裹起来，还有就是方法的名字要是Java&#95;包名&#95;类名&#95;方法名，比较严格。前面的示例用的就是静态注册。</p>
+
+<p>动态注册的原理是加载so的时候，当虚拟机在找到so以后，会查找里面一个叫做JNI&#95;OnLoad的函数指针，然后执行此函数。那么，在so的实现中，写一个叫做JNI&#95;OnLoad的函数，在里面手动进行Native方法注册，然后当so被加载时JNI&#95;OnLoad就会被执行，JNI方法就注册好了。</p>
+
+<pre><code class="C++">#include &lt;jni.h&gt;
+#include &lt;string&gt;
+
+// Method declaration
+jstring dynamicString(JNIEnv *env, jobject thiz);
+
+// JNI wrapper
+const char className[] = "net/toughcoder/effectivejni/LocalJNI";
+
+const JNINativeMethod methods[] = {
+        {"stringFromJNI", "()Ljava/lang/String;", reinterpret_cast&lt;void *&gt;(dynamicString)}
+};
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+    JNIEnv *env;
+    if (vm-&gt;GetEnv(reinterpret_cast&lt;void **&gt;(&amp;env), JNI_VERSION_1_6) != JNI_OK) {
+        return JNI_ERR;
+    }
+    jclass clazz = env-&gt;FindClass(className);
+    env-&gt;RegisterNatives(clazz, methods, (int) (sizeof(methods) / sizeof(methods[0])));
+
+    return JNI_VERSION_1_6;
+}
+
+// The implementation
+jstring dynamicString(JNIEnv *env, jobject thiz) {
+    std::string str = "String from JNI via dynamic mapping.";
+    return env-&gt;NewStringUTF(str.c_str());
+}
+</code></pre>
+
+<p>这个JNI&#95;OnLoad的方法的参数很有意思是一个JavaVM对象指针，JavaVM对象每个应用进程只有一个，可以认为就是应用的虚拟机。但每个JNI方法都有一个JNIEnv对象指针，它给native方法提供一个JNI上下文，这个则是每个线程都有一个。</p>
+
+<p>推荐使用动态注册方式进行JNI注册，这是因为这种方式更为灵活，不必写繁琐的方法声明，也不必用extern C限制，可以是常规的C++函数。</p>
+
+<h2>JNI是一个接口层</h2>
+
+<p>JNI是一个口子，可以让Java调用native代码，也能让native代码调用Java代码，调用Java代码就相当于反射。JNI是一个传送门，虽然入口处有一些限制，但深入到native里面就是完全的C和C++世界了，只要是C和C++能实现的事情都可以做。</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/JNI.svg" alt="图1. JNI是一个传送门" /></p>
+
+<h2>JNI线程</h2>
+
+<p>需要注意的是结构体JavaVM是所有线程共享，它代表着进程所在的虚拟机。但结构体JNIEnv则是代表着栈中的执行环境（因为JNI仅一个方法，而方法必然运行在某个线程之中），每个线程有一个。创建的局部引用也不能跨线程使用。</p>
+
+<p>从JNIEnv获取JavaVM：env->GetJavaVM(&amp;vm)</p>
+
+<p>从JavaVM获得当前JNIENV：vm->AttachCurrentThread(&amp;env, null)</p>
+
+<p>最好都从Java层来管理线程，JNI只是某些方法的实现。</p>
+
+<p>如果JNI的native代码也很复杂需要线程的话，也可以用pthread创建线程，但也应该维持在一定的作用域范围内，不应该再从此线程去调用Java。这样只会制造混乱。</p>
+
+<h2>两个世界的对象连接</h2>
+
+<p>需要注意JNI是纯C接口，没有对象的概念，入口处的native方法不属于任何C++对象。假如native深入层足够复杂也有一套对象，如何建立起 Java层对象和native对象的连接呢？可以参考Android frameworks的作法，它通常会给Java层的对象有一个整形域变量，用以存放native层对象指针，这样就能建立起来对象与对象的一一对应关系。</p>
+
+<h2>添加已编译好的native库</h2>
+
+<p>JNI是连接Java层与C/C++层的传送门，除了新写的native代码，也可以直接使用已编译好的C/C++的库，静态库libxxx.a和动态库libxxx.so。</p>
+
+<p>预编译的库通常作为JNI的依赖，当然也可以直接加载，前提是so里面已包含了JNI接口。但需要特别注意的是静态的库.a是无法直接在Java中加载的，也即无法通过System.loadLibrary()来加载native的静态库。因此静态库只能作为依赖，要包一层，写一个Wrapper层编译为so，静态库作为so的依赖，然后把so加载为JNI。</p>
+
+<p>通过CMake中的add_library指令来添加预编译好的库，具体可以 <a href="https://cmake.org/cmake/help/latest/command/add_library.html">参考其文档</a>。</p>
+
+<h2>NDK的版本</h2>
+
+<p>在项目的配置gradle文件中可以指定具体的NDK版本：</p>
+
+<pre><code class="Kotlin">android {
+    ndkVersion = "28.0.12433566"
+}
+</code></pre>
+
+<p>NDK的版本可以看<a href="https://developer.android.com/ndk/downloads/revision_history">官方发布历史</a>，NDK主要是指Android提供的native API（C/C++ API），主要是一些系统提供的能力，如音频视频能力，图形图像能力等，可以看<a href="https://developer.android.com/ndk/guides/stable_apis">其接口说明文档</a>，以及<a href="https://developer.android.com/ndk/reference">NDK开发文档</a>。</p>
+
+<h2>C/C++的版本指定</h2>
+
+<p>C++语言自从其诞生，在Java和新一代编程语言出现后，曾一度长期停滞，在泛型，函数式编程，并发上面落后于其他语言，并被诟病。但从C++11开始，（C++语言的版本以年份的后两位来命名，如C++11是指2011年发布的版本，C++17指2017年发布的，以此类推）这门古老的语言焕然一新，增加了很多新时代编程语言的特性，其后的C++17继续前进，到现在的C++20已经完全是一个现代化的编程语言了，lambda，函数式，泛型和并发都有了非常好的支持，甚至已经超越了老对手Java。因此，C++11以后的版本也称为『现代C++（Modern C++）』。</p>
+
+<p>都4202年了，肯定要用最新的C++20才行啊。CMake使用的是LLVM编译器，而LLVM已经完全支持C++20了，但默认的版本使用的是C++17，想要特别的版本，就需要在CMakefile.txt中进行指定，也即通过添加编译选项来指定C++的版本：</p>
+
+<pre><code class="Bash">set(CMAKE_ANDROID_STL_TYPE "c++_shared")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=c99")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++20")
+</code></pre>
+
+<h2>JNI内存管理</h2>
+
+<p>Java层是自动档（自动内存管理），但C/C++是手动档，因此穿过JNI后就需要特别小心内存管理。有一些注意事项：</p>
+
+<ul>
+<li>Java 层传过来的对象，不需要手动去释放。比如说传过来的数组或者字符串。</li>
+<li>传回给Java层的对象，也不需要手动释放。比如像上面的例子新创建出来的字符串，尽管使用了New，但不需要管。GC会追踪。而且你也没法释放，创建完对象交给Java层了，不确定Java还在不在使用中呢，你咋delete？</li>
+<li>只应该管理生命周期全都在native的new出来的对象，和引用。</li>
+<li>需要特别注意方法运行的上下文，也即JNIEnv，这个东西每个线程有一个，且是不同的。要保证在同一个JNIEnv中管理内存，不同的JNIEnv无法共享创建出来的对象和引用，不能交叉使用，更不能交叉式的释放。</li>
+</ul>
+
+
+<h2>JNI能做什么</h2>
+
+<p>JNI是一个接口层，能够让Java进入C/C++世界，调用C/C++的代码，包括现有代码。所以只要编译出来了目标平台（ARM）的so，就可以在JNI中用。</p>
+
+<p>当然了，为了兼容性，使用的so最好用NDK进行编译。</p>
+
+<p>因为Android是Linux内核的，所以，理论上Linux系统调用支持的东西全都能在JNI里面搞。当然，使用native最为正确的体位是使用NDK来实现想要的功能，可以查看<a href="https://developer.android.com/ndk/reference">NDK的开发文档</a>来明确可以做哪些事情。</p>
+
+<h2>使用JNI的正确姿式</h2>
+
+<p>JNI虽好，但不要滥用，不能单单以『C/C++语言性能高于Java（JVM）』为理由就去使用JNI。JNI本身是一个口子，单从方法调用角度讲，从Java层调用过来要有历经查询和数据转换，不见得会比Java方法高效到哪里去。而且JNI在线程调度，异常管理和内存管理上面都较Java层相比非常的不方便，那点看起来的性能优势的代价是很大的，所以说能不用JNI就别用。</p>
+
+<p>使用JNI的正确理由：</p>
+
+<ol>
+<li>做一些Java层无法做到的事情，比如一些底层的系统调用（System calls），Java层做不到，那自然得用C/C++</li>
+<li>使用一些现有的C/C++代码，这个是最为正统的理由</li>
+<li>基于安全角度考量，把一些关键的实现放在C/C++层，这个也合理，因为C/C++相较于Java字节码要略难破解一些</li>
+<li>基于跨平台角度考虑，把一些与平台关联密切的，且独立的模块用C/C++实现，比如像通信协议，或者加密，或者压缩之类的非常独立的功能模块，用C/C++来实现，屏蔽名个平台的不同，这会让Java层更加的简单</li>
+</ol>
+
+
+<p>除此之外，似乎没有理由使用JNI。另外，在使用的时候也要注意尽可能的单进单出，也就是说从Java层调用native方法，进去后一直在native运算，得到结果后返回给Java。而不应该频繁的有交互，比如说Java层调用进了native方法，但在native中又频繁 的调用Java层的方法。这明显是设计不合理，应该在Java层把需要的数据准备齐全后，再调用native层。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://juejin.cn/post/7382893339098906665">Android JNI入门</a></li>
+<li><a href="https://juejin.cn/post/7302684536148230194">一、Android-JNI开发</a></li>
+<li><a href="https://juejin.cn/post/6844903933375152136">Android NDK-深入理解JNI</a></li>
+<li><a href="https://cloud.tencent.com/developer/article/1666741">JNI线程相关</a></li>
+<li><a href="https://developer.android.com/studio/projects/add-native-code">Add C and C++ code to your project</a></li>
+<li><a href="https://developer.android.com/training/articles/perf-jni">JNI tips</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[让Activity更加优雅地跳转]]></title>
@@ -1024,213 +1273,6 @@ fun InputSettingsEntry(
 <ul>
 <li><a href="https://climbtheladder.com/10-android-jetpack-compose-best-practices/">10 Android Jetpack Compose Best Practices</a></li>
 <li><a href="https://getstream.io/blog/jetpack-compose-guidelines/">6 Jetpack Compose Best Practices for Optimizing Your App Performance</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『神龙摆尾』| Architecture]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/09/12/architecture-in-compose/"/>
-    <updated>2024-09-12T22:27:58+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/09/12/architecture-in-compose</id>
-    <content type="html"><![CDATA[<p>通过前面的<a href="https://juejin.cn/column/7367555191338467337">一系列文章</a>，我们已经掌握了足够的Jetpack Compose的开发基础。为了更好的在实际项目中使用Compose，我们还需要了解一下现代应用开发的架构原则，以及使用Jetpack Compose时如何更好的遵循这些原则。这篇文章将聚焦于架构原则这一话题，进行一些探讨和总结。</p>
-
-<p><a href=""><img src="https://www.sixt.tech/assets/jetpack-compose/jetpack-compose.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>现代Android应用开发的架构方式</h2>
-
-<p>Jetpack Compose是一个声明式的UI框架，用它来开发应用程序，因此根本上仍是在做应用程序开发，所以需要遵循现代应用程序的架构原则。</p>
-
-<p>一提到架构自然会想到Bob大叔的<a href="https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html">The Clean Architecture</a>，这里面的最主要的核心思想就是分层，把不同的概念按照抽象的层次进行分离，层与层之间有特定的依赖规则，也即只能从控制层往业务逻辑依赖。分层最大的益处就是方便移植和替换，降低维护成本，这也是架构的意义所在。</p>
-
-<p><img src="https://blog.cleancoder.com/uncle-bob/images/2012-08-13-the-clean-architecture/CleanArchitecture.jpg" alt="图1. The Clean Architecture" /></p>
-
-<p>对于移动应用开发，谷歌也给出比较实用的<a href="https://developer.android.com/topic/architecture#common-principles">现代应用架构原则</a>，其中有四个核心原则：</p>
-
-<ol>
-<li>远离系统组件，系统组件（Activity，Service和Fragment等）仅能作为一个入口和必要的依赖对象，以及协调和连接不同的对象。深层次的原因是系统组件实例不可控，系统随时会重新创建实例，所以应该把对系统组件的依赖降到最低；</li>
-<li>由数据来驱动UI，且数据最好是不可变的（Immutable data）。这个原则要求把逻辑尽可能的放在数据层而非UI层，UI层就是展示数据层，处理用户事件和UI自己的逻辑，但不应该做的业务逻辑处理。比如说新闻类应用，数据层把一坨列表传过来，UI就展示，如果列表为空，那显示加载错误，用户点击刷新就让数据层刷新数据。但不应该对列表中的数据做更新或者更改，比如说把不同的列表融合为一个，这些都是业务逻辑，应该由数据层来做。这样的好处是能让UI层尽可能的简单，方便移植，方便测试。而且这符合响应式的数据流，可以使用响应式编程范式（MVVM或者MVI）；</li>
-<li>单一数据源（Single Source Of Truth），也就是说任何数据都应该只由它的生产者来修改，其他模块只是使用不能修改，因此每一层返回的数据都应该是不可修改类型（Immutable objects）;</li>
-<li>单向数据流动（Unidirectional Data Flow），UI层展示数据，获得用户事件，调用业务逻辑层处理事件，业务逻辑层再去数据层请求新的数据，新的数据再来驱动刷新UI，而不可以业务逻辑层修改数据后一边去刷新UI，一边再去让数据层修改数据，这会导致难以调试的bug。</li>
-</ol>
-
-
-<p><img src="https://developer.android.com/static/topic/libraries/architecture/images/mad-arch-overview.png" alt="图2. 现代应用典型架构" /></p>
-
-<p>下面我们围绕Jetpack Compose来深入探讨一下如何把这些架构原则落到实处。</p>
-
-<h2>使用Jetpack Compose落实架构原则</h2>
-
-<p>Jetpack Compose是声明式UI框架，所以它只能出现在UI层，用UI元素展示数据， 以及获取用户事件。其余的部分，如业务逻辑层（ViewModels）和数据层（Models and Data）都与Compose没有关系，也不应该受到Compose的影响。这就是架构分层带来的好处，不同层之间通过约定 的接口进行协作，每一层都可以用不同的技术栈去实现，不会对其他层造成影响。</p>
-
-<p><img src="https://developer.android.com/static/topic/libraries/architecture/images/mad-arch-overview-ui.png" alt="图3. 应用架构中的UI层的角色" /></p>
-
-<h3>典型的项目结构</h3>
-
-<p>按照架构原则，一个典型的项目模块结构应该是酱紫的：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/project_org.png" alt="图4. 典型项目模块结构" /></p>
-
-<p>Activity（对应着Activity实例）和AndroidApp（对应着Application实例）是应用程序的入口，可能需要在里面做一些必要的初始化工作，比如有些三方的库可能需要在Application#onCreate中去做初始化工作。ui package对应着UI层，负责UI的展示；package model对应着Model层，里面定义着供UI层使用的数据类型，以及获取 这些数据的接口；package data对应着数据层（data layer），实现着model中的接口定义。当然也可以把model与data合并成一个package，不过，单独把数据的定义和数据层的接口拿出来放在一个包里，会更清晰一些，因为UI层只需关心有哪些接口可以获得什么数据，它只需要知道model就够了。</p>
-
-<p>Jetpack Compose的入口应该用一个名字为App的函数，在这里做初始化工作，比如创建数据层的实例，进行弹窗，创建导航等等。此处作为一个桥接，用以把Android的组件与Compose连接起来，创建必要的实例并把各实例协调起来。当然也可以直接把这些事情放入Activity中，但独立出来更方便测试和移植，让系统组件变得更为简单。Activity直接调用App即可：</p>
-
-<pre><code class="Kotlin">class MainActivity : AppCompatActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent {
-            AeolusApp(Modifier.fillMaxWidth())
-        }
-    }
-}
-
-@Composable
-fun AeolusApp(
-    modifier: Modifier = Modifier
-) {
-    AeolusTheme {
-        // A surface container using the 'background' color from the theme
-        Surface(
-            modifier = modifier,
-            color = MaterialTheme.colorScheme.background
-        ) {
-            CurrentLocationPermission {
-                val dataContainer = DataContainerImpl(LocalContext.current)
-                AeolusNavGraph(appContainer = dataContainer)
-            }
-        }
-    }
-}
-</code></pre>
-
-<h3>创建导航</h3>
-
-<p>导航是把所有的UI页面组织在一起形成一个逻辑清晰的交互整体，可以参照之前的文章<a href="https://juejin.cn/post/7398728505872908315">降Compose十八掌之『密云不雨』| Navigation</a>来创建导航。</p>
-
-<p>需要注意的就是页面应该命名为Screen，其ViewModel应该作为参数传递给Screen，Screen和ViewModel的实例创建都在导航中来完成。</p>
-
-<h3>ViewModel应该保持独立</h3>
-
-<p>ViewModel作为UI层与数据层的中间层而存在，目的是让UI层专注于数据展示。为了更好的可移植性，ViewModel不应该有平台相关的依赖，比如<a href="https://juejin.cn/post/7409869765177147430">平台的生命周期</a>或者Context，它只应该依赖model层。并且为了方便依赖注入，应该把Model层的数据接口对象（通常是Repository）作为参数传递给ViewModel：</p>
-
-<pre><code class="Kotlin">class FavoritesViewModel(
-    private val locationRepo: LocationRepository,
-    private val weatherRepo: WeatherRepository
-) : ViewModel() {
-}
-</code></pre>
-
-<p>具体的Repository对象可以在导航创建ViewModel时创建，或者用依赖注入框架（如Hilt）来注入实例。</p>
-
-<h3>并发原则</h3>
-
-<p>现代的应用肯定都会用并发，无论是协程还是Flow，为了能让并发更加的结构化和可控，应该遵循以下原则：</p>
-
-<ol>
-<li>Model层的方法都应该是suspend，对于所有Model层公开出来的方法都应该用suspend来修饰。</li>
-<li>Repository（即Data层）的每个方法的实现都要指定明确的Dispatcher，最好接收一个Dispatcher作为构造参数，以方便进行注入或者测试。</li>
-<li>ViewModel要把所有对Model的方法调用包裹在协程作用域viewModelScope中。</li>
-</ol>
-
-
-<h3>层与层之间的交互要定义接口</h3>
-
-<p>比如Model层提供给ViewModel的能力要定义为接口，然后在Data层中去实现这些接口。接口的最大好处是方便替换具体的实现，比如换个实现方式时，或者Mock测试时都能很方便的进行替换，甚至还可以使用动态代理在运行时进行替换。</p>
-
-<h3>对外部的依赖要作为构造器参数传入</h3>
-
-<p>作为构造参数传入外部依赖，而不是在内部直接创建，这样做的好处在于方便替换实例，无论是日后更换一种实现实例，还是Mock测试，都可以在不修改类本身的情况下进行实例替换。甚至可以使用依赖注入框架（如Hilt）做到让具体使用的实例可配置化。</p>
-
-<h2>Compose与ViewModel的交互原则</h2>
-
-<p>这部分我们具体谈一谈Compose与ViewModel在交互时的一些原则和建议。ViewModel暴露UiState给Compose展示，Compose则把事件（Event）给ViewModel去处理（可以是MVI式的把事件封装成Intent塞给ViewModel，也可以直接调用ViewModel的接口）。</p>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/state-unidirectional-flow.png" alt="图5. Compose与ViewModel的UDF" /></p>
-
-<p>比如说一个典型的登录场景，其Composable和ViewModel应该像这样的：</p>
-
-<pre><code class="Kotlin">class MyViewModel : ViewModel() {
-    private val _uiState = mutableStateOf&lt;UiState&gt;(UiState())
-    val uiState: State&lt;UiState&gt;
-        get() = _uiState
-    // ...
-}
-
-data class UiState(
-    loading: Boolean = false,
-    signedIn: Boolean = false,
-    error: String = ""
-)
-
-@Composable
-fun MyComposable(viewModel: MyViewModel) {
-    val uiState = viewModel.uiState.collectAsStateWithLifecycle()
-    if (uiState.loading) {
-        // show loading
-    } else if (uiState.signedIn) {
-        // show signed in status
-    } else {
-        // show uiState.error
-    }
-}
-</code></pre>
-
-<h3>一定要定义专用的UiState数据对象</h3>
-
-<p>从ViewModel给UI的数据要封装成一个不可变的数据对象（data class）作为UiState，即使其数据与从Model处获得的数据没有变化，也应该定义并做基本转换。</p>
-
-<p>原因就是让UI层和Model不会相互影响，假如直接把Model的数据传给UI，那假如以后Model层的数据有变动，这就会影响到UI。架构分层的目的就是要封装和隔离，每一层都应该定义自己的输出数据类型，把依赖和耦合降到最低。</p>
-
-<h3>当数据特别多时，分成多个UiState对象</h3>
-
-<p>如果页面较复杂，需要的字段特别多，这时应该把页面分成几个区域，同时UiState也应该分成几个不同的对象，而不是大一统的装在一个对象里面。</p>
-
-<p>原因在于Compose会把从ViewModel处获得的UiState装在一个状态里面，从<a href="https://juejin.cn/post/7376094685495001139">前面的文章中</a>我们知道，状态是用于触发重组的，状态发生变化就会触发重组。因为数据多半部分变化的，甚至有些业务逻辑总是某几个字段在变化。因为字段都放在了一个对象中，那么即使只有一个字段变了，对于Compose来说，也是状态变化了，就要进行重组。</p>
-
-<p>把字段按其变化的性质进行拆分，用几个UiState来表示，这样能把变化降到最低，只让真正有变化的UiState触发重组进而刷新UI。</p>
-
-<h3>Compose中要尽可能拆解为无状态函数</h3>
-
-<p>这里的意思是说我们应该把从ViewModel处获得的UiState拆解开来，变成具体的参数用无状态函数去展示，而不应该全都把UiState当成参数传给每一个composables。比如说对于一个新闻页面，对于标题元素就应该只接受两个String作为参数，而不应该把整个NewsUiState作为参数：</p>
-
-<pre><code class="Kotlin">@Composable
-fun Header(title: String, subtitle: String) {
-    // 只有当title和subtitle发生变化时才会重组
-}
-
-@Composable
-fun Header(news: NewsUiState) {
-    // 只要状态变了就会重组，哪怕有关的title和subtitle没有变化
-}
-</code></pre>
-
-<p>这样做的目的也是为了尽可能减少重组。</p>
-
-<h3>ViewModel塞给UI的数据要能够直接展示</h3>
-
-<p>UI层负责数据展示，不应该有过多的逻辑，特别是不能有涉及非UI直接相关的逻辑。ViewModel存在的意义就是为了把非UI相关的业务逻辑全从UI中拿走，把UI做的尽可能薄一些，这里薄的意思是逻辑要少。背后的核心原因在于方便测试和移植，众所周知UI是与每个平台强相关的，每个平台的UI构建方式都不一样，并且UI是极难做单元测试的，依赖太多很难Mock。</p>
-
-<p>UI层很薄，仅是数据的展示，逻辑都放在ViewModel中，但ViewModel依赖很少，没有对平台和依赖，它的依赖对象都是可以Mock的，那么ViewModel就很容易做测试，只要测试保证ViewModel没什么问题，那么就基本上可以认为UI也不会有问题，毕竟光做展示一般不会出问题。</p>
-
-<p>这里的最重要的一点就是要保证ViewModel递给UI的数据要是经过逻辑处理后的，可以直接展示的数据。举个粟子，比如说展示时间间隔的字段，类似于『100 ms』，『10 seconds』，『2 mins 10ms』或者『1 hour 10 mins』 这种，那么就不可以直接把一个Int或者Long传给UI，让UI去换算，而是让ViewModel做换算，把结果String传给UI，UI用一个Text直接显示String。这样一来就可测试了，我们Mock几个不同的字段值给ViewModel，再检查它吐出来的UiState中的时长String字段是否符合预期，就能保证这段逻辑没有问题。对于UI可以不用测试了，一个Text显示一个String出错的可能性不大，可以忽略了。</p>
-
-<h2>总结</h2>
-
-<p>架构最难的地方在于它是<strong>形而上学（Metaphysics）</strong>的，不会像算法或者设计模式那样有非常明确的和具体的实施步骤，仅是有一些抽象的指导原则。在实际的项目中就要从实际的业务场景出发，使用可用的技术工具，把指导原则进行落地，要<strong>把『神似』而非『形似』</strong>作为目标。切忌生搬硬套网上一些所谓的应用架构框架，假如真的有通用的架构框架，那谷歌为啥不写在SDK里面？不同的业务，不同的规模，不同的技术栈，不同的版本策略都会影响架构的方式。比如像第一部分提到的四大原则，难道只有用MVVM或者MVI才能做到么？即使用了MVVM，你在ViewModel直接把未处理的数据丢给UI，UI中仍有大量的处理数据的if-else，ViewModel把数据改了后两头更新，这明显不符合架构原则，最后仍是维护一坨巨大的shi山难解的Bug满天飞。所以对于网上的各种架构框架看看就好，一定不能生搬硬套。</p>
-
-<p>可以通过谷歌提供的一些非常好的<a href="https://github.com/android/architecture-samples/tree/main">案例</a>来学习架构，仔细研读这些案例的源码，以深刻理解架构指导原则的内在涵义。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/topic/architecture">Guide to app architecture</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/architecture">Architecting your Compose UI</a></li>
-<li><a href="https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html">The Clean Architecture</a></li>
-<li><a href="https://www.geeksforgeeks.org/separation-of-concerns-soc/">Separation of Concerns (SoC)</a></li>
 </ul>
 
 ]]></content>
