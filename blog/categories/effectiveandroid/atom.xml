@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2024-11-08T22:41:54+08:00</updated>
+  <updated>2024-11-10T23:19:00+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,230 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[用Compose中的CompositionLocal来暗渡陈仓]]></title>
+    <link href="https://alexhilton.github.io/blog/2024/11/10/understanding-composition-local/"/>
+    <updated>2024-11-10T23:17:56+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2024/11/10/understanding-composition-local</id>
+    <content type="html"><![CDATA[<p>通过<a href="https://juejin.cn/column/7367555191338467337">前面的学习</a>我们知道Jetpack Compose是一个声明式的UI框架，采用的是函数式编程思想，直观上来看就是一坨函数从上调到下。当函数需要数据时，会通过函数调用的参数来传递，一般来说这也没有什么问题。但当需要的数据特别多时，特别是对于一些非业务逻辑本身的数据（输入与输出），如上下文环境变量（Context，或者主题之类），都通过函数调用的参数传递就难免会让代码变得非常的庞杂和臃肿。这时候就可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/CompositionLocal">CompositionLocal</a>，一种在组合树中隐式的从上到下传递数据的方法，我们来具体地看一下。</p>
+
+<p><a href=""><img src="file:///Users/alexhilton/Downloads/compose_libs/compositionlocal.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p><strong>注意：</strong> Compose中的函数通常叫做composable，可以简单的理解为同一个东西。从根composable开始，一个套一个的调用，自上而下的意思就是指composable的调用顺序，根函数在上，被调用的函数在下。函数调用是可以传递参数的，正常的从上到下的数据传递都是通过函数调用时的参数。</p>
+
+<p>废话不多说，我们先来看一下什么是CompositionLocal以及它能做什么事情。</p>
+
+<h2>什么是CompositionLocal</h2>
+
+<p>CompositionLocal提供一种<strong>自上而下</strong>的数据传递方式，<strong>隐式的传递</strong>，也就是说，不用把数据放在参数里传递给子函数，子函数像在类中的方法访问域变量那样直接访问。我们来看一个粟子。</p>
+
+<p>比如说，页面中有一个文案，可能需要定制字体颜色，常规方式是这样子写：</p>
+
+<pre><code class="Kotlin">@Composable
+fun MyApp() {
+    val colors = colors()
+    SomeTextLabel(text, colors.onPrimary)
+}
+
+@Composable
+fun SomeTextLabel(labelText: String, color: Int) {
+    Text(
+        text = labelText,
+        color = color
+    )
+}
+</code></pre>
+
+<p>文案的颜色，以及像背景等等这些东西是与整个App的配置相关的，或者与运行环境（如手机）的主题风格有关的，它并不是应用程序的业务逻辑。它属于上下文环境变量，其变化往往是由于运行环境变化而变化，或者是由于用户更改了应用的配置。这就非常适合使用CompositionLocal来转化为隐式数据传递，进而简化代码，使用后就变成酱婶儿的：</p>
+
+<pre><code class="Kotlin">@Composable
+fun MyApp() {
+    // 在上级函数中定义主题相关的颜色，并定义为CompositionLocal
+    val colors = staticCompositionLocalOf( colors() )
+    CompositionLocalProvider(LocalColors provides colors) {
+        SomeTextLabel(text)
+    }
+}
+
+// 被调用的子函数
+@Composable
+fun SomeTextLabel(labelText: String) {
+    Text(
+        text = labelText,
+        color = LocalColors.onPrimary // 可以直接访问定义好的颜色
+    )
+}
+</code></pre>
+
+<p>通过这个示例可以看出，定义了CompositionLocal以后，在被调用到的所有子函数中（desendants）都可以直接使用，就像访问全局变量那样。这就是CompositionLocal的作用，在指定的作用域中提供隐式的数据。</p>
+
+<h2>如何使用CompositionLocal</h2>
+
+<p>使用起来非常的方便，就像在类的方法中使用域变量那样，或者像使用全局变量那样，找到上级所定义的的CompositionLocal实例，然后引用其中的变量即可。</p>
+
+<p>其实，已经在不知不觉中经常地使用了CompositionLocal，主题风格相关的<a href="https://developer.android.com/reference/kotlin/androidx/compose/material3/MaterialTheme">MaterialTheme</a>，Android的上下文<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/package-summary#LocalContext(">LocalContext</a>)以及像绘制时常用的<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/package-summary#LocalDensity(">LocalDensity</a>)，这些都是CompositionLocal实例，是由Compose定义好的顶层实例，在所有的composables中都可以直接使用。</p>
+
+<p>需要理解的是CompositionLocal实例，本身并不是一个数据，它更像是一个集装箱，它本身是一个数据传递的机制，会在后面定义CompositionLocal实例时详细讲解。</p>
+
+<p>另外，需要特别注意的是CompositionLocal是有作用域的，对其所有的子函数生效，并且也可以嵌套的，<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/CompositionLocal#current(">属性current</a>)引用的是最近一层父函数（closest ancestor）中绑定的值。比如说：</p>
+
+<pre><code class="Kotlin">@Composable
+fun CompositionLocalExample() {
+    MaterialTheme {
+        // 绑定一个值到LocalContentColor
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.primary) {
+            Surface {
+                Column {
+                    Text("Uses Surface's provided content color")
+                    // 重新绑定一个值到LocalContentColor
+                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.error) {
+                        DescendantExample()
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun DescendantExample() {
+    // current会指向最后绑定的值，即MaterialTheme.colorScheme.error
+    Text(text = "This Text uses the error color now", color = LocalContentColor.current)
+}
+</code></pre>
+
+<h2>如何定义一个CompositionLocal</h2>
+
+<p>大部分时候Compose中定义好的就够我们用了，但也可以针对具体的场景来自定义一个CompositionLocal。分为两个步骤，创建实例，和绑定数据。</p>
+
+<p>CompositionLocal实例是一个集装箱，用以封装需要从顶层往底层传递的数据，这些数据也不一定非要是常量，也是会改变的，比如应用或者页面上下文环境变化时，或者整个应用的配置发生变化时。</p>
+
+<h3>创建CompositionLocal实例</h3>
+
+<p>第一步是先创建一个实例，有两种方法创建一个CompositionLocal实例，这两种方式的主要区别就在于当数据变化时如何影响着重组（reComposition）：</p>
+
+<ul>
+<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#compositionLocalOf(androidx.compose.runtime.SnapshotMutationPolicy,kotlin.Function0">compositionLocalOf</a>) 当数据发生变化时仅会影响读取数据函数的重组；</li>
+<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#staticCompositionLocalOf(kotlin.Function0">staticCompositionLocalOf</a>) 当数组变化时，提供数据的所有子函数都会被重组。</li>
+</ul>
+
+
+<p>可以发现，这两个方法的区别就在于影响重组的范围，前一个是影响着读取数据的地方，这与状态（State）一样；后一个则是影响着所有的被调用的composables。</p>
+
+<pre><code class="Kotlin">// LocalElevations.kt file
+
+data class Elevations(val card: Dp = 0.dp, val default: Dp = 0.dp)
+
+// 使用Elevations的默认值构造一个全局的CompositinLocal实例
+// 这个实例可以被应用中的所有composables访问得到
+val LocalElevations = compositionLocalOf { Elevations() }
+</code></pre>
+
+<p><strong>注意：</strong> 为了更好的可读性和可维护性，CompositionLocal实例的命名应该以Local开头，如LocalColors。</p>
+
+<h3>把数据绑定到实例中去</h3>
+
+<p>光创建实例没什么用，创建完实例后，还需要把数组绑定到CompositionLocal实例中去，并<strong>同时指定作用域</strong>，这是非常关键的一步，不但决定了CompositionLocal中有什么数据，还决定了谁可以使用这些数据。使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#CompositionLocalProvider(kotlin.Array,kotlin.Function0">CompositionLocalProvider</a>)来绑定数据：</p>
+
+<pre><code class="Kotlin">// MyActivity.kt file
+
+class MyActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        setContent {
+            // 基于系统主题来计算具体的elevation
+            val elevations = if (isSystemInDarkTheme()) {
+                Elevations(card = 1.dp, default = 1.dp)
+            } else {
+                Elevations(card = 0.dp, default = 0.dp)
+            }
+
+            // 把上面计算得到的elevation绑定到LocalElevations
+            CompositionLocalProvider(LocalElevations provides elevations) {
+                // ... Content goes here ...
+                // 这里的子composables都可以直接访问LocalElevations.current
+                // 以得到elevation
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>函数CompositionLocalProvider接收一个CompositionLocal实例和一个composable lambda，这个lambda就是这个实例的作用域，也即此lambda所调用的所有composables都可以使用访问此实例的数据。参数LocalElevations就是实例，可以看前面的创建代码。LocalElevations provides elevation这是infix符号式写法，相当于LocalElevations.provides(elevation)，elevation则是具体的数据，这意思就是在此lambda的作用域中，CompositionLocal实例LocalElevations会提供数据elevation。</p>
+
+<pre><code class="Kotlin">@Composable
+fun SomeComposable() {
+    // 使用的地方直接通过LocalElevations.current就能访问到
+    MyCard(elevation = LocalElevations.current.card) {
+        // Content
+    }
+}
+</code></pre>
+
+<p>这里多说一下，compositionLocalOf是更为精细化的控制（fine-grained control），因为，当数据发生变化时，在作用域中只有读取了数据的composables才会被重组；而staticCompositionLocalOf影响范围较大，因为（当数据发生变化 时）整个作用域内（即CompositionLocalProvider的lambda）的composables都会被重组。</p>
+
+<h2>什么时候该用CompositionLocal</h2>
+
+<p>CompositionLocal提供了一种新的数据传递方式，当数据需要在一定作用域内（Scoped）分享时，就可以考虑使用它。但并不是所有的场景都适用，具体来说，要符合以下标准：</p>
+
+<ul>
+<li>数据要是非业务逻辑数据，也就是非代码所直接需要的输入和输出。</li>
+<li>数据要有一个极其合理的初始值（默认值）。</li>
+<li>数据不一定要是常量，也可以变化，但是业务逻辑并不是数据变化的原因。</li>
+<li>数据的使用有一定的作用域。并且在作用域内<strong>所有的composables都可能会</strong>使用此数据。这一点很重要，如果仅仅是某个特定的composable使用，那就直接传参就好了。</li>
+</ul>
+
+
+<p>适合使用CompositionLocal的数据有应用的主题风格，应用的配置信息，平台提供的上下文变量，平台的配置信息，或者对于一个局部来说是上下文变量的数据（比如说一个Dialog用到的数据）。除此之外，绝大部分时候不应该使用CompositionLocal。特别是涉及业务逻辑代码本身强相关的数据（输入与输出），一定不能使用CompositionLocal，这会让代码极难理解和维护，造成极难调试的Bug。</p>
+
+<p>CompositionLocal的一个大的特点就是有明确的作用域，那么如何选择合适的作用域呢？总的来说应该让作用域越小越好。视数据的 影响范围和使用范围来决定其作用域：</p>
+
+<ul>
+<li>整个应用级别的（App level），如主题风格，应用配置，平台的配置信息，或者会话数据（user sessions）。应该在根composable，即setContent处绑定数据。</li>
+<li>整个页面级别的（Screen level），如平台上下文变量（Context或者Density），导航，或者页面内部的定制参数。</li>
+<li>组件级别的（Component level），页面中某一个局部，比如Dialog的主题风格，或者Dialog并不直接操作，但却依赖的数据。</li>
+</ul>
+
+
+<p>任何工具都是为了适合其的场景而生的，要了解清楚什么场景适合使用非常重要，切忌滥用。</p>
+
+<h2>它与状态（State）的区别是什么</h2>
+
+<p>从前面的文章<a href="https://juejin.cn/post/7376094685495001139">降Compose十八掌之『鸿渐于陆』| State</a>我们了解到，状态（State）是为了重组时数据不丢失，也就是说在composable多次运行时，数据能够得以留存。反过来状态变化了，也会触发重组，因为要刷新UI。状态是时间上的概念（使用此状态的composables）多次运行，状态持有的数据都得以保存，不会变成初始值。如果想要使用状态，必须当作参数传递过去。</p>
+
+<p>而CompositionLocal是为了能在不同的composables中共享数据，不用参数传递，它是空间上的概念。</p>
+
+<p>它们是为了解决不同的问题而设计出来的。可以把状态绑定到CompositionLocal中去，但其实没必要这么做，因为内部实现上已经会把绑定的数据封装为状态，因为CompositionLocal的数据是可能发生变化的，并且当变化时，也是要触发重组的。</p>
+
+<h2>它与全局变量的区别是什么</h2>
+
+<p>Kotlin语言是支持顶级全局变量（Top level globals）的，也就是与class平齐，在任何class之外的全局变量，其作用域是整个进程，任何导入（import）此变量的地方都可以访问。Compose是基于Kotlin语言的，所以Compose也是可以使用全局变量的。</p>
+
+<p>全局变量的缺点是没有作用域，容易失控，仅应该用于常量，并且它也不能用于composables的重组。虽然全局变量可以跨越空间，让所有函数都能访问。全局变量是编程语言层面的东西，仅适用于常量的定义，也即整个应用程序运行期间确定不会发生改变的值。</p>
+
+<p>这正是CompositionLocal有价值的地方，它能限定作用域，又可以触发重组，允许数据值改变，又可以跨越空间。这是Compose框架层面提供的工具，自然更适合在Compose中使用。</p>
+
+<h2>总结</h2>
+
+<p>调用函数时传递参数可谓是『明修栈道』，而CompositionLocal则是『暗渡陈仓』，提供了一种在组合（Composition）中自上而下隐式传递数据的一种方式，可以让函数调用只关心与逻辑相关的输入数据。恰当的使用CompositionLocal可以有效的管控上下文环境变量，并极大地简化代码，让代码更加的优雅和简洁。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/compositionlocal">Locally scoped data with CompositionLocal</a></li>
+<li><a href="https://www.valueof.io/blog/compose-compositionlocal-compositionlocalprovider">Passing data using CompositionLocal</a></li>
+<li><a href="https://www.kodeco.com/34513206-compositionlocal-in-jetpack-compose">CompositionLocal in Jetpack Compose</a></li>
+<li><a href="https://medium.com/mobile-innovation-network/understanding-composition-local-jetpack-compose-4546605df5e1">Understanding Composition Local: Jetpack Compose</a></li>
+<li><a href="https://medium.com/@ramadan123sayed/composition-local-in-jetpack-compose-4d0a54afa67c">Composition Local in Jetpack Compose</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[给Jetpack Compose添加Native支持]]></title>
@@ -1076,203 +1300,6 @@ fun MultipleAccompanistInterceptor(
 <li><a href="https://betterprogramming.pub/jetpack-compose-request-permissions-in-two-ways-fd81c4a702c">2 Ways to Request Permissions in Jetpack Compose</a></li>
 <li><a href="https://www.howtodoandroid.com/runtime-permission-on-jetpack-compose/">Best ways to handle runtime permission on jetpack compose</a></li>
 <li><a href="https://www.freecodecamp.org/news/requesting-location-permissions-in-jetpack-compose/">How to Request Location Permissions in Jetpack Compose</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[轻松解决Jetpack Compose中的一些痛点问题]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/09/21/compose-best-practices/"/>
-    <updated>2024-09-21T10:59:35+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/09/21/compose-best-practices</id>
-    <content type="html"><![CDATA[<p>暑去秋来，金桂飘香，不知不觉中我们已经练完了<a href="https://juejin.cn/column/7367555191338467337">『降Compose十八掌』</a>，相信通过这一系列文章能够对Jetpack Compose有足够的理解，并能在实际项目中进行运用。今天将继续Compose之旅，总结一下Compose使用过程中经常会遇到的一些痛点问题，并学会如何优雅的解决这些问题。</p>
-
-<p><a href=""><img src="https://innovationm.co/wp-content/uploads/2021/05/Jetpack-compose.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>定义slot时要注明布局作用域</h2>
-
-<p>先来看一个比较常规的问题，Compose开发过程中，非常鼓励开发者把可以复用的部分抽象成为一个函数，然后接收一个尾部lambda作为参数进行差异化的定制。这种范式叫做<a href="https://developer.android.com/develop/ui/compose/layouts/basics#slot-based-layouts">slot模式</a>，slot模式的好处在于能够大大加强代码复用，开发者在构建UI的时候，像搭积木那样把一个一个的slot叠在一起。Compose自己的API中都大量的采用了这种模式。</p>
-
-<p>为了让slot更加的通用，我们需要<strong>明确传入的lambda与slot之间的约定</strong>，这就要求我们对lamdba的类型进行严格的限制。</p>
-
-<p>首先要添加注解&#64;Composable，这个是显而易见的，因为slot是为了绘制一些自定义UI元素而准备的，所以肯定是要加上&#64;Composable，否则在lambda中无法写UI，因为非Composable不能调用Compose的方法。</p>
-
-<p>另外，不是那么明显的就是这个lamdba的类型，要指定<a href="https://kotlinlang.org/docs/lambdas.html#function-literals-with-receiver">其Receiver</a>，以限定它所在的布局。比如说slot是用在一个Column里面的，那么要给lamdba指定ColumnScope作为receiver，这样在实现lambada的时候就知道是作为Column的一部分，并且可以使用Column布局的特有相关参数，如左右居中和垂直排列：</p>
-
-<pre><code class="Kotlin">@Composable
-MyLayout(
-     modifier: Modifier,
-     content: @Composable ColumnScope.()-&gt;Unit
-) {
-     Column() {
-          // 共用的一部分
-
-          content()
-     }
-}
-
-// 调用的地方
-MyLayout { // this = ColumnScope
-     // 隐式this指针指向一个ColumnScope对象，就像在一个Column中一样
-     // 定制的部分
-}
-</code></pre>
-
-<p>UI元素很多都会涉及到居中，对齐的调整，以及内部元素的排列，而对齐和排列又会明确的受到所在父布局的影响，比如说Box与Column的对齐和排列方式就是不同的。所以在使用slot时一定要明确 标注它所在的布局，以让调用者能够明确地知道lambda所在的布局作用域。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://chrisbanes.me/posts/slotting-in-with-compose-ui/">Slotting in with Compose UI</a></li>
-<li><a href="https://www.valueof.io/blog/compose-slot-api-example-composable-content-lambda">Practical Compose Slot API example</a></li>
-<li><a href="https://proandroiddev.com/designing-slot-apis-in-jetpack-compose-4a981ddbc776">Designing Slot APIs in Jetpack Compose</a></li>
-<li><a href="https://tech.pic-collage.com/%E5%88%9D%E6%8E%A2-jetpack-compose-slot-api-8d3f153f77e3">初探 Jetpack Compose — Slot API</a></li>
-</ul>
-
-
-<h2>如何在ViewModel中使用平台相关的资源</h2>
-
-<p>我们在<a href="https://juejin.cn/post/7411812014047461387">降Compose十八掌之『神龙摆尾』| Architecture</a>中讨论过，ViewModel作为Domain层，目的是把逻辑尽可能的从UI层中抽出来，让UI尽可能的只做UI渲染。ViewModel也要做到平台独立，这样才方便移植和测试。ViewModel中吐出来的数据要是加工过的可以直接方便地在UI层展示的数据，如字符串或者图片。</p>
-
-<p>但有一个问题，资源文件如何管理都是平台强相关的。对于要展示给用户的文案，也不可能直接把字符串传给UI，因为UI语言都要能够本地化以适应不同的国家和地区，当然了如果说不需要考虑多语言的问题，比如我的应用只给某一个语言使用，那当然也可以直接把处理好的字符串当作UiState传给UI层。</p>
-
-<p>最为理想的解决方案就是ViewModel层定义一些<strong>状态码</strong>，对应着不同的提示语言，由UI负责一一对应的，把状态码再转成字符串。对于其他的资源也可以采用类似方式处理。这是从ViewModel输出到UI层的情况。</p>
-
-<p>还会反过来，对于需要从UI层输入到ViewModel的资源，也是要<strong>去除平台的相关性</strong>，比如转成ViewModel中定义的状态码，或者转成原始数据类型String，或者转成平台无关的输入输出流等等。</p>
-
-<h3>字符串资源</h3>
-
-<p>对于Android平台来说，可以用一个简单的方式来解决字符串资源问题，因为资源的引用是一个整数，所以可以直接把资源的ID当作字段传给UI，Compose拿到后直接用函数stringResource取出来就可以了：</p>
-
-<pre><code class="Kotlin">data class UiState(
-     val loading: Boolean = false,
-     @StringRes val errorMsg: Int = 0
-)
-
-class HomeViewModel {
-     val timeout = UiState(false, R.string.error_message_timeout)
-     _state.update(timeout)
-}
-
-// 在Compose中
-HomeScreen() {
-    Text(stringResource(uiState.errorMsg))
-}
-</code></pre>
-
-<p>虽然说这并不太通用，因为换成其他平台时可能不是用资源ID来获取资源，但转成状态码的方式也会很容易，所以问题不大。</p>
-
-<p>如果是输入的话，在Compose中直接读取资源变成String传给ViewModel就好了。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://stackoverflow.com/questions/47628646/how-should-i-get-resourcesr-string-in-viewmodel-in-android-mvvm-and-databindi">How should I get Resources(R.string) in viewModel in Android (MVVM and databinding)</a></li>
-<li><a href="https://medium.com/@margin555/using-string-resources-in-a-viewmodel-e334611b73da">Using String Resources in a ViewModel</a></li>
-</ul>
-
-
-<h3>图片资源</h3>
-
-<p>图片资源一般来说都是UI自己指定，但有些时候可能会有逻辑，比如一些需要经过运算才能得到的复杂的状态，其代表的Icon，由ViewModel来直接指定要好一些。图片资源也可以直接使用资源ID，然后在Compose中使用painterResource来获取：</p>
-
-<pre><code class="Kotlin">data class UiState(
-     @DrawableRes val icon: Int = 0
-)
-
-// in ViewModel
-val state = UiState(R.drawable.ic_windy)
-
-// in Compose
-Icon(painterResource(uiState.icon))
-</code></pre>
-
-<p>如果是输入的话，可以在Compose中把图片资源转成输入流传给ViewModel去处理。</p>
-
-<h3>其他资源</h3>
-
-<p>其他资源如dimen或者color，也可以如法炮制。</p>
-
-<p>输入的话，对于普通的资源像字符串资源，dimen或者color等读出来转成基础数据类型String，Int或者Array传给ViewModel就好。而像比较麻烦的资源，如Assets中的资源，就转成输入流传给ViewModel处理。</p>
-
-<h2>如何在常规函数中调用Composables</h2>
-
-<p>在Compose的开发过程中最为令人不爽的地方在于Compose 的API，只能在被注解&#64;Composable标注的函数中调用，其他地方是无法调用的。一般来说，这个问题也不大，因为Compose的入口是肯定是一个composable啊，一坨坨的composables的调用最终<a href="https://juejin.cn/post/7407643004490956810">会生成UI树</a>。</p>
-
-<p>但有些地方却跑出了Composable之外，比如像很多UI元素的事件响应，比如<a href="https://developer.android.com/develop/ui/compose/components/button">Button</a>，它的事件响应onClick接收的就是一个普通的lambda：</p>
-
-<pre><code class="Kotlin">@Composable
-fun MainContent(
-    modifier: Modifier = Modifier,
-    serviceOn: Boolean,
-    context: Context
-) {
-    Column() {
-        Button(
-            onClick = { AccessibilityHelper.gotoChronosSettings(context) },
-        ) {
-            Text(stringResource(if (serviceOn) R.string.turn_off_service else R.string.enable_service))
-        }
-    }
-}
-</code></pre>
-
-<p>在Button的onClick里面可以执行一些普通函数调用，比如调用ViewModel等，但是不可以调用Compose的API，因为它是非Composable的，已经跑到了Composable之外。有些场景，这会带来比较大的不方便。</p>
-
-<p>响应点击按扭的方式可能有很多，有些是执行一些普通函数调用，但有些时候也会修改UI，大部分时候也会创建新UI，比如说会弹出对话框。对于修改UI，可以直接通过修改状态的值，状态的值发生改变会触发重组，进而UI状态就会改变（通过读取状态的值显示 不同的UI）。</p>
-
-<p>对话框<a href="https://developer.android.com/develop/ui/compose/components/dialog">Dialog</a>也是一个Composable，它只能被Composable调用，无法在Button的onClick中直接调用Dialog。解决的办法依旧是借助状态，用一个Boolean型值的状态，当其为true时显示Dialog，在Button的onClick中更改此状态为true，状态变了触发重组，在重组时值为true就会显示Dialog了：</p>
-
-<pre><code class="Kotlin">@Composable
-fun InputSettingsEntry(
-    label: String,
-    description: String,
-    value: String,
-    onChange: (String)-&gt;Unit
-) {
-    var showing by remember { mutableStateOf(false) }
-     Button(onClick = { showing = true }) {
-          Text(value)
-     }
-
-    if (showing) {
-        InputDialog(
-            title = label,
-            message = description,
-            value = value,
-            onDismiss = { showing = false },
-            onConfirm = {
-                onChange(it)
-                showing = false
-            }
-        )
-    }
-}
-</code></pre>
-
-<p>另外，其实Dialog本身的一些事件响应也都是非Composable的，都是通过状态来控制Dialog的显示与否。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://stackoverflow.com/questions/66952179/not-able-to-show-alertdialog-from-onclick-in-jetpack-compose">Not able to show AlertDialog from onClick in Jetpack Compose</a></li>
-<li><a href="https://medium.com/@esthcarelle/alert-dialog-with-jetpack-compose-a-step-by-step-guide-04dc3e9dfc1d">Alert Dialog with Jetpack compose: A Step-by-Step Guide</a></li>
-</ul>
-
-
-<h2>总结</h2>
-
-<p>Jetpack Compose博大精深，看似简单就是一坨函数，但在实际项目使用中会遇到各种细节问题。遇到问题也不用慌，用我们的<a href="https://juejin.cn/column/7367555191338467337">『降Compose十八掌』</a>都能解决，没事就多读一读，理解了Compose的思想与原理，做到心中无剑，很多问题都能迎刃而解。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://climbtheladder.com/10-android-jetpack-compose-best-practices/">10 Android Jetpack Compose Best Practices</a></li>
-<li><a href="https://getstream.io/blog/jetpack-compose-guidelines/">6 Jetpack Compose Best Practices for Optimizing Your App Performance</a></li>
 </ul>
 
 ]]></content>

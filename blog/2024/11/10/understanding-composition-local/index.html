@@ -1,0 +1,652 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>用Compose中的CompositionLocal来暗渡陈仓 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="通过实例，深入浅出地讲解什么是Compose中的CompositionLocal，它能解决什么问题，以及如何正确的使用它。">
+  <meta name="keywords" content="Compose, CompositionLocal, Android, Jetpack">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2024/11/10/understanding-composition-local">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">用Compose中的CompositionLocal来暗渡陈仓</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2024-11-10T23:17:56+08:00'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>10</span><span class='date-suffix'>th</span>, <span class='date-year'>2024</span></span> <span class='time'>11:17 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>通过<a href="https://juejin.cn/column/7367555191338467337">前面的学习</a>我们知道Jetpack Compose是一个声明式的UI框架，采用的是函数式编程思想，直观上来看就是一坨函数从上调到下。当函数需要数据时，会通过函数调用的参数来传递，一般来说这也没有什么问题。但当需要的数据特别多时，特别是对于一些非业务逻辑本身的数据（输入与输出），如上下文环境变量（Context，或者主题之类），都通过函数调用的参数传递就难免会让代码变得非常的庞杂和臃肿。这时候就可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/CompositionLocal">CompositionLocal</a>，一种在组合树中隐式的从上到下传递数据的方法，我们来具体地看一下。</p>
+
+<p><a href="/blog/2024/11/10/understanding-composition-local/"><img src="file:///Users/alexhilton/Downloads/compose_libs/compositionlocal.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p><strong>注意：</strong> Compose中的函数通常叫做composable，可以简单的理解为同一个东西。从根composable开始，一个套一个的调用，自上而下的意思就是指composable的调用顺序，根函数在上，被调用的函数在下。函数调用是可以传递参数的，正常的从上到下的数据传递都是通过函数调用时的参数。</p>
+
+<p>废话不多说，我们先来看一下什么是CompositionLocal以及它能做什么事情。</p>
+
+<h2>什么是CompositionLocal</h2>
+
+<p>CompositionLocal提供一种<strong>自上而下</strong>的数据传递方式，<strong>隐式的传递</strong>，也就是说，不用把数据放在参数里传递给子函数，子函数像在类中的方法访问域变量那样直接访问。我们来看一个粟子。</p>
+
+<p>比如说，页面中有一个文案，可能需要定制字体颜色，常规方式是这样子写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyApp</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">colors</span> <span class="p">=</span> <span class="n">colors</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">SomeTextLabel</span><span class="p">(</span><span class="n">text</span><span class="p">,</span> <span class="n">colors</span><span class="p">.</span><span class="n">onPrimary</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SomeTextLabel</span><span class="p">(</span><span class="n">labelText</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">color</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="n">labelText</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">color</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>文案的颜色，以及像背景等等这些东西是与整个App的配置相关的，或者与运行环境（如手机）的主题风格有关的，它并不是应用程序的业务逻辑。它属于上下文环境变量，其变化往往是由于运行环境变化而变化，或者是由于用户更改了应用的配置。这就非常适合使用CompositionLocal来转化为隐式数据传递，进而简化代码，使用后就变成酱婶儿的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyApp</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 在上级函数中定义主题相关的颜色，并定义为CompositionLocal</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">colors</span> <span class="p">=</span> <span class="n">staticCompositionLocalOf</span><span class="p">(</span> <span class="n">colors</span><span class="p">()</span> <span class="p">)</span>
+</span><span class='line'>    <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalColors</span> <span class="n">provides</span> <span class="n">colors</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">SomeTextLabel</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 被调用的子函数</span>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SomeTextLabel</span><span class="p">(</span><span class="n">labelText</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="n">labelText</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">LocalColors</span><span class="p">.</span><span class="n">onPrimary</span> <span class="c1">// 可以直接访问定义好的颜色</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>通过这个示例可以看出，定义了CompositionLocal以后，在被调用到的所有子函数中（desendants）都可以直接使用，就像访问全局变量那样。这就是CompositionLocal的作用，在指定的作用域中提供隐式的数据。</p>
+
+<h2>如何使用CompositionLocal</h2>
+
+<p>使用起来非常的方便，就像在类的方法中使用域变量那样，或者像使用全局变量那样，找到上级所定义的的CompositionLocal实例，然后引用其中的变量即可。</p>
+
+<p>其实，已经在不知不觉中经常地使用了CompositionLocal，主题风格相关的<a href="https://developer.android.com/reference/kotlin/androidx/compose/material3/MaterialTheme">MaterialTheme</a>，Android的上下文<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/package-summary#LocalContext(">LocalContext</a>)以及像绘制时常用的<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/package-summary#LocalDensity(">LocalDensity</a>)，这些都是CompositionLocal实例，是由Compose定义好的顶层实例，在所有的composables中都可以直接使用。</p>
+
+<p>需要理解的是CompositionLocal实例，本身并不是一个数据，它更像是一个集装箱，它本身是一个数据传递的机制，会在后面定义CompositionLocal实例时详细讲解。</p>
+
+<p>另外，需要特别注意的是CompositionLocal是有作用域的，对其所有的子函数生效，并且也可以嵌套的，<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/CompositionLocal#current(">属性current</a>)引用的是最近一层父函数（closest ancestor）中绑定的值。比如说：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">CompositionLocalExample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">MaterialTheme</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 绑定一个值到LocalContentColor</span>
+</span><span class='line'>        <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalContentColor</span> <span class="n">provides</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">primary</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Surface</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Uses Surface&#39;s provided content color&quot;</span><span class="p">)</span>
+</span><span class='line'>                    <span class="c1">// 重新绑定一个值到LocalContentColor</span>
+</span><span class='line'>                    <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalContentColor</span> <span class="n">provides</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">error</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">DescendantExample</span><span class="p">()</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">DescendantExample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// current会指向最后绑定的值，即MaterialTheme.colorScheme.error</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;This Text uses the error color now&quot;</span><span class="p">,</span> <span class="n">color</span> <span class="p">=</span> <span class="n">LocalContentColor</span><span class="p">.</span><span class="n">current</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>如何定义一个CompositionLocal</h2>
+
+<p>大部分时候Compose中定义好的就够我们用了，但也可以针对具体的场景来自定义一个CompositionLocal。分为两个步骤，创建实例，和绑定数据。</p>
+
+<p>CompositionLocal实例是一个集装箱，用以封装需要从顶层往底层传递的数据，这些数据也不一定非要是常量，也是会改变的，比如应用或者页面上下文环境变化时，或者整个应用的配置发生变化时。</p>
+
+<h3>创建CompositionLocal实例</h3>
+
+<p>第一步是先创建一个实例，有两种方法创建一个CompositionLocal实例，这两种方式的主要区别就在于当数据变化时如何影响着重组（reComposition）：</p>
+
+<ul>
+<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#compositionLocalOf(androidx.compose.runtime.SnapshotMutationPolicy,kotlin.Function0">compositionLocalOf</a>) 当数据发生变化时仅会影响读取数据函数的重组；</li>
+<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#staticCompositionLocalOf(kotlin.Function0">staticCompositionLocalOf</a>) 当数组变化时，提供数据的所有子函数都会被重组。</li>
+</ul>
+
+
+<p>可以发现，这两个方法的区别就在于影响重组的范围，前一个是影响着读取数据的地方，这与状态（State）一样；后一个则是影响着所有的被调用的composables。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// LocalElevations.kt file</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Elevations</span><span class="p">(</span><span class="k">val</span> <span class="py">card</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span> <span class="k">val</span> <span class="py">default</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 使用Elevations的默认值构造一个全局的CompositinLocal实例</span>
+</span><span class='line'><span class="c1">// 这个实例可以被应用中的所有composables访问得到</span>
+</span><span class='line'><span class="k">val</span> <span class="py">LocalElevations</span> <span class="p">=</span> <span class="n">compositionLocalOf</span> <span class="p">{</span> <span class="n">Elevations</span><span class="p">()</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>注意：</strong> 为了更好的可读性和可维护性，CompositionLocal实例的命名应该以Local开头，如LocalColors。</p>
+
+<h3>把数据绑定到实例中去</h3>
+
+<p>光创建实例没什么用，创建完实例后，还需要把数组绑定到CompositionLocal实例中去，并<strong>同时指定作用域</strong>，这是非常关键的一步，不但决定了CompositionLocal中有什么数据，还决定了谁可以使用这些数据。使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#CompositionLocalProvider(kotlin.Array,kotlin.Function0">CompositionLocalProvider</a>)来绑定数据：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// MyActivity.kt file</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">MyActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// 基于系统主题来计算具体的elevation</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">elevations</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">isSystemInDarkTheme</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Elevations</span><span class="p">(</span><span class="n">card</span> <span class="p">=</span> <span class="m">1.</span><span class="n">dp</span><span class="p">,</span> <span class="n">default</span> <span class="p">=</span> <span class="m">1.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Elevations</span><span class="p">(</span><span class="n">card</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span> <span class="n">default</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="c1">// 把上面计算得到的elevation绑定到LocalElevations</span>
+</span><span class='line'>            <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalElevations</span> <span class="n">provides</span> <span class="n">elevations</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="c1">// ... Content goes here ...</span>
+</span><span class='line'>                <span class="c1">// 这里的子composables都可以直接访问LocalElevations.current</span>
+</span><span class='line'>                <span class="c1">// 以得到elevation</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>函数CompositionLocalProvider接收一个CompositionLocal实例和一个composable lambda，这个lambda就是这个实例的作用域，也即此lambda所调用的所有composables都可以使用访问此实例的数据。参数LocalElevations就是实例，可以看前面的创建代码。LocalElevations provides elevation这是infix符号式写法，相当于LocalElevations.provides(elevation)，elevation则是具体的数据，这意思就是在此lambda的作用域中，CompositionLocal实例LocalElevations会提供数据elevation。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SomeComposable</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 使用的地方直接通过LocalElevations.current就能访问到</span>
+</span><span class='line'>    <span class="n">MyCard</span><span class="p">(</span><span class="n">elevation</span> <span class="p">=</span> <span class="n">LocalElevations</span><span class="p">.</span><span class="n">current</span><span class="p">.</span><span class="n">card</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// Content</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里多说一下，compositionLocalOf是更为精细化的控制（fine-grained control），因为，当数据发生变化时，在作用域中只有读取了数据的composables才会被重组；而staticCompositionLocalOf影响范围较大，因为（当数据发生变化 时）整个作用域内（即CompositionLocalProvider的lambda）的composables都会被重组。</p>
+
+<h2>什么时候该用CompositionLocal</h2>
+
+<p>CompositionLocal提供了一种新的数据传递方式，当数据需要在一定作用域内（Scoped）分享时，就可以考虑使用它。但并不是所有的场景都适用，具体来说，要符合以下标准：</p>
+
+<ul>
+<li>数据要是非业务逻辑数据，也就是非代码所直接需要的输入和输出。</li>
+<li>数据要有一个极其合理的初始值（默认值）。</li>
+<li>数据不一定要是常量，也可以变化，但是业务逻辑并不是数据变化的原因。</li>
+<li>数据的使用有一定的作用域。并且在作用域内<strong>所有的composables都可能会</strong>使用此数据。这一点很重要，如果仅仅是某个特定的composable使用，那就直接传参就好了。</li>
+</ul>
+
+
+<p>适合使用CompositionLocal的数据有应用的主题风格，应用的配置信息，平台提供的上下文变量，平台的配置信息，或者对于一个局部来说是上下文变量的数据（比如说一个Dialog用到的数据）。除此之外，绝大部分时候不应该使用CompositionLocal。特别是涉及业务逻辑代码本身强相关的数据（输入与输出），一定不能使用CompositionLocal，这会让代码极难理解和维护，造成极难调试的Bug。</p>
+
+<p>CompositionLocal的一个大的特点就是有明确的作用域，那么如何选择合适的作用域呢？总的来说应该让作用域越小越好。视数据的 影响范围和使用范围来决定其作用域：</p>
+
+<ul>
+<li>整个应用级别的（App level），如主题风格，应用配置，平台的配置信息，或者会话数据（user sessions）。应该在根composable，即setContent处绑定数据。</li>
+<li>整个页面级别的（Screen level），如平台上下文变量（Context或者Density），导航，或者页面内部的定制参数。</li>
+<li>组件级别的（Component level），页面中某一个局部，比如Dialog的主题风格，或者Dialog并不直接操作，但却依赖的数据。</li>
+</ul>
+
+
+<p>任何工具都是为了适合其的场景而生的，要了解清楚什么场景适合使用非常重要，切忌滥用。</p>
+
+<h2>它与状态（State）的区别是什么</h2>
+
+<p>从前面的文章<a href="https://juejin.cn/post/7376094685495001139">降Compose十八掌之『鸿渐于陆』| State</a>我们了解到，状态（State）是为了重组时数据不丢失，也就是说在composable多次运行时，数据能够得以留存。反过来状态变化了，也会触发重组，因为要刷新UI。状态是时间上的概念（使用此状态的composables）多次运行，状态持有的数据都得以保存，不会变成初始值。如果想要使用状态，必须当作参数传递过去。</p>
+
+<p>而CompositionLocal是为了能在不同的composables中共享数据，不用参数传递，它是空间上的概念。</p>
+
+<p>它们是为了解决不同的问题而设计出来的。可以把状态绑定到CompositionLocal中去，但其实没必要这么做，因为内部实现上已经会把绑定的数据封装为状态，因为CompositionLocal的数据是可能发生变化的，并且当变化时，也是要触发重组的。</p>
+
+<h2>它与全局变量的区别是什么</h2>
+
+<p>Kotlin语言是支持顶级全局变量（Top level globals）的，也就是与class平齐，在任何class之外的全局变量，其作用域是整个进程，任何导入（import）此变量的地方都可以访问。Compose是基于Kotlin语言的，所以Compose也是可以使用全局变量的。</p>
+
+<p>全局变量的缺点是没有作用域，容易失控，仅应该用于常量，并且它也不能用于composables的重组。虽然全局变量可以跨越空间，让所有函数都能访问。全局变量是编程语言层面的东西，仅适用于常量的定义，也即整个应用程序运行期间确定不会发生改变的值。</p>
+
+<p>这正是CompositionLocal有价值的地方，它能限定作用域，又可以触发重组，允许数据值改变，又可以跨越空间。这是Compose框架层面提供的工具，自然更适合在Compose中使用。</p>
+
+<h2>总结</h2>
+
+<p>调用函数时传递参数可谓是『明修栈道』，而CompositionLocal则是『暗渡陈仓』，提供了一种在组合（Composition）中自上而下隐式传递数据的一种方式，可以让函数调用只关心与逻辑相关的输入数据。恰当的使用CompositionLocal可以有效的管控上下文环境变量，并极大地简化代码，让代码更加的优雅和简洁。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/compositionlocal">Locally scoped data with CompositionLocal</a></li>
+<li><a href="https://www.valueof.io/blog/compose-compositionlocal-compositionlocalprovider">Passing data using CompositionLocal</a></li>
+<li><a href="https://www.kodeco.com/34513206-compositionlocal-in-jetpack-compose">CompositionLocal in Jetpack Compose</a></li>
+<li><a href="https://medium.com/mobile-innovation-network/understanding-composition-local-jetpack-compose-4546605df5e1">Understanding Composition Local: Jetpack Compose</a></li>
+<li><a href="https://medium.com/@ramadan123sayed/composition-local-in-jetpack-compose-4d0a54afa67c">Composition Local in Jetpack Compose</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2024-11-10T23:17:56+08:00'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>10</span><span class='date-suffix'>th</span>, <span class='date-year'>2024</span></span> <span class='time'>11:17 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2024/11/08/android-jni-made-easy/" title="Previous Post: 给Jetpack Compose添加Native支持">&laquo; 给Jetpack Compose添加Native支持</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2024 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

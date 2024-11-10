@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2024-11-08T22:41:54+08:00</updated>
+  <updated>2024-11-10T23:19:00+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,326 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[用Compose中的CompositionLocal来暗渡陈仓]]></title>
+    <link href="https://alexhilton.github.io/blog/2024/11/10/understanding-composition-local/"/>
+    <updated>2024-11-10T23:17:56+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2024/11/10/understanding-composition-local</id>
+    <content type="html"><![CDATA[<p>通过<a href="https://juejin.cn/column/7367555191338467337">前面的学习</a>我们知道Jetpack Compose是一个声明式的UI框架，采用的是函数式编程思想，直观上来看就是一坨函数从上调到下。当函数需要数据时，会通过函数调用的参数来传递，一般来说这也没有什么问题。但当需要的数据特别多时，特别是对于一些非业务逻辑本身的数据（输入与输出），如上下文环境变量（Context，或者主题之类），都通过函数调用的参数传递就难免会让代码变得非常的庞杂和臃肿。这时候就可以使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/CompositionLocal">CompositionLocal</a>，一种在组合树中隐式的从上到下传递数据的方法，我们来具体地看一下。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2024/11/10/understanding-composition-local/"><img src="file:///Users/alexhilton/Downloads/compose_libs/compositionlocal.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p><strong>注意：</strong> Compose中的函数通常叫做composable，可以简单的理解为同一个东西。从根composable开始，一个套一个的调用，自上而下的意思就是指composable的调用顺序，根函数在上，被调用的函数在下。函数调用是可以传递参数的，正常的从上到下的数据传递都是通过函数调用时的参数。</p>
+
+<p>废话不多说，我们先来看一下什么是CompositionLocal以及它能做什么事情。</p>
+
+<h2>什么是CompositionLocal</h2>
+
+<p>CompositionLocal提供一种<strong>自上而下</strong>的数据传递方式，<strong>隐式的传递</strong>，也就是说，不用把数据放在参数里传递给子函数，子函数像在类中的方法访问域变量那样直接访问。我们来看一个粟子。</p>
+
+<p>比如说，页面中有一个文案，可能需要定制字体颜色，常规方式是这样子写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyApp</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">colors</span> <span class="p">=</span> <span class="n">colors</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">SomeTextLabel</span><span class="p">(</span><span class="n">text</span><span class="p">,</span> <span class="n">colors</span><span class="p">.</span><span class="n">onPrimary</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SomeTextLabel</span><span class="p">(</span><span class="n">labelText</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">color</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="n">labelText</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">color</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>文案的颜色，以及像背景等等这些东西是与整个App的配置相关的，或者与运行环境（如手机）的主题风格有关的，它并不是应用程序的业务逻辑。它属于上下文环境变量，其变化往往是由于运行环境变化而变化，或者是由于用户更改了应用的配置。这就非常适合使用CompositionLocal来转化为隐式数据传递，进而简化代码，使用后就变成酱婶儿的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyApp</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 在上级函数中定义主题相关的颜色，并定义为CompositionLocal</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">colors</span> <span class="p">=</span> <span class="n">staticCompositionLocalOf</span><span class="p">(</span> <span class="n">colors</span><span class="p">()</span> <span class="p">)</span>
+</span><span class='line'>    <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalColors</span> <span class="n">provides</span> <span class="n">colors</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">SomeTextLabel</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 被调用的子函数</span>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SomeTextLabel</span><span class="p">(</span><span class="n">labelText</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="n">labelText</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">LocalColors</span><span class="p">.</span><span class="n">onPrimary</span> <span class="c1">// 可以直接访问定义好的颜色</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>通过这个示例可以看出，定义了CompositionLocal以后，在被调用到的所有子函数中（desendants）都可以直接使用，就像访问全局变量那样。这就是CompositionLocal的作用，在指定的作用域中提供隐式的数据。</p>
+
+<h2>如何使用CompositionLocal</h2>
+
+<p>使用起来非常的方便，就像在类的方法中使用域变量那样，或者像使用全局变量那样，找到上级所定义的的CompositionLocal实例，然后引用其中的变量即可。</p>
+
+<p>其实，已经在不知不觉中经常地使用了CompositionLocal，主题风格相关的<a href="https://developer.android.com/reference/kotlin/androidx/compose/material3/MaterialTheme">MaterialTheme</a>，Android的上下文<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/package-summary#LocalContext(">LocalContext</a>)以及像绘制时常用的<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/package-summary#LocalDensity(">LocalDensity</a>)，这些都是CompositionLocal实例，是由Compose定义好的顶层实例，在所有的composables中都可以直接使用。</p>
+
+<p>需要理解的是CompositionLocal实例，本身并不是一个数据，它更像是一个集装箱，它本身是一个数据传递的机制，会在后面定义CompositionLocal实例时详细讲解。</p>
+
+<p>另外，需要特别注意的是CompositionLocal是有作用域的，对其所有的子函数生效，并且也可以嵌套的，<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/CompositionLocal#current(">属性current</a>)引用的是最近一层父函数（closest ancestor）中绑定的值。比如说：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">CompositionLocalExample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">MaterialTheme</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 绑定一个值到LocalContentColor</span>
+</span><span class='line'>        <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalContentColor</span> <span class="n">provides</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">primary</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Surface</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Uses Surface&#39;s provided content color&quot;</span><span class="p">)</span>
+</span><span class='line'>                    <span class="c1">// 重新绑定一个值到LocalContentColor</span>
+</span><span class='line'>                    <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalContentColor</span> <span class="n">provides</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">error</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">DescendantExample</span><span class="p">()</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">DescendantExample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// current会指向最后绑定的值，即MaterialTheme.colorScheme.error</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;This Text uses the error color now&quot;</span><span class="p">,</span> <span class="n">color</span> <span class="p">=</span> <span class="n">LocalContentColor</span><span class="p">.</span><span class="n">current</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>如何定义一个CompositionLocal</h2>
+
+<p>大部分时候Compose中定义好的就够我们用了，但也可以针对具体的场景来自定义一个CompositionLocal。分为两个步骤，创建实例，和绑定数据。</p>
+
+<p>CompositionLocal实例是一个集装箱，用以封装需要从顶层往底层传递的数据，这些数据也不一定非要是常量，也是会改变的，比如应用或者页面上下文环境变化时，或者整个应用的配置发生变化时。</p>
+
+<h3>创建CompositionLocal实例</h3>
+
+<p>第一步是先创建一个实例，有两种方法创建一个CompositionLocal实例，这两种方式的主要区别就在于当数据变化时如何影响着重组（reComposition）：</p>
+
+<ul>
+<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#compositionLocalOf(androidx.compose.runtime.SnapshotMutationPolicy,kotlin.Function0">compositionLocalOf</a>) 当数据发生变化时仅会影响读取数据函数的重组；</li>
+<li><a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#staticCompositionLocalOf(kotlin.Function0">staticCompositionLocalOf</a>) 当数组变化时，提供数据的所有子函数都会被重组。</li>
+</ul>
+
+
+<p>可以发现，这两个方法的区别就在于影响重组的范围，前一个是影响着读取数据的地方，这与状态（State）一样；后一个则是影响着所有的被调用的composables。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// LocalElevations.kt file</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Elevations</span><span class="p">(</span><span class="k">val</span> <span class="py">card</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span> <span class="k">val</span> <span class="py">default</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 使用Elevations的默认值构造一个全局的CompositinLocal实例</span>
+</span><span class='line'><span class="c1">// 这个实例可以被应用中的所有composables访问得到</span>
+</span><span class='line'><span class="k">val</span> <span class="py">LocalElevations</span> <span class="p">=</span> <span class="n">compositionLocalOf</span> <span class="p">{</span> <span class="n">Elevations</span><span class="p">()</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>注意：</strong> 为了更好的可读性和可维护性，CompositionLocal实例的命名应该以Local开头，如LocalColors。</p>
+
+<h3>把数据绑定到实例中去</h3>
+
+<p>光创建实例没什么用，创建完实例后，还需要把数组绑定到CompositionLocal实例中去，并<strong>同时指定作用域</strong>，这是非常关键的一步，不但决定了CompositionLocal中有什么数据，还决定了谁可以使用这些数据。使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#CompositionLocalProvider(kotlin.Array,kotlin.Function0">CompositionLocalProvider</a>)来绑定数据：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// MyActivity.kt file</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">MyActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// 基于系统主题来计算具体的elevation</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">elevations</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">isSystemInDarkTheme</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Elevations</span><span class="p">(</span><span class="n">card</span> <span class="p">=</span> <span class="m">1.</span><span class="n">dp</span><span class="p">,</span> <span class="n">default</span> <span class="p">=</span> <span class="m">1.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Elevations</span><span class="p">(</span><span class="n">card</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span> <span class="n">default</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="c1">// 把上面计算得到的elevation绑定到LocalElevations</span>
+</span><span class='line'>            <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalElevations</span> <span class="n">provides</span> <span class="n">elevations</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="c1">// ... Content goes here ...</span>
+</span><span class='line'>                <span class="c1">// 这里的子composables都可以直接访问LocalElevations.current</span>
+</span><span class='line'>                <span class="c1">// 以得到elevation</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>函数CompositionLocalProvider接收一个CompositionLocal实例和一个composable lambda，这个lambda就是这个实例的作用域，也即此lambda所调用的所有composables都可以使用访问此实例的数据。参数LocalElevations就是实例，可以看前面的创建代码。LocalElevations provides elevation这是infix符号式写法，相当于LocalElevations.provides(elevation)，elevation则是具体的数据，这意思就是在此lambda的作用域中，CompositionLocal实例LocalElevations会提供数据elevation。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SomeComposable</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 使用的地方直接通过LocalElevations.current就能访问到</span>
+</span><span class='line'>    <span class="n">MyCard</span><span class="p">(</span><span class="n">elevation</span> <span class="p">=</span> <span class="n">LocalElevations</span><span class="p">.</span><span class="n">current</span><span class="p">.</span><span class="n">card</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// Content</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里多说一下，compositionLocalOf是更为精细化的控制（fine-grained control），因为，当数据发生变化时，在作用域中只有读取了数据的composables才会被重组；而staticCompositionLocalOf影响范围较大，因为（当数据发生变化 时）整个作用域内（即CompositionLocalProvider的lambda）的composables都会被重组。</p>
+
+<h2>什么时候该用CompositionLocal</h2>
+
+<p>CompositionLocal提供了一种新的数据传递方式，当数据需要在一定作用域内（Scoped）分享时，就可以考虑使用它。但并不是所有的场景都适用，具体来说，要符合以下标准：</p>
+
+<ul>
+<li>数据要是非业务逻辑数据，也就是非代码所直接需要的输入和输出。</li>
+<li>数据要有一个极其合理的初始值（默认值）。</li>
+<li>数据不一定要是常量，也可以变化，但是业务逻辑并不是数据变化的原因。</li>
+<li>数据的使用有一定的作用域。并且在作用域内<strong>所有的composables都可能会</strong>使用此数据。这一点很重要，如果仅仅是某个特定的composable使用，那就直接传参就好了。</li>
+</ul>
+
+
+<p>适合使用CompositionLocal的数据有应用的主题风格，应用的配置信息，平台提供的上下文变量，平台的配置信息，或者对于一个局部来说是上下文变量的数据（比如说一个Dialog用到的数据）。除此之外，绝大部分时候不应该使用CompositionLocal。特别是涉及业务逻辑代码本身强相关的数据（输入与输出），一定不能使用CompositionLocal，这会让代码极难理解和维护，造成极难调试的Bug。</p>
+
+<p>CompositionLocal的一个大的特点就是有明确的作用域，那么如何选择合适的作用域呢？总的来说应该让作用域越小越好。视数据的 影响范围和使用范围来决定其作用域：</p>
+
+<ul>
+<li>整个应用级别的（App level），如主题风格，应用配置，平台的配置信息，或者会话数据（user sessions）。应该在根composable，即setContent处绑定数据。</li>
+<li>整个页面级别的（Screen level），如平台上下文变量（Context或者Density），导航，或者页面内部的定制参数。</li>
+<li>组件级别的（Component level），页面中某一个局部，比如Dialog的主题风格，或者Dialog并不直接操作，但却依赖的数据。</li>
+</ul>
+
+
+<p>任何工具都是为了适合其的场景而生的，要了解清楚什么场景适合使用非常重要，切忌滥用。</p>
+
+<h2>它与状态（State）的区别是什么</h2>
+
+<p>从前面的文章<a href="https://juejin.cn/post/7376094685495001139">降Compose十八掌之『鸿渐于陆』| State</a>我们了解到，状态（State）是为了重组时数据不丢失，也就是说在composable多次运行时，数据能够得以留存。反过来状态变化了，也会触发重组，因为要刷新UI。状态是时间上的概念（使用此状态的composables）多次运行，状态持有的数据都得以保存，不会变成初始值。如果想要使用状态，必须当作参数传递过去。</p>
+
+<p>而CompositionLocal是为了能在不同的composables中共享数据，不用参数传递，它是空间上的概念。</p>
+
+<p>它们是为了解决不同的问题而设计出来的。可以把状态绑定到CompositionLocal中去，但其实没必要这么做，因为内部实现上已经会把绑定的数据封装为状态，因为CompositionLocal的数据是可能发生变化的，并且当变化时，也是要触发重组的。</p>
+
+<h2>它与全局变量的区别是什么</h2>
+
+<p>Kotlin语言是支持顶级全局变量（Top level globals）的，也就是与class平齐，在任何class之外的全局变量，其作用域是整个进程，任何导入（import）此变量的地方都可以访问。Compose是基于Kotlin语言的，所以Compose也是可以使用全局变量的。</p>
+
+<p>全局变量的缺点是没有作用域，容易失控，仅应该用于常量，并且它也不能用于composables的重组。虽然全局变量可以跨越空间，让所有函数都能访问。全局变量是编程语言层面的东西，仅适用于常量的定义，也即整个应用程序运行期间确定不会发生改变的值。</p>
+
+<p>这正是CompositionLocal有价值的地方，它能限定作用域，又可以触发重组，允许数据值改变，又可以跨越空间。这是Compose框架层面提供的工具，自然更适合在Compose中使用。</p>
+
+<h2>总结</h2>
+
+<p>调用函数时传递参数可谓是『明修栈道』，而CompositionLocal则是『暗渡陈仓』，提供了一种在组合（Composition）中自上而下隐式传递数据的一种方式，可以让函数调用只关心与逻辑相关的输入数据。恰当的使用CompositionLocal可以有效的管控上下文环境变量，并极大地简化代码，让代码更加的优雅和简洁。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/compositionlocal">Locally scoped data with CompositionLocal</a></li>
+<li><a href="https://www.valueof.io/blog/compose-compositionlocal-compositionlocalprovider">Passing data using CompositionLocal</a></li>
+<li><a href="https://www.kodeco.com/34513206-compositionlocal-in-jetpack-compose">CompositionLocal in Jetpack Compose</a></li>
+<li><a href="https://medium.com/mobile-innovation-network/understanding-composition-local-jetpack-compose-4546605df5e1">Understanding Composition Local: Jetpack Compose</a></li>
+<li><a href="https://medium.com/@ramadan123sayed/composition-local-in-jetpack-compose-4d0a54afa67c">Composition Local in Jetpack Compose</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[给Jetpack Compose添加Native支持]]></title>
@@ -7287,496 +7607,6 @@ textStyle比较丰富，除了直接指定颜色以外，还可以用<a href="ht
 
 <ul>
 <li><a href="https://developer.android.com/develop/ui/compose/graphics/draw/modifiers">Graphics modifiers</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『利涉大川』| Canvas]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/06/24/canvas-in-compose/"/>
-    <updated>2024-06-24T20:22:49+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/06/24/canvas-in-compose</id>
-    <content type="html"><![CDATA[<p>任何一个GUI框架都会提供大量的预定义的UI部件，让开发者构建UI页面，但有些时候预定义的部件无法满足需求，这时就需要定制，甚至是自定义绘制的内容。对于Android开发者来说，这已经是家常便饭了，因为肯定有过用自定义View来实现一些特殊设计需求的经验。在Jetpack Compose中也有同样的方法来实现自定义绘制内容，今天就来学习一下。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2024/06/24/canvas-in-compose/"><img src="https://apptractor.ru/wp-content/uploads/2021/03/1_r_ly2xx-jo8vixat0xh7qa.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>使用Canvas来自定义内容</h2>
-
-<p>在Compose中， 我们用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/package-summary#Canvas(android.graphics.Canvas">Canvas函数</a>)来绘制自定义内容，可以把它理解成为自定义View，但，它是一个函数，把绘制指令传给它就可以了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">textMeasurer</span> <span class="p">=</span> <span class="n">rememberTextMeasurer</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">drawRect</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">LightGray</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">drawText</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">textMeasurer</span> <span class="p">=</span> <span class="n">textMeasurer</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;降Compose十八掌&quot;</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">4f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2.2f</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">drawCircle</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Magenta</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">radius</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">10f</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">center</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">1.8f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3f</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>    <span class="n">drawCircle</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Yellow</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">radius</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">12f</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">center</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">1.6f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">4.5f</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>    <span class="n">drawCircle</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">radius</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">14f</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">center</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">1.46f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">7f</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/f7c77abcb2b34e0683201294f4926082~tplv-k3u1fbpfcp-jj-mark:3024:0:0:0:q75.awebp#?w=1220&amp;h=1436&amp;s=75585&amp;e=png&amp;b=cccccc" alt="hello_canvas" /></p>
-
-<h2>坐标系统</h2>
-
-<p>坐标系统，与常见的GUI坐标系统，以及View的坐标系统都是一样的，左上角是原点（0，0），x轴向右，y轴向下。</p>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/graphics/introduction/compose_coordinate_system_drawing.png" alt="" /></p>
-
-<h2>绘图上下文DrawScope</h2>
-
-<p>仔细看Canvas函数，可以发现，写绘制指令的地方是一个尾部lambda，这是Compose中非常常见的一种设计方式。这个lambda被定义为DrawScope对象的一个扩展函数，所以在这个lambda中可以隐式的访问DrawScope对象。我们所使用的绘制指令，以及很多参数其实都是在通过this指针隐式的调用DrawScope。对于扩展函数不熟悉的同学可以去复习一下<a href="https://juejin.cn/post/7327478228188594202">Kotlin中函数的一些高级用法</a>。</p>
-
-<p>通过AndroidStudio的提示，也能看到隐式的this指针是一个DrawScope对象。</p>
-
-<p>所以呢，当查找API文档时记得要去找<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/drawscope/DrawScope">DrawScope</a>，而不是Canvas函数。其实Canvas就是一个封装的函数，也没啥东西。但还有一个略微底层一些的作为Graphics接口的<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/Canvas">对象Canvas</a>，它与Android SDK中的Canvas对象是差不多的概念。</p>
-
-<p>接下来我们重点看看如何使用绘制指令绘制出我们需要的内容。</p>
-
-<h2>画图形</h2>
-
-<p>图形（Shape）是最为常见的一类绘制目标，比如圆，椭圆，矩形，线，扇形等等。不难，看一眼就会用：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">drawRect</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">LightGray</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">drawOval</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="m">50f</span><span class="p">,</span> <span class="m">50f</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">size</span><span class="p">=</span>  <span class="n">Size</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">10f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">12f</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">drawLine</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Yellow</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">start</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="m">50</span> <span class="p">+</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">20f</span><span class="p">,</span> <span class="m">50f</span> <span class="p">+</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">24f</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">end</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">1.8f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3f</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">strokeWidth</span> <span class="p">=</span> <span class="n">Stroke</span><span class="p">.</span><span class="n">DefaultMiter</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">drawCircle</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Magenta</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">radius</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">5f</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">center</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">1.8f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3f</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">drawPoints</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">DarkGray</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">pointMode</span> <span class="p">=</span> <span class="n">PointMode</span><span class="p">.</span><span class="n">Points</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">strokeWidth</span> <span class="p">=</span> <span class="m">50f</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">points</span> <span class="p">=</span> <span class="n">genPoints</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">2f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3f</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://p9-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/a6b042b2c41f4899aeb3245baa99f591~tplv-k3u1fbpfcp-jj-mark:3024:0:0:0:q75.awebp#?w=1219&amp;h=1447&amp;s=77422&amp;e=png&amp;b=cccccc" alt="shapes" /></p>
-
-<h2>画路径</h2>
-
-<p>路径（Path）是把一系列的数学指令转化为绘制命令，可以更为灵活的画一些曲线和图形，比如说画一个三角函数曲线：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">PathDemo</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">tm</span> <span class="p">=</span> <span class="n">rememberTextMeasurer</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">drawRect</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">LightGray</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">drawText</span><span class="p">(</span><span class="n">tm</span><span class="p">,</span> <span class="s">&quot;cosine of [-PI, PI]&quot;</span><span class="p">,</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">3f</span><span class="p">,</span> <span class="m">60f</span><span class="p">))</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">drawLine</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">DarkGray</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">start</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="m">0f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">end</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">strokeWidth</span> <span class="p">=</span> <span class="m">3f</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">drawLine</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">DarkGray</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">start</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">2f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">end</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">2f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">*</span> <span class="m">2</span><span class="p">/</span> <span class="m">3f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">strokeWidth</span> <span class="p">=</span> <span class="m">3f</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">drawPath</span><span class="p">(</span><span class="n">genPath</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">),</span> <span class="n">Color</span><span class="p">.</span><span class="n">Magenta</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">Stroke</span><span class="p">(</span><span class="n">width</span> <span class="p">=</span> <span class="m">10f</span><span class="p">))</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">fun</span> <span class="nf">genPath</span><span class="p">(</span><span class="n">width</span><span class="p">:</span> <span class="n">Float</span><span class="p">,</span> <span class="n">height</span><span class="p">:</span> <span class="n">Float</span><span class="p">):</span> <span class="n">Path</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">slices</span> <span class="p">=</span> <span class="m">60</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">path</span> <span class="p">=</span> <span class="n">Path</span><span class="p">();</span>
-</span><span class='line'>    <span class="n">path</span><span class="p">.</span><span class="n">moveTo</span><span class="p">(</span><span class="m">0f</span><span class="p">,</span> <span class="n">height</span> <span class="p">/</span> <span class="m">3f</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="k">in</span> <span class="m">1.</span><span class="p">.</span><span class="n">slices</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">x0</span> <span class="p">=</span> <span class="m">2f</span> <span class="p">*</span> <span class="n">i</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">*</span> <span class="n">PI</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">/</span>  <span class="n">slices</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">-</span> <span class="n">PI</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">y0</span> <span class="p">=</span> <span class="n">cos</span><span class="p">(</span><span class="n">x0</span><span class="p">)</span> <span class="p">*</span> <span class="n">height</span> <span class="p">/</span> <span class="m">6f</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">x</span> <span class="p">=</span> <span class="n">i</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">/</span> <span class="n">slices</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">*</span> <span class="n">width</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">y</span> <span class="p">=</span> <span class="n">y0</span> <span class="p">+</span> <span class="n">height</span> <span class="p">/</span> <span class="m">2f</span>
-</span><span class='line'>        <span class="n">path</span><span class="p">.</span><span class="n">lineTo</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">path</span><span class="p">.</span><span class="n">moveTo</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="n">path</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">path</span><span class="p">;</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://p6-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/fd5a91eab8a34a8fae51874ec21d989d~tplv-k3u1fbpfcp-jj-mark:3024:0:0:0:q75.awebp#?w=1217&amp;h=1994&amp;s=104973&amp;e=png&amp;b=cccccc" alt="path" />
-路径在绘制中是非常强大的功能，可以实现非常炫酷的动画效果。</p>
-
-<h2>画文字</h2>
-
-<p>文字是特别重要的UI元素，通常情况下我们都是过Text来展示文字，再与其他部件进行组合就能满足需求。一般来说不需要在自定义内容也使用文字，因为文字绘制一般来说比较复杂，因为像基线对齐，字体样式，字体大小等等，都需要考虑。文字部件Text内容其实也是用与自定义一样的更低层的API来实现的，但它把像对齐，样式，富文本等等都封装好了。</p>
-
-<p>DrawScope也提供了绘制文字的函数，不过呢使用起来比较麻烦，需要详细计算文字所占用的区域大小，而文字的measure通常是非常麻烦的，因为像文字的字体以及文字大小都会影响到measure，因此measure要保存成为一个状态，这样当有影响到文字绘制的因素发生变化时，measure就会发生变化，进而触发Re-Composition：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">TextDemo</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">textMeasure</span> <span class="p">=</span> <span class="n">rememberTextMeasurer</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">measuredText</span> <span class="p">=</span>
-</span><span class='line'>            <span class="n">textMeasure</span><span class="p">.</span><span class="n">measure</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">AnnotatedString</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">text</span> <span class="p">=</span>
-</span><span class='line'>                    <span class="s">&quot;&quot;&quot;</span>
-</span><span class='line'>                        <span class="err">“降龙十八掌可说是【武学中的巅峰绝诣】，当真是无坚不摧、无固不破。虽招数有限，但每一招均具绝大威力。</span>
-</span><span class='line'>                        <span class="err">北宋年间，丐帮帮主萧峰以此邀斗天下英雄，极少有人能挡得他三招两式，气盖当世，群豪束手。</span>
-</span><span class='line'>                        <span class="err">当时共有“降龙廿八掌”，后经萧峰及他义弟虚竹子删繁就简，取精用宏，改为降龙十八掌，掌力更厚。</span>
-</span><span class='line'>                        <span class="err">这掌法传到洪七公手上，在华山绝顶与王重阳、黄药师等人论剑时施展出来，王重阳等尽皆称道。”</span>
-</span><span class='line'>                    <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
-</span><span class='line'>                    <span class="n">spanStyle</span> <span class="p">=</span> <span class="n">SpanStyle</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">fontSize</span> <span class="p">=</span> <span class="m">20.</span><span class="n">sp</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">ExtraBold</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">brush</span> <span class="p">=</span> <span class="n">Brush</span><span class="p">.</span><span class="n">verticalGradient</span><span class="p">(</span><span class="n">listOf</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Magenta</span><span class="p">,</span> <span class="n">Color</span><span class="p">.</span><span class="n">Cyan</span><span class="p">,</span> <span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">))</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                <span class="p">),</span>
-</span><span class='line'>                <span class="n">constraints</span> <span class="p">=</span> <span class="n">Constraints</span><span class="p">.</span><span class="n">fixed</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">width</span> <span class="p">=</span> <span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">1.6f</span><span class="p">).</span><span class="n">toInt</span><span class="p">(),</span>
-</span><span class='line'>                    <span class="n">height</span> <span class="p">=</span> <span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">).</span><span class="n">toInt</span><span class="p">()</span>
-</span><span class='line'>                <span class="p">),</span>
-</span><span class='line'>                <span class="n">overflow</span> <span class="p">=</span> <span class="n">TextOverflow</span><span class="p">.</span><span class="n">Ellipsis</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">style</span> <span class="p">=</span> <span class="n">TextStyle</span><span class="p">(</span><span class="n">fontSize</span> <span class="p">=</span> <span class="m">18.</span><span class="n">sp</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">drawText</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">textLayoutResult</span> <span class="p">=</span> <span class="n">measuredText</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="m">60f</span><span class="p">,</span> <span class="m">60f</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://p3-juejin.byteimg.com/tos-cn-i-k3u1fbpfcp/2aaf95cc9fff45dc9c963065098b0faa~tplv-k3u1fbpfcp-jj-mark:3024:0:0:0:q75.awebp#?w=1220&amp;h=1774&amp;s=275925&amp;e=png&amp;b=fefbff" alt="text" /></p>
-
-<h2>画图片</h2>
-
-<p>图片（Image）是与文字类似的非常重要的UI元素，像图标，头像，表情，背景图，Banner图，以及内容中的图像都属于图片元素，一般情况下用Image函数可以用来展示图片。</p>
-
-<p>对于自定义绘制内容也可以使用图片，DrawScope中有提供绘制图片的方法：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">dogImage</span> <span class="p">=</span> <span class="n">ImageBitmap</span><span class="p">.</span><span class="n">imageResource</span><span class="p">(</span><span class="n">id</span> <span class="p">=</span> <span class="n">R</span><span class="p">.</span><span class="n">drawable</span><span class="p">.</span><span class="n">dog</span><span class="p">)</span>
-</span><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span> <span class="n">onDraw</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">drawImage</span><span class="p">(</span><span class="n">dogImage</span><span class="p">)</span>
-</span><span class='line'><span class="p">})</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/graphics/introduction/compose_graphics_canvas_image.png" alt="" /></p>
-
-<h2>变幻</h2>
-
-<p>除了绘制以外，DrawScope还提供了一系列做变幻的函数。包括缩放，位移，旋转这些变幻直接作用于绘制指令上面。</p>
-
-<h3>缩放</h3>
-
-<p>使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/drawscope/DrawScope#(androidx.compose.ui.graphics.drawscope.DrawScope">DrawScope.scale</a>.scale(kotlin.Float,kotlin.Float,androidx.compose.ui.geometry.Offset,kotlin.Function1))函数来对绘制指令进行缩放，参数是x轴方向和y轴方向的缩放倍数（大于1放大，小于1缩小），还可以指定中心坐标，默认是几何中心。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">scale</span><span class="p">(</span><span class="n">scaleX</span> <span class="p">=</span> <span class="m">10f</span><span class="p">,</span> <span class="n">scaleY</span> <span class="p">=</span> <span class="m">15f</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">drawCircle</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">,</span> <span class="n">radius</span> <span class="p">=</span> <span class="m">20.</span><span class="n">dp</span><span class="p">.</span><span class="n">toPx</span><span class="p">())</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/graphics/introduction/compose_graphics_canvas_scale.png" alt="" /></p>
-
-<h3>位移</h3>
-
-<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/drawscope/DrawScope#(androidx.compose.ui.graphics.drawscope.DrawScope">DrawScope.translate</a>.translate(kotlin.Float,kotlin.Float,kotlin.Function1))可以实现位移，参数是x方向或者y方向的距离。参数为正，是沿着坐标轴正向，为负就是反向。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">translate</span><span class="p">(</span><span class="n">left</span> <span class="p">=</span> <span class="m">100f</span><span class="p">,</span> <span class="n">top</span> <span class="p">=</span> <span class="p">-</span><span class="m">300f</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">drawCircle</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">,</span> <span class="n">radius</span> <span class="p">=</span> <span class="m">200.</span><span class="n">dp</span><span class="p">.</span><span class="n">toPx</span><span class="p">())</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/graphics/introduction/compose_graphics_canvas_translate.png" alt="" /></p>
-
-<h3>旋转</h3>
-
-<p>用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/drawscope/DrawScope#(androidx.compose.ui.graphics.drawscope.DrawScope">DrawScope.rotate</a>.rotate(kotlin.Float,androidx.compose.ui.geometry.Offset,kotlin.Function1))函数实现旋转，参数为正时是顺时针的角度，为负就是逆时针，可以指定中心点，默认是几何中心。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">rotate</span><span class="p">(</span><span class="n">degrees</span> <span class="p">=</span> <span class="m">45F</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">drawRect</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Gray</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">3F</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3F</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">size</span> <span class="p">=</span> <span class="n">size</span> <span class="p">/</span> <span class="m">3F</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/graphics/introduction/compose_graphics_canvas_rotate.png" alt="" /></p>
-
-<h3>画布尺寸调整</h3>
-
-<p>用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/drawscope/package-summary#(androidx.compose.ui.graphics.drawscope.DrawScope">DrawScope.inset</a>.inset(kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Float,kotlin.Function1))函数来对DrawScope的画布进行调整，参数是周围四个方向的边距偏移量。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">canvasQuadrantSize</span> <span class="p">=</span> <span class="n">size</span> <span class="p">/</span> <span class="m">2F</span>
-</span><span class='line'>    <span class="n">inset</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">50f</span><span class="p">,</span> <span class="n">vertical</span> <span class="p">=</span> <span class="m">30f</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">drawRect</span><span class="p">(</span><span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">,</span> <span class="n">size</span> <span class="p">=</span> <span class="n">canvasQuadrantSize</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这样调整后，inset内部的lambda中的绘制指令的尺寸size会受影响，size.width = width - 2 * horizontal，size.height = height - 2 * vertical，相当于是加了padding。</p>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/graphics/introduction/compose_graphics_canvas_inset.png" alt="" /></p>
-
-<h3>组合变幻</h3>
-
-<p>变幻除了可以单独使用，还可以组合起来使用，能更简便的实现变幻效果。使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/drawscope/package-summary#(androidx.compose.ui.graphics.drawscope.DrawScope">DrawScope.withTransform</a>.withTransform(kotlin.Function1,kotlin.Function1))来组合变幻：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">withTransform</span><span class="p">({</span>
-</span><span class='line'>        <span class="n">translate</span><span class="p">(</span><span class="n">left</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">5F</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">rotate</span><span class="p">(</span><span class="n">degrees</span> <span class="p">=</span> <span class="m">45F</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">})</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">drawRect</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Gray</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">3F</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3F</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">size</span> <span class="p">=</span> <span class="n">size</span> <span class="p">/</span> <span class="m">3F</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/graphics/introduction/compose_graphics_multiple_transforms.png" alt="" /></p>
-
-<h2>总结</h2>
-
-<p>今天主要学习了如何通过Canvas函数来实现自定义绘制内容，Canvas给我们了封装了一个包含有DrawScope的lambda，通过DrawScope提供的各种绘制指令可以实现我们的想要的自定义内容。可以自由的通过绘制图形，文字和图像，并且可以做变幻，以实现一些特效。相信通过今天的学习，足可以应付常见的自定义绘制需求。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/graphics/draw/overview">Graphics in Compose</a></li>
 </ul>
 
 ]]></content>
