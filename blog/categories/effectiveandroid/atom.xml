@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2024-11-17T20:35:42+08:00</updated>
+  <updated>2024-11-24T08:49:59+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,158 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Compose大前端从上车到起飞]]></title>
+    <link href="https://alexhilton.github.io/blog/2024/11/24/master-compose-multiplatform/"/>
+    <updated>2024-11-24T08:45:46+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2024/11/24/master-compose-multiplatform</id>
+    <content type="html"><![CDATA[<p>在前面的一篇文章<a href="https://juejin.cn/post/7436648335380496434">赶紧上车开启Compose大前端之路</a>中我们学习了CMP的基本概念以及如何创建一个CMP项目。今天将继续学习CMP，深入研究项目的配置方法，了解CMP的内部机制并总结一些CMP开发的最佳实践。</p>
+
+<p><a href=""><img src="https://repository-images.githubusercontent.com/293498508/6469be07-159b-49de-9ffe-56340d5dfd07" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>深入了解项目结构</h2>
+
+<p>CMP的基础结构与一个标准的Android应用的项目结构基本一样，只不过主module名字变成了「composeApp」。项目根目录下的build.gradle.kts是整个项目的配置，主要是指定使用的插件；settings.gradle.kts指定项目的依赖仓库，以及项目包含哪些module；gradle/wrapper/libs.version.toml定义着依赖的版本信息。模块「composeApp」包含着源码集合（source sets）以及一个build.gradle.kts，这是描述这个模块如何构建的脚本。</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/project-view.png" alt="图1. 项目结构" /></p>
+
+<p>对于Android开发同学来说，这样的项目结构非常熟悉，事实上如果把项目视图切换到「Android」，就会发现，这比起常规的Android项目，无非就是多了一些源码集合。</p>
+
+<p>仔细看一下源码集合「androidMain」它就是一个标准的Android项目，里面有AndroidManifest文件，以及一个入口MainActivity，它会调用「commonMain」中定义的composable App()，由此就进入到了「commonMain」中。</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/android-entry.png" alt="图2. Android源码关系" /></p>
+
+<p>虽然并不在源码集合中，iosApp子目录其实是一个标准的Xcode项目，里面全是Xcode项目的配置文件，可以用Xcode直接打开。它是iOS应用的入口，它的调用顺序是iOSApp，到ContentView，这两个是标准的iOS的代码，用的是Swift。然后会进入到「iosMain」中的MainConntroller，这里就到了Kotlin地界了，MainController，再进入到common中的composable App()，由此进入了「commonMain」中。</p>
+
+<p><img src="file:///Users/alexhilton/Downloads/compose_libs/ios-entry.png" alt="图3. iOS源码关系" /></p>
+
+<h2>依赖配置方法</h2>
+
+<p>现代的软件不可能全都是从零开始，有很多现成的代码库可以使用，这就需要为项目配置依赖。CMP中依赖配置方法与常规的Android略不一样，视依赖的使用，以及依赖的平台依赖性，需要分别针对不同的源码集合配置。</p>
+
+<p>需要注意的就是依赖的作用域，如果是在commonMain中配置的，那就会对所有的平台生效；如果是为androidMain配置的依赖，只能在Android中生效，以次类推。</p>
+
+<h3>在源码集合中配置依赖</h3>
+
+<p>最直接的方式就是针对每个源码集合配置其依赖：</p>
+
+<pre><code class="Kotlin">kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation("com.example:my-library:1.0") // 所有平台共享的依赖
+        }
+    }
+}
+</code></pre>
+
+<h3>在顶层DSL dependencies中配置</h3>
+
+<p>除了在源码集合处配置依赖，也可以在顶层DSL dependencies中配置，本质都是一样的，只不过是方式略有不同。具体的格式是<strong> &lt;源码集合&gt;&lt;具体的依赖&gt; </strong>，比如上面酱紫写：</p>
+
+<pre><code class="Kotlin">dependencies {
+    "commonMainImplementation"("com.example:my-library:1.0")
+}
+</code></pre>
+
+<p>这与像上面在源码集合commonMain中配置是一样的。在顶层配置依赖的好处在于这里可以配置一些源码集合中找不到的依赖，如testing等等。</p>
+
+<h3>本地module如何相互依赖</h3>
+
+<p>如果是本地的库（module），可以通过project方式引入，同样的如果是共享的库加在common里，如果是某个平台特有的，或者只想在某个平台使用就单独加到它上面：</p>
+
+<pre><code class="Kotlin">kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation(project(":some-other-multiplatform-module"))
+        }
+    }
+}
+</code></pre>
+
+<h2>如何共享和定制代码</h2>
+
+<p>CMP的终极目的是要尽可能的共享代码，让一套代码能够跑在多个平台上面。但现实的世界是不完美的，平台的差异是不可忽视的。像存储，I/O，硬件资源等等都是平台强相关的。我们只能尽可能多的共享我们自己写的业务逻辑，对于实现业务逻辑而需要的系统平台相关的API，肯定还是需要每个平台定制化的去实现。</p>
+
+<p>CMP通过Kotlin中的关键字expect和actual来处理平台定制API。</p>
+
+<p>具体的做法就是在common中定义一个用关键字expect修饰的类型（函数，类，接口枚举，属性等），然后在每个平台的源码集合中去具体实现，并用关键字actual来修饰。注意，这里的类型没有限制，可以是函数，可以是类/接口/枚举，也可以是属性，尽管绝大多数情况下都是函数。</p>
+
+<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/expect-functions-properties.svg" alt="图4. 用expect和actual来定制API" /></p>
+
+<p>可以理解为OO中的接口，但又不完全一样。区别在于，common中的expect函数不能有默认实现代码，并且函数的声明要在同一个包下面。编译的时候，编译器会用平台代码里面的actual去替换common中的expect函数。也就是说这是发生在编译时的行为，所以它要求包名和函数的签名完全一致。</p>
+
+<h2>资源管理</h2>
+
+<p>CMP是能构建跨平台UI的，而UI必然会涉及资源，最常见的资源就是图片和字符串，资源的复杂地方在于它会有限定属性，比如不同屏幕分辨率要用不同的图片，比如不同的地区语言要用不同的字符串，所以资源是相当复杂的，而且平台强相关。</p>
+
+<p>为此CMP提供了一个专门的库用于管理资源，可以屏蔽平台特定，以统一的方式来管理资源。只需要在commonMain中引入依赖即可：</p>
+
+<pre><code class="Kotlin">kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation(compose.components.resources)
+        }
+    }
+}
+</code></pre>
+
+<p>资源是放在commonMain中与kotlin同级别的目录中：</p>
+
+<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/compose-resources-qualifiers.png" alt="图5. 资源文件管理" /></p>
+
+<p>资源可以分为几种类型，图片应该放在子目录drawable中，字体资源放在fonts中，字符串放在values中，其他文件放在files中。</p>
+
+<p>资源文件还可以有限定符以支持定制化，如屏幕分辨率（xhdpi，xxhdpi等），区域语言（en，zh-rCN等）和主题（dark，light等）。可以发现，规则与Android平台资源管理规则是非常接近的。</p>
+
+<p>图片字体等直接添加文件即可，字符串的话放在一个xml文件中，根Tag是resources，每个字符串的Tag是string，如：</p>
+
+<pre><code class="Kotlin">&lt;resources&gt;
+    &lt;string name="app_name"&gt;My awesome app&lt;/string&gt;
+    &lt;string name="title"&gt;Some title&lt;/string&gt;
+&lt;/resources&gt;
+</code></pre>
+
+<p>需要注意资源的命名，与Android的资源规则一样，要是小写字符，可以有数字和下划线。</p>
+
+<p>添加好资源后，编译插件会自动生成一个类Res，通过它就可以引用各种资源，如：</p>
+
+<pre><code class="Kotlin">Image(
+    painter = painterResource(Res.drawable.my_icon),
+    contentDescription = null
+)
+
+Text(stringResource(Res.string.app_name))
+</code></pre>
+
+<h2>一些开发实践建议</h2>
+
+<p>CMP是为了构建跨平台应用的，那么应该尽最大的可能去共享代码。虽然有平台定制机制，但只应该用它来定制细粒度的具体的API，而不是业务逻辑。比如说，从一个文件中读文本内容，不应该定义一个getFileContent，而是应该定制细粒度的openFile，closeFile和readLine，这是因为读取文件过程真正不同的是处理文件的API，除打开文件，读出每一行以外，其他的逻辑是一样的，应该共享。</p>
+
+<p>还有，在写业务的时候要注意看Compose文档中以及Kotlin文档中API标注的平台范围，尽可能选择标记为「Common」或者「Cmn」的API。</p>
+
+<p>另外，因为Kotlin是基于JVM的语言，标准JDK中的API都可以用，但在CMP的iOS（目标是Native）平台和Web（目标是Wasm）却无法使用JDK的API，所以我们应该多使用Kotlin标准库以及Kotlin扩展库（kotlinx），这些API都做了多平台适配。</p>
+
+<h2>总结</h2>
+
+<p>利益于Gradle中的源码集合，CMP对源码的结构是很宽容的，并没有严格的要求，这对于现有项目来说是相当友好的，因为把现有的项目源码搬进来就可以了，不用改太多，然后通过源码集合来做具体的指定和逻辑上的关系处理。每个源码集合其实都是其平台的一个标准项目，把common作为其依赖而已，关系就这么简单，甚至还可以用其平台的原生方式去写UI，写逻辑，这都是可以的。</p>
+
+<p>虽然这样做貌似会失去共享代码和逻辑的意义，但是这对改造现有项目是十分友好的，比如第一步可能是把Android项目和iOS项目先融合进来，然后再慢慢的把两个平台的共享代码抽离出来入进common。这样做不但能慢慢推进跨端，每个项目各自仍是完整的，如果有紧急 的事情仍可先用原生方式去开发构建。</p>
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://kotlinlang.org/docs/multiplatform-add-dependencies.html">Adding dependencies on multiplatform libraries</a></li>
+<li><a href="https://kotlinlang.org/docs/gradle-configure-project.html#configure-dependencies">Configure dependencies</a></li>
+<li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-connect-to-apis.html">Use platform-specific APIs</a></li>
+<li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-multiplatform-resources.html">Resources overview</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[赶紧上车开启Compose大前端之路]]></title>
@@ -210,6 +362,7 @@
 <ul>
 <li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html">Get started with Kotlin Multiplatform</a></li>
 <li><a href="https://kotlinlang.org/docs/multiplatform-intro.html">Introduction to Kotlin Multiplatform</a></li>
+<li><a href="https://getstream.io/blog/build-app-kotlin-multiplatform/">Build Your First Android and iOS Mobile App With Kotlin Multiplatform</a></li>
 </ul>
 
 ]]></content>
@@ -884,344 +1037,6 @@ fun GetContentExample() {
 <li><a href="https://developer.android.com/training/basics/intents/result">Get a result from an activity</a></li>
 <li><a href="https://stackoverflow.com/questions/64721218/jetpack-compose-launch-activityresultcontract-request-from-composable-function">Jetpack Compose: Launch ActivityResultContract request from Composable function</a></li>
 <li><a href="https://developer.android.com/develop/ui/compose/libraries">Compose and other libraries</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[喜迎国庆，用Compose赶制一面五星红旗]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/10/11/waving-flag-with-compose/"/>
-    <updated>2024-10-11T22:38:22+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/10/11/waving-flag-with-compose</id>
-    <content type="html"><![CDATA[<p>我们学习Jetpack Compose已经有一段时间了，通过前面的学习已能掌握足够的技巧以在实战中应用。恰逢普天庆国庆，利用我们学过的知识，使用Jetpack Compose来画一个迎风飘扬的五星红旗吧！废话不多说，先来看一眼效果图。</p>
-
-<p><a href=""><img src="file:///Users/alexhilton/Downloads/compose_libs/red_flag.gif" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>五星红旗的设计标准</h2>
-
-<p>需要特别注意，五星红旗有明确的设计标准的，在<a href="https://www.gov.cn/xinwen/2020-12/24/content_5572913.htm">国旗法中有明确的制法说明</a>。</p>
-
-<p>总结一下要点：宽与高之比为3比2，五颗星都在左上四分之一小矩形内，最大五角星直径约为高的十分之一，四个小五角星的一个角要指向大五角星的中心。</p>
-
-<h2>如何画五角星</h2>
-
-<p>五星红旗并不是特别复杂，拆解一下，其组成图案就是矩形和五角星了，矩形是基本的图形可以直接画。需要研究一下五角星怎么画。</p>
-
-<p>画对称多边形的方法都要借助圆，因为几何图形最容易画的同时也是最标准的就是圆了，再借助角度从圆上取点，把点连成线就是多边形。多边形的顶角度数不一样，因此把圆分成多少份，就能画出不同的多边形了。</p>
-
-<p>五角星也要借助圆，把五角星五个顶点连线就是一个正五边形了，所以在圆上取5个等分点，也即每隔72度取一个点，然后把这5个点每隔一点连成线，就是五角星了。如下图所示：</p>
-
-<p><img src="https://www.algebra.com/cgi-bin/plot-formula.mpl?expression=drawing%28330%2C330%2C-6.6%2C6.6%2C-6.6%2C6.6%2Cgrid%280%29%2C%0D%0Ared%28circle%280%2C0%2C6%29%29%2Cline%280%2C6%2C3.527%2C-4.854%29%2Clocate%285.8%2C1.9%2CP%29%2C%0D%0Aline%280%2C6%2C-3.527%2C-4.854%29%2Cline%28-3.527%2C-4.854%2C5.706%2C1.854%29%2C%0D%0Aline%28-5.706%2C1.854%2C5.706%2C1.854%29%2Cline%28-5.706%2C1.854%2C3.527%2C-4.854%29%2C%0D%0Ared%28arrow%280%2C0%2C6.562%2C2.132%29%29%2Cred%28arc%280%2C0%2C4.4%2C4.4%2C-18%2C0%29%29%2C%0D%0Alocate%282.2%2C1%2Cred%2890%5Eo-72%5Eo=18%5Eo%29%29%2Cred%28arc%280%2C0%2C8%2C8%2C-90%2C-18%29%29%2C%0D%0Alocate%282.8%2C3.5%2Cred%2872%5Eo%29%29%2Cgreen%28arrow%280%2C0%2C3.879%2C5.34%29%29%2C%0D%0Agreen%28arc%280%2C0%2C2.2%2C2.2%2C-90%2C-54%29%29%2Clocate%280.1%2C2%2Cgreen%2836%5Eo%29%29%0D%0A%29" alt="图2. 五角星画法" /></p>
-
-<p>这种画法对手工尺规作图很友好，对程序来说，就没那么友好了。程序化的API需要明确的坐标点，把点串连成路径（Path）。这里需要的五角星是填充的，所以如果能知道5个顶点，和凹进来的五个点，只要把这10个点串起来，就能组成一个闭合的图形，得到我们想要五角星了。</p>
-
-<p>五角星的外面五个点和内部五个点能组成两个正五边形，这两个正五边形的外接圆是两个同心圆，外顶点与内顶点刚好相差36度，正五边形的顶点之间是72度。所以，我们通过画两个半径不同的同心圆，每个圆分成5份，大圆的点与小圆的点交错开，就能画出一个五角星了。圆心和半径是关键的参数，通过圆心与半径，就能精细调整五角星的形状。</p>
-
-<p><img src="https://mathalino.com/sites/default/files/images/005-planegeom-pentagram.jpg" alt="图3. 填充式五角星" /></p>
-
-<p>因为五角星是填充色，所以我们把最外层的五个点与内层的五个点连串一起组成一个闭合的图形。通过前面的<a href="https://juejin.cn/post/7381826917086920742">降Compose十八掌之『利涉大川』| Canvas</a>学习，我们知道可以用路径（Path）来画图形，一共10个点把圆分成10分，所以角度是36度，半径是一大一小交错开来：</p>
-
-<pre><code class="Kotlin">   val path = Path().apply {
-        val pointNumber = 5
-        val angle = PI.toFloat() / pointNumber
-        val innerRadius = radius * cos(angle) / 2f
-
-        for (i in pointNumber * 2 downTo 0) {
-            val r = if (i % 2 == 1) radius else innerRadius
-            val omega = angle * i
-
-            val x = center.x + r * sin(omega)
-            val y = center.y + r * cos(omega)
-            lineTo(x, y)
-        }
-    }
-
-    drawPath(
-        path = path,
-        color = color,
-        style = Fill
-    )
-</code></pre>
-
-<h2>画五星红旗</h2>
-
-<p>根据制法以及画五角星的方法，我们总结一下设计要点：</p>
-
-<ol>
-<li>用一个高height作为主要参数，那么宽就是其1.5倍，其他的参数都与height有关系，所以改变height就可以完全控制整个旗子的大小；</li>
-<li>大五星圆心x是宽的1/6，y是height的1/4，可以看出比例是一致的，所以可以先计算y，再乘1.5就是x；</li>
-<li>大五星的外接圆直径约是height的3/10，半径就是高度的3/20，这样大五星就完全确定了；</li>
-<li>小五星的直径是高的1/10，半径就是1/20；从上到下命名为a，b，c，d；</li>
-<li>小五星a的圆心x在宽的1/3，y在高的1/10</li>
-<li>小五星b的圆心x在宽的2/5，y在高的1/5</li>
-<li>小五星c的圆心x在宽的2/5，y在高的7/20</li>
-<li>小五星d的圆心x在宽的1/3，y在高的9/20</li>
-<li>小五星的角要对着大五星的圆心，也就是要把小五星旋转一下。一个办法对Path做变幻，但其实不用那么复杂。我们在画五角星时，选择点时加上一个偏移角度beta就可以了，这样尖角就有旋转角度了。这个旋转角度可以用小五星的圆心与alpha的圆心来求得，就是这两个圆心连线与水平x轴的夹角，用反正切atan来求。</li>
-</ol>
-
-
-<p>综上，就可以写代码啦：</p>
-
-<pre><code class="Kotlin">@Composable
-fun FiveStarsRedFlag(height: Dp = 200.dp) {
-    val stickWidth = 10.dp
-    val flagWidth = height.times(1.5f)
-    val flagHeight = height
-    val canvasWidth = flagWidth.plus(stickWidth)
-    val canvasHeight = height.times(2f)
-
-    Canvas(modifier = Modifier.size(canvasWidth, canvasHeight)) {
-        // The background
-        drawRect(color = Color.Red, size = Size(flagWidth.toPx(), flagHeight.toPx()))
-
-        // The stick
-        drawRect(color = Color.LightGray, size = Size(stickWidth.toPx(), canvasHeight.toPx()))
-
-        val centerY = flagHeight.toPx() / 4f
-        val centerX = flagWidth.toPx() / 6f
-        val radius = flagHeight.toPx() * 3f / 20f
-        val smallRadius = flagHeight.toPx() / 20f
-        val alphaCenter = Offset(centerX, centerY)
-
-        // 大五角星 alpha
-        drawStar(
-            alphaCenter = alphaCenter,
-            center = alphaCenter,
-            radius = radius,
-            color = Color.Yellow
-        )
-
-        // 小五星 a
-        drawStar(
-            alphaCenter = alphaCenter,
-            center = Offset(flagWidth.toPx() / 3f, flagHeight.toPx() / 10f),
-            radius = smallRadius,
-            color = Color.Yellow
-        )
-
-        // 小五星 b
-        drawStar(
-            alphaCenter = alphaCenter,
-            center = Offset(flagWidth.toPx() * 0.4f, flagHeight.toPx() / 5f),
-            radius = smallRadius,
-            color = Color.Yellow
-        )
-
-        // 小五星 c
-        drawStar(
-            alphaCenter = alphaCenter,
-            center = Offset(flagWidth.toPx() * 0.4f, flagHeight.toPx() * 7 / 20f),
-            radius = smallRadius,
-            color = Color.Yellow
-        )
-
-        // 小五星 d
-        drawStar(
-            alphaCenter = alphaCenter,
-            center = Offset(flagWidth.toPx() / 3f, flagHeight.toPx() * 9 / 20f),
-            radius = smallRadius,
-            color = Color.Yellow
-        )
-   }
-}
-
-fun DrawScope.drawStar(alphaCenter: Offset, center: Offset, radius: Float, color: Color) {
-    val pointNumber = 5
-    val angle = PI.toFloat() / pointNumber
-    val innerRadius = radius * cos(angle) / 2f
-
-    val beta = if (alphaCenter == center) {
-        0f
-    } else {
-        PI.toFloat() / 2f - atan((center.y - alphaCenter.y) / (center.x - alphaCenter.x))
-    }
-
-    val path = Path().apply {
-        for (i in 0 .. pointNumber * 2) {
-            val r = if (i % 2 == 1) radius else innerRadius
-            val omega = angle * i + beta
-
-            val x = center.x + r * sin(omega)
-            val y = center.y + r * cos(omega)
-            lineTo(x, y)
-        }
-        close()
-    }
-
-    drawPath(
-        path = path,
-        color = color,
-        style = Fill
-    )
-}
-</code></pre>
-
-<p>为了检查画图结果是否符合设计，我们可以画出制法中的那样的格子：</p>
-
-<pre><code class="Kotlin">        if (DEBUG) {
-            val strokeWidth = 0.8.dp.toPx()
-
-            // Slice
-            drawLine(
-                Color.Black,
-                Offset(stickWidth.toPx(), flagHeight.toPx() / 2f),
-                Offset(flagWidth.toPx(), flagHeight.toPx() / 2f),
-                strokeWidth = strokeWidth * 2f
-            )
-
-            drawLine(
-                Color.Black,
-                Offset(flagWidth.toPx() / 2f, 0f),
-                Offset(flagWidth.toPx() / 2f, flagHeight.toPx()),
-                strokeWidth = strokeWidth * 2f
-            )
-
-            // Grid
-            for (i in 1 until 10) {
-                drawLine(
-                    Color.Black,
-                    Offset(stickWidth.toPx(), flagHeight.toPx() * i / 20f),
-                    Offset(flagWidth.toPx() / 2f, flagHeight.toPx() * i / 20f),
-                    strokeWidth = strokeWidth
-                )
-            }
-
-            for (i in 1 until 14) {
-                drawLine(
-                    Color.Black,
-                    Offset(stickWidth.toPx() + flagWidth.toPx() * i / 30f, 0f),
-                    Offset(stickWidth.toPx() + flagWidth.toPx() * i / 30f, flagHeight.toPx() / 2f),
-                    strokeWidth = strokeWidth
-                )
-            }
-       }
-</code></pre>
-
-<p>拿带格子的效果图，与制法设计图对比，可以发现一模一样，完全符合设计。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/flag_with_grid.png" alt="图4. 带格子的效果图" /></p>
-
-<p>好了，到这里，我们的五星红旗就画完了。未完，别走啊，我们还要让旗子飘扬起来。</p>
-
-<h2>让五星红旗飘扬起来</h2>
-
-<p>旗子飘扬的真实形态是三维的曲面，比如用三角函数曲面计算每一个坐标点x, y, z，就像<a href="https://juejin.cn/post/7206950454098247736">这篇文章</a>中的做法那样。</p>
-
-<p>但在Compose中无法实现，因为Compose，虽然也可以做三维的变幻，但都是针对整个图层的，没有办法针对图形中的每个坐标点去单独做变幻，这也是与三维图形库如OpenGL ES的最大区别。</p>
-
-<p>在Compose中要想每个坐标点都不一样，只能绘制曲线，曲线 的点再由动画动态的去改变，这样就会有类似波动一样的效果，但都局限在二维。为此，我们需要用Path来画背景，上边和下边都用曲线，曲线的点用动画来不断的波动，这样就能有点波动的感觉了：</p>
-
-<pre><code class="Kotlin">    val infiniteTransition = rememberInfiniteTransition(label = "infinite transition")
-
-    val amplitude = with(LocalDensity.current) { height.div(8f).toPx() }
-    val heightPx = with(LocalDensity.current) { height.toPx() }
-
-    val waveDuration = 2000
-    val ya by infiniteTransition.animateFloat(
-        initialValue = amplitude / 2f,
-        targetValue = -amplitude / 2f,
-        animationSpec = infiniteRepeatable(tween(waveDuration), RepeatMode.Reverse),
-        label = "ya"
-    )
-    val yb by infiniteTransition.animateFloat(
-        initialValue = -amplitude / 2f,
-        targetValue = amplitude / 2f,
-        animationSpec = infiniteRepeatable(tween(waveDuration), RepeatMode.Reverse),
-        label = "yb"
-    )
-    val yc by infiniteTransition.animateFloat(
-        initialValue = amplitude / 2f,
-        targetValue = -amplitude / 2f,
-        animationSpec = infiniteRepeatable(tween(waveDuration), RepeatMode.Reverse),
-        label = "yc"
-    )
-
-    val ye by infiniteTransition.animateFloat(
-        initialValue = heightPx + amplitude / 2f,
-        targetValue = heightPx - amplitude / 2f,
-        animationSpec = infiniteRepeatable(tween(waveDuration), RepeatMode.Reverse),
-        label = "ye"
-    )
-    val yf by infiniteTransition.animateFloat(
-        initialValue = heightPx - amplitude / 2f,
-        targetValue = heightPx + amplitude / 2f,
-        animationSpec = infiniteRepeatable(tween(waveDuration), RepeatMode.Reverse),
-        label = "yf"
-    )
-    val yg by infiniteTransition.animateFloat(
-        initialValue = heightPx + amplitude / 2f,
-        targetValue = heightPx - amplitude / 2f,
-        animationSpec = infiniteRepeatable(tween(waveDuration), RepeatMode.Reverse),
-        label = "yg"
-    )
-
-    Canvas(
-        modifier = Modifier.size(canvasWidth, height)
-    ) {
-        val stickOffset = Offset(stickWidth.toPx(), 0f)
-
-        // The background
-        val pathBG = Path().apply {
-            moveTo(0f, 0f)
-            cubicTo(flagWidth.toPx() / 3f, ya, flagWidth.toPx() * 2f / 3f, yb, flagWidth.toPx(), yc)
-
-            lineTo(flagWidth.toPx(), ye)
-
-            cubicTo(flagWidth.toPx() * 2f / 3f, yf, flagWidth.toPx() / 3f, yg, 0f, size.height)
-
-            lineTo(0f, 0f)
-
-            translate(stickOffset)
-        }
-        drawPath(path = pathBG, color = Color.Red, style = Fill)
-   }
-</code></pre>
-
-<p>也可以用GraphicsLayer，再添加一点点Y轴和Z轴的旋转，就更像那么回事了：</p>
-
-<pre><code class="Kotlin">val rotateY by infiniteTransition.animateFloat(
-        initialValue = -3f,
-        targetValue = 6f,
-        animationSpec = infiniteRepeatable(tween(3000), RepeatMode.Reverse),
-        label = "rotateY"
-    )
-Canvas(
-        modifier = Modifier
-            .size(canvasWidth, height)
-            .graphicsLayer {
-                transformOrigin = TransformOrigin(0f, 0f)
-                rotationZ = 2f
-                rotationY = rotateY
-            }
-    ) { ... }
-</code></pre>
-
-<p>至此，我们的五星红旗就算做完了，当然了可对背景的左边和右边也加上波动，就会更像一些了，完整代码可以<a href="https://github.com/alexhilton/EffectiveCompose/blob/main/app/src/main/java/net/toughcoder/effectivecompose/WavingFlag.kt">看这里</a>。</p>
-
-<p>让我们小结一下，看似简单的一个五星红旗，实现起来其实并不容易，用到了好多数学知识，书到用时方恨少，数学真的太重要了，无处不在。UI开发会涉及大量的数学（特别是几何）知识，要想做好UI必须 要有良好的数学功底，难度并不小。</p>
-
-<h2>仅供娱乐，请勿参考</h2>
-
-<p>以上的实现方式其实仅供娱乐，在真实的项目中不建议这样一笔一笔的用Canvas来画。建议的实现方式应该是找一个（或者让设计师提供）现成的五星红旗图形资源，然后当成图片来展示 出来。</p>
-
-<p>这样做的好处是把设计与代码实现分离开来，当需要调整设计效果时，不必去修改代码，毕竟替换一个资源比起修改代码的风险要小很多，虽然说可能也只是调整一个整数（颜色），但毕竟是改代码了，风险还是有的。再者，分离开来能让设计工作由更为专业的人士来做，而不必受到（或者考虑）代码实现的限制。还有就是，用代码一笔一笔的画，无论研发效率还是运行效率其实都不高，远不如显示一张图片性能好。</p>
-
-<h2>最后</h2>
-
-<p>祝愿伟大的祖国繁荣昌盛，国泰民安！祝愿所有的朋友国庆快乐，天天开心！</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://codepen.io/jonkemp/pen/EVgaLR">Five-pointed star using CSS</a></li>
-<li><a href="https://stackoverflow.com/questions/14580033/algorithm-for-drawing-a-5-point-star">Algorithm for drawing a 5 point star</a></li>
-<li><a href="https://www.instructables.com/How-to-draw-a-5-point-star/">How to Draw a 5-point Star</a></li>
-<li><a href="https://codepen.io/udit007/pen/XWJooNQ">Waving Flag animation with CSS</a></li>
-<li><a href="https://codepen.io/christopheschwyzer/pen/nMoWBa">CSS3 Waving Flags</a></li>
 </ul>
 
 ]]></content>
