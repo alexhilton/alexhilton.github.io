@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-01-02T22:15:54+08:00</updated>
+  <updated>2025-02-04T17:22:36+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,164 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Compose多平台 (CMP) 开发的四个实用技巧]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/02/04/tips-to-migrate-to-kmp/"/>
+    <updated>2025-02-04T17:21:07+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/02/04/tips-to-migrate-to-kmp</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/4-useful-tips-for-compose-kotlin-multiplatform-kmp-8809ba1cac51">Four useful tips for Compose Kotlin Multiplatform (KMP)</a></p></blockquote>
+
+<p><strong>译注：</strong> 这篇文章虽然比较短，但提到的问题还是比较具体和典型的，针对CMP项目的一些配置还是很有借鉴意义的。</p>
+
+<p><a href="">Error processing input, expected syntax: {% img [class name(s)] [http[s]:/]/path/to/image [width [height]] [title text | &#8220;title text&#8221; [&#8220;alt text&#8221;]] %}</a></p>
+
+<!-- more -->
+
+
+<h2>简介</h2>
+
+<p>正如我在上一篇文章<a href="https://medium.com/@lizarraga.iosu/a-complete-migration-of-a-multi-module-app-to-compose-kotlin-multiplatform-kmp-682905266bde">《将多模块应用程序完全迁移到 Compose Kotlin Multiplatform (KMP)》</a>中所说，上个月我一直在将现有的多模块应用程序迁移到 Compose Multiplatform，除此之外，我还从头开始创建一个新的 Compose Multiplatform 多模块项目。在这两个项目中，我都遇到了相同的“问题”或者说“阻碍”，因此，如果您正在迁移或从头开始启动 CMP 项目，那么本文就是为你量身定做的。</p>
+
+<h2>提示 1：预览</h2>
+
+<p>KMP 不支持 commonMain 目录Compose组件的预览，因此我想到了在 androidMain 目录中创建它们，并且它们的预览运行得很好。</p>
+
+<blockquote><p><strong>译注：</strong>此文原文发布于2024年12月初，彼时非Android侧的源码确实无法Preview，后来JetBrains解决了这个问题，通过一个<a href="https://plugins.jetbrains.com/plugin/16541-compose-multiplatform-ide-support">支持桌面Compose的插件</a>。</p></blockquote>
+
+<p>例如：</p>
+
+<pre><code class="bash">commonMain/com/example/feature/component/FeatureScreen.kt
+androidMain/com/example/feature/component/FeatureScreenPreview.kt
+</code></pre>
+
+<h2>提示 2：BackHandler</h2>
+
+<p>KMP 不支持 BackHandler 操作，因此我创建了一个用于屏幕的expect函数，并在 androidMain 中的actual函数上添加了 BackHandler 操作，并将 iosMain 留空（因为我在 iOS 中没有找到类似的操作）。</p>
+
+<p>例如：</p>
+
+<pre><code class="Kotlin">// commonMain/ com.example.feature.component.FeatureScreen.kt
+@Composable
+expect fun FeatureScreen(
+    viewModel: FeatureScreenViewModel,
+)
+
+@Composable
+internal fun Content(
+    viewModel: FeatureScreenViewModel,
+) {
+    ...
+}
+</code></pre>
+
+<pre><code class="Kotlin">// androidMain/ com.example.feature.component.FeatureScreenActual.kt (needs a name different from common)
+@Composable
+actual fun FeatureScreen(
+    viewModel: WorkScreenViewModel,
+) {
+    BackHandler { viewModel.onIntent(WorkIntent.Back) }
+
+    Content(
+        viewModel = viewModel,
+    )
+}
+// extra: I have joined the preview in this same class to have it better organized.
+</code></pre>
+
+<pre><code class="Kotlin">// iosMain/ com.example.feature.component.FeatureScreenActual.kt (needs a name different from common)
+@Composable
+actual fun FeatureScreen(
+    viewModel: WorkScreenViewModel,
+) {
+    Content(
+        viewModel = viewModel,
+    )
+}
+</code></pre>
+
+<h2>提示 3：测试模拟</h2>
+
+<p>我喜欢使用 <a href="https://mockk.io/">mockk</a> 库进行模拟测试，在撰写本文时，KMP 尚不支持该库，因此我决定在 androidUnitTest 目录中创建 UnitTest，并将库依赖项添加到 androidUnitTest.dependencies {} 块中。</p>
+
+<p>对于此类测试，我使用了支持 KMP 的 kotlin-test jetbrains 库。</p>
+
+<p>例如：</p>
+
+<pre><code class="Kotlin">mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk-version" }
+kotlin-test = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin-version" }
+</code></pre>
+
+<pre><code class="Kotlin">// feature build.gradle.kts
+kotlin {
+    ...
+
+    sourceSets {
+        androidUnitTest.dependencies {
+            implementation(libs.mockk)
+        }
+
+        commonTest.dependencies {
+            implementation(libs.kotlin.test)
+        }
+    }
+}
+</code></pre>
+
+<pre><code class="bash">androidUnitTest/com/example/feature/usecase/UseCaseTest.kt
+</code></pre>
+
+<h2>提示 4：UI 测试</h2>
+
+<p><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-test.html">官方的 Compose 多平台 UI 测试指南</a>指出，必须使用commonTest 目录进行 UI 测试，但我更喜欢使用androidInstrumentedTest目录，因为使用这种方法，我可以将单元测试与 UI 测试分开，并且我可以直接从同一个测试类执行它们，并从目录运行所有 UI 测试。</p>
+
+<p>例如：</p>
+
+<pre><code class="Kotlin">mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk-version" }
+ui-test-junit4-android = { group = "androidx.compose.ui", name = "ui-test-junit4-android", version.ref = "uiTestJunit4AndroidVersion" }
+ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest", version.ref = "uiTestManifestVersion" }
+kotlin-test = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin-version" }
+</code></pre>
+
+<pre><code class="Kotlin">// feature build.gradle.kts
+plugins {
+    ...
+    alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.compose)
+}
+
+kotlin {
+    ...
+
+    sourceSets {
+        androidInstrumentedTest.dependencies {
+            implementation(libs.mockk.android)
+            implementation(libs.ui.test.junit4.android)
+        }
+
+        commonTest.dependencies {
+            implementation(libs.kotlin.test)
+            @OptIn(ExperimentalComposeLibrary::class)
+            implementation(compose.uiTest)
+        }
+    }
+}
+
+...
+
+dependencies {
+    debugImplementation(libs.ui.test.manifest)
+}
+</code></pre>
+
+<pre><code class="bash">androidInstrumentedTest/com/example/feature/component/ScreenAndroidTest.kt
+</code></pre>
+
+<h2>结论</h2>
+
+<p>在本文中，我们看到了一些 Compose Multiplatform 技巧，希望您觉得它们有用。感谢您阅读本文，欢迎提供任何反馈。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[关于Android 16你想知道的都在这里]]></title>
@@ -669,209 +827,6 @@ Text(stringResource(Res.string.app_name))
 <li><a href="https://kotlinlang.org/docs/gradle-configure-project.html#configure-dependencies">Configure dependencies</a></li>
 <li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-connect-to-apis.html">Use platform-specific APIs</a></li>
 <li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-multiplatform-resources.html">Resources overview</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[赶紧上车开启Compose大前端之路]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/11/17/compose-multiplatform-made-easy/"/>
-    <updated>2024-11-17T20:33:51+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/11/17/compose-multiplatform-made-easy</id>
-    <content type="html"><![CDATA[<p>在<a href="https://juejin.cn/column/7367555191338467337">前面的文章中</a>，我们一再强调Jetpack Compose是一个声明式的UI框架，尽管我们都是基于Android开发来实战的，但Compose并不局限于Android开发，它其实与特定的开发平台没有关系，是可以做到跨平台开发的。事实上JetBrains早就已经准备好了一套工具，以让Compose跨平台，开发多端应用，跻身于大前端的一员。今天就来学习一下如何使用Compose进行大前端开发。</p>
-
-<p><a href=""><img src="https://dev-to-uploads.s3.amazonaws.com/uploads/articles/j9tap6mygsqvxh6aauc8.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>缘起</h2>
-
-<p>时光荏苒，白云苍狗，自乔帮主发布iPhone开启移动互网联至今已有十余载。对于互联网应用来说，早已从最初的Android加iOS两端并行，发展到现在的大前端时代。时至今日，不论大厂小厂，多端拉齐（Web，Android, iOS, Desktop，鸿蒙）已经是一个标配和强需求。那么如何减少多端的重复开发，如何跨多端开发就成了一个永不过时的研究方向。从最初的Mobile H5，到Hybrid App，再到React Native，再到后来的Flutter，大前端已经得到了长足的发展。得益于Kotlin Multiplatform（KMP），Compose也有了跨端的能力，跻身于大前端工具之列。</p>
-
-<p>在深入主题学习之前，我们先来理解一下重要的概念。</p>
-
-<h2>概念理解</h2>
-
-<p>为了避免混淆和加强理解，需要对一些概念进行澄清。</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;"> 概念 </th>
-<th style="text-align:left;"> 缩写 </th>
-<th style="text-align:left;"> 说明 </th>
-<th style="text-align:left;"> 开发者 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;"> Jetpack Compose </td>
-<td style="text-align:left;"> Compose </td>
-<td style="text-align:left;"> 基于Kotlin语言的声明式UI开发框架，与平台无关，源于以及主要用于Android开发 </td>
-<td style="text-align:left;"> Google </td>
-</tr>
-<tr>
-<td style="text-align:left;"> Compose Multiplatform </td>
-<td style="text-align:left;"> CMP </td>
-<td style="text-align:left;"> 用于把Compose转化为多端的一个框架 </td>
-<td style="text-align:left;"> JetBrains </td>
-</tr>
-<tr>
-<td style="text-align:left;"> Kotlin Multiplatform </td>
-<td style="text-align:left;"> KMP </td>
-<td style="text-align:left;"> 把Kotlin编译为多端的框架，这是Compose能跨平台的根基 </td>
-<td style="text-align:left;"> JetBrains </td>
-</tr>
-</tbody>
-</table>
-
-
-<p>为了简便，在后文以及以后的文章中将使用缩写。虽然严格来说CMP专指把Compose转化为多端的UI框架，但大部分场合也用它来代指Compose跨端开发，后面也会这样用。</p>
-
-<p><strong>注意：</strong> 在早些时候，也就是在JetBrains刚推出KMP的时候，仅针对和支持Android和iOS两个平台，所以当时就叫做Kotlin Multiplatform Mobile，缩写为KMM，后来也能编译出桌面（Desktop）和Web端了，就把Mobile去掉了，就是现在的KMP，代表Kotlin Multiplatform。所以，如果 在其他地方看到了KMM，把它当成KMP就可以了。</p>
-
-<h2>Compose大前端技术栈</h2>
-
-<p>在继续深入之前，捋捋技术栈，从大的角度来了解一下用到的技术工具的关系是很有必要的。</p>
-
-<p>仍是用Jetpack Compose来写UI，用Kotlin来写业务逻辑，这是个是没有变的。而Compose Multiplatform（CMP）相当于是一个转换工具，能把Compose写的UI转变成为不同平台的UI实现。编程语言用的是都是Kotlin，最终要依赖KMM编译出具体平台的目标文件（Target）。所以，它们三个是依赖关系Compose依赖CMP，它们又都依赖KMM。</p>
-
-<p>最先出现的当然是编程语言Kotlin，之后Google推出了声明式UI框架Jetpack Compose，采用了Kotlin语言。随着Kotlin的发展，JetBrains推出了KMP，让Kotlin实现跨多端，在这之后又基于Compose，推出了CMP，因为都是Kotlin语言，与KMP一起凑成了Compose/Kotlin的跨端。现在谷歌也与JetBrains紧密的合作，一起努力把Compose往前推进，去挑战React Native和Flutter。</p>
-
-<p>学习成本并不高，因为对于开发者来说仍旧是Compose和Kotlin，CMP和KMP是透明的，它们以插件和依赖库的形式存在，没有额外的学习成本。当然，这对Android开发同学来说更为友好一些，因为大部分Android开发同学早已掌握了Compose和Kotlin。</p>
-
-<h2>开发环境搭建</h2>
-
-<p>CMP的技术栈并不复杂，如果已具备Android开发环境，那基本上就齐活儿了，这再次说明CMP对Android开发同学是相当友好的。开发用的IDE就是Android Studio，编译工具用的是Gradle，这对Android同学来说已经是标配了，不熟悉的同学可自行Google。</p>
-
-<p>唯一需要安装的就是KMP的插件（plugin），也即Android Studio中，到插件市场搜索Kotlin Multiplatform，这是JetBrains官方提供的插件，找到后可放心安装，之后重启AS即可。</p>
-
-<p>以上是通用开发配置，但如果目标平台是iOS就略麻烦一些。此小节后面的内容，仅当目标平台包含iOS时需要，否则可以跳过。</p>
-
-<p><strong>注意：</strong> Mac虽然也是水果系统，但Mac属于桌面端（Desktop），如果为Mac构建应用要选择Desktop为目标平台。</p>
-
-<p>因为水果的生态是封闭的，要想构建iOS就必须要用Xcode，而Xcode只在Mac上面才能用，所以要想构建iOS端应用，必须要用Mac来开发，而且要是新一点的Mac（三年以内）。然后安装最新的Xcode就差不多了，官方提供了一个Mac上为iOS环境的检查工具kdoctor（用brew install kdoctor来安装），但其实如果配置了Android开发环境后，再装上Xcode就够了。</p>
-
-<p><strong>注意：</strong> 如果是比较旧的Mac，Big Sur以前的，就不用再折腾了，无法构建iOS，因为构建iOS需要Xcode 12.5，而<a href="https://developer.apple.com/support/xcode/">Xcode 12.5又至少需要macOS 11.7（即Big Sur）</a>。环境检查工具kdoctor本身也是要求Xcode 12.5以上，建议在安装之前可以先用brew info kdoctor来检查一下。水果就这点不好，硬件和软件更新都特别快，向后兼容又不友好，最多支持三个版本（时间跨度在3年左右）。</p>
-
-<h2>创建一个多端应用</h2>
-
-<p>环境配置好后，就可以开始创建CMP了，官方提供了一个<a href="https://kmp.jetbrains.com/?_gl=1*271nsz*_gcl_au*MTE5MzE4NTY0NS4xNzMxMzIzNDU3*_ga*MzUyNjc2MzcuMTU5NDM3NDQ0MA..*_ga_9J976DJZ68*MTczMTQwMDc1MC4xOC4wLjE3MzE0MDA3NTAuNjAuMC4w">KMP项目创建向导</a>可以方便的生成一个项目模板。需要注意的是就是，如果要构建iOS，一定要勾选『Share UI』。</p>
-
-<p><strong>注意：</strong> 要想构建iOS目标需要较新的Mac才可以，如果开发环境不是Mac，或者Mac较旧，就不用钩选iOS了，因为选了也无法构建出来和运行目标产物。</p>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/multiplatform-web-wizard.png" alt="图1. CMP项目创建向导" /></p>
-
-<p>在创建向导中配置好后，点击下载就可以了。解压之后，用Android Studio打开（File | Open）项目文件，就可以开始CMP的开发了。注意，要直接打开解压出来的根目录，而不是里面的某个子目录。因为AS打开的项目默认使用专为Android开发优化后的视图结构「Android」，为了更方便需要切换为「Project」。</p>
-
-<p>可以看一眼项目结构，与常规的Android项目相比差不多，包含了两个模块（module）：</p>
-
-<ul>
-<li>composeApp 这是最主要的模块，可以说东西都在这里面。它是一个Kotlin模块（Kotlin module），包含了多端共用代码，以及不同平台的定制代码。使用Gradle来构建，用Gradle的脚本来描述构建方式。</li>
-<li>iosApp 这是一个完整的Xcode项目，主要用于构建iOS目标，它会依赖于composeApp。</li>
-</ul>
-
-
-<p><strong>注意：</strong> 如果在<a href="https://kmp.jetbrains.com/?_gl=1*zmaxre*_gcl_au*NDM5ODU1NDAyLjE3Mjc1OTk1MDU.*_ga*MzEyMDU2NTg5LjE2NzQwMDg5NjM.*_ga_9J976DJZ68*MTczMTQwMTE0NC45NC4xLjE3MzE0MDExNDguNTYuMC4w">项目创建向导</a>中没有钩选iOS，将不会有模块iosApp，以及composeApp中的iosMain。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/cmp-structure.png" alt="图2. 项目结构" /></p>
-
-<p>重点需要关注<strong>composeApp</strong>，它包含了几个源码集合（source sets）：</p>
-
-<ul>
-<li>commonMain 这是最主要的集合，包含共享代码，由一个composable函数作为入口开始（如App()）开始。这里应该是项目的主要代码集合。</li>
-<li>androidMain 包含与Android平台相关的代码，包括入口（如Android manifest和Activity），入口会调用commonMain中的入口composable。以及提供平台特定的定制化实现。</li>
-<li>desktopMain 桌面端的入口，以及定制化实现。</li>
-<li>iosMain 水果移动端的入口，以及定制化实现。</li>
-<li>wasmJsMain Web端的入口，以及定制化实现。</li>
-</ul>
-
-
-<p><strong>注意：</strong> 源码集的具体数量取决于创建项目时钩选的目标平台。</p>
-
-<p>源码集合（source set）构建工具Gradle的一个概念，它包含逻辑上相关的一坨源码文件，资源文件，以及其依赖，对于Android开发同学来说这个概念并不陌生。</p>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/module-structure.png" alt="图3. 项目源码集合关系" /></p>
-
-<p>这种项目源码集合关系是由KMP定义的，编译构建的时候common部分会编译成为一个依赖组件，平台部分把common当成一个依赖使用，然后最终构建出目标产物，详细的过程可以<a href="https://kotlinlang.org/docs/multiplatform-discover-project.html">看KMP的文档</a>。</p>
-
-<p>这个模板有默认的页面，可以看一下，打开文件commonMain中的App.kt，它包含一个composable函数App()，这就是CMP的入口，可以从这里开始用Compose写应用了。</p>
-
-<h2>构建与运行</h2>
-
-<p>项目创建向导创建出来的模板项目，包含了基本的页面，可以直接构建和运行。</p>
-
-<p><strong>注意：</strong> 首次打开项目会比较慢，这是因为要下载Gradle工具链以及项目的依赖，视网络情况，可能需要几分钟到十几分钟不等，之后就能秒开。</p>
-
-<p><strong>注意：</strong> 创建出来的项目依赖用的都比较新，比如像Android开发插件AGP可能会用8.5.2，但AGP的版本受制于Android Studio，<a href="https://developer.android.com/build/releases/gradle-plugin#android_gradle_plugin_and_android_studio_compatibility">AGP与AS的兼容对应关系可以看这里</a>。如果使用的AS版本较旧，需要调整AGP的版本。</p>
-
-<p>待Gradle sync完成之后，就可以运行了。</p>
-
-<h3>运行Android app</h3>
-
-<p>对于Android app来说可以直接运行，在运行配置那里选择「composeApp」，连上手机（或者模拟器），运行就可以了。</p>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/compose-run-android.png" alt="图4. 运行Android app" /></p>
-
-<h3>运行桌面端（Desktop）App</h3>
-
-<p>桌面端没有默认运行配置，需要创建一个。在菜单中编辑运行配置（Run | Edit Configurations），点左上的加号，选择「Gradle」，输入个名字如「desktopRun」，然后在配置那一侧中的「Tasks and arguments」输入：</p>
-
-<pre><code class="Bash">composeApp:run
-</code></pre>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/compose-run-desktop-temp.png" alt="图5. 运行桌面端App" />
-之后，选择「desktopRun」运行即可。</p>
-
-<h3>运行iOS app</h3>
-
-<p>如果选择了iOS的话，也有默认运行配置，可直接运行。但水果的东西必须依赖于水果的工具，所以要先打开Xcode，打开就行，放在一边不用做啥。然后回到AS，选择「iosApp」，运行，如果顺利，在Xcode那头就会启动iOS的模拟器，并运行App了。</p>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/compose-run-ios.png" alt="图6. 运行iOS app" /></p>
-
-<p><strong>注意：</strong> 要想运行iOS，Xcode版本必须要在12.5以上，因为iOS构建方式是基于Xcode 12.5的。</p>
-
-<h2>运行Web app</h2>
-
-<p>Web端也没有默认配置，需要像桌面端那样创建一个，同样是Gradle，区别在于命令不一样：</p>
-
-<pre><code class="Bash">wasmJsBrowserRun -t --quiet
-</code></pre>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/compose-run-web.png" alt="图7. 运行Web app" />
-然后，运行，这会开启一个本地server，如果浏览器没有自动打开的话，就手动打开浏览器，并输入「localhost:8080」，就能看到。</p>
-
-<p><strong>注意：</strong> 如果开发平台是Mac，运行Web app时会有编译错误：</p>
-
-<pre><code class="Bash">Continuous build does not work when file system watching is disabled
-</code></pre>
-
-<p>可以通过修改构建指令参数，添加&#45;&#45;watch&#45;fs来解决：</p>
-
-<pre><code class="Bash">wasmJsBrowserRun -t --quiet --watch-fs
-</code></pre>
-
-<p>或者添加Gradle选项，以对所有的构建配置命令都生效：</p>
-
-<pre><code class="Bash">org.gradle.vfs.watch=true
-</code></pre>
-
-<p>但是，无论是&#45;&#45;watch&#45;fs，还是Gradle选项，对于macOS 12（Monterey）以后才生效，详见<a href="https://docs.gradle.org/current/userguide/file_system_watching.html">Gradle文档</a>。</p>
-
-<p>到此，应该说CMP的开发已经完全就位了。</p>
-
-<h2>总结</h2>
-
-<p>CMP配置简单，上手较快，前景光明，相信通过本文的学习可以了解并完全上车CMP开发了，还等啥呢赶紧上手撸一撸吧！</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html">Get started with Kotlin Multiplatform</a></li>
-<li><a href="https://kotlinlang.org/docs/multiplatform-intro.html">Introduction to Kotlin Multiplatform</a></li>
-<li><a href="https://getstream.io/blog/build-app-kotlin-multiplatform/">Build Your First Android and iOS Mobile App With Kotlin Multiplatform</a></li>
 </ul>
 
 ]]></content>
