@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-02-12T23:01:37+08:00</updated>
+  <updated>2025-02-24T22:46:38+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,620 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[详解DiffUtils、Myers算法和 Jetpack Compose]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/02/24/diffutils-and-jetpack-compose/"/>
+    <updated>2025-02-24T22:33:47+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/02/24/diffutils-and-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/diffutils-myers-algorithm-and-jetpack-compose-028c726e574d">《DiffUtils, Myers’ Algorithm and Jetpack Compose》</a>，原文发布于2024年12月27日。</p></blockquote>
+
+<p>在 Android UI 开发领域，DiffUtils 是优化 RecyclerView 中列表更新的必备工具。DiffUtils 是一个实用程序类，它计算将一个列表转换为另一个列表所需的<strong>最小更改</strong>，并仅更新 UI 中已更改的部分，从而<strong>节省性能并减少不必要的重绘</strong>。这个强大的工具依赖于<strong>Myers算法</strong>，这是一种在两个序列之间找到<strong>最短编辑脚本（Shortest edit script）</strong>的有效方法。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2025/02/24/diffutils-and-jetpack-compose/"><img src="https://www.pngmart.com/files/Android-App-Development-PNG-Free-Download.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>但在 Jetpack Compose 中，是没有DiffUtils的，这又是为什么呢？</p>
+
+<p>在这篇博客中，我将详细分析 DiffUtils 的工作原理、它与 Myers 算法的联系、为什么它是现代 Android 开发的重要组成部分，并探讨为什么 DiffUtil 在 Compose 中是不必要的、Compose 如何优化 UI 更新，以及你应该使用什么来代替。</p>
+
+<p>让我们开始吧！</p>
+
+<h2>DiffUtils 是什么？</h2>
+
+<p>DiffUtils 是 Android 中的一个实用程序，它可以比较两个列表并生成一系列更新操作，例如：</p>
+
+<ul>
+<li>插入：添加新项目。</li>
+<li>删除：移除过时的项目。</li>
+<li>移动：重新排序现有项目。</li>
+</ul>
+
+
+<p>然后可以应用这些操作来有效地更新列表，最大限度地减少不必要的重绘或重新计算。这在 RecyclerView 等性能至关重要的组件中特别有用。</p>
+
+<h3>DiffUtils 的工作原理</h3>
+
+<blockquote><p>DiffUtil 使用 Eugene W. Myers 的差异算法来计算将一个列表转换为另一个列表所需的最少更新次数。Myers 的算法不处理移动的项目，因此 DiffUtil 对结果进行第二次遍历以检测移动的项目。&ndash; <a href="https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil">https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil</a></p></blockquote>
+
+<p>Android 中的 DiffUtils 基于 Myers 算法，用于比较列表并找出它们之间的差异。Myers 算法和 DiffUtils 的目标是相同的：确定将一个序列（列表）转换为另一个序列（列表）所需的最小更改次数，包括插入、删除和移动。从本质上讲，DiffUtils 通过识别以下内容来计算两个列表之间的差异：</p>
+
+<ol>
+<li>最长公共子序列 (LCS)：新旧列表之间保持不变的元素。</li>
+<li>编辑操作：将旧列表转换为新列表所需的插入、删除和移动。</li>
+</ol>
+
+
+<p><strong>关键见解：</strong>
+DiffUtils使用 LCS 的概念来最小化更改（插入和删除），并且还针对移动进行了优化——这是基于列表的比较所特有的功能，其中元素不仅被删除和插入，而且还被重新定位。</p>
+
+<h3>Myers 算法：DiffUtils 的基础</h3>
+
+<p>Myers 算法于 1986 年推出，旨在计算两个序列之间的<strong>最短编辑脚本 (SES，Shortest Edit Script)</strong>。它找到将一个序列转换为另一个序列所需的最少操作数。这些操作包括：</p>
+
+<ul>
+<li>插入</li>
+<li>删除</li>
+<li>匹配（按顺序排列的公共元素）</li>
+</ul>
+
+
+<h4>Myers 算法的关键概念</h4>
+
+<p>Myers 算法旨在找到将一个序列（例如，旧列表）转换为另一个序列（新列表）所需的最少<strong>插入、删除和移动</strong>次数。该算法基于<strong>编辑距离（Edit Distance）</strong>的概念，并专门计算将一个序列转换为另一个序列的一系列操作。</p>
+
+<p>Myers 算法在计算<strong>最短的编辑操作序列</strong>方面特别有效，从而最小化所需的总更改次数。核心思想是找到两个序列之间的<strong>最长公共子序列 (LCS)</strong>，然后确定将旧序列转换为新序列的最小操作。</p>
+
+<p>最长公共子序列 (LCS)：Myers 算法首先确定两个列表之间的 LCS。LCS 表示不需要修改的元素。</p>
+
+<p><strong>编辑图：</strong></p>
+
+<ul>
+<li>该算法将转换可视化为一个图，其中每条路径
+代表一系列操作（插入、删除或匹配）。</li>
+<li>通过该图的最短路径对应于最短编辑脚本
+（SES）。</li>
+</ul>
+
+
+<p><strong>优化：</strong></p>
+
+<ul>
+<li>Myers 算法使用动态规划来减少计算开销，实现高效的 O(ND) 时间复杂度，其中 N 和 D 是序列的长度和它们之间的距离。</li>
+</ul>
+
+
+<h3>DiffUtils 实际应用示例</h3>
+
+<p>让我们考虑两个列表：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// Old list</span>
+</span><span class='line'><span class="na">[&quot;a&quot;, &quot;b&quot;, &quot;c&quot;, &quot;d&quot;]</span>
+</span><span class='line'><span class="c1">// New List</span>
+</span><span class='line'><span class="na">[&quot;a&quot;, &quot;d&quot;, &quot;c&quot;, &quot;b&quot;]</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ol>
+<li><strong>确定 LCS</strong>：此处的 LCS 为 [&ldquo;a&rdquo;] 。</li>
+<li><strong>计算编辑脚本</strong>：</li>
+<li>删除“b”（旧列表）。</li>
+<li>将“d”移到“c”之前。</li>
+<li>在“c”之后插入“b”。</li>
+<li><strong>应用更改</strong>：使用这些最少的操作将旧列表转换为新列表。</li>
+</ol>
+
+
+<h3>DiffUtils 在 RecyclerView 中的作用</h3>
+
+<p>在 RecyclerView 中，每次更新都涉及计算哪些项目发生了变化、哪些项目被添加以及哪些项目被删除。单纯地更新整个列表可能会导致卡顿或无响应等性能问题。DiffUtils 通过以下方式解决此问题：</p>
+
+<ul>
+<li>最小化更改：仅执行必要的更新。</li>
+<li>优化性能：实现流畅的动画和高效的列表更新。</li>
+<li>减少重绘：仅重新渲染受影响的项目，从而提高整体 UI 响应能力。</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="c1">// 第1步: 创建一个DiffUtil.Callback</span>
+</span><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">MyDiffCallback</span> <span class="kd">extends</span> <span class="n">DiffUtil</span><span class="o">.</span><span class="na">Callback</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span> <span class="n">oldList</span><span class="o">;</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">final</span> <span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span> <span class="n">newList</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">public</span> <span class="nf">MyDiffCallback</span><span class="o">(</span><span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span> <span class="n">oldList</span><span class="o">,</span> <span class="n">List</span><span class="o">&lt;</span><span class="n">String</span><span class="o">&gt;</span> <span class="n">newList</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">oldList</span> <span class="o">=</span> <span class="n">oldList</span><span class="o">;</span>
+</span><span class='line'>        <span class="k">this</span><span class="o">.</span><span class="na">newList</span> <span class="o">=</span> <span class="n">newList</span><span class="o">;</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">int</span> <span class="nf">getOldListSize</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">oldList</span><span class="o">.</span><span class="na">size</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">int</span> <span class="nf">getNewListSize</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">newList</span><span class="o">.</span><span class="na">size</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">areItemsTheSame</span><span class="o">(</span><span class="kt">int</span> <span class="n">oldItemPosition</span><span class="o">,</span> <span class="kt">int</span> <span class="n">newItemPosition</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">oldList</span><span class="o">.</span><span class="na">get</span><span class="o">(</span><span class="n">oldItemPosition</span><span class="o">).</span><span class="na">equals</span><span class="o">(</span><span class="n">newList</span><span class="o">.</span><span class="na">get</span><span class="o">(</span><span class="n">newItemPosition</span><span class="o">));</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="kt">boolean</span> <span class="nf">areContentsTheSame</span><span class="o">(</span><span class="kt">int</span> <span class="n">oldItemPosition</span><span class="o">,</span> <span class="kt">int</span> <span class="n">newItemPosition</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">oldList</span><span class="o">.</span><span class="na">get</span><span class="o">(</span><span class="n">oldItemPosition</span><span class="o">).</span><span class="na">equals</span><span class="o">(</span><span class="n">newList</span><span class="o">.</span><span class="na">get</span><span class="o">(</span><span class="n">newItemPosition</span><span class="o">));</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 第2步: 计算差异</span>
+</span><span class='line'><span class="n">DiffUtil</span><span class="o">.</span><span class="na">DiffResult</span> <span class="n">diffResult</span> <span class="o">=</span> <span class="n">DiffUtil</span><span class="o">.</span><span class="na">calculateDiff</span><span class="o">(</span>
+</span><span class='line'>    <span class="k">new</span> <span class="nf">MyDiffCallback</span><span class="o">(</span><span class="n">oldList</span><span class="o">,</span> <span class="n">newList</span><span class="o">)</span>
+</span><span class='line'><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 第3步: 派发更新</span>
+</span><span class='line'><span class="n">myAdapter</span><span class="o">.</span><span class="na">submitList</span><span class="o">(</span><span class="n">newList</span><span class="o">);</span>
+</span><span class='line'><span class="n">diffResult</span><span class="o">.</span><span class="na">dispatchUpdatesTo</span><span class="o">(</span><span class="n">myAdapter</span><span class="o">);</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>DiffUtils 是一款功能强大的工具，用于处理 Android 中的列表更新，确保高效且最小的更改。通过利用 Myers 算法，它可以计算出将一个列表转换为另一个列表的最短编辑脚本。了解其工作原理不仅可以提高你对 Android 开发的掌握，还可以帮助你优化 RecyclerView 的性能。</p>
+
+<h2>为什么 Compose 不需要 DiffUtils</h2>
+
+<p>Jetpack Compose 建立在<strong>声明性 UI 原则</strong>之上，这意味着你可以根据当前状态<strong>描述 UI 应该是</strong>什么样子，而 Compose 会处理其余的事情。</p>
+
+<p><strong>命令式 UI（视图）：</strong></p>
+
+<ul>
+<li>通过确定需要应用哪些更改，你可以手动更新 UI 组件。</li>
+<li>DiffUtil 等工具对于计算列表的最小更新以控制性能必不可少。</li>
+</ul>
+
+
+<p><strong>声明式 UI（Compose）：</strong></p>
+
+<ul>
+<li>你描述给定状态下的 UI 应该是什么样子，而不是如何更改它。</li>
+<li>Compose 会自动重新组合受状态更改影响的 UI 部分。</li>
+</ul>
+
+
+<p>在 Compose 中，<strong>状态驱动 UI，重组处理更新</strong>。DiffUtils 无需计算增量，因为系统会自动优化要重新渲染的内容。</p>
+
+<p>以下是 Compose 不再需要 DiffUtils 的主要原因：</p>
+
+<ol>
+<li><strong>状态驱动的UI</strong></li>
+</ol>
+
+
+<p>在 Compose 中，当状态发生变化时，UI 会自动重组。你无需手动计算列表之间的差异；Compose 会为你处理。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">items</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateListOf</span><span class="p">(</span><span class="s">&quot;Apple&quot;</span><span class="p">,</span> <span class="s">&quot;Banana&quot;</span><span class="p">,</span> <span class="s">&quot;Cherry&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">items</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">item</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果你从 items 中添加或删除项目，Compose 将仅重组 UI 中受影响的部分。无需 DiffUtils！</p>
+
+<ol>
+<li><strong>内置优化</strong></li>
+</ol>
+
+
+<p>Compose 使用 LazyColumn 和 LazyRow 中的键来优化项目渲染。通过为每个项目指定一个唯一键，Compose 可以识别哪些项目已更改、已添加或已移除。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">items</span><span class="p">(</span><span class="n">items</span> <span class="p">=</span> <span class="n">yourList</span><span class="p">,</span> <span class="n">key</span> <span class="p">=</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span> <span class="n">item</span><span class="p">.</span><span class="n">id</span> <span class="p">})</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">item</span><span class="p">.</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>该key确保 Compose 有效地仅更新受影响的项目，类似于 DiffUtils 所做的。</p>
+
+<ol>
+<li><strong>智能重组</strong></li>
+</ol>
+
+
+<p>Compose 可以智能地跳过未发生改变的 UI 元素的重组。使用 Remember 和 RememberSaveable 等工具，你可以进一步优化重组行为。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">RememberExample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">count</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">count</span><span class="p">.</span><span class="n">value</span><span class="p">++</span> <span class="p">})</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Clicked ${count.value} times&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">// 在这里，当状态发生变化时，只有Button中的Text，而不是整个组件，会发生重组</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>Compose 中的重组：</strong></p>
+
+<ul>
+<li>Compose 会观察状态变化。当特定 UI 元素的状态发生变化时，只会重组该元素（及其依赖项）。</li>
+<li>系统会完全跳过未更改的 UI 元素。</li>
+</ul>
+
+
+<p><strong>Views 中的 DiffUtils：</strong></p>
+
+<ul>
+<li>需要明确计算列表的新旧状态之间的变化。</li>
+<li>然后分派计算出的更改以更新 RecyclerView。</li>
+</ul>
+
+
+<h3>在 Compose 中用什么来代替 DiffUtils</h3>
+
+<p>虽然你不需要 DiffUtils ，但 Compose 提供了实现类似优化的工具：</p>
+
+<ol>
+<li>带 Keys 的 LazyColumn</li>
+</ol>
+
+
+<p>使用 key 可以有效地识别和管理列表中的更改。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">items</span><span class="p">(</span><span class="n">items</span> <span class="p">=</span> <span class="n">yourList</span><span class="p">,</span> <span class="n">key</span> <span class="p">=</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span> <span class="n">item</span><span class="p">.</span><span class="n">id</span> <span class="p">})</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">item</span><span class="p">.</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ol>
+<li>SnapshotStateList</li>
+</ol>
+
+
+<p>若要以被动方式管理列表，请使用 SnapshotStateList 。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">items</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateListOf</span><span class="p">(</span><span class="s">&quot;Apple&quot;</span><span class="p">,</span> <span class="s">&quot;Banana&quot;</span><span class="p">,</span> <span class="s">&quot;Cherry&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">items</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="s">&quot;Date&quot;</span><span class="p">)</span> <span class="p">})</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Add Item&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">items</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">item</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ol>
+<li>SubcomposeLayout</li>
+</ol>
+
+
+<p>对于复杂的场景，SubcomposeLayout 可以精确控制要重组的内容。</p>
+
+<h2>相关的面试问题</h2>
+
+<ol>
+<li>为什么 Jetpack Compose 不需要 DiffUtils ？</li>
+</ol>
+
+
+<p>Compose 依赖于声明性 UI 模型。它会根据状态变化自动更新 UI，无需像 DiffUtil 那样手动计算列表差异。使用 LazyColumn 中的键可确保高效更新，而无需使用外部工具。</p>
+
+<ol>
+<li>Jetpack Compose 处理列表更新的方式与 RecyclerView 有何不同？</li>
+</ol>
+
+
+<p>Compose 不依赖手动差异计算 (DiffUtils)，而是观察状态变化并仅重组受影响的组件。这是通过使用键和 Compose 的重组逻辑在内部管理的。</p>
+
+<ol>
+<li><p>在 Android 开发中，声明式 UI 与命令式 UI 相比有哪些优势？</p></li>
+<li><p>代码更简单：声明式 UI 通过关注内容而不是方式来减少样板代码。</p></li>
+<li>自动状态管理：Compose 根据状态变化自动更新 UI。</li>
+<li>可测试性提高：无状态可组合项可以独立测试。</li>
+<li>一致性：重组确保 UI 始终反映当前状态。</li>
+<li><p>Compose 中的重组是什么？它与 RecyclerView 中的传统视图失效有何不同？</p></li>
+<li><p>重组：当 Compose 检测到状态变化时发生。它仅重新生成受变化影响的 UI 部分。</p></li>
+<li>视图失效：在 RecyclerView 中，失效会触发视图重绘，如果没有 DiffUtil 之类的工具，这可能会很低效。</li>
+<li><p>何时应在 Compose 中使用 Remember 和 RememberSaveable？</p></li>
+<li><p>使用 Remember 在单个组合生命周期内存储状态。</p></li>
+<li>使用 RememberSaveable 在配置更改（如屏幕旋转）期间保留状态。</li>
+<li>Compose 如何决定要重组 UI 的哪些部分？</li>
+</ol>
+
+
+<p>Compose 会跟踪每个可组合项中的状态读取。当状态发生变化时，只有读取已更改状态的可组合项才会被重组。</p>
+
+<ol>
+<li>在 Compose 中实现 LazyColumn 以显示项目列表并添加按钮来更新列表。确保它能够高效更新。</li>
+</ol>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">LazyColumnExample</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">items</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateListOf</span><span class="p">(</span><span class="s">&quot;Apple&quot;</span><span class="p">,</span> <span class="s">&quot;Banana&quot;</span><span class="p">,</span> <span class="s">&quot;Cherry&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">items</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="s">&quot;Date&quot;</span><span class="p">)</span> <span class="p">})</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Add Item&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">items</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">key</span> <span class="p">=</span> <span class="p">{</span> <span class="n">it</span> <span class="p">})</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
+</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">item</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ol>
+<li>识别并修复 Compose 组件中不必要的重组。</li>
+</ol>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">items</span><span class="p">(</span><span class="n">items</span> <span class="p">=</span> <span class="n">list</span><span class="p">,</span> <span class="n">key</span> <span class="p">=</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span> <span class="n">item</span><span class="p">.</span><span class="n">id</span> <span class="p">})</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">item</span><span class="p">.</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ol>
+<li><p>诊断 LazyColumn 中的滞后：</p></li>
+<li><p>检查关键参数：确保每个项目都有唯一的键。</p></li>
+<li>使用分析工具：使用 Android Studio 的Compose 调试器分析重组计数。</li>
+<li>优化项目渲染：避免在 LazyColumn 中使用的可组合函数中进行大量计算。</li>
+<li>调试列表更新中的不一致行为：</li>
+</ol>
+
+
+<p>确保数据源稳定并符合 UI 预期。使用SnapshotStateList 可以帮助保持反应性。</p>
+
+<ol>
+<li>SnapshotStateList 和 ArrayList 之间的区别：</li>
+</ol>
+
+
+<p>SnapshotStateList 是被动的；更改会自动触发 Compose 中的重组。ArrayList 不是被动的，需要手动通知 UI 更新。</p>
+
+<ol>
+<li>使用 SubcomposeLayout</li>
+</ol>
+
+
+<p>SubcomposeLayout 是 Jetpack Compose 中一个强大的布局工具，可让你按需组合布局的各个部分。这对于 UI 的某些部分占用大量资源或可能无法立即使用的情况尤其有用，例如从网络或数据库加载图像。SubcomposeLayout 允许按需组合布局的各个部分。</p>
+
+<p>示例：动态加载图像并显示占位符，直到准备好为止。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ImageWithPlaceholder</span><span class="p">(</span><span class="n">imageUrl</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">placeholder</span><span class="p">:</span> <span class="n">Painter</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">SubcomposeLayout</span> <span class="p">{</span> <span class="n">constraints</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="c1">// First, compose the placeholder</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">placeholderLayout</span> <span class="p">=</span> <span class="n">subcompose</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Image</span><span class="p">(</span><span class="n">painter</span> <span class="p">=</span> <span class="n">placeholder</span><span class="p">,</span> <span class="n">contentDescription</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="c1">// Compose the image once it&#39;s loaded</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">imageLayout</span> <span class="p">=</span> <span class="n">subcompose</span><span class="p">(</span><span class="m">1</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">AsyncImage</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">model</span> <span class="p">=</span> <span class="n">imageUrl</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">contentDescription</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
+</span><span class='line'>                    <span class="n">contentScale</span> <span class="p">=</span> <span class="n">ContentScale</span><span class="p">.</span><span class="n">Crop</span>
+</span><span class='line'>                <span class="p">)</span><span class="err">你</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="c1">// Return the max size for the layout</span>
+</span><span class='line'>            <span class="n">layout</span><span class="p">(</span><span class="n">constraints</span><span class="p">.</span><span class="n">maxWidth</span><span class="p">,</span> <span class="n">constraints</span><span class="p">.</span><span class="n">maxHeight</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">placeholderLayout</span><span class="p">[</span><span class="m">0</span><span class="p">].</span><span class="n">measure</span><span class="p">(</span><span class="n">constraints</span><span class="p">).</span><span class="n">placeRelative</span><span class="p">(</span><span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">)</span>
+</span><span class='line'>                <span class="n">imageLayout</span><span class="p">[</span><span class="m">0</span><span class="p">].</span><span class="n">measure</span><span class="p">(</span><span class="n">constraints</span><span class="p">).</span><span class="n">placeRelative</span><span class="p">(</span><span class="m">0</span><span class="p">,</span> <span class="m">0</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Preview</span>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ImageWithPlaceholderPreview</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">ImageWithPlaceholder</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">imageUrl</span> <span class="p">=</span> <span class="s">&quot;https://www.example.com/image.jpg&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">placeholder</span> <span class="p">=</span> <span class="n">painterResource</span><span class="p">(</span><span class="n">id</span> <span class="p">=</span> <span class="n">R</span><span class="p">.</span><span class="n">drawable</span><span class="p">.</span><span class="n">placeholder_image</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ul>
+<li>SubcomposeLayout：此布局允许你根据需要组合布局的各个部分。在这里，我们首先组合占位符，然后在图像准备好后组合图像。</li>
+<li>subcompose()：此函数用于组合布局的各个部分。subcompose 函数返回 MeasureResult 对象列表，然后你可以测量这些对象并将其放置在屏幕上。</li>
+<li>AsyncImage：我们使用 coil-compose 库中的 AsyncImage 异步加载图像。加载时，会显示占位符。</li>
+<li>占位符：首先显示占位符。图像准备好后，它会接管。</li>
+</ul>
+
+
+<p>此方法可帮助你通过减少不必要的重新组合和更优雅地处理图像或数据等动态内容来创建更高效​​的 UI。</p>
+
+<ol>
+<li><p>将旧版 RecyclerView 迁移到 Compose：</p></li>
+<li><p>用 LazyColumn 替换 RecyclerView。</p></li>
+<li>将适配器逻辑移至可组合函数。</li>
+<li>使用 Remember 或 SnapshotStateList 进行状态管理。</li>
+<li>使用 Keys 进行优化。</li>
+</ol>
+
+
+<h2>结论</h2>
+
+<ul>
+<li>Compose 不需要 DiffUtils，因为它建立在声明性和状态驱动的架构上。</li>
+<li>带有 key 的 LazyColumn 和 SnapshotStateList 提供类似的优化。</li>
+<li>智能重组可确保高效的 UI 更新，从而减少手动优化的需要。</li>
+</ul>
+
+
+<p>通过拥抱 Compose 的声明性特性，你可以专注于构建美观、响应迅速的 UI，而无需担心列表更新的复杂性。</p>
+
+<p>Happy Composing！</p>
+
+<h2>参考文献</h2>
+
+<ol>
+<li>Myers, E. (1986)。O(ND) 差分算法及其变体。ACM编程语言和系统事务，1(2)，251–266。</li>
+<li><a href="https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil">Android 开发者文档 — DiffUtils</a></li>
+</ol>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Compose多平台 (CMP) 开发的四个实用技巧]]></title>
@@ -5521,459 +6135,6 @@
 
 <ul>
 <li><a href="https://developer.android.com/develop/ui/compose/lifecycle">Lifecycle of composables</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『密云不雨』| Navigation]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/08/12/navigation-with-compose/"/>
-    <updated>2024-08-12T07:46:31+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/08/12/navigation-with-compose</id>
-    <content type="html"><![CDATA[<p>除了一些玩具性的Demo以外，相信任何一个应用程序不可能只有一个页面，最为极简的应用也至少会有两个页面，一个主页和一个设置页。对于传统的View系统来说对于导航这块没有专门的API，一般都是自己写逻辑跳Activity，或者跳到Fragment，然后再反向的Back，所以有了很多三方的各种Router类库（如大阿里的ARouter，货拉拉的TheRouter）。其实谷歌已经提供了解决方案，在Jetpack中提供了<a href="https://developer.android.com/guide/navigation">Navigation组件</a>，专门用于解决应用内部各种页面之间跳转的问题。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2024/08/12/navigation-with-compose/"><img src="https://blog.mindorks.com/images/banner-jetpack-compose-navigation-657edc7b323cafdf.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>对于Jetpack Compose来说，因为是全新的框架，在设计之初就考虑到了导航的问题，但也不是重新开发了一套新库，而是把Jetpack中的组件Navigation深度的结合了进来。换句话说，在Jetpack Compose中可以直接使用Navigation组件来进行页面之间的跳转，并且有非常符合Compose的粘合API，使用起来非常的丝滑顺手。</p>
-
-<h2>基本概念</h2>
-
-<p>在深入之前有必要先澄清Navigation中的一些概念，了解了一些基本的概念和术语之后，会有助于理解组件的设计理念，也会更容易上手使用。</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:center;"> 术语 </th>
-<th style="text-align:left;"> 用途 </th>
-<th style="text-align:left;"> 具体的Composable </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:center;"> Host </td>
-<td style="text-align:left;"> 包含了当前导航页面的容器。应该把它理解成为导航的容器，包含着当前的页面， 以及一个NavController。 </td>
-<td style="text-align:left;"> <a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#NavHost(androidx.navigation.NavHostController,androidx.navigation.NavGraph,androidx.compose.ui.Modifier,androidx.compose.ui.Alignment,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1">NavHost</a>) </td>
-</tr>
-<tr>
-<td style="text-align:center;"> Graph </td>
-<td style="text-align:left;"> 静态的数组结构，定义着一个应用中的所有页面，以及它们之间应该如何跳转。 </td>
-<td style="text-align:left;"> <a href="https://developer.android.com/reference/androidx/navigation/NavGraph">NavGraph</a> </td>
-</tr>
-<tr>
-<td style="text-align:center;"> Controller </td>
-<td style="text-align:left;"> 页面之间导航的核心管理者。它封装着如何在页面之间跳转的方法，处理链接的方法，以及返回堆栈的方法。 </td>
-<td style="text-align:left;"> <a href="https://developer.android.com/reference/androidx/navigation/NavController">NavController</a> </td>
-</tr>
-<tr>
-<td style="text-align:center;"> Destination </td>
-<td style="text-align:left;"> 在Graph中的一个节点。当跳转到这个节点时，Host中就包含并展示它的页面。在实际项目中，往往是一个Fragment或者一个Composable，也就是一个页面。 </td>
-<td style="text-align:left;"> <a href="https://developer.android.com/reference/androidx/navigation/NavDestination">NavDestination</a> </td>
-</tr>
-<tr>
-<td style="text-align:center;"> Route </td>
-<td style="text-align:left;"> Destination的全局唯一标识，包括其所需要的参数。大部分时候，特别是在Compose中，这就是一坨类似于Uri一样的String </td>
-<td style="text-align:left;"> </td>
-</tr>
-</tbody>
-</table>
-
-
-<p>还需要说明一下的就是导航的基本的操作对象是一个页面，一个页面可以理解为一个全屏的，逻辑上内聚，内容上互相关联，自成一家的一个UI页面，比如说一个应用的主页是一个页面，文章列表是一个页面，文章详情是一个页面，设置是一个页面，用户页又是一个页面。当然，这里全屏并不是直观的全屏，意思是说（特别是对于Compose）一个页面的大小是受系统控制的，并不能像普通的Composable那样随意设置大小，对于手机就是全屏的，对于平板可能会一个占据三分之一（列表页），一个占据三分之二（详情页）。</p>
-
-<h2>使用Navigation</h2>
-
-<p>Jetpack Compose是声明式UI，是函数式编程，每一个Composable都是一个函数，所以在Compose中使用Navigation略微的有点不一样。核心原理和核心的规则肯定与Navigation是一样一样的，只是使用上的API略不一样，其实是更简单更方便了（这是声明式UI带来的收益）。</p>
-
-<h3>添加依赖</h3>
-
-<p>在使用之前先要添加Navigation库作为项目的依赖：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">navVersion</span> <span class="p">=</span> <span class="s">&quot;2.7.7&quot;</span>
-</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.navigation:navigation-runtime-ktx:$navVersion&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.navigation:navigation-compose:$navVersion&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>使用Navigation的方法</h3>
-
-<p>可以通过以下步骤来使用Navigation：</p>
-
-<ul>
-<li>创建NavHost，并设置为应用的入口，通过Composable函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#NavHost(androidx.navigation.NavHostController,androidx.navigation.NavGraph,androidx.compose.ui.Modifier,androidx.compose.ui.Alignment,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1">NavHost</a>)。</li>
-<li>创建NavController，可以直接创建，但推荐的方式是使用Compose提供的状态构造函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#rememberNavController(kotlin.Array">rememberNavController</a>)，它的好处在于当前导航会提升为一个状态。</li>
-<li>定义Destination和Route，其实对于Compose来说都是用类似于Uri的String来作为Destination，每一个Destition唯一对应着一个页面。</li>
-<li>添加页面，通过函数NavHost的尾部lambda，它实际上是一个<a href="https://developer.android.com/reference/kotlin/androidx/navigation/NavGraphBuilder">NavGraphBuilder</a>的扩展函数，这里调用函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/compose/package-summary#(androidx.navigation.NavGraphBuilder">composable</a>.composable(kotlin.collections.Map,kotlin.collections.List,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function1,kotlin.Function2))来添加页面。</li>
-<li>配置跳转，通过前面创建的navController来实现跳转，用<a href="https://developer.android.com/reference/kotlin/androidx/navigation/NavController#navigate(android.net.Uri">navController.navigate</a>)来跳转到指定的Destination，用<a href="https://developer.android.com/reference/androidx/navigation/NavController#popBackStack(">navController.popBackStack</a>)来返回到前一个页面。而触发的入口肯定是在具体的页面之中，所以页面要把其跳转函数作为参数，在NavGraphBuilder时，再用NavController去实现，这样所有的跳转逻辑就都在NavGraph中，便于管理。</li>
-</ul>
-
-
-<h3>具体实例</h3>
-
-<p>说了那么多貌似挺烦杂的，让我们看一个实例就会瞬间明白。</p>
-
-<p>一个简单的应用有4个页面，先定义Destinations：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">object</span> <span class="nc">Destinations</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">APP_URI</span> <span class="p">=</span> <span class="s">&quot;http://toughcoder.net/chronos&quot;</span>
-</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">HOME_ROUTE</span> <span class="p">=</span> <span class="s">&quot;home&quot;</span> <span class="c1">// 主页</span>
-</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">HISTORY_ROUTE</span> <span class="p">=</span> <span class="s">&quot;history&quot;</span> <span class="c1">// 历史记录页面</span>
-</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">SETTINGS</span> <span class="p">=</span> <span class="s">&quot;settings&quot;</span> <span class="c1">// 设置页</span>
-</span><span class='line'>    <span class="n">const</span> <span class="k">val</span> <span class="py">ARTICLES</span> <span class="p">=</span> <span class="s">&quot;articles&quot;</span> <span class="c1">// 文章页</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>那么就可以如此配置Navigation：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-<span class='line-number'>52</span>
-<span class='line-number'>53</span>
-<span class='line-number'>54</span>
-<span class='line-number'>55</span>
-<span class='line-number'>56</span>
-<span class='line-number'>57</span>
-<span class='line-number'>58</span>
-<span class='line-number'>59</span>
-<span class='line-number'>60</span>
-<span class='line-number'>61</span>
-<span class='line-number'>62</span>
-<span class='line-number'>63</span>
-<span class='line-number'>64</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">ChronosNavGraph</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">navController</span><span class="p">:</span> <span class="n">NavHostController</span> <span class="p">=</span> <span class="n">rememberNavController</span><span class="p">(),</span>
-</span><span class='line'>    <span class="n">start</span><span class="p">:</span> <span class="n">String</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">HOME_ROUTE</span> <span class="c1">// 默认的初始页面为主页</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">NavHost</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">navController</span> <span class="p">=</span> <span class="n">navController</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">startDestination</span> <span class="p">=</span> <span class="n">start</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">HOME_ROUTE</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.HOME_ROUTE}&quot;</span> <span class="p">}</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">ChronosScreen</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">gotoSettings</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Destinations</span><span class="p">.</span><span class="n">SETTINGS</span><span class="p">)</span> <span class="p">},</span>
-</span><span class='line'>                <span class="n">gotoHistory</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Destinations</span><span class="p">.</span><span class="n">HISTORY_ROUTE</span><span class="p">)</span> <span class="p">},</span>
-</span><span class='line'>                <span class="n">gotoArticles</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Destinations</span><span class="p">.</span><span class="n">ARTICLES</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">HISTORY_ROUTE</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.HISTORY_ROUTE}&quot;</span> <span class="p">}</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">HistoryScreen</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">navController</span><span class="p">.</span><span class="n">popBackStack</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">SETTINGS</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.SETTINGS}&quot;</span> <span class="p">}</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">SettingsScreen</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">navController</span><span class="p">.</span><span class="n">popBackStack</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">composable</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">route</span> <span class="p">=</span> <span class="n">Destinations</span><span class="p">.</span><span class="n">ARTICLES</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;${Destinations.APP_URI}/${Destinations.ARTICLES}&quot;</span> <span class="p">}</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">ArticlesScreen</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">navController</span><span class="p">.</span><span class="n">popBackStack</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>可以看到每一个composable函数用以创建一个导航页面，里面有其Route，具体的页面，以及跳转的入口函数。deepLinks是每个页面的Uri式的链接，后面会详细的讲解。</p>
-
-<p>最后就是把这个NavGraph作为应用的入口页面：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">ChronosTheme</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">Surface</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
-</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">background</span>
-</span><span class='line'>                <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">ChronosNavGraph</span><span class="p">()</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>在页面之间传递参数</h2>
-
-<p>页面跳转还必然会涉及参数的传递，比如具有递进关系的两个页面，核心参数肯定要由前一个页传递过去，最为典型的场景就是列表类页面到详情页面的跳转，比如文章列表要把文章的Id传给详情页，这样详情页才知道去展示哪个文章，用户列表要把用户Id传给详情页，详情页才知道展示哪个用户。</p>
-
-<p>Navigation提供了传递参数的方法，在创建导航页面时传入的Route可以加入占位符形参，然后在跳转navController.navigate时可以传入实参，只不过参数的类型有限制，只能是基础数据类型如字串或者数字。目标页面使用时通过backStackEntry.arguments来获得参数。来具体看一下，比如说传递用户Id的场景：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">NavHost</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">composable</span><span class="p">(</span>
-</span><span class='line'>          <span class="s">&quot;profile/{userId}&quot;</span><span class="p">,</span>
-</span><span class='line'>          <span class="n">arguments</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">navArgument</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">)</span> <span class="p">{</span> <span class="k">type</span> <span class="p">=</span> <span class="n">NavType</span><span class="p">.</span><span class="n">StringType</span> <span class="p">}</span> <span class="c1">// 这句可以省略，因为默认类型都当成是字符串</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
-</span><span class='line'>          <span class="n">Profile</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">arguments</span><span class="o">?.</span><span class="n">getString</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">))</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>上面参数类型的声明，其实可以省略，因为默认的类型都当成String来解析和处理，如果是其他类型则需要显式地声明。这样目标页面的参数就声明好了，我们在跳转的时候传入实参就可以了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="s">&quot;profile/user1234&quot;</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>大部分时候参数都是<strong>必填参数</strong>，像上面这样写userId是必填的参数。但有些时候一些非核心的参数，可能不是每次跳转都会传，这就需要页面把参数声明为<strong>可选参数</strong>。可选参数在声明的时候Uri中必须使用查询式语句，如（&#8221;?argName={argName}&ldquo;），另外必须 设置默认值，或者类型是nullable的。这也意味着我们不能省略导航页面构建composable函数中的arguments参数：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">composable</span><span class="p">(</span>
-</span><span class='line'>    <span class="s">&quot;profile?userId={userId}&quot;</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">arguments</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">navArgument</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">)</span> <span class="p">{</span> <span class="n">defaultValue</span> <span class="p">=</span> <span class="s">&quot;user1234&quot;</span> <span class="p">})</span> <span class="c1">// 注意这里的默认值，当调用navigate时如果不传userId就用这个默认值</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
-</span><span class='line'>    <span class="n">Profile</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">arguments</span><span class="o">?.</span><span class="n">getString</span><span class="p">(</span><span class="s">&quot;userId&quot;</span><span class="p">))</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>注意：</strong> 要尽可能的使用基本的数据类型，如String，Int或者Long，而不传递复杂的数据。复杂的数据通常都是业务逻辑数据，而业务逻辑数据应该使用基本的参数，再从数据源处（通常是通过ViewModel从Repo处）去主动获取，这样才能保证数据的真实有效。这是设计原则中的『单一数据源原则Single Source of Truth』。复杂数据从Repo处获取后，可能会变得过时或者失真，而且在页面之间传递会有拷贝，效率也不高，因此要避免在页面之间传递复杂数据。</p>
-
-<h2>处理DeepLinks</h2>
-
-<p>DeepLinks是Uri式的链接跳转范式，能够以字符串形式的Uri精准的定位到某个应用的具体某个页面，就犹如互联网中的Uri一样。它的好处在于形成了一个统一的标准，形式简单方便，一个字符串就能定位到一个页面。</p>
-
-<p>使用导航页面构建函数composable在构建页面的时候可以传入<a href="https://developer.android.com/reference/androidx/navigation/NavDeepLink">NavDeepLink</a>对象，更为方便的是使用其构建函数<a href="https://developer.android.com/reference/kotlin/androidx/navigation/package-summary#navDeepLink(kotlin.Function1">navDeepLink</a>)：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">uri</span> <span class="p">=</span> <span class="s">&quot;https://www.example.com&quot;</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">composable</span><span class="p">(</span>
-</span><span class='line'>    <span class="s">&quot;profile?id={id}&quot;</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">deepLinks</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">navDeepLink</span> <span class="p">{</span> <span class="n">uriPattern</span> <span class="p">=</span> <span class="s">&quot;$uri/{id}&quot;</span> <span class="p">})</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
-</span><span class='line'>    <span class="n">Profile</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">arguments</span><span class="o">?.</span><span class="n">getString</span><span class="p">(</span><span class="s">&quot;id&quot;</span><span class="p">))</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>从示例中可以看出Uri中还可以带有参数，形参的声明，以及参数的获取与前面提到的页面参数是一样一样的，如果实际传过来的Uri是&#8221;<a href="https://www.example.com/user123">https://www.example.com/user123</a>&#8220;，到此页面后，就能解析出参数id为user123。</p>
-
-<p>正常情况下这些DeepLinks只能在应用内部使用，如果要对应用外开放，则需要在应用的AndroidManifest文件中进行声明，声明为intent filter：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;activity</span> <span class="err">…</span><span class="nt">&gt;</span>
-</span><span class='line'>  <span class="nt">&lt;intent-filter&gt;</span>
-</span><span class='line'>    ...
-</span><span class='line'>    <span class="nt">&lt;data</span> <span class="na">android:scheme=</span><span class="s">&quot;https&quot;</span> <span class="na">android:host=</span><span class="s">&quot;www.example.com&quot;</span> <span class="nt">/&gt;</span>
-</span><span class='line'>  <span class="nt">&lt;/intent-filter&gt;</span>
-</span><span class='line'><span class="nt">&lt;/activity&gt;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>页面跳转过渡动画</h2>
-
-<p>页面跳转可以指定具体的过渡动画，具体的可以参考<a href="https://juejin.cn/post/7385758285960609831#heading-10">前面专门讲动画的那篇文章</a>，这里就不再重复了。</p>
-
-<h2>Route的类型安全</h2>
-
-<p>通常情况下Route都是使用Uri式的String，但这明显不够安全，因为调用navController#navigate的时候，可能会传一个不认识的页面Route，或者参数传错了（比如数字参数传了String），等等。轻则跳转失败，因为找不到Destination页面，重则会Crash。要想类型安全，就不能使用String式的Uri，需要把Ruote定义为类型（也即class），但要使用注解&#64;Serializeable标记一下：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 主页面，不带任何参数</span>
-</span><span class='line'><span class="n">@Serializable</span>
-</span><span class='line'><span class="k">object</span> <span class="nc">Home</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// 用户页面，参数是用户Id，其类型是一个String</span>
-</span><span class='line'><span class="n">@Serializable</span>
-</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Profile</span><span class="p">(</span><span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后在构建导航页面的时候，函数composable其实是一个泛型函数，它可以指定Route的参数类型：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">NavHost</span><span class="p">(</span><span class="n">navController</span><span class="p">,</span> <span class="n">startDestination</span> <span class="p">=</span> <span class="n">Home</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>     <span class="n">composable</span><span class="p">&lt;</span><span class="n">Home</span><span class="p">&gt;</span> <span class="p">{</span> <span class="c1">// 泛型函数，可以指定参数类型</span>
-</span><span class='line'>         <span class="n">HomeScreen</span><span class="p">(</span><span class="n">onNavigateToProfile</span> <span class="p">=</span> <span class="p">{</span> <span class="n">id</span> <span class="p">-&gt;</span>
-</span><span class='line'>             <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Profile</span><span class="p">(</span><span class="n">id</span><span class="p">))</span> <span class="c1">// 跳转的时候传入的实参是一个对象，类型就是上面定义的Route</span>
-</span><span class='line'>         <span class="p">})</span>
-</span><span class='line'>     <span class="p">}</span>
-</span><span class='line'>     <span class="n">composable</span><span class="p">&lt;</span><span class="n">Profile</span><span class="p">&gt;</span> <span class="p">{</span> <span class="n">backStackEntry</span> <span class="p">-&gt;</span>
-</span><span class='line'>         <span class="k">val</span> <span class="py">profile</span><span class="p">:</span> <span class="n">Profile</span> <span class="p">=</span> <span class="n">backStackEntry</span><span class="p">.</span><span class="n">toRoute</span><span class="p">()</span>  <span class="c1">// 获取参数的时候，用toRoute来获得Route对象，类型就是我们定义的那个</span>
-</span><span class='line'>         <span class="n">ProfileScreen</span><span class="p">(</span><span class="n">profile</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>     <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后在跳转的时候就可以把Route对象作为实参传进去：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="n">Profile</span><span class="p">(</span><span class="n">id</span> <span class="p">=</span> <span class="m">123</span><span class="p">))</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这样因为都是定义的类型，所以编译器会做编译时检查，虚拟机也会做运行时的类型检查，保证类型安全。</p>
-
-<p><strong>注意：</strong> 不要混淆，这里Route虽然是自定义类型，但并不算是在页面之间传递复杂的业务数据，因为具体的参数仍是诸如String和Int之类的基础数值。把Route定义为类型（class），而不是直接使用String，是为了让编译器帮忙我们保证类型安全，减少出错。</p>
-
-<h2>总结</h2>
-
-<p>使用Navigation可以非常轻松的把应用的各个页面组织连接起来，形成一个完整的交互闭环。谷歌也提供了相应的<a href="https://developer.android.com/codelabs/jetpack-compose-navigation#0">CodeLab</a>可以学习一下。此外，谷歌的一些Sample app，像<a href="https://github.com/android/sunflower/tree/main">Sunflower</a>和<a href="https://github.com/android/compose-samples/tree/main/JetNews">JetNews</a>也是使用Navigation来实现导航的，是非常好的学习案例。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/navigation">Navigation with Compose</a></li>
-<li><a href="https://developer.android.com/guide/navigation">Navigation</a></li>
 </ul>
 
 ]]></content>

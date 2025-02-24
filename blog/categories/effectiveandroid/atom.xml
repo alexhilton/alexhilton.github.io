@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-02-12T23:01:37+08:00</updated>
+  <updated>2025-02-24T22:46:38+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,475 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[详解DiffUtils、Myers算法和 Jetpack Compose]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/02/24/diffutils-and-jetpack-compose/"/>
+    <updated>2025-02-24T22:33:47+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/02/24/diffutils-and-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/diffutils-myers-algorithm-and-jetpack-compose-028c726e574d">《DiffUtils, Myers’ Algorithm and Jetpack Compose》</a>，原文发布于2024年12月27日。</p></blockquote>
+
+<p>在 Android UI 开发领域，DiffUtils 是优化 RecyclerView 中列表更新的必备工具。DiffUtils 是一个实用程序类，它计算将一个列表转换为另一个列表所需的<strong>最小更改</strong>，并仅更新 UI 中已更改的部分，从而<strong>节省性能并减少不必要的重绘</strong>。这个强大的工具依赖于<strong>Myers算法</strong>，这是一种在两个序列之间找到<strong>最短编辑脚本（Shortest edit script）</strong>的有效方法。</p>
+
+<p><a href=""><img src="https://www.pngmart.com/files/Android-App-Development-PNG-Free-Download.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>但在 Jetpack Compose 中，是没有DiffUtils的，这又是为什么呢？</p>
+
+<p>在这篇博客中，我将详细分析 DiffUtils 的工作原理、它与 Myers 算法的联系、为什么它是现代 Android 开发的重要组成部分，并探讨为什么 DiffUtil 在 Compose 中是不必要的、Compose 如何优化 UI 更新，以及你应该使用什么来代替。</p>
+
+<p>让我们开始吧！</p>
+
+<h2>DiffUtils 是什么？</h2>
+
+<p>DiffUtils 是 Android 中的一个实用程序，它可以比较两个列表并生成一系列更新操作，例如：</p>
+
+<ul>
+<li>插入：添加新项目。</li>
+<li>删除：移除过时的项目。</li>
+<li>移动：重新排序现有项目。</li>
+</ul>
+
+
+<p>然后可以应用这些操作来有效地更新列表，最大限度地减少不必要的重绘或重新计算。这在 RecyclerView 等性能至关重要的组件中特别有用。</p>
+
+<h3>DiffUtils 的工作原理</h3>
+
+<blockquote><p>DiffUtil 使用 Eugene W. Myers 的差异算法来计算将一个列表转换为另一个列表所需的最少更新次数。Myers 的算法不处理移动的项目，因此 DiffUtil 对结果进行第二次遍历以检测移动的项目。&ndash; <a href="https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil">https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil</a></p></blockquote>
+
+<p>Android 中的 DiffUtils 基于 Myers 算法，用于比较列表并找出它们之间的差异。Myers 算法和 DiffUtils 的目标是相同的：确定将一个序列（列表）转换为另一个序列（列表）所需的最小更改次数，包括插入、删除和移动。从本质上讲，DiffUtils 通过识别以下内容来计算两个列表之间的差异：</p>
+
+<ol>
+<li>最长公共子序列 (LCS)：新旧列表之间保持不变的元素。</li>
+<li>编辑操作：将旧列表转换为新列表所需的插入、删除和移动。</li>
+</ol>
+
+
+<p><strong>关键见解：</strong>
+DiffUtils使用 LCS 的概念来最小化更改（插入和删除），并且还针对移动进行了优化——这是基于列表的比较所特有的功能，其中元素不仅被删除和插入，而且还被重新定位。</p>
+
+<h3>Myers 算法：DiffUtils 的基础</h3>
+
+<p>Myers 算法于 1986 年推出，旨在计算两个序列之间的<strong>最短编辑脚本 (SES，Shortest Edit Script)</strong>。它找到将一个序列转换为另一个序列所需的最少操作数。这些操作包括：</p>
+
+<ul>
+<li>插入</li>
+<li>删除</li>
+<li>匹配（按顺序排列的公共元素）</li>
+</ul>
+
+
+<h4>Myers 算法的关键概念</h4>
+
+<p>Myers 算法旨在找到将一个序列（例如，旧列表）转换为另一个序列（新列表）所需的最少<strong>插入、删除和移动</strong>次数。该算法基于<strong>编辑距离（Edit Distance）</strong>的概念，并专门计算将一个序列转换为另一个序列的一系列操作。</p>
+
+<p>Myers 算法在计算<strong>最短的编辑操作序列</strong>方面特别有效，从而最小化所需的总更改次数。核心思想是找到两个序列之间的<strong>最长公共子序列 (LCS)</strong>，然后确定将旧序列转换为新序列的最小操作。</p>
+
+<p>最长公共子序列 (LCS)：Myers 算法首先确定两个列表之间的 LCS。LCS 表示不需要修改的元素。</p>
+
+<p><strong>编辑图：</strong></p>
+
+<ul>
+<li>该算法将转换可视化为一个图，其中每条路径
+代表一系列操作（插入、删除或匹配）。</li>
+<li>通过该图的最短路径对应于最短编辑脚本
+（SES）。</li>
+</ul>
+
+
+<p><strong>优化：</strong></p>
+
+<ul>
+<li>Myers 算法使用动态规划来减少计算开销，实现高效的 O(ND) 时间复杂度，其中 N 和 D 是序列的长度和它们之间的距离。</li>
+</ul>
+
+
+<h3>DiffUtils 实际应用示例</h3>
+
+<p>让我们考虑两个列表：</p>
+
+<pre><code class="Kotlin">// Old list
+["a", "b", "c", "d"]
+// New List
+["a", "d", "c", "b"]
+</code></pre>
+
+<ol>
+<li><strong>确定 LCS</strong>：此处的 LCS 为 [&ldquo;a&rdquo;] 。</li>
+<li><strong>计算编辑脚本</strong>：</li>
+<li>删除“b”（旧列表）。</li>
+<li>将“d”移到“c”之前。</li>
+<li>在“c”之后插入“b”。</li>
+<li><strong>应用更改</strong>：使用这些最少的操作将旧列表转换为新列表。</li>
+</ol>
+
+
+<h3>DiffUtils 在 RecyclerView 中的作用</h3>
+
+<p>在 RecyclerView 中，每次更新都涉及计算哪些项目发生了变化、哪些项目被添加以及哪些项目被删除。单纯地更新整个列表可能会导致卡顿或无响应等性能问题。DiffUtils 通过以下方式解决此问题：</p>
+
+<ul>
+<li>最小化更改：仅执行必要的更新。</li>
+<li>优化性能：实现流畅的动画和高效的列表更新。</li>
+<li>减少重绘：仅重新渲染受影响的项目，从而提高整体 UI 响应能力。</li>
+</ul>
+
+
+<pre><code class="Java">// 第1步: 创建一个DiffUtil.Callback
+public class MyDiffCallback extends DiffUtil.Callback {
+    private final List&lt;String&gt; oldList;
+    private final List&lt;String&gt; newList;
+
+    public MyDiffCallback(List&lt;String&gt; oldList, List&lt;String&gt; newList) {
+        this.oldList = oldList;
+        this.newList = newList;
+    }
+
+    @Override
+    public int getOldListSize() {
+        return oldList.size();
+    }
+
+    @Override
+    public int getNewListSize() {
+        return newList.size();
+    }
+
+    @Override
+    public boolean areItemsTheSame(int oldItemPosition, int newItemPosition) {
+        return oldList.get(oldItemPosition).equals(newList.get(newItemPosition));
+    }
+
+    @Override
+    public boolean areContentsTheSame(int oldItemPosition, int newItemPosition) {
+        return oldList.get(oldItemPosition).equals(newList.get(newItemPosition));
+    }
+}
+
+// 第2步: 计算差异
+DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(
+    new MyDiffCallback(oldList, newList)
+);
+
+// 第3步: 派发更新
+myAdapter.submitList(newList);
+diffResult.dispatchUpdatesTo(myAdapter);
+</code></pre>
+
+<p>DiffUtils 是一款功能强大的工具，用于处理 Android 中的列表更新，确保高效且最小的更改。通过利用 Myers 算法，它可以计算出将一个列表转换为另一个列表的最短编辑脚本。了解其工作原理不仅可以提高你对 Android 开发的掌握，还可以帮助你优化 RecyclerView 的性能。</p>
+
+<h2>为什么 Compose 不需要 DiffUtils</h2>
+
+<p>Jetpack Compose 建立在<strong>声明性 UI 原则</strong>之上，这意味着你可以根据当前状态<strong>描述 UI 应该是</strong>什么样子，而 Compose 会处理其余的事情。</p>
+
+<p><strong>命令式 UI（视图）：</strong></p>
+
+<ul>
+<li>通过确定需要应用哪些更改，你可以手动更新 UI 组件。</li>
+<li>DiffUtil 等工具对于计算列表的最小更新以控制性能必不可少。</li>
+</ul>
+
+
+<p><strong>声明式 UI（Compose）：</strong></p>
+
+<ul>
+<li>你描述给定状态下的 UI 应该是什么样子，而不是如何更改它。</li>
+<li>Compose 会自动重新组合受状态更改影响的 UI 部分。</li>
+</ul>
+
+
+<p>在 Compose 中，<strong>状态驱动 UI，重组处理更新</strong>。DiffUtils 无需计算增量，因为系统会自动优化要重新渲染的内容。</p>
+
+<p>以下是 Compose 不再需要 DiffUtils 的主要原因：</p>
+
+<ol>
+<li><strong>状态驱动的UI</strong></li>
+</ol>
+
+
+<p>在 Compose 中，当状态发生变化时，UI 会自动重组。你无需手动计算列表之间的差异；Compose 会为你处理。</p>
+
+<pre><code class="Kotlin">val items = remember { mutableStateListOf("Apple", "Banana", "Cherry") }
+
+LazyColumn {
+    items(items) { item -&gt;
+        Text(text = item)
+    }
+}
+</code></pre>
+
+<p>如果你从 items 中添加或删除项目，Compose 将仅重组 UI 中受影响的部分。无需 DiffUtils！</p>
+
+<ol>
+<li><strong>内置优化</strong></li>
+</ol>
+
+
+<p>Compose 使用 LazyColumn 和 LazyRow 中的键来优化项目渲染。通过为每个项目指定一个唯一键，Compose 可以识别哪些项目已更改、已添加或已移除。</p>
+
+<pre><code class="Kotlin">LazyColumn {
+    items(items = yourList, key = { item -&gt; item.id }) { item -&gt;
+        Text(text = item.name)
+    }
+}
+</code></pre>
+
+<p>该key确保 Compose 有效地仅更新受影响的项目，类似于 DiffUtils 所做的。</p>
+
+<ol>
+<li><strong>智能重组</strong></li>
+</ol>
+
+
+<p>Compose 可以智能地跳过未发生改变的 UI 元素的重组。使用 Remember 和 RememberSaveable 等工具，你可以进一步优化重组行为。</p>
+
+<pre><code class="Kotlin">@Composable
+fun RememberExample() {
+    val count = remember { mutableStateOf(0) }
+
+    Button(onClick = { count.value++ }) {
+        Text("Clicked ${count.value} times")
+    }
+}
+// 在这里，当状态发生变化时，只有Button中的Text，而不是整个组件，会发生重组
+</code></pre>
+
+<p><strong>Compose 中的重组：</strong></p>
+
+<ul>
+<li>Compose 会观察状态变化。当特定 UI 元素的状态发生变化时，只会重组该元素（及其依赖项）。</li>
+<li>系统会完全跳过未更改的 UI 元素。</li>
+</ul>
+
+
+<p><strong>Views 中的 DiffUtils：</strong></p>
+
+<ul>
+<li>需要明确计算列表的新旧状态之间的变化。</li>
+<li>然后分派计算出的更改以更新 RecyclerView。</li>
+</ul>
+
+
+<h3>在 Compose 中用什么来代替 DiffUtils</h3>
+
+<p>虽然你不需要 DiffUtils ，但 Compose 提供了实现类似优化的工具：</p>
+
+<ol>
+<li>带 Keys 的 LazyColumn</li>
+</ol>
+
+
+<p>使用 key 可以有效地识别和管理列表中的更改。</p>
+
+<pre><code class="Kotlin">LazyColumn {
+    items(items = yourList, key = { item -&gt; item.id }) { item -&gt;
+        Text(text = item.name)
+    }
+}
+</code></pre>
+
+<ol>
+<li>SnapshotStateList</li>
+</ol>
+
+
+<p>若要以被动方式管理列表，请使用 SnapshotStateList 。</p>
+
+<pre><code class="Kotlin">val items = remember { mutableStateListOf("Apple", "Banana", "Cherry") }
+Button(onClick = { items.add("Date") }) {
+    Text("Add Item")
+}
+LazyColumn {
+    items(items) { item -&gt;
+        Text(text = item)
+    }
+}
+</code></pre>
+
+<ol>
+<li>SubcomposeLayout</li>
+</ol>
+
+
+<p>对于复杂的场景，SubcomposeLayout 可以精确控制要重组的内容。</p>
+
+<h2>相关的面试问题</h2>
+
+<ol>
+<li>为什么 Jetpack Compose 不需要 DiffUtils ？</li>
+</ol>
+
+
+<p>Compose 依赖于声明性 UI 模型。它会根据状态变化自动更新 UI，无需像 DiffUtil 那样手动计算列表差异。使用 LazyColumn 中的键可确保高效更新，而无需使用外部工具。</p>
+
+<ol>
+<li>Jetpack Compose 处理列表更新的方式与 RecyclerView 有何不同？</li>
+</ol>
+
+
+<p>Compose 不依赖手动差异计算 (DiffUtils)，而是观察状态变化并仅重组受影响的组件。这是通过使用键和 Compose 的重组逻辑在内部管理的。</p>
+
+<ol>
+<li><p>在 Android 开发中，声明式 UI 与命令式 UI 相比有哪些优势？</p></li>
+<li><p>代码更简单：声明式 UI 通过关注内容而不是方式来减少样板代码。</p></li>
+<li>自动状态管理：Compose 根据状态变化自动更新 UI。</li>
+<li>可测试性提高：无状态可组合项可以独立测试。</li>
+<li>一致性：重组确保 UI 始终反映当前状态。</li>
+<li><p>Compose 中的重组是什么？它与 RecyclerView 中的传统视图失效有何不同？</p></li>
+<li><p>重组：当 Compose 检测到状态变化时发生。它仅重新生成受变化影响的 UI 部分。</p></li>
+<li>视图失效：在 RecyclerView 中，失效会触发视图重绘，如果没有 DiffUtil 之类的工具，这可能会很低效。</li>
+<li><p>何时应在 Compose 中使用 Remember 和 RememberSaveable？</p></li>
+<li><p>使用 Remember 在单个组合生命周期内存储状态。</p></li>
+<li>使用 RememberSaveable 在配置更改（如屏幕旋转）期间保留状态。</li>
+<li>Compose 如何决定要重组 UI 的哪些部分？</li>
+</ol>
+
+
+<p>Compose 会跟踪每个可组合项中的状态读取。当状态发生变化时，只有读取已更改状态的可组合项才会被重组。</p>
+
+<ol>
+<li>在 Compose 中实现 LazyColumn 以显示项目列表并添加按钮来更新列表。确保它能够高效更新。</li>
+</ol>
+
+
+<pre><code class="Kotlin">@Composable
+fun LazyColumnExample() {
+    val items = remember { mutableStateListOf("Apple", "Banana", "Cherry") }
+
+    Column {
+        Button(onClick = { items.add("Date") }) {
+            Text("Add Item")
+        }
+
+        LazyColumn {
+            items(items, key = { it }) { item -&gt;
+                Text(text = item)
+            }
+        }
+    }
+}
+</code></pre>
+
+<ol>
+<li>识别并修复 Compose 组件中不必要的重组。</li>
+</ol>
+
+
+<pre><code class="Kotlin">LazyColumn {
+    items(items = list, key = { item -&gt; item.id }) { item -&gt;
+        Text(text = item.name)
+    }
+}
+</code></pre>
+
+<ol>
+<li><p>诊断 LazyColumn 中的滞后：</p></li>
+<li><p>检查关键参数：确保每个项目都有唯一的键。</p></li>
+<li>使用分析工具：使用 Android Studio 的Compose 调试器分析重组计数。</li>
+<li>优化项目渲染：避免在 LazyColumn 中使用的可组合函数中进行大量计算。</li>
+<li>调试列表更新中的不一致行为：</li>
+</ol>
+
+
+<p>确保数据源稳定并符合 UI 预期。使用SnapshotStateList 可以帮助保持反应性。</p>
+
+<ol>
+<li>SnapshotStateList 和 ArrayList 之间的区别：</li>
+</ol>
+
+
+<p>SnapshotStateList 是被动的；更改会自动触发 Compose 中的重组。ArrayList 不是被动的，需要手动通知 UI 更新。</p>
+
+<ol>
+<li>使用 SubcomposeLayout</li>
+</ol>
+
+
+<p>SubcomposeLayout 是 Jetpack Compose 中一个强大的布局工具，可让你按需组合布局的各个部分。这对于 UI 的某些部分占用大量资源或可能无法立即使用的情况尤其有用，例如从网络或数据库加载图像。SubcomposeLayout 允许按需组合布局的各个部分。</p>
+
+<p>示例：动态加载图像并显示占位符，直到准备好为止。</p>
+
+<pre><code class="Kotlin">@Composable
+fun ImageWithPlaceholder(imageUrl: String, placeholder: Painter) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        SubcomposeLayout { constraints -&gt;
+            // First, compose the placeholder
+            val placeholderLayout = subcompose(0) {
+                Image(painter = placeholder, contentDescription = null, modifier = Modifier.fillMaxSize())
+            }
+
+            // Compose the image once it's loaded
+            val imageLayout = subcompose(1) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )你
+            }
+
+            // Return the max size for the layout
+            layout(constraints.maxWidth, constraints.maxHeight) {
+                placeholderLayout[0].measure(constraints).placeRelative(0, 0)
+                imageLayout[0].measure(constraints).placeRelative(0, 0)
+            }
+        }
+    }
+}
+
+@Preview
+@Composable
+fun ImageWithPlaceholderPreview() {
+    ImageWithPlaceholder(
+        imageUrl = "https://www.example.com/image.jpg",
+        placeholder = painterResource(id = R.drawable.placeholder_image)
+    )
+}
+</code></pre>
+
+<ul>
+<li>SubcomposeLayout：此布局允许你根据需要组合布局的各个部分。在这里，我们首先组合占位符，然后在图像准备好后组合图像。</li>
+<li>subcompose()：此函数用于组合布局的各个部分。subcompose 函数返回 MeasureResult 对象列表，然后你可以测量这些对象并将其放置在屏幕上。</li>
+<li>AsyncImage：我们使用 coil-compose 库中的 AsyncImage 异步加载图像。加载时，会显示占位符。</li>
+<li>占位符：首先显示占位符。图像准备好后，它会接管。</li>
+</ul>
+
+
+<p>此方法可帮助你通过减少不必要的重新组合和更优雅地处理图像或数据等动态内容来创建更高效​​的 UI。</p>
+
+<ol>
+<li><p>将旧版 RecyclerView 迁移到 Compose：</p></li>
+<li><p>用 LazyColumn 替换 RecyclerView。</p></li>
+<li>将适配器逻辑移至可组合函数。</li>
+<li>使用 Remember 或 SnapshotStateList 进行状态管理。</li>
+<li>使用 Keys 进行优化。</li>
+</ol>
+
+
+<h2>结论</h2>
+
+<ul>
+<li>Compose 不需要 DiffUtils，因为它建立在声明性和状态驱动的架构上。</li>
+<li>带有 key 的 LazyColumn 和 SnapshotStateList 提供类似的优化。</li>
+<li>智能重组可确保高效的 UI 更新，从而减少手动优化的需要。</li>
+</ul>
+
+
+<p>通过拥抱 Compose 的声明性特性，你可以专注于构建美观、响应迅速的 UI，而无需担心列表更新的复杂性。</p>
+
+<p>Happy Composing！</p>
+
+<h2>参考文献</h2>
+
+<ol>
+<li>Myers, E. (1986)。O(ND) 差分算法及其变体。ACM编程语言和系统事务，1(2)，251–266。</li>
+<li><a href="https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil">Android 开发者文档 — DiffUtils</a></li>
+</ol>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Compose多平台 (CMP) 开发的四个实用技巧]]></title>
@@ -675,158 +1144,6 @@ dependencies { ... }
 <li><a href="https://touchlab.co/compose-multiplatform-transition-guide">Jetpack Compose to Compose Multiplatform: Transition Guide</a></li>
 <li><a href="https://stackoverflow.com/questions/71510247/how-to-convert-kotlin-project-to-kotlin-multiplatform-mobile-after-the-project-c">How to convert Kotlin project to Kotlin Multiplatform Mobile after the project completion?</a></li>
 <li><a href="https://markonovakovic.medium.com/from-android-to-multiplatform-migrating-real-100-jetpack-compose-app-to-fully-multiplatform-app-2d65dc9e212e">From Android to Multiplatform: Migrating real 100% Jetpack Compose App to fully Multiplatform App. Intro</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Compose大前端从上车到起飞]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/11/24/master-compose-multiplatform/"/>
-    <updated>2024-11-24T08:45:46+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/11/24/master-compose-multiplatform</id>
-    <content type="html"><![CDATA[<p>在前面的一篇文章<a href="https://juejin.cn/post/7436648335380496434">赶紧上车开启Compose大前端之路</a>中我们学习了CMP的基本概念以及如何创建一个CMP项目。今天将继续学习CMP，深入研究项目的配置方法，了解CMP的内部机制并总结一些CMP开发的最佳实践。</p>
-
-<p><a href=""><img src="https://repository-images.githubusercontent.com/293498508/6469be07-159b-49de-9ffe-56340d5dfd07" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>深入了解项目结构</h2>
-
-<p>CMP的基础结构与一个标准的Android应用的项目结构基本一样，只不过主module名字变成了「composeApp」。项目根目录下的build.gradle.kts是整个项目的配置，主要是指定使用的插件；settings.gradle.kts指定项目的依赖仓库，以及项目包含哪些module；gradle/wrapper/libs.version.toml定义着依赖的版本信息。模块「composeApp」包含着源码集合（source sets）以及一个build.gradle.kts，这是描述这个模块如何构建的脚本。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/project-view.png" alt="图1. 项目结构" /></p>
-
-<p>对于Android开发同学来说，这样的项目结构非常熟悉，事实上如果把项目视图切换到「Android」，就会发现，这比起常规的Android项目，无非就是多了一些源码集合。</p>
-
-<p>仔细看一下源码集合「androidMain」它就是一个标准的Android项目，里面有AndroidManifest文件，以及一个入口MainActivity，它会调用「commonMain」中定义的composable App()，由此就进入到了「commonMain」中。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/android-entry.png" alt="图2. Android源码关系" /></p>
-
-<p>虽然并不在源码集合中，iosApp子目录其实是一个标准的Xcode项目，里面全是Xcode项目的配置文件，可以用Xcode直接打开。它是iOS应用的入口，它的调用顺序是iOSApp，到ContentView，这两个是标准的iOS的代码，用的是Swift。然后会进入到「iosMain」中的MainConntroller，这里就到了Kotlin地界了，MainController，再进入到common中的composable App()，由此进入了「commonMain」中。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/ios-entry.png" alt="图3. iOS源码关系" /></p>
-
-<h2>依赖配置方法</h2>
-
-<p>现代的软件不可能全都是从零开始，有很多现成的代码库可以使用，这就需要为项目配置依赖。CMP中依赖配置方法与常规的Android略不一样，视依赖的使用，以及依赖的平台依赖性，需要分别针对不同的源码集合配置。</p>
-
-<p>需要注意的就是依赖的作用域，如果是在commonMain中配置的，那就会对所有的平台生效；如果是为androidMain配置的依赖，只能在Android中生效，以次类推。</p>
-
-<h3>在源码集合中配置依赖</h3>
-
-<p>最直接的方式就是针对每个源码集合配置其依赖：</p>
-
-<pre><code class="Kotlin">kotlin {
-    sourceSets {
-        commonMain.dependencies {
-            implementation("com.example:my-library:1.0") // 所有平台共享的依赖
-        }
-    }
-}
-</code></pre>
-
-<h3>在顶层DSL dependencies中配置</h3>
-
-<p>除了在源码集合处配置依赖，也可以在顶层DSL dependencies中配置，本质都是一样的，只不过是方式略有不同。具体的格式是<strong> &lt;源码集合&gt;&lt;具体的依赖&gt; </strong>，比如上面酱紫写：</p>
-
-<pre><code class="Kotlin">dependencies {
-    "commonMainImplementation"("com.example:my-library:1.0")
-}
-</code></pre>
-
-<p>这与像上面在源码集合commonMain中配置是一样的。在顶层配置依赖的好处在于这里可以配置一些源码集合中找不到的依赖，如testing等等。</p>
-
-<h3>本地module如何相互依赖</h3>
-
-<p>如果是本地的库（module），可以通过project方式引入，同样的如果是共享的库加在common里，如果是某个平台特有的，或者只想在某个平台使用就单独加到它上面：</p>
-
-<pre><code class="Kotlin">kotlin {
-    sourceSets {
-        commonMain.dependencies {
-            implementation(project(":some-other-multiplatform-module"))
-        }
-    }
-}
-</code></pre>
-
-<h2>如何共享和定制代码</h2>
-
-<p>CMP的终极目的是要尽可能的共享代码，让一套代码能够跑在多个平台上面。但现实的世界是不完美的，平台的差异是不可忽视的。像存储，I/O，硬件资源等等都是平台强相关的。我们只能尽可能多的共享我们自己写的业务逻辑，对于实现业务逻辑而需要的系统平台相关的API，肯定还是需要每个平台定制化的去实现。</p>
-
-<p>CMP通过Kotlin中的关键字expect和actual来处理平台定制API。</p>
-
-<p>具体的做法就是在common中定义一个用关键字expect修饰的类型（函数，类，接口枚举，属性等），然后在每个平台的源码集合中去具体实现，并用关键字actual来修饰。注意，这里的类型没有限制，可以是函数，可以是类/接口/枚举，也可以是属性，尽管绝大多数情况下都是函数。</p>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/expect-functions-properties.svg" alt="图4. 用expect和actual来定制API" /></p>
-
-<p>可以理解为OO中的接口，但又不完全一样。区别在于，common中的expect函数不能有默认实现代码，并且函数的声明要在同一个包下面。编译的时候，编译器会用平台代码里面的actual去替换common中的expect函数。也就是说这是发生在编译时的行为，所以它要求包名和函数的签名完全一致。</p>
-
-<h2>资源管理</h2>
-
-<p>CMP是能构建跨平台UI的，而UI必然会涉及资源，最常见的资源就是图片和字符串，资源的复杂地方在于它会有限定属性，比如不同屏幕分辨率要用不同的图片，比如不同的地区语言要用不同的字符串，所以资源是相当复杂的，而且平台强相关。</p>
-
-<p>为此CMP提供了一个专门的库用于管理资源，可以屏蔽平台特定，以统一的方式来管理资源。只需要在commonMain中引入依赖即可：</p>
-
-<pre><code class="Kotlin">kotlin {
-    sourceSets {
-        commonMain.dependencies {
-            implementation(compose.components.resources)
-        }
-    }
-}
-</code></pre>
-
-<p>资源是放在commonMain中与kotlin同级别的目录中：</p>
-
-<p><img src="https://resources.jetbrains.com/help/img/kotlin-multiplatform-dev/compose-resources-qualifiers.png" alt="图5. 资源文件管理" /></p>
-
-<p>资源可以分为几种类型，图片应该放在子目录drawable中，字体资源放在fonts中，字符串放在values中，其他文件放在files中。</p>
-
-<p>资源文件还可以有限定符以支持定制化，如屏幕分辨率（xhdpi，xxhdpi等），区域语言（en，zh-rCN等）和主题（dark，light等）。可以发现，规则与Android平台资源管理规则是非常接近的。</p>
-
-<p>图片字体等直接添加文件即可，字符串的话放在一个xml文件中，根Tag是resources，每个字符串的Tag是string，如：</p>
-
-<pre><code class="Kotlin">&lt;resources&gt;
-    &lt;string name="app_name"&gt;My awesome app&lt;/string&gt;
-    &lt;string name="title"&gt;Some title&lt;/string&gt;
-&lt;/resources&gt;
-</code></pre>
-
-<p>需要注意资源的命名，与Android的资源规则一样，要是小写字符，可以有数字和下划线。</p>
-
-<p>添加好资源后，编译插件会自动生成一个类Res，通过它就可以引用各种资源，如：</p>
-
-<pre><code class="Kotlin">Image(
-    painter = painterResource(Res.drawable.my_icon),
-    contentDescription = null
-)
-
-Text(stringResource(Res.string.app_name))
-</code></pre>
-
-<h2>一些开发实践建议</h2>
-
-<p>CMP是为了构建跨平台应用的，那么应该尽最大的可能去共享代码。虽然有平台定制机制，但只应该用它来定制细粒度的具体的API，而不是业务逻辑。比如说，从一个文件中读文本内容，不应该定义一个getFileContent，而是应该定制细粒度的openFile，closeFile和readLine，这是因为读取文件过程真正不同的是处理文件的API，除打开文件，读出每一行以外，其他的逻辑是一样的，应该共享。</p>
-
-<p>还有，在写业务的时候要注意看Compose文档中以及Kotlin文档中API标注的平台范围，尽可能选择标记为「Common」或者「Cmn」的API。</p>
-
-<p>另外，因为Kotlin是基于JVM的语言，标准JDK中的API都可以用，但在CMP的iOS（目标是Native）平台和Web（目标是Wasm）却无法使用JDK的API，所以我们应该多使用Kotlin标准库以及Kotlin扩展库（kotlinx），这些API都做了多平台适配。</p>
-
-<h2>总结</h2>
-
-<p>利益于Gradle中的源码集合，CMP对源码的结构是很宽容的，并没有严格的要求，这对于现有项目来说是相当友好的，因为把现有的项目源码搬进来就可以了，不用改太多，然后通过源码集合来做具体的指定和逻辑上的关系处理。每个源码集合其实都是其平台的一个标准项目，把common作为其依赖而已，关系就这么简单，甚至还可以用其平台的原生方式去写UI，写逻辑，这都是可以的。</p>
-
-<p>虽然这样做貌似会失去共享代码和逻辑的意义，但是这对改造现有项目是十分友好的，比如第一步可能是把Android项目和iOS项目先融合进来，然后再慢慢的把两个平台的共享代码抽离出来入进common。这样做不但能慢慢推进跨端，每个项目各自仍是完整的，如果有紧急 的事情仍可先用原生方式去开发构建。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/multiplatform-add-dependencies.html">Adding dependencies on multiplatform libraries</a></li>
-<li><a href="https://kotlinlang.org/docs/gradle-configure-project.html#configure-dependencies">Configure dependencies</a></li>
-<li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-connect-to-apis.html">Use platform-specific APIs</a></li>
-<li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/compose-multiplatform-resources.html">Resources overview</a></li>
 </ul>
 
 ]]></content>
