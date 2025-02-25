@@ -1,0 +1,591 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>一文带你理解OkHttp中的Gzip压缩 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="详细解释流行框架OkHttp中的gzip压缩机制，并用实例展示如何手动处理响应的解压和发送压缩请求。">
+  <meta name="keywords" content="OkHttp, Gzip">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2025/02/25/understanding-okhttp-gzip-compression">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">一文带你理解OkHttp中的Gzip压缩</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2025-02-25T22:28:09+08:00'><span class='date'><span class='date-month'>Feb</span> <span class='date-day'>25</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>10:28 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自<a href="ttps://medium.com/tech-insider/okhttps-gzip-compression-904919638458">OkHttp’s Gzip Compression</a>，原文发布于2020年5月1日。本文假定读者对HTTP有基本的了解，以及使用过OkHttp，否则理解起来可能会一点困难。</p></blockquote>
+
+<p><strong>译注：</strong> OkHttp确实会自动添加gzip并处理响应。但如果显示的给请求添加除了gzip之外的字段，如&#8221;Accept-Encoding: gzip, deflate, br&#8221;，那么就需要手动处理响应。其实一般时候我们并不需要手动设置，除非是模拟浏览器时（比如用了浏览器的UA），或者某些服务器强制deflate字段。更多的信息可以<a href="https://stackoverflow.com/questions/51901333/okhttp-3-how-to-decompress-gzip-deflate-response-manually-using-java-android">看这里</a>。</p>
+
+<p><a href="/blog/2025/02/25/understanding-okhttp-gzip-compression/"><img src="https://img-blog.csdnimg.cn/879e064594104e0ab5671f6710ffea24.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>压缩是一种简单有效的节省带宽和加快移动用户交互速度的方法。当用户点击你的页面屏幕时，会调用你的服务器来提供请求的响应。响应越大，屏幕上显示数据的时间就越长。通过压缩，即使你的访问者的互联网连接速度非常慢并且你的 API 响应过于繁重，他们也能享受快速加载。</p>
+
+<h2>这是如何工作的呢？</h2>
+
+<p><strong>Gzip 会找到相似的字符串，并用一些占位符临时替换这些字符串，以缩小整体大小。</strong>如果你使用大量重复文本，并且有大量空格， 这也没有问题。你可以使用 Gzip 压缩你的响应主体以及请求主体。由于文件小得多，此操作可大大减少传输时间。</p>
+
+<p><strong>注意：</strong>如果你尝试使用postman，它会默认在header的隐藏部分中添加 Accept-Encoding: gzip字段。</p>
+
+<blockquote><p>重要提示：OkHttp 也会自动在请求中添加字段 Accept-Encoding 并自动识别响应中的 Content-Encoding，因此会自行解压缩响应数据，因此无需单独设置，但假设当我们必须将压缩的请求数据发送到服务器时，我们就必须编写自己的拦截器。</p></blockquote>
+
+<p>这种压缩的棘手之处在于请求者和服务器都知道可以发送压缩文件。你必须告诉服务器您接受这种编码，然后它才会提供。该协议分为两部分：</p>
+
+<ul>
+<li>请求者发送一个header，告知服务器它接受压缩内容：Accept-Encoding：gzip</li>
+<li>服务器使用此header确认你的请求：Content-Encoding：gzip</li>
+</ul>
+
+
+<p>说得够多的了，我想你还有耐心，所以让我们看一些代码。</p>
+
+<h2>编写自己的拦截器</h2>
+
+<p>先决条件：了解 OkHttp 中的<a href="https://square.github.io/okhttp/features/interceptors/">拦截器（Interceptors）</a>。</p>
+
+<ol>
+<li>解开 Gzip 响应：在请求header中添加 Accept-Encoding: gzip，并在获取响应时在其响应header中查找 Content-Encoding: gzip。如果存在则解压缩，否则直接返回响应。</li>
+</ol>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kn">import</span> <span class="nn">java.io.IOException</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.Headers</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.Interceptor</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.Request</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.Response</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.ResponseBody</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okio.GzipSource</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okio.Okio</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">GzipInterceptor</span> <span class="kd">implements</span> <span class="n">Interceptor</span> <span class="o">{</span>
+</span><span class='line'>    <span class="nd">@Override</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="n">Response</span> <span class="nf">intercept</span><span class="o">(</span><span class="n">Chain</span> <span class="n">chain</span><span class="o">)</span> <span class="kd">throws</span> <span class="n">IOException</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Request</span><span class="o">.</span><span class="na">Builder</span> <span class="n">newRequest</span> <span class="o">=</span> <span class="n">chain</span><span class="o">.</span><span class="na">request</span><span class="o">().</span><span class="na">newBuilder</span><span class="o">();</span>
+</span><span class='line'>        <span class="n">newRequest</span><span class="o">.</span><span class="na">addHeader</span><span class="o">(</span><span class="s">&quot;Accept-Encoding&quot;</span><span class="o">,</span> <span class="s">&quot;gzip&quot;</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">Response</span> <span class="n">response</span> <span class="o">=</span> <span class="n">chain</span><span class="o">.</span><span class="na">proceed</span><span class="o">(</span><span class="n">newRequest</span><span class="o">.</span><span class="na">build</span><span class="o">());</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">isGzipped</span><span class="o">(</span><span class="n">response</span><span class="o">))</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">return</span> <span class="nf">unzip</span><span class="o">(</span><span class="n">response</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">response</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">Response</span> <span class="nf">unzip</span><span class="o">(</span><span class="kd">final</span> <span class="n">Response</span> <span class="n">response</span><span class="o">)</span> <span class="kd">throws</span> <span class="n">IOException</span> <span class="o">{</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">response</span><span class="o">.</span><span class="na">body</span><span class="o">()</span> <span class="o">==</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">response</span><span class="o">;</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">GzipSource</span> <span class="n">gzipSource</span> <span class="o">=</span> <span class="k">new</span> <span class="nf">GzipSource</span><span class="o">(</span><span class="n">response</span><span class="o">.</span><span class="na">body</span><span class="o">().</span><span class="na">source</span><span class="o">());</span>
+</span><span class='line'>        <span class="n">String</span> <span class="n">bodyString</span> <span class="o">=</span> <span class="n">Okio</span><span class="o">.</span><span class="na">buffer</span><span class="o">(</span><span class="n">gzipSource</span><span class="o">).</span><span class="na">readUtf8</span><span class="o">();</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">ResponseBody</span> <span class="n">responseBody</span> <span class="o">=</span> <span class="n">ResponseBody</span><span class="o">.</span><span class="na">create</span><span class="o">(</span><span class="n">response</span><span class="o">.</span><span class="na">body</span><span class="o">().</span><span class="na">contentType</span><span class="o">(),</span> <span class="n">bodyString</span><span class="o">);</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">Headers</span> <span class="n">strippedHeaders</span> <span class="o">=</span> <span class="n">response</span><span class="o">.</span><span class="na">headers</span><span class="o">().</span><span class="na">newBuilder</span><span class="o">()</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">removeAll</span><span class="o">(</span><span class="s">&quot;Content-Encoding&quot;</span><span class="o">)</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">removeAll</span><span class="o">(</span><span class="s">&quot;Content-Length&quot;</span><span class="o">)</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">build</span><span class="o">();</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">response</span><span class="o">.</span><span class="na">newBuilder</span><span class="o">()</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">headers</span><span class="o">(</span><span class="n">strippedHeaders</span><span class="o">)</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">body</span><span class="o">(</span><span class="n">responseBody</span><span class="o">)</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">message</span><span class="o">(</span><span class="n">response</span><span class="o">.</span><span class="na">message</span><span class="o">())</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">build</span><span class="o">();</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">Boolean</span> <span class="nf">isGzipped</span><span class="o">(</span><span class="n">Response</span> <span class="n">response</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">response</span><span class="o">.</span><span class="na">header</span><span class="o">(</span><span class="s">&quot;Content-Encoding&quot;</span><span class="o">)</span> <span class="o">!=</span> <span class="kc">null</span> <span class="o">&amp;&amp;</span> <span class="n">response</span><span class="o">.</span><span class="na">header</span><span class="o">(</span><span class="s">&quot;Content-Encoding&quot;</span><span class="o">).</span><span class="na">equals</span><span class="o">(</span><span class="s">&quot;gzip&quot;</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ol>
+<li>创建 Gzip 请求：如果你的请求过大，那么我们可以使用它来压缩我们的请求。为了通知服务器，我们将在请求header中添加 Content-Encoding: gzip。</li>
+</ol>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kn">import</span> <span class="nn">java.io.IOException</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.Interceptor</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.MediaType</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.Request</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.RequestBody</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okhttp3.Response</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okio.BufferedSink</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okio.GzipSink</span><span class="o">;</span>
+</span><span class='line'><span class="kn">import</span> <span class="nn">okio.Okio</span><span class="o">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">GzipInterceptor</span> <span class="kd">implements</span> <span class="n">Interceptor</span> <span class="o">{</span>
+</span><span class='line'>    <span class="nd">@Override</span> <span class="kd">public</span> <span class="n">Response</span> <span class="nf">intercept</span><span class="o">(</span><span class="n">Interceptor</span><span class="o">.</span><span class="na">Chain</span> <span class="n">chain</span><span class="o">)</span> <span class="kd">throws</span> <span class="n">IOException</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">Request</span> <span class="n">originalRequest</span> <span class="o">=</span> <span class="n">chain</span><span class="o">.</span><span class="na">request</span><span class="o">();</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="o">(</span><span class="n">originalRequest</span><span class="o">.</span><span class="na">body</span><span class="o">()</span> <span class="o">==</span> <span class="kc">null</span> <span class="o">||</span> <span class="n">originalRequest</span><span class="o">.</span><span class="na">header</span><span class="o">(</span><span class="s">&quot;Content-Encoding&quot;</span><span class="o">)</span> <span class="o">!=</span> <span class="kc">null</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">chain</span><span class="o">.</span><span class="na">proceed</span><span class="o">(</span><span class="n">originalRequest</span><span class="o">);</span>
+</span><span class='line'>        <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">Request</span> <span class="n">compressedRequest</span> <span class="o">=</span> <span class="n">originalRequest</span><span class="o">.</span><span class="na">newBuilder</span><span class="o">()</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">header</span><span class="o">(</span><span class="s">&quot;Content-Encoding&quot;</span><span class="o">,</span> <span class="s">&quot;gzip&quot;</span><span class="o">)</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">method</span><span class="o">(</span><span class="n">originalRequest</span><span class="o">.</span><span class="na">method</span><span class="o">(),</span> <span class="n">gzip</span><span class="o">(</span><span class="n">originalRequest</span><span class="o">.</span><span class="na">body</span><span class="o">()))</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">build</span><span class="o">();</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">chain</span><span class="o">.</span><span class="na">proceed</span><span class="o">(</span><span class="n">compressedRequest</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="kd">private</span> <span class="n">RequestBody</span> <span class="nf">gzip</span><span class="o">(</span><span class="kd">final</span> <span class="n">RequestBody</span> <span class="n">body</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="k">new</span> <span class="nf">RequestBody</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>            <span class="nd">@Override</span> <span class="kd">public</span> <span class="n">MediaType</span> <span class="nf">contentType</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">return</span> <span class="n">body</span><span class="o">.</span><span class="na">contentType</span><span class="o">();</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="nd">@Override</span> <span class="kd">public</span> <span class="kt">long</span> <span class="nf">contentLength</span><span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>                <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="o">;</span> <span class="c1">// 事先不知道请求内容的长度</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="nd">@Override</span> <span class="kd">public</span> <span class="kt">void</span> <span class="nf">writeTo</span><span class="o">(</span><span class="n">BufferedSink</span> <span class="n">sink</span><span class="o">)</span> <span class="kd">throws</span> <span class="n">IOException</span> <span class="o">{</span>
+</span><span class='line'>                <span class="n">BufferedSink</span> <span class="n">gzipSink</span> <span class="o">=</span> <span class="n">Okio</span><span class="o">.</span><span class="na">buffer</span><span class="o">(</span><span class="k">new</span> <span class="nf">GzipSink</span><span class="o">(</span><span class="n">sink</span><span class="o">));</span>
+</span><span class='line'>                <span class="n">body</span><span class="o">.</span><span class="na">writeTo</span><span class="o">(</span><span class="n">gzipSink</span><span class="o">);</span>
+</span><span class='line'>                <span class="n">gzipSink</span><span class="o">.</span><span class="na">close</span><span class="o">();</span>
+</span><span class='line'>            <span class="o">}</span>
+</span><span class='line'>        <span class="o">};</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>好了，就到这里吧，如果你愿意的话，可以赞一下。</p>
+
+<p>参考资料：</p>
+
+<ol>
+<li><a href="https://square.github.io/okhttp/">https://square.github.io/okhttp/</a></li>
+<li><a href="https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-compression-in-web-development">https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-
+compression-in-web-development</a></li>
+<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://en.wikipedia.org/wiki/Gzip</a></li>
+<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://www.youtube.com/watch?v=Mjab_aZsdxw</a></li>
+</ol>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2025-02-25T22:28:09+08:00'><span class='date'><span class='date-month'>Feb</span> <span class='date-day'>25</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>10:28 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2025/02/24/diffutils-and-jetpack-compose/" title="Previous Post: 详解DiffUtils、Myers算法和 Jetpack Compose">&laquo; 详解DiffUtils、Myers算法和 Jetpack Compose</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2025 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-02-24T22:46:38+08:00</updated>
+  <updated>2025-02-25T22:30:59+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,168 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[一文带你理解OkHttp中的Gzip压缩]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/02/25/understanding-okhttp-gzip-compression/"/>
+    <updated>2025-02-25T22:28:09+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/02/25/understanding-okhttp-gzip-compression</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="ttps://medium.com/tech-insider/okhttps-gzip-compression-904919638458">OkHttp’s Gzip Compression</a>，原文发布于2020年5月1日。本文假定读者对HTTP有基本的了解，以及使用过OkHttp，否则理解起来可能会一点困难。</p></blockquote>
+
+<p><strong>译注：</strong> OkHttp确实会自动添加gzip并处理响应。但如果显示的给请求添加除了gzip之外的字段，如&#8221;Accept-Encoding: gzip, deflate, br&#8221;，那么就需要手动处理响应。其实一般时候我们并不需要手动设置，除非是模拟浏览器时（比如用了浏览器的UA），或者某些服务器强制deflate字段。更多的信息可以<a href="https://stackoverflow.com/questions/51901333/okhttp-3-how-to-decompress-gzip-deflate-response-manually-using-java-android">看这里</a>。</p>
+
+<p><a href=""><img src="https://img-blog.csdnimg.cn/879e064594104e0ab5671f6710ffea24.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>压缩是一种简单有效的节省带宽和加快移动用户交互速度的方法。当用户点击你的页面屏幕时，会调用你的服务器来提供请求的响应。响应越大，屏幕上显示数据的时间就越长。通过压缩，即使你的访问者的互联网连接速度非常慢并且你的 API 响应过于繁重，他们也能享受快速加载。</p>
+
+<h2>这是如何工作的呢？</h2>
+
+<p><strong>Gzip 会找到相似的字符串，并用一些占位符临时替换这些字符串，以缩小整体大小。</strong>如果你使用大量重复文本，并且有大量空格， 这也没有问题。你可以使用 Gzip 压缩你的响应主体以及请求主体。由于文件小得多，此操作可大大减少传输时间。</p>
+
+<p><strong>注意：</strong>如果你尝试使用postman，它会默认在header的隐藏部分中添加 Accept-Encoding: gzip字段。</p>
+
+<blockquote><p>重要提示：OkHttp 也会自动在请求中添加字段 Accept-Encoding 并自动识别响应中的 Content-Encoding，因此会自行解压缩响应数据，因此无需单独设置，但假设当我们必须将压缩的请求数据发送到服务器时，我们就必须编写自己的拦截器。</p></blockquote>
+
+<p>这种压缩的棘手之处在于请求者和服务器都知道可以发送压缩文件。你必须告诉服务器您接受这种编码，然后它才会提供。该协议分为两部分：</p>
+
+<ul>
+<li>请求者发送一个header，告知服务器它接受压缩内容：Accept-Encoding：gzip</li>
+<li>服务器使用此header确认你的请求：Content-Encoding：gzip</li>
+</ul>
+
+
+<p>说得够多的了，我想你还有耐心，所以让我们看一些代码。</p>
+
+<h2>编写自己的拦截器</h2>
+
+<p>先决条件：了解 OkHttp 中的<a href="https://square.github.io/okhttp/features/interceptors/">拦截器（Interceptors）</a>。</p>
+
+<ol>
+<li>解开 Gzip 响应：在请求header中添加 Accept-Encoding: gzip，并在获取响应时在其响应header中查找 Content-Encoding: gzip。如果存在则解压缩，否则直接返回响应。</li>
+</ol>
+
+
+<pre><code class="Java">import java.io.IOException;
+
+import okhttp3.Headers;
+import okhttp3.Interceptor;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+import okio.GzipSource;
+import okio.Okio;
+
+public class GzipInterceptor implements Interceptor {
+    @Override
+    public Response intercept(Chain chain) throws IOException {
+        Request.Builder newRequest = chain.request().newBuilder();
+        newRequest.addHeader("Accept-Encoding", "gzip");
+        Response response = chain.proceed(newRequest.build());
+
+        if (isGzipped(response)) {
+            return unzip(response);
+        } else {
+            return response;
+        }
+    }
+
+    private Response unzip(final Response response) throws IOException {
+
+        if (response.body() == null) {
+            return response;
+        }
+
+        GzipSource gzipSource = new GzipSource(response.body().source());
+        String bodyString = Okio.buffer(gzipSource).readUtf8();
+
+        ResponseBody responseBody = ResponseBody.create(response.body().contentType(), bodyString);
+
+        Headers strippedHeaders = response.headers().newBuilder()
+                .removeAll("Content-Encoding")
+                .removeAll("Content-Length")
+                .build();
+        return response.newBuilder()
+                .headers(strippedHeaders)
+                .body(responseBody)
+                .message(response.message())
+                .build();
+
+    }
+
+    private Boolean isGzipped(Response response) {
+        return response.header("Content-Encoding") != null &amp;&amp; response.header("Content-Encoding").equals("gzip");
+    }
+}
+</code></pre>
+
+<ol>
+<li>创建 Gzip 请求：如果你的请求过大，那么我们可以使用它来压缩我们的请求。为了通知服务器，我们将在请求header中添加 Content-Encoding: gzip。</li>
+</ol>
+
+
+<pre><code class="Java">import java.io.IOException;
+
+import okhttp3.Interceptor;
+import okhttp3.MediaType;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okio.BufferedSink;
+import okio.GzipSink;
+import okio.Okio;
+
+public class GzipInterceptor implements Interceptor {
+    @Override public Response intercept(Interceptor.Chain chain) throws IOException {
+        Request originalRequest = chain.request();
+
+        if (originalRequest.body() == null || originalRequest.header("Content-Encoding") != null) {
+            return chain.proceed(originalRequest);
+        }
+
+        Request compressedRequest = originalRequest.newBuilder()
+                .header("Content-Encoding", "gzip")
+                .method(originalRequest.method(), gzip(originalRequest.body()))
+                .build();
+        return chain.proceed(compressedRequest);
+    }
+
+    private RequestBody gzip(final RequestBody body) {
+        return new RequestBody() {
+            @Override public MediaType contentType() {
+                return body.contentType();
+            }
+
+            @Override public long contentLength() {
+                return -1; // 事先不知道请求内容的长度
+            }
+
+            @Override public void writeTo(BufferedSink sink) throws IOException {
+                BufferedSink gzipSink = Okio.buffer(new GzipSink(sink));
+                body.writeTo(gzipSink);
+                gzipSink.close();
+            }
+        };
+    }
+}
+</code></pre>
+
+<p>好了，就到这里吧，如果你愿意的话，可以赞一下。</p>
+
+<p>参考资料：</p>
+
+<ol>
+<li><a href="https://square.github.io/okhttp/">https://square.github.io/okhttp/</a></li>
+<li><a href="https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-compression-in-web-development">https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-
+compression-in-web-development</a></li>
+<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://en.wikipedia.org/wiki/Gzip</a></li>
+<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://www.youtube.com/watch?v=Mjab_aZsdxw</a></li>
+</ol>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[详解DiffUtils、Myers算法和 Jetpack Compose]]></title>
@@ -964,186 +1126,6 @@ adb shell am get-standby-bucket &lt;APP_PACKAGE_NAME&gt;
 <li><a href="https://medium.com/newsoft-official/compose-multiplatform-vs-flutter-771673612c61">Compose Multiplatform VS. Flutter</a></li>
 <li><a href="https://infinitelambda.com/flutter-kotlin-multiplatform-native-comparison/">FLUTTER VS KOTLIN MULTIPLATFORM VS NATIVE</a></li>
 <li><a href="https://www.miquido.com/blog/kotlin-multiplatform-vs-flutter/">Flutter vs. Kotlin Multiplatform Mobile</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[实战：把一个现有的Compose项目转化为CMP项目]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/12/09/migrate-existing-project-to-cmp/"/>
-    <updated>2024-12-09T22:09:28+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/12/09/migrate-existing-project-to-cmp</id>
-    <content type="html"><![CDATA[<p>通过<a href="https://juejin.cn/column/7367555191338467337">前面两篇文章</a>的学习，我们已经对CMP有了一定的了解，接下来要进入实战阶段。在现实的世界中极小数项目会从0开始，今天重点研究一下如何把一个现成的用Jetpack Compose开发的Android项目转成CMP项目。</p>
-
-<p><a href=""><img src="https://www.mouritech.com/wp-content/uploads/2024/01/Compose-Multiplatform.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>总体思路</h2>
-
-<p>在前面的文章<a href="https://juejin.cn/post/7439251025385996307">Compose大前端从上车到起飞</a>里面我们学习到了，CMP对Android开发同学是相当友好的，CMP项目与Android项目在项目结构上面是非常相似的。并且因为CMP的开发IDE就是Android Studio，因此，可以直接把一个Android项目改造成为CMP项目，而不是创建一个全新的CMP项目之后把项目代码移动进去。</p>
-
-<p>具体的步骤如下：</p>
-
-<ol>
-<li>添加CMP的插件，添加源码集合，配置CMP的依赖</li>
-<li>把代码从「androidMain」移动到「commonMain」中去</li>
-<li>把资源转换成为CMP方式</li>
-<li>添加并适配其他平台</li>
-</ol>
-
-
-<p><strong>小贴士：</strong> 针对 不同的类型的任务需要采取 不同的策略，比如开发功能的时候使用「自上而下」的方式要更为好一些，因为先关注大粒度的组件，类与方法，不被细节拖住，更有利于我们看清架构和优先解决掉重点问题；但当做移植任务时，应该采用「自下而上」，因为依赖是一层套一层，先把下面的移好，上面的自然就会更加容易。</p>
-
-<p>这里选用的项目是先前用纯Jetpack Compose开发的<a href="https://github.com/alexhilton/Aeolus">一款天气应用</a>，项目比较简单，依赖不多，完全是用Jetpack Compose实现的UI，也符合<a href="https://juejin.cn/post/7411812014047461387">现代应用开发架构原则</a>，非常适合当作案例。</p>
-
-<p><strong>注意：</strong> 其实这里的项目并没有严格要求，只要是一个能运行的Android项目即可，其他的（是不是Jetpack Compose实现的，用的是不是Kotlin）并不是最关键的。因为CMP项目对于每个源码集合本身并没有明确的要求，前面的文章也讲了，每个平台的源码集合，其实就是其平台的完整的项目。移植的目的就是把 <strong>可共用共享</strong> 的代码从现有项目中抽出来放进「commonMain」中，即可以是原有的业务逻辑，也可以是新开发的代码。采用新技术或者新工具的一个非常重要的原则 就是要循序渐进，不搞一刀切。如果时间不充裕，完全可以新功能和新代码先用CMP方式开发，老代码暂且不动它，待日后慢慢再移植。当然了，纯Jetpack Compose实现的项目移植过程会相对容易一些。</p>
-
-<p>下面我们进行详细的一步一步的实践。</p>
-
-<h2>配置CMP的插件，源码集合和依赖</h2>
-
-<p>首先要做的是配置Gradle构建插件（这是把Gradle常用的Tasks等打包成为一个构建 插件，是编译过程中使用的）：</p>
-
-<ul>
-<li>使用Kotlin Multiplatform（「org.jetbrains.kotlin.multiplatform」）替换Kotlin Android（「org.jetbrains.kotlin.android」），这个主要是Kotlin语言的东西，版本号就是Kotlin的版本号，注意要与其他（如KSP，如Coroutines）版本进行匹配；</li>
-<li>添加Compose compiler（「org.jetbrains.kotlin.plugin.compose」）的插件，版本号要与Kotlin版本号保持一致；</li>
-<li>以及添加Compose Multiplatform（org.jetbrains.compose」）插件，版本号是CMP的版本号。</li>
-</ul>
-
-
-<p>注意，构建插件配置是修改项目根目录的那个build.gradle.kts：</p>
-
-<pre><code class="Kotlin">// Top-level build file where you can add configuration options common to all sub-projects/modules.
-plugins {
-    id("com.android.application") version "8.1.4" apply false
-    id("com.android.library") version "8.1.4" apply false
-    id("org.jetbrains.kotlin.multiplatform") version "2.0.21" apply false
-    id("com.google.devtools.ksp") version "2.0.21-1.0.28" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
-    id("org.jetbrains.compose") version "1.7.0" apply false
-}
-</code></pre>
-
-<p>之后是修改module的build.gradle.kts，先是启用需要的插件，然后是添加kotlin相关的配置（即DSL kotlin {&hellip;}），在其中指定需要编译的目标，源码集合以及其依赖，具体的可以仿照着CMP的demo去照抄就好了。对于依赖，可以把其都从顶层DSL dependencies中移动到androidMain.dependencies里面，如果有无法移动的就先放在原来的位置，暂不动它，最终build.gradle.kts会是酱紫：</p>
-
-<pre><code class="Kotlin">plugins {
-    id("com.android.application")
-    id("com.google.devtools.ksp")
-    id("org.jetbrains.kotlin.multiplatform")
-    id("org.jetbrains.kotlin.plugin.compose")
-    id("org.jetbrains.compose")
-}
-
-kotlin {
-    androidTarget {
-        @OptIn(org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi::class)
-        compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        }
-    }
-
-    sourceSets {
-        androidMain.dependencies {
-            // Jetpack
-            implementation("androidx.core:core-ktx:1.15.0")
-            implementation("androidx.appcompat:appcompat:1.7.0")
-            implementation("androidx.activity:activity-compose:1.9.3")
-            val lifecycleVersion = "2.8.7"
-            implementation("androidx.lifecycle:lifecycle-runtime-ktx:$lifecycleVersion")
-            implementation("androidx.lifecycle:lifecycle-runtime-compose:$lifecycleVersion")
-            implementation("androidx.lifecycle:lifecycle-viewmodel-compose:$lifecycleVersion")
-            val navVersion = "2.8.4"
-            implementation("androidx.navigation:navigation-runtime-ktx:$navVersion")
-            implementation("androidx.navigation:navigation-compose:$navVersion")
-            implementation("androidx.datastore:datastore-preferences:1.1.1")
-
-            // Google Play Services
-            implementation("com.google.android.gms:play-services-location:21.3.0")
-
-            // Compose
-            implementation(compose.preview)
-            implementation(project.dependencies.platform("androidx.compose:compose-bom:2024.02.00"))
-            implementation("androidx.compose.ui:ui")
-            implementation("androidx.compose.ui:ui-graphics")
-            implementation("androidx.compose.ui:ui-tooling-preview")
-            implementation("androidx.compose.material3:material3")
-            implementation("androidx.compose.material:material")
-
-            // Network
-            implementation("com.google.code.gson:gson:2.10.1")
-            implementation("com.squareup.retrofit2:retrofit:2.9.0")
-            implementation("com.squareup.retrofit2:converter-gson:2.9.0")
-            implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-
-            // Accompanist
-            implementation("com.google.accompanist:accompanist-permissions:0.32.0")
-        }
-        commonMain.dependencies {
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material)
-            implementation(compose.ui)
-            implementation(compose.components.resources)
-            implementation(compose.components.uiToolingPreview)
-            val lifecycleVersion = "2.8.3"
-            implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel:$lifecycleVersion")
-            implementation("org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose:$lifecycleVersion")
-        }
-    }
-}
-
-android { ... }
-
-dependencies { ... }
-</code></pre>
-
-<p>最后，把DSL android {&hellip;}中不支持的字段删除掉即可，如kotlinOptions，它用来指定Kotlin JVM target的，现改在DSL kotlin中的androidTarget()中指定了，但要注意Kotlin的JVM target要与android中的compileOptions的sourceCompatibility以及targetCompatibility版本保持一致，比如都是17或者都是11，否则会有编译错误。</p>
-
-<p>需要特别注意的是DSL kotlin中的源码集合名字要与真实的目录一致，否则编译会出错。建议的方式就是依照CMP的demo那样在module中去创建androidMain和commonMain即可。另外，可以把module名字从「app」改为「composeApp」，然后把运行配置从「app」改为「androidApp」，这下就齐活儿了：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/migrate-struct.png" alt="图1. 重命名后的项目结构" /></p>
-
-<p>CMP的插件和依赖配置好了以后，运行「androidApp」应该就可以正常运行。因为仅是配置一些依赖，这仍是一个完整的Android应用，应该能够正常运行。这时第一步就做完了，虽然看起来貌似啥也没干，但这已经是一个CMP项目了，基础打好了，可以大步向前了。</p>
-
-<p><strong>小贴士：</strong> 通过配置依赖可以发现，CMP的artifact依赖都是以org.jetbrans.*开头的，哪怕是对于Compose本身，纯Android上面Jetpack Compose的依赖是「&#8221;androidx.compose.ui:ui&#8221;」，而CMP中的则是「&#8221;org.jetbrains.compose.ui:ui&#8221;」。虽然都是Jetpack Compose，代码是兼容的，但技术上来讲是两个不同的实现。确切地说JetBrains的Compose是从谷歌的上面fork出来的一个分支，以让其更好的适用于CMP，但完全兼容，标准的Compose代码都是能正常跑的。</p>
-
-<h2>把代码从「androidMain」移动到「commonMain」</h2>
-
-<p>这是最关键的一步了，也是最难啃的硬骨头，具体的难度取决于项目中使用了多少「不兼容」的库和API。Compose和Jetpack中的绝大多数库都是支持的，可以在CMP中使用，可以无缝切换，这是JetBrains和Google共同努力的结果，谷歌现在对CMP/KMP的态度非常的积极，给与「第一优先支持（First class support）」。所以对于依赖于room，navigation，material和viewmodel的代码都可以直接移到common中。</p>
-
-<p>也就是说对于data部分，model部分以及domain部分（即view models）都可以直接先移到common中，因为这些层，从架构角度来说都属于业务逻辑，都应该是平台独立的，它们的主要依赖应该是Jetpack以及三方的库，这些库大多也都可以直接跨平台。</p>
-
-<p>当然，不可能这么顺利，因为或多或少会用到与平台强相关的API，比如最为常见的就是上下文对象（Context）以及像权限管理和硬件资源（如位置信息），这就需要用到平台定制机制（即expect/actual）来进行定制。</p>
-
-<p>可能有同学会很奇怪，为啥UI层还不移动到common中，UI是用Compose写的啊，而Compose是可以直接在CMP上跑的啊。Compose写的UI确实可以直接跑，但UI必然会用到资源，必须 先把资源从android中移到common中，否则UI是跑不起来的。</p>
-
-<h2>把资源转化成为CMP方式</h2>
-
-<p>在前一篇文章<a href="https://juejin.cn/post/7439251025385996307">Compose大前端从上车到起飞</a>有讲过CMP用一个库resources来专门处理资源，规则与Android开发管理资源的方式很像，所以可以把UI用到的资源移动到common中的composeResources里面，就差不多了。</p>
-
-<p>但需要特别注意，不要把全部的资源都从androidMain中移出，只需要把UI层用到的那部分资源移出即可。androidMain中至少要把Android强相关的资源留下，如应用的icon，应用的名字，以及一些关键的需要在manifest中使用的xml等。这是因为这些资源是需要在Android应用的配置文件AndroidManifest中使用的，所以必须还放在android源码集中。</p>
-
-<p>资源文件移动好后，就可以把UI移动到common中了，最后一步就是使用CMP的资源类Res代替Android的资源类R即可。</p>
-
-<p>到此，就完成了从Android项目到CMP项目的转变。</p>
-
-<h2>添加并适配其他平台</h2>
-
-<p>前面的工作做好后，再适配其他的平台就非常容易了，添加其他平台的target和入口（可以仿照CMP的demo），然后实现相关的expect接口即可。由此，一个大前端 项目就彻底大功告成了。</p>
-
-<h2>总结</h2>
-
-<p>CMP对项目结构中源码 集合 的限制 并不多，每个平台相关的sourceSet可以保持其原来的样子，这对现有项目是非常友好的，可以让现有的项目轻松的转成为CMP项目，这也是CMP最大的一个优势。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://touchlab.co/compose-multiplatform-transition-guide">Jetpack Compose to Compose Multiplatform: Transition Guide</a></li>
-<li><a href="https://stackoverflow.com/questions/71510247/how-to-convert-kotlin-project-to-kotlin-multiplatform-mobile-after-the-project-c">How to convert Kotlin project to Kotlin Multiplatform Mobile after the project completion?</a></li>
-<li><a href="https://markonovakovic.medium.com/from-android-to-multiplatform-migrating-real-100-jetpack-compose-app-to-fully-multiplatform-app-2d65dc9e212e">From Android to Multiplatform: Migrating real 100% Jetpack Compose App to fully Multiplatform App. Intro</a></li>
 </ul>
 
 ]]></content>
