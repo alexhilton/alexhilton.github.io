@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-02-25T22:30:59+08:00</updated>
+  <updated>2025-03-01T11:27:04+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,367 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[理解Android中的内存泄漏以及如何让LeakCanary来帮忙]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/03/01/understanding-memory-leaks/"/>
+    <updated>2025-03-01T11:05:54+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/03/01/understanding-memory-leaks</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/understanding-memory-leaks-in-android-how-leakcanary-can-help-4768df60f646">Understanding Memory Leaks in Android &amp; How LeakCanary Can Help</a>，原文发布于2024年12月27日。</p></blockquote>
+
+<p><strong>译者注：</strong> 关于内存优化，笔者也曾经写过两篇文章，侧重于内存问题的深入分析，如有兴趣可以作为拓展阅读：<a href="https://juejin.cn/post/7277489569958756364">让你不再惧怕内存优化</a>和<a href="https://juejin.cn/post/7287913786038992915">Android应用性能剖析全攻略</a>。</p>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Sx4veSpq_Z1oYBsP5Q7nwQ.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>作为 Android 开发者，管理内存是构建高性能应用的一个最关键方面。开发者面临的一个最常见问题是内存泄漏。这些泄漏会对应用的性能和用户体验产生负面影响，导致运行缓慢、崩溃甚至电池耗尽你。但别担心——有一种解决方案可以让发现和修复内存泄漏变得更容易，那就是LeakCanary。</p>
+
+<p>在这篇文章中，我们将首先探讨什么是内存泄漏、为什么会发生内存泄漏，然后介绍 LeakCanary 作为检测和修复 Android 应用程序中这些泄漏的强大工具。</p>
+
+<h2>什么是内存泄漏？</h2>
+
+<p>当你的应用保留不再需要的内存时，就会发生内存泄漏。简单来说，当不再使用的对象没有从内存中正确清除时，就会发生内存泄漏，从而导致你的应用消耗了不必要的内存。随着时间的推移，这可能会导致性能下降，在极端情况下，还会导致应用崩溃。</p>
+
+<h2>内存泄漏为何如此危险？</h2>
+
+<p>内存泄漏乍一看似乎无害，但它可能会给你的 Android 应用带来严重问题：</p>
+
+<ol>
+<li><strong>内存使用量增加：</strong> 当内存未释放时，应用会不断消耗更多资源，导致内存消耗过高。</li>
+<li><strong>性能下降：</strong> 随着时间的推移，内存中保存的对象越来越多，应用会变得越来越慢，导致延迟和用户体验不佳。</li>
+<li><strong>应用崩溃：</strong> 如果内存消耗达到临界水平，你的应用可能会崩溃甚至强制关闭。</li>
+<li><strong>电池耗尽：</strong> 内存泄漏可能导致进程在后台运行，从而比预期更快地耗尽设备电池。</li>
+</ol>
+
+
+<h2>Android 中内存泄漏的常见原因</h2>
+
+<ol>
+<li><strong>保存对上下文的引用：</strong> 如果你在静态变量或单例中保存对 Activity 或 Context 的引用，它将永远不会被垃圾回收，因为系统仍会考虑正在使用的 Activity 或 Context。</li>
+<li><strong>内部类和匿名类：</strong> 它们隐式保存对外部类（通常是 Activity 或 Fragment）的引用，从而防止它们被垃圾回收。</li>
+<li><strong>未关闭的资源：</strong> 完成后不关闭 Cursor、Stream 或数据库连接等资源可能会导致内存堆积。</li>
+<li><strong>事件侦听器：</strong> 如果你向 UI 元素添加侦听器（例如 OnClickListener），但在不再需要它们后没有将其删除，这些对象可能会泄漏内存。</li>
+</ol>
+
+
+<h2>LeakCanary 如何帮助检测 Android 中的内存泄漏</h2>
+
+<p>现在我们了解了内存泄漏可能导致的问题，让我们来讨论一下可以帮助我们检测内存泄漏的工具：LeakCanary。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*xas01FOk-1FlwDFe.png" alt="LeakCanary" /></p>
+
+<p>LeakCanary 是一个适用于 Android 的开源内存泄漏检测库。它旨在自动识别开发过程中应用中的内存泄漏，让你在影响用户之前修复它们。</p>
+
+<ul>
+<li>当发生内存泄漏时，LeakCanary 会自动触发堆转储，对其进行分析，并向开发人员提供一份报告，指出泄漏发生的位置。这使开发人员能够更轻松地发现和解决内存泄漏，以免导致性能问题。</li>
+</ul>
+
+
+<h3>LeakCanary 如何工作？</h3>
+
+<p>LeakCanary 的工作原理是监控应用的内存并分析堆转储以识别不应该存在的对象。当检测到内存泄漏时，它会生成一份报告，显示泄漏发生的位置，从而帮助你找出根本原因。</p>
+
+<ol>
+<li><strong>堆转储：</strong> 当 LeakCanary 检测到潜在泄漏时，它会进行堆转储（应用内存的快照），并将其与垃圾回收后的堆进行比较。如果它发现不应保留的对象，它会将其标记为泄漏。</li>
+<li><strong>泄漏的对象：</strong> LeakCanary 会向你显示哪些对象被保存在内存中以及引用链中，帮助你识别导致泄漏的对象以及它仍被保留的原因。</li>
+<li><strong>通知：</strong> 每当 LeakCanary 发现内存泄漏时，它都会在应用的调试版本中通知你。你可以快速访问报告并开始解决问题。</li>
+</ol>
+
+
+<p>LeakCanary 自动检测以下对象的泄漏：</p>
+
+<ul>
+<li>销毁的 Activity 实例</li>
+<li>销毁的 Fragment 实例</li>
+<li>销毁的 fragment View 实例</li>
+<li>清除的 ViewModel 实例</li>
+<li>销毁的 Service 实例</li>
+</ul>
+
+
+<h3>如何将 LeakCanary 集成到 Android 项目中？</h3>
+
+<p>要将 LeakCanary 集成到 Android 项目中，请按照以下步骤操作：</p>
+
+<ul>
+<li><strong>添加 LeakCanary 依赖项：</strong> 在 build.gradle 文件（应用程序级别）中，添加以下内容：</li>
+</ul>
+
+
+<pre><code class="Groovy">dependencies {
+    debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.9.1'
+}
+</code></pre>
+
+<ul>
+<li><strong>初始化 LeakCanary：</strong> LeakCanary 在调试构建类型中自动初始化。但是，你可以在 Application 类中手动初始化它：</li>
+</ul>
+
+
+<pre><code class="Java">public class MyApplication extends Application {
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        if (LeakCanary.isInAnalyzerProcess(this)) {
+            return; // LeakCanary is in heap analysis process
+        }
+        LeakCanary.install(this); // Initialize LeakCanary
+    }
+}
+</code></pre>
+
+<ul>
+<li><strong>在调试模式下运行应用程序</strong>，LeakCanary 将在开发阶段检测内存泄漏。</li>
+</ul>
+
+
+<h3>如何在生产版本中使用 LeakCanary？</h3>
+
+<p>虽然 LeakCanary 专为调试和开发而设计，但在生产环境中使用它时应谨慎。它可能会影响应用性能，并可能不必要地暴露与内存相关的数据。但是，如果你出于某种原因需要在生产环境中启用它，则可以有条件地仅在某些构建版本中添加 LeakCanary：</p>
+
+<pre><code class="Groovy">dependencies {
+    releaseImplementation 'com.squareup.leakcanary:leakcanary-android-no-op:2.9.1' // No-op for release
+    debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.9.1'
+}
+</code></pre>
+
+<p>这样，LeakCanary 仅在调试版本中处于活动状态，而无操作版本则用于生产。</p>
+
+<h3>你将采取什么步骤来修复 LeakCanary 报告的内存泄漏？</h3>
+
+<p>当 LeakCanary 报告内存泄漏时，请按照以下步骤解决：</p>
+
+<ol>
+<li><p><strong>分析泄漏报告：</strong> LeakCanary 提供一份详细的报告，其中包含一个对象引用链，显示泄漏发生的位置。</p></li>
+<li><p><strong>识别泄漏对象：</strong> 查找意外保存在内存中的对象（如 Activity、Fragment 或 Context）。</p></li>
+<li><p><strong>修复泄漏：</strong></p>
+
+<ul>
+<li>避免将 Activity 或 Context 引用存储在静态变量或长寿命对象中。</li>
+<li>确保关闭 Cursor、Stream 等资源。</li>
+<li>在不再需要时删除侦听器和回调。</li>
+</ul>
+</li>
+<li><strong>测试修复：</strong> 进行更改后，重新运行你的应用以确认内存泄漏已解决。</li>
+</ol>
+
+
+<h3>LeakCanary 有哪些局限性？</h3>
+
+<p>虽然 LeakCanary 是一款出色的工具，但它也有一些局限性：</p>
+
+<ul>
+<li><strong>并非所有泄漏都能被检测到：</strong> LeakCanary 专注于 Java 堆内存泄漏，但它可能无法检测本机内存泄漏或低级问题。</li>
+<li><strong>对性能的影响：</strong> 由于堆分析过程，在开发过程中运行 LeakCanary 可能会稍微减慢你的应用速度。</li>
+<li><strong>不能取代良好的内存管理：</strong> 虽然 LeakCanary 有助于检测泄漏，但开发人员仍应遵循内存管理的最佳实践，以防止泄漏发生。</li>
+</ul>
+
+
+<h2>结论</h2>
+
+<p>内存管理对于确保 Android 应用高效运行至关重要。LeakCanary 是一款功能强大的工具，可帮助你在内存泄漏影响应用性能之前检测并解决内存泄漏问题。通过遵循最佳实践并将 LeakCanary 集成到你的开发过程中，你可以确保你的应用保持优化状态并且不会出现与内存相关的问题。</p>
+
+<p>检查你是否已在 Android 应用程序中完成以下所有操作：</p>
+
+<ol>
+<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#rel-unused">释放未使用的资源。</a></li>
+<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#unreg">不再需要时取消注册监听器。</a></li>
+<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#cancel-tasks">不需要时取消任务。</a></li>
+<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#fwd-lifecyc">发生命周期方法以释放资源。</a></li>
+<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#latest-versions">使用最新版本的 SDK。</a></li>
+</ol>
+
+
+<h2>参考</h2>
+
+<ul>
+<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices">https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices</a></li>
+<li><a href="https://square.github.io/leakcanary/">https://square.github.io/leakcanary/</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[选择Retrofit还是Ktor：给Android开发者的指南]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/02/26/retrofit-vs-ktor/"/>
+    <updated>2025-02-26T22:50:55+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/02/26/retrofit-vs-ktor</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/when-to-use-retrofit-and-when-to-use-ktor-a-guide-for-android-developers-918491dcf69a">When to Use Retrofit and When to Use Ktor: A Guide for Android Developers</a></p></blockquote>
+
+<p>作为 Android 开发人员，为你的项目选择正确的 HTTP 客户端是一项关键的决定。当今最受欢迎的两个选项莫过于 Retrofit 和 Ktor。虽然Retrofit 多年来一直是事实上的标准，但 Ktor 因其现代架构和灵活性而势头强劲。</p>
+
+<p><a href=""><img src="https://robotqa.com/blog/wp-content/uploads/2024/06/202406120818248.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在本文中，我们将探讨你应该选择 Retrofit 或 Ktor 的场景，以及它们的优势如何满足你的应用要求。</p>
+
+<h2>了解基础知识</h2>
+
+<p>先来了解一下基础知识：</p>
+
+<h3>Retrofit</h3>
+
+<p>Retrofit 是 Square 开发的适用于 Android 和 Java 的类型安全 HTTP 客户端。它将 API 调用抽象为声明式接口，并使用 Gson 或 Moshi 等库无缝地将 JSON 解析为 Java/Kotlin 对象。</p>
+
+<h3>Ktor</h3>
+
+<p>Ktor 由 JetBrains 开发，是一款基于 Kotlin 的异步框架，用于构建联网应用程序。它不仅仅是一个 HTTP 客户端，而是一个多用途框架，让你能够使用同一个库构建后端服务并发出网络请求。</p>
+
+<h2>何时使用 Retrofit？</h2>
+
+<h3>1. 你需要简单和可读性</h3>
+
+<p>如果你更喜欢使用预定义接口以直观的方式进行 API 调用，Retrofit 是一个绝佳的选择。</p>
+
+<p>例子：</p>
+
+<pre><code class="Kotlin">interface ApiService {
+    @GET("posts")
+    suspend fun getPosts(): List&lt;Post&gt;
+}
+</code></pre>
+
+<p>使用 Retrofit，你可以预先定义 API 结构并专注于业务逻辑。</p>
+
+<h3>2. 你的团队已经熟悉 Retrofit</h3>
+
+<p>如果你的团队已有使用 Retrofit 的经验，那么坚持使用它可以降低学习曲线并加速开发。</p>
+
+<h3>3. 你需要开箱即用的功能</h3>
+
+<p>Retrofit 提供强大的功能，例如：</p>
+
+<ul>
+<li>自动解析 JSON 响应。</li>
+<li>内置对 OkHttp 拦截器的支持。</li>
+<li>轻松实现重试、缓存和日志记录。</li>
+</ul>
+
+
+<h3>4. 你在多语言环境中工作</h3>
+
+<p>Retrofit 非常适合涉及 Java 和 Kotlin 的项目，因此它对于遗留代码库来说是一个绝佳的选择。</p>
+
+<h3>5.你需要一个庞大的社区和资源</h3>
+
+<p>Retrofit 的成熟意味着丰富的文档、教程和社区支持，这使其成为许多团队更安全的选择。</p>
+
+<h2>何时使用 Ktor？</h2>
+
+<h3>1. 你需要高度可定制性</h3>
+
+<p>Ktor 允许你构建 HTTP 客户端，并对请求构建、日志记录和自定义管道进行细粒度的控制。</p>
+
+<p>例子：</p>
+
+<pre><code class="Kotlin">val client = HttpClient {
+    install(JsonFeature) {
+        serializer = KotlinxSerializer()
+    }
+}
+</code></pre>
+
+<h3>2. 你想利用 Kotlin Multiplatform</h3>
+
+<p>Ktor 的多平台支持是其突出的功能之一。如果你正在为 Android、iOS 和其他平台构建应用程序，Ktor 可确保你在所有平台上使用相同的网络逻辑。</p>
+
+<h3>3. 你正在构建轻量级或模块化应用程序</h3>
+
+<p>Ktor 的模块化设计使其成为轻量级应用程序或网络堆栈需要精简和集中的项目的理想选择。</p>
+
+<h3>4.你需要异步通信</h3>
+
+<p>Ktor 原生使用协程，这使得处理并发比传统的基于回调的方法更简单、更高效。</p>
+
+<h3>5. 你需要统一的后端和前端代码</h3>
+
+<p>借助 Ktor，你可以使用相同的框架构建服务器端 API 和移动应用程序，从而简化开发并确保一致性。</p>
+
+<h2>你应该选择哪一个？</h2>
+
+<p>用一张表格来总结一下两者各自的特点：</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:center;"> 特点 </th>
+<th style="text-align:center;"> Retrofit </th>
+<th style="text-align:center;"> Ktor </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;"> 易于使用 </td>
+<td style="text-align:center;"> 高 </td>
+<td style="text-align:center;"> 中等 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> Kotlin-first 设计 </td>
+<td style="text-align:center;"> 否 </td>
+<td style="text-align:center;"> 是 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> 跨平台支持 </td>
+<td style="text-align:center;"> 否 </td>
+<td style="text-align:center;"> 是 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> 可定制性 </td>
+<td style="text-align:center;"> 中等 </td>
+<td style="text-align:center;"> 高 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> 学习曲线 </td>
+<td style="text-align:center;"> 低 </td>
+<td style="text-align:center;"> 中等 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> 社区支持 </td>
+<td style="text-align:center;"> 规模很大 </td>
+<td style="text-align:center;"> 快速发展 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> 与协程集成 </td>
+<td style="text-align:center;"> 通过添加suspend </td>
+<td style="text-align:center;"> 是（集成了原生协程） </td>
+</tr>
+<tr>
+<td style="text-align:center;"> 后端能力 </td>
+<td style="text-align:center;"> 否 </td>
+<td style="text-align:center;"> 是 </td>
+</tr>
+</tbody>
+</table>
+
+
+<h3>如果符合以下情况则选择 Retrofit：</h3>
+
+<ul>
+<li>你正在开发一个 Kotlin 或 Java 项目，其中简单性和快速开发是首要任务。</li>
+<li>你的项目依赖于久经考验的工具和广泛的社区支持。</li>
+<li>你需要对 REST API 进行最低限度的配置。</li>
+</ul>
+
+
+<h3>以下情况请选择 Ktor：</h3>
+
+<ul>
+<li>你正在构建一个 Kotlin Multiplatform 项目。</li>
+<li>你需要一个现代、灵活的网络堆栈。</li>
+<li>你需要同时支持前端和后端开发。</li>
+</ul>
+
+
+<h2>结论</h2>
+
+<p>在 Retrofit 和 Ktor 之间进行选择取决于你的项目需求和你的团队对这些工具的熟悉程度。Retrofit 是传统 Android 项目的可靠选择，而 Ktor 则在现代 Kotlin 优先和多平台应用程序中表现出色。了解这些差异将有助于你为下一个 Android 应用做出正确的选择。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[一文带你理解OkHttp中的Gzip压缩]]></title>
@@ -799,335 +1160,6 @@ dependencies {
 <h2>结论</h2>
 
 <p>在本文中，我们看到了一些 Compose Multiplatform 技巧，希望您觉得它们有用。感谢您阅读本文，欢迎提供任何反馈。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[关于Android 16你想知道的都在这里]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/01/02/android-16-is-comming/"/>
-    <updated>2025-01-02T22:14:32+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/01/02/android-16-is-comming</id>
-    <content type="html"><![CDATA[<p>2025年的Android新版本来的比2024年稍早了一些。今年Google非常反常地提前就发布了Android的<a href="https://developer.android.com/about/versions/16">新版本Android 16 Baklava</a>，整体的计划比往年提前了2～3个月。另外，谷歌把<a href="https://www.androidfaithful.com/android-16-code-name/">Android 16的代码命名为「Baklava」</a>,这与先前的字母表顺序的点心食物命名方式截然不同，不过「Baklava」巴克拉瓦，又称果仁蜜饼，是一种口味浓郁、甜蜜的土耳其酥皮点心。</p>
-
-<p><a href=""><img src="https://www.android-user.de/wp-content/uploads/2024/11/20241101-Android-16-Baklava-Beitragsbild.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>谷歌的发布计划</h2>
-
-<p>从<a href="https://developer.android.com/about/versions/16">官方的消息</a>来看会在24年结束Preview，在25年1月其实是Q1就开始Beta release，并在Q2进入Platform Stability，预计上半年就可能会正式发布，整体的节奏较往年提前了约2～3个月（往年是Q1会有Preview，Q2发布Beta,6~7月左右开始Platform Stability，Q3 9月～10月正式发布）。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/android-16-release.webp" alt="图1. Android 16的发布计划" /></p>
-
-<p>不过现仍在非常为初始的Preview阶段，后面可能会有变数，官方也没有给具体的计划。但有一点是确定的，那就是今年Android 16的发布肯定较往年会提拉一些，至少提拉2个月。</p>
-
-<p>对于应用开发者来说，更为关心的是API的发布情况，一般情况下API会较系统版本提前一个季度就会正式稳定下来（也即不会再有大的变动），换句话说，今年在Q2就能得到较为稳定的API版本，当然比往年还是有提拉的。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/android16-api-release.webp" alt="图2. Android 16 API的发布计划" /></p>
-
-<p>发布计划不受我们控制，了解一下就可以了，下面我们看一下如何用条件区分这些新的API。</p>
-
-<h2>区分使用新的API的方式</h2>
-
-<p>如果应用不是运行在最新的版本，那么新的API不应该被执行，因此我们需要用条件来区分不同的API版本，用<a href="https://developer.android.com/reference/android/os/Build.VERSION#SDK_INT">SDK_INT</a>和<a href="https://developer.android.com/reference/android/os/Build.VERSION_CODES">VERSION_CODES</a>就可以做到。当然，需要先在Android Studio中把SDK中的Android 16 Preview版本下载下来才能编译。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/install-baklava-sdk.png" alt="图3. 升级SDK" /></p>
-
-<pre><code class="Kotlin">if (SDK_INT &gt;= VERSION_CODES.BAKLAVA) {
-  // 使用Android 16中才有的API
-}
-</code></pre>
-
-<p>为了能更细致地区分版本，Android 16新增加了一个新的版本常量<a href="https://developer.android.com/reference/android/os/Build.VERSION#SDK_INT_FULL">SDK_INT_FULL</a>，并在<a href="https://developer.android.com/reference/android/os/Build.VERSION_CODES_FULL">VERSION_CODES_FULL</a>中定义了具体的常量值。它可以粒度更细地检查API的版本，分为Major版本和Minor版本。以往的SDK_INT只能区分大的版本（Major版本），这是它们最大的不同。</p>
-
-<pre><code class="Kotlin">if (SDK_INT_FULL &gt;= VERSION_CODES_FULL.[MAJOR or MINOR RELEASE]) {
-  // 用Major版本或者Minor版本才有的API
-}
-</code></pre>
-
-<p>每个Major版本可能会多个Minor版本，如果不想麻烦，可以用<a href="https://developer.android.com/reference/android/os/Build#getMinorSdkVersion%28int%29">Build.getMinorSdkVersion()</a>来从VERSION_CODES_FULL中取出Minor版本号。</p>
-
-<p><strong>注意：</strong> SDK_INT_FULL，VERSION_CODES_FULL以及getMinorSdkVersion都是Android 16中新增的API，确保把SDK升级到最新才可以编译成功。</p>
-
-<p>接下来我们重点来看一下新一代的Android带来了哪些变化。</p>
-
-<h2>新的功能和新的API</h2>
-
-<p>很不幸，Android 16并没有带来全新的功能。只有一些小的新API。</p>
-
-<h3>用户体验和系统UI</h3>
-
-<p>提供一些的新的API以更好更灵活的控制系统的行为。</p>
-
-<h4>可预见的返回更新</h4>
-
-<p>Android 16增加了新的API以使能手势导航中的可预见返回系统动画，比如从应用返回到桌面的动画。使用新的<a href="https://developer.android.com/reference/android/window/OnBackInvokedDispatcher#PRIORITY_SYSTEM_NAVIGATION_OBSERVER">PRIORITY_SYSTEM_NAVIGATION_OBSERVER</a>向系统注册一个回调<a href="https://developer.android.com/reference/android/window/OnBackInvokedDispatcher#registerOnBackInvokedCallback(int,%20android.window.OnBackInvokedCallback">onBackInvokedCallback</a>)，每当系统处理一个返回导航时就能够收到<a href="https://developer.android.com/reference/android/window/OnBackInvokedCallback#onBackInvoked(">onBackInvoked</a>)回调，而不影响常规的返回导航流程。</p>
-
-<p>Android 16还增加了两个API <a href="https://developer.android.com/reference/android/window/SystemOnBackInvokedCallbacks#finishAndRemoveTaskCallback(android.app.Activity">finishAndRemoveTaskCallback</a>)和<a href="https://developer.android.com/reference/android/window/SystemOnBackInvokedCallbacks#moveTaskToBackCallback(android.app.Activity">moveTaskToBackCallback</a>)。通过向<a href="https://developer.android.com/reference/android/window/OnBackInvokedDispatcher">OnBackInvokedDispatcher</a>注册这些回调，当执行返回手势时系统就能触发具体的行为和播放相关的动画。</p>
-
-<h4>更加丰富的震感反馈</h4>
-
-<p>Android 16增加了<a href="https://developer.android.com/reference/android/os/vibrator/package-summary">震感API</a>，能让应用定义震感效果的振幅和频率的曲线，同时屏蔽设备的差异。</p>
-
-<h3>性能和电池</h3>
-
-<p>Android 16提供了新的API以帮助收集应用的洞察。</p>
-
-<h4>系统触发的分析</h4>
-
-<p><a href="https://developer.android.com/about/versions/15/features#app-start-info">Android 15</a>添加的<a href="https://developer.android.com/reference/android/os/ProfilingManager">ProfilingManager</a>能让应用请求分析数据集。然而，这个分析必须由应用来发起，一些像启动过程以及ANR就很抓取得到（因为应用必须要先正常启动起来后，才能调用ProfilingManager去获取分析数据）。</p>
-
-<p>为了解决这个问题，Android 16在ProfilingManager中增加了系统触发的分析数据。应用可以注册感兴趣的特定场景的trace，诸如冷起动或者ANR，系统会替应用开启和停止trace。trace收集完毕后，结果会传到应用的data目录。</p>
-
-<h3>ApplicationStartInfo中增加Start component</h3>
-
-<p>ApplicationStateInfo是在Android 15增加的，让应用能够看到进程启动原因，启动类型，启动时间等一系列诊断数据。Android 16增加了方法<a href="">getStartComponent</a>以辨识哪种组件类型触发的启动，这对于优化应用启动过程将会非常有帮助。</p>
-
-<h3>更好的（后台）任务反查</h3>
-
-<p>API <a href="https://developer.android.com/reference/android/app/job/JobScheduler#getPendingJobReason(int">JobScheduler#getPendingJobReason()</a>)能返回任何处于待处理的原因。当然，一个任务可能由于很多种原因待处理。</p>
-
-<p>在Android 16中，增加了一个新的API <a href="https://developer.android.com/reference/android/app/job/JobScheduler#getPendingJobReasons(int">JobScheduler#getPendingJobReasons(int jobId)</a>)，用以返回任务处于待处理的多个原因，比如缘于开发者设置了显性的限制或者系统设置的隐性限制。</p>
-
-<p>还增加了一个API <a href="https://developer.android.com/reference/android/app/job/JobScheduler#getPendingJobReasonsHistory(int">JobScheduler#getPendingJobReasonsHistory(int jobId)</a>)，用以返回最近的限制变更列表。</p>
-
-<p>推荐使用这些API来调试为何后台任务没被执行，尤其是当看到特定任务的成功率降低时，或者特定任务完成有延迟时。例如，在后台更新桌面小部件时失败或者预先拉取任务在应用启动前失败等等。</p>
-
-<p>这也能够更好的帮助你明白因为系统定义的限制还是因为显性的限制而导致特定的任务未执行完成。</p>
-
-<h3>自适应刷新频率</h3>
-
-<p>Android 15引入的自适应刷新频率(Adaptive refresh rate ARR)通过离散化的VSync步长能够让屏幕刷新频率适配内容频率。这会降低功耗同时消除潜在的掉帧。</p>
-
-<p>Android 16增加了方法<a href="https://developer.android.com/reference/android/view/Display#hasArrSupport(">hasArrSupport</a>)和方法<a href="https://developer.android.com/reference/android/view/Display#getSuggestedFrameRate(int">getSuggestedFrameRate(int)</a>)以及<a href="https://developer.android.com/reference/android/view/Display#getSupportedRefreshRates(">getSupportedRefreshRates()</a>)，让应用容易利用ARR。Jetpack中的很多组件在内部实现上已经利用ARR以增强平滑的滑动，详细的可<a href="https://developer.android.com/media/optimize/performance/frame-rate">参见了此文章</a>。</p>
-
-<h3>连接</h3>
-
-<p>WiFi可以用来室内定位，Android 16增加了对WiFi位置安全性的支持，通过<a href="https://developer.android.com/reference/android/net/wifi/rtt/SecureRangingConfig">这个特性</a>。</p>
-
-<h3>媒体</h3>
-
-<h4>照片选择增强</h4>
-
-<p><a href="https://developer.android.com/training/data-storage/shared/photopicker">照片选择器(photo picker)</a>提供了一个安全且内置的方式让应用在用户授权的情况下从存储中选择媒体文件。</p>
-
-<p>Android 16带来的增强点有：</p>
-
-<ul>
-<li>嵌入式的图片选择器：<a href="https://developer.android.com/reference/android/widget/photopicker/package-summary">新的API</a>能够让应用把图片选择器嵌入到自己的视图中。这会让图片选择看起来更像是应用整体的一部分。后续的Jetpack中会提供可嵌入的图片选择器。</li>
-<li>图片选择器支持云搜索：<a href="https://developer.android.com/sdk/api_diff/b-dp2-incr/changes/pkg_android.provider">新的API</a>在图片选择器将支持云搜索。</li>
-</ul>
-
-
-<h3>隐私</h3>
-
-<h4>健康连接更新</h4>
-
-<p>开发者Preview版本中的健康连接增加了ACTIVITY_INTENSITY（活动强度），依据世界健康组织（WHO）给出的指南中定义的一个新的数据类型。每一条记录将必须包括开始时间，结束时间以及活动强度。</p>
-
-<h4>隐私沙盒</h4>
-
-<p>Android 16集成了<a href="https://developers.google.com/privacy-sandbox/overview/android">Android隐私沙盒</a>的最新版本，这是一项为保护用户隐私而持续进行的工作。可以查看<a href="https://developer.android.com/design-for-safety/privacy-sandbox/program-overview">网站内容</a>以了解更多。</p>
-
-<h2>行为变更</h2>
-
-<p>比起新的API，Android 16带来的行为变更更值得我们关注，因为这会直接影响所有应用，无论targetSdkVersion是否是Baklava。</p>
-
-<h3>核心功能</h3>
-
-<h4>JobScheduler配额优化</h4>
-
-<p>从Android 16开始，以基于以下因素来调整常规任务和加急任务的运行时配额：</p>
-
-<ul>
-<li>应用处于<a href="https://developer.android.com/topic/performance/appstandby">哪个等待区</a>：在Android 16中，活跃的等待区会减少限制。</li>
-<li>如果任务开始执行时应用处于头部状态：在Android 16中，任务启动时，如果应用是用户可见的且应用变成可见后仍在继续执行，会加入到运行时配额中。</li>
-<li>如果任务执行时正在运行一个前台服务：在Android 16中，当正在执行一个前台服务时，正在执行的任务将加入到运行时配额中。如果任务是用于用户数据传送，建议<a href="https://developer.android.com/develop/background-work/background-tasks/uidt">考虑替换方案</a>。</li>
-</ul>
-
-
-<p>这些变动将会影响由WorkManager，JobScheduler和DownloadManager调度的任务。如果要调试为何一个任务被终止了，建议通过调用<a href="https://developer.android.com/reference/androidx/work/WorkInfo#getStopReason(">WorkInfo.getStopReason()</a>)来打印日志。</p>
-
-<p>也可以通过Android 16新增加的API <a href="https://developer.android.com/partners/android-16/features#feature-pending-job-reason-history">JobScheduler#getPendingJobReasonsHistory</a>来了解为何任务未执行。</p>
-
-<p>另外，在Android 16上还可以通过adb命令强制调整运行时任务配额，以方便测试：</p>
-
-<pre><code class="Bash"># 取消头部状态配额限制
-adb shell am compat enable OVERRIDE_QUOTA_ENFORCEMENT_TO_TOP_STARTED_JOBS &lt;APP_PACKAGE_NAME&gt;
-
-# 设置等待区
-adb shell am set-standby-bucket &lt;APP_PACKAGE_NAME&gt; active|working_set|frequent|rare|restricted
-
-# 获取所处的等待区状态
-adb shell am get-standby-bucket &lt;APP_PACKAGE_NAME&gt;
-</code></pre>
-
-<h3>用户体验和系统UI</h3>
-
-<p>Android 16废弃了无障碍公告(announcement)，一种使用<a href="https://developer.android.com/reference/android/view/View#announceForAccessibility(java.lang.CharSequence">announceForAccessibility</a>)或者派发<a href="https://developer.android.com/reference/android/view/accessibility/AccessibilityEvent#TYPE_ANNOUNCEMENT">TYPE_ANNOUNCEMENT</a>引起的无障碍事件。这些公告会造成Talkback和屏幕发声的混乱，容易被滥用，一些可行的替换方案有：</p>
-
-<ul>
-<li>对于像窗口变化之类的极重要的UI变化，可以用<a href="https://developer.android.com/reference/android/app/Activity#setTitle(java.lang.CharSequence">Activity.setTitle(CharSequence)</a>)和<a href="https://developer.android.com/reference/android/view/View#setAccessibilityPaneTitle(java.lang.CharSequence">setAccessibilityPaneTitle(java.lang.CharSequence)</a>)。在Compose中使用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/semantics/package-summary#(androidx.compose.ui.semantics.SemanticsPropertyReceiver">Modifier.semantics { paneTitle = &ldquo;paneTitle&rdquo; }</a>.liveRegion)。</li>
-<li>告知用户重要UI变化，使用<a href="https://developer.android.com/reference/android/view/View#setAccessibilityLiveRegion(int">setAccessibilityLiveRegion(int)</a>)。在Compose中，用<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/semantics/package-summary#(androidx.compose.ui.semantics.SemanticsPropertyReceiver">Modifier.semantics { liveRegion = LiveRegionMode.[Polite|Assertive]}</a>.liveRegion)。这些也要小心使用，因为每当View刷新就会触发一个无障碍事件。</li>
-<li>通知用户有错误，发送一个类型为<a href="https://developer.android.com/reference/android/view/accessibility/AccessibilityEvent#CONTENT_CHANGE_TYPE_ERROR">AccessibilityEvent#CONTENT_CHANGE_TYPE_ERROR</a>的无障碍事件，并且设置<a href="https://developer.android.com/reference/android/view/accessibility/AccessibilityNodeInfo#setError(java.lang.CharSequence">AccessibilityNodeInfo#setError(CharSequence)</a>)，或者<a href="https://developer.android.com/reference/android/widget/TextView#setError(java.lang.CharSequence">TextView#setError(CharSequence)</a>)。</li>
-</ul>
-
-
-<p>可以<a href="https://developer.android.com/reference/android/view/View#announceForAccessibility(java.lang.CharSequence">看文档</a>)以了解废弃announceForAccessibility的细节以及推荐的替代方案。</p>
-
-<h2>适配建议</h2>
-
-<p>到目前为止，我们能了解到的Android 16的变化就这么多，总的来看增量变化并不多，新的API 都是一些小的细节上的增强；行为的变更也很少很少，只涉及后台任务和无障碍。新的API不会影响现有的应用，行为变更也不多，可以说对于绝大多数应用来说影响甚微。</p>
-
-<p>现在仍是开发者Preview阶段，只有亲儿子Pixel系列会收到OTA版本，我们了解一下就可以了。即使是应用可能会受到行为变更的影响，也不用着急，建议再等2～3个月，等到有更多的厂商发出Beta版本了，并且API也稳定了时再做适配也不迟。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/about/versions/16/features">Features and APIs</a></li>
-<li><a href="https://android-developers.googleblog.com/2024/11/the-first-developer-preview-android16.html">The First Developer Preview of Android 16</a></li>
-<li><a href="https://android-developers.googleblog.com/2024/12/second-developer-preview-android16.html">The Second Developer Preview of Android 16</a></li>
-<li><a href="https://developer.android.com/about/versions/16/behavior-changes-16">Behavior changes: Apps targeting Android 16 or higher</a></li>
-<li><a href="https://developer.android.com/about/versions/16/behavior-changes-all">Behavior changes: all apps</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[群星闪耀的大前端开发]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/12/10/a-brief-history-of-cross-platform-development/"/>
-    <updated>2024-12-10T22:01:05+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/12/10/a-brief-history-of-cross-platform-development</id>
-    <content type="html"><![CDATA[<p>乔帮主发布iPhone以降，把世界推向了智能手机时代，随之而来的是移动互联网大潮，一时间移动应用开发变得炙手可热起来，渐渐的超越了传统桌面端和传统前端，成为了主流。随之而来的就是重复开发的问题，同样的业务需要在Android上面实现一次，在iOS上面实现一次，通常也需要在Mobile Web（移动端H5）实现一次，自此跨端开发成了移动互联时代一个必须要攻克的难题。</p>
-
-<p><a href=""><img src="https://www.ropstam.com/wp-content/uploads/2023/09/Best-Cross-Platform-App-Development-Frameworks.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>大前端开发简史</h2>
-
-<p>工程师的使命是<strong>把不可能变可能，把可能变简单，把简单变优雅</strong>。如果能用同一套代码在不同的端侧都运行，那将是再美好不过的了，毕竟对于端侧业务逻辑一样的，但却要用不同的编程语言，不同的框架，不同的平台，不同的团队各开发一次。如果能够做到「开发一次，多端运行」，将极大的节省人力物力和财力，开发效率也将大大提升。遂业界一直在探索如何跨移动端开发，也即只用一套代码，开发一次，就可以在Android端，iOS端和移动Web端三端运行。</p>
-
-<h3>史前时代：Hybrid app</h3>
-
-<p>最先出来的框架是Hybrid app（<a href="https://phonegap.com/">PhoneGap</a>和<a href="https://cordova.apache.org/docs/en/latest/">Cordova</a>），利用Android端和iOS端都对WebView有较好的支持，因此用移动前端（也即网页）的方式来开发应用，绝大多数的业务逻辑都在网页里，Android端和iOS端都是用WebView去展示网页，对于JavaScript在网页中无法实现的，与平台强相关的事情可以通过JavaScript Bridge来调用平台实现的API，称之为JsBridge。</p>
-
-<p>这种架构非常简单，对于Android和iOS来说，使用一个WebView，再实现一些native API就可以了，其余的都是标准的移动前端。得益于平台对HTML 5的支持，以及像jQuery Mobile等优秀的前端库的加持，无论是开发体验还是使用体验，Hybrid app并不差。最重的是它跨平台性特别好，性价比超高，对于UI部分很重，交互 也不复杂的以展示为主的页面来说，这是性价比超高的实现方式。</p>
-
-<p>这个可以称之为史前时代。</p>
-
-<h3>黑暗时代：不成熟的各种尝试</h3>
-
-<p>Hybrid app方式虽然可行，但在不同的终端上面体验差距很明显。对于性能较好的中高端设备，因为设备整体性能较好，Hybrid app体验尚可，虽然与原生UI相比仍有差距，但属于可接受范围。但对于中低端设备来说，WebView不但性能差，而且兼容性不好，体验严重差于原生UI。另外，如果UI交互变得复杂，或者对体验和实时性操作要求比较高（如文档编辑类等）Hybrid方式与原生更是相距甚远。工程师们开始尝试新的方案。</p>
-
-<p>比如坊间有用json格式来定义UI，定义好格式后，每个端拿到一坨json数据解析，然后生成UI。这其实都算不上是框架，其实就是用json来描述一个页面，解析与构建UI仍是由每个端自己搞，顶多算是一种UI描述格式。但难以通用，并且只能描述UI的静态结构，无法有动态的行为之类的。这种方案也曾有不少大厂用过，它非常适用于局部的，并不复杂的UI，业务逻辑固定，但UI排版样式可能随时会变页面。但要说用它来写整个应用，是不现实的。</p>
-
-<p>这期间Google也做了尝试，搞出一个叫做<a href="https://developers.google.com/j2objc">j2objc的工具</a>，它能把Java代码翻译 成为Objective&#45;C代码，转换后的Objective-C代码无需修改可以直接编译运行。显然，这个工具并不适用于UI，因为UI都是与平台强相关的，需要大量的依赖于平台的SDK，并不是把代码「翻译」过来就完事了。这个工具适用于非UI部分的业务逻辑代码，效果也非常的好，经其转换后的代码可以直接编译运行。据说Google自己也在用，当时的GMS产品Google Inbox等都用j2objc达到了70%代码共用。</p>
-
-<p>这是大前端的一个黑暗时代，虽然大家都在尝试，但始终没有一个比较理想的完整的解决方案。</p>
-
-<h3>黎明的署光：划时代的ReactNative</h3>
-
-<p>Hybrid方式最大的问题在于WebView是性能和体验的瓶颈，WebView之所以是瓶颈 在于它是一个完全的浏览器，它要完全支持JavaScript，HTML和CSS。但随着HTML5和Web前端技术的发展，有很多库可能只用JavaScript来实现。JavaScript独立出来与Node.js结合（严谨的说是JS引挚），同样可以做前端，但却少了HTML和CSS的拖累，沿着这个思路非死不可（彼时叫做Facebook，现在叫做Meta）推出了一个跨移动端平台的开发框架ReactNative。它是基于Facebook的React框架，做了面向移动端的延伸。它的主要实现方法是用React来写页面，这是一个基于JavaScript语言的声明式UI框架，加入了一个虚拟DOM层，用以屏蔽频繁的DOM改动，然后再把虚拟DOM转成一个渲染树，最后由Node开出口子，把渲染树用Native的API去实现，由此实现了原生UI。</p>
-
-<p>ReactNative可以实现跨三端，页面用React写好后，不用修改就可以在Web，Android和iOS上运行。一经发布引发了巨大反响，坊间众人皆拍大腿「卧草，还可以这样玩儿啊！」。</p>
-
-<p>ReactNative是划时代的，因为它确定了跨端框架的基本结构：声明式UI，虚拟DOM和渲染树，用原生API去实现渲染树（映射为Native的组件，或者用Native graphics API去实现渲染树）。后续的跨端框架基本上都是这个路子。</p>
-
-<h3>群星闪耀的当下</h3>
-
-<p>时光荏苒，移动互联大潮已经过了十几年，技术也层出不穷，新的框架在不断的涌现。现如今跨端这一领域百花齐放，群星闪耀，各大框架经过几年的沉淀与发展已经比较成熟。除了<a href="https://reactnative.dev/">ReactNative</a>以外，还有了NativeScript，Flutter以及CMP。这其中<a href="https://nativescript.org/">NativeScript</a>其实与ReactNative差不多，唯一的区别在于它允许用JavaScript家族语言（如<a href="https://www.typescriptlang.org/">TypeScript</a>和<a href="https://coffeescript.org/">CoffeeScript</a>），以及不限制开发框架，可以用Vue.js或者Angular.js来写UI。</p>
-
-<p>当然，最为广泛流行，业界使用最多的当属于Flutter和ReactNative，CMP作为一颗新星也越来越受关注。</p>
-
-<h2>流行框架对比</h2>
-
-<p>这里简要对比一下最为流行的ReactNative和Flutter以及新星CMP，以方便使用者做出更好的选择。</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:center;"> 框架 </th>
-<th style="text-align:center;"> 开发者 </th>
-<th style="text-align:center;"> 开发语言 </th>
-<th style="text-align:center;"> UI开发库 </th>
-<th style="text-align:center;"> 支持的端 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:center;"> ReactNative </td>
-<td style="text-align:center;"> Meta </td>
-<td style="text-align:center;"> JavaScript </td>
-<td style="text-align:center;"> React </td>
-<td style="text-align:center;"> Android, iOS, Web </td>
-</tr>
-<tr>
-<td style="text-align:center;"> Flutter </td>
-<td style="text-align:center;"> Google </td>
-<td style="text-align:center;"> Dart </td>
-<td style="text-align:center;"> </td>
-<td style="text-align:center;"> Android, iOS, Desktop, Web </td>
-</tr>
-<tr>
-<td style="text-align:center;"> CMP </td>
-<td style="text-align:center;"> JetBrains </td>
-<td style="text-align:center;"> Kotlin </td>
-<td style="text-align:center;"> Jetpack Compose </td>
-<td style="text-align:center;"> Android, iOS, Desktop, Web </td>
-</tr>
-</tbody>
-</table>
-
-
-<p>ReactNative和Flutter都相对较成熟和稳定了，使用者也较多，社区很活跃。ReactNative更适合移动端，而Flutter能跨的端和CMP要更多一些。此外，Flutter和CMP与其他框架最大的区别在于它使用Skia库构建了一个渲染引挚，可以直接把渲染树渲染成为平台支持的更为底层的canvas，直接接入native层的graphics API而不是映射成native组件，为此，它的渲染效率更为高效一些，进而性能更优一些，可以把它们想像成为一个浏览器。</p>
-
-<p>技术栈也不一样，ReactNative是基于Node和JavaScript，属于前端技术栈，与前端融合更为紧密一些；而CMP是基于Kotlin和JVM与Android更为紧密一些，属于Java派系；而Flutter自成一派。</p>
-
-<h2>选择是痛苦的</h2>
-
-<p>实事求是的来说<a href="https://flutter.dev/">Flutter</a>是当前最为成熟 也最为完备的一个跨端框架，只不过可能学习成本略大，对于大部分同学来说Dart是一门小众的编程语言。而ReactNative最大的问题就在于React，它太前端化了，对于客户端同学来说写一坨HTML式的标签还是相当难受的。</p>
-
-<p>应该说Flutter已经非常成功了，达到了它应该有高度，实现了它的价值，换句话说它的前景也不是特别明朗了，因为它已经很成熟了，所以有传言谷歌内部也在裁撤Flutter的研发资源。ReactNative也一样，这么多年了，版本还没有到1.0。</p>
-
-<p><img src="https://blog.droidchef.dev/content/images/size/w1000/2022/11/Flutter-vs-Jetpack-Compose-Header--2-.png" alt="图1. Flutter vs CMP" /></p>
-
-<p>而CMP刚刚兴起，使用起来非常的方便和简单，它的安装与配置是所有框架之中最为简便的（只需要安装一个Android Studio的插件，其余的都是编译插件和依赖，并不像Flutter和ReactNative都需要在开发机器上安装其他东西），前途无量，非常值得投入。并且Flutter对于谷歌来说九牛一毛，是非常不起眼的东西，谷歌毕竟家大业大，像谷歌和Meta等巨头现在都在狂卷AI，其他的小业务都不受重视。</p>
-
-<p>但CMP不一样，JetBrains本身就是专门搞开发工具的，这是他们的主业肯定 会好好搞，把CMP与其IDE深度结合，对于开发者使用起来那就相当的方便了。事实上JetBrains已经开始弄了，它的最新的<a href="https://www.jetbrains.com/fleet/">IDE Fleet</a>（一个通用的IDE）将会深度绑定CMP，非常值得期待。</p>
-
-<p>综合考虑，给出的建议就是如果是<strong>一个纯新的项目，特别是MVP阶段，不要犹豫就是用Flutter</strong>。而如果是<strong>现有项目，想要跨端，就选择CMP</strong>，它是对现有项目最为友好的一个。除非你是资源前端且是React粉，否则不要考虑ReactNative。</p>
-
-<h2>框架只能解决一部分问题</h2>
-
-<p>最后想说的是，对于跨端开发，框架只能解决一小部分问题。</p>
-
-<p>跨端开发最难的地方在于合理的架构和团队的协同。架构需要做好层与层的隔离，特别是把与平台强相关的API做好隔离层，以最大限度 的共用代码，如果到处都是粗粒度的平台相关的实现，复杂度将急剧上升，那最后会变成多端的拼盘而非一个跨端项目。人员的协作应该以功能为单位来划分而不能再以端的维度，要彻底消灭端的思维，要以UI，功能和业务逻辑角度来思考问题，这样才能更好的协作。总之跨端对团队的要求更高，否则只会制造更多的问题。</p>
-
-<p>人的问题永远要比技术问题要复杂一些，举个最简单的例子，以往每个端各自为政，Android端某个同学犯了错，顶多就是Android端不能用了，可能最多就3.25。真跨端了以后，再犯错那可就是所有端都搞挂了，可能最少是3.25起步，这里头的差别还是相当大的，如果没有强有力的大一点的老板来推，是很难推得动的。</p>
-
-<p>研发同学都喜欢折腾，光完成业务是很无聊的，也不可能出成绩，都想方设法的搞出点「技术产出」（俗称造轮子）。记得ReactNative刚出来时，坊间很热情都在把其引入到各自的业务中去，但最终的结果是，没有人会真的在业务中重点使用，而是都花心思搞出了一套属于自己的跨端框架，并且向其他团队推广。年终汇报时，PPT很漂亮：「老板您看，我们不光完成了业务，还搞了一套跨端框架，它比ReactNative好在哪里，已经在我们的业务使用了，也给其他团队推广了」。相反，假如你真的使用了跨端，你咋 汇报？「老板，您看，我们用了别人的跨端技术，成功的实现了跨端，原来三个端15个人能做完的事情，现在只需要8个人！」。老板听了，很激动，3.25终于找到人选了，开猿节流也有着落了！</p>
-
-<p>Anyway，总的来说跨端开发更适合业务不复杂，UI交互也不重的中小型App，或者那种UI占比较小非UI逻辑占比大的应用（最典型的就是浏览器），才能发挥出最大的价值。一个比较简单的判断标准就是，如果每个端的研发人员都超过10个人，可能就不太适合用跨平台的开发方式。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://www.jetbrains.com/help/kotlin-multiplatform-dev/cross-platform-frameworks.html">The Six Most Popular Cross-Platform App Development Frameworks</a></li>
-<li><a href="https://developers.google.com/j2objc">What J2ObjC is</a></li>
-<li><a href="https://github.com/google/j2objc">A Java to iOS Objective-C translation tool and runtime.</a></li>
-<li><a href="https://hackernoon.com/getting-started-with-react-native-for-windows-and-macos">Getting started with React Native for Windows &amp; macOS</a></li>
-<li><a href="https://medium.com/@ankit-detroja/react-native-or-flutter-in-2024-7cfb0605698f">React native or Flutter in 2024</a></li>
-<li><a href="https://leancode.co/blog/flutter-vs-react-native">Flutter vs. React Native: A Detailed Comparison for 2024</a></li>
-<li><a href="https://nateshmbhat.medium.com/flutter-vs-react-native-performance-benchmarks-you-cant-miss-%EF%B8%8F-2e31905df9b4">Flutter Vs React Native : Performance Benchmarks you can’t miss ! 🔥⚡️ [Part -1]</a></li>
-<li><a href="https://medium.com/newsoft-official/compose-multiplatform-vs-flutter-771673612c61">Compose Multiplatform VS. Flutter</a></li>
-<li><a href="https://infinitelambda.com/flutter-kotlin-multiplatform-native-comparison/">FLUTTER VS KOTLIN MULTIPLATFORM VS NATIVE</a></li>
-<li><a href="https://www.miquido.com/blog/kotlin-multiplatform-vs-flutter/">Flutter vs. Kotlin Multiplatform Mobile</a></li>
-</ul>
-
 ]]></content>
   </entry>
   
