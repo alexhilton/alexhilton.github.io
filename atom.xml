@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-03-11T21:17:34+08:00</updated>
+  <updated>2025-03-16T20:39:50+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,944 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[高效地在Jetpack Compose中设计UI组件]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/03/16/effective-compose-components/"/>
+    <updated>2025-03-16T20:37:18+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/03/16/effective-compose-components</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/designing-effective-ui-components-in-jetpack-compose-cb8d18f7f888">Designing Effective UI Components in Jetpack Compose</a>，原文作者是Jaewoong Eum，原文发布于2025年2月7日。</p></blockquote>
+
+<p><strong>译者按：</strong> 本文适合有一定Jetpack Compose经验的开发者阅读，假定读者熟悉Jetpack Compose的基本使用方法，以及熟悉常见 的Slot设计模式。否则理解上可能会有一些困难。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2025/03/16/effective-compose-components/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*PwVzAjyhIPGIgrT0" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>自<a href="https://android-developers.googleblog.com/2021/07/jetpack-compose-announcement.html"> Google 宣布 Jetpack Compose 1.0 稳定版</a>以来，许多公司都已采用 Jetpack Compose 来利用其众多优势。随着 Compose 在 Android 生态系统中的广泛采用，库和 SDK 也开始集成对 Compose 的支持。</p>
+
+<p>传统上，在基于 XML 的项目中，UI 组件以自定义视图的形式提供，并通过属性（attributes）提供可自定义的选项。虽然这种方法可以轻松地将组件集成到 XML 布局中，但它带来了一些挑战，例如在多个组件之间应用主题样式时不一致，以及由于底层 View 类公开的方法而导致的 API 滥用。</p>
+
+<p>与传统的自定义视图相比，Jetpack Compose 提供了一种完全不同的组件设计策略。其声明式结构允许更直观、更灵活的 API 设计。这种转变不仅有利于库和 SDK 开发人员，也有利于构建共享 UI 组件的大型团队，使他们能够实施更好的做法、减少误用并增强整体开发人员体验。</p>
+
+<p>在本文中，你将发现在 Jetpack Compose 中设计 UI 组件的有效策略，借鉴<a href="https://getstream.io/video/sdk/android/"> Stream Video SDK </a>的最佳实践。</p>
+
+<h2>Modifier的最佳实践</h2>
+
+<p><a href="https://developer.android.com/develop/ui/compose/modifiers">Modifier </a>是 Jetpack Compose 中一个功能强大的 API，可让你以链式和可组合的方式装饰和增强 UI 元素。但是，应谨慎使用它，因为它的属性可以传播到其他可组合函数，如果管理不当，可能会导致意想不到的效果。</p>
+
+<p>Modifier函数的顺序尤其重要，因为每个函数都会修改前一个函数返回的Modifier或从可组合项外部传递的Modifier。此顺序直接影响最终输出。在本节中，我们将探讨三个关键原则和最佳实践，它们可以指导你在 Jetpack Compose 中设计有效且可预测的 UI 组件 API。</p>
+
+<h3>1. 将Modifier应用到组件最顶层的布局</h3>
+
+<p>Jetpack Compose 中的Modifier会通过布局层次结构向下传递，但理想情况下，它们应仅应用于可组合函数中最顶层的布局节点。在层次结构中的任意级别应用Modifier可能会导致意外行为，并增加用户误用的可能性，从而使组件更难以预测且更难以有效使用。</p>
+
+<p>例如，假设你想要创建一个代表圆形按钮的组件，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
+</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>      <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但是，你不应将 Modifier 应用于 Text ，而应应用于 Button ，后者是布局层次结构中最顶层的可组合函数，如下所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
+</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span> <span class="c1">// 别这么干</span>
+</span><span class='line'>      <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>自定义可组合函数 RoundedButton 的主要用途是表示 Button ，而不是 Text 。因此，你应避免转移所创建主要组件的焦点或用途。</p>
+
+<p>此外，如果布局层次结构变得复杂，并且你在可组合函数的中间级别应用Modifier，则用户可能很难预测提供的Modifier参数最终会影响哪个组件。这种不明确性可能会导致混淆和误用。</p>
+
+<p>如果你想让用户灵活地修改按钮的内部内容，你可以使用插槽来实现，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">RowScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
+</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">content</span><span class="p">()</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 对Modifier使用单个参数</h3>
+
+<p>你可能想知道是否可以接受多个 Modifier 参数以应用于布局层次结构中的特定组件，同时限制组件的结构，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">textModifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
+</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">textModifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>      <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但是，Modifier 本质上被设计为一个单一的、可链接的参数，使用户能够定义 Composable 函数的外部行为和外观。在 Composable 中引入多个 Modifier 参数会增加不必要的复杂性，增加误用的风险，并且偏离了 Jetpack Compose 保持 API 直观和可预测的原则。</p>
+
+<p>最好使用基于插槽的方法，让用户能够灵活地自定义内部内容。例如，你可以定义一个插槽（slot），让用户提供自定义内容，同时仍保留单个Modifier以进行外部自定义，而不是添加多个Modifier参数。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">RowScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
+</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">content</span><span class="p">()</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3. 避免跨组件重复使用Modifier</h3>
+
+<p>设计组件时的另一个重要考虑因素是避免重复使用提供的 Modifier 实例。一些开发人员可能会担心为每个组件创建新的 Modifier 实例可能会导致内存使用量增加或对性能产生负面影响，尤其是在具有大量Modifier的复杂布局层次结构中。</p>
+
+<p>然而，由于 Jetpack Compose 中Modifier实现的优化性质，这种担忧通常是没有根据的。Modifier旨在应用于可组合函数中的单个布局节点，以确保行为清晰且可预测。如果在布局层次结构中不同级别的多个可组合项中使用相同的Modifier，则可能导致意外的副作用和不可预测的行为，从而损害组件的一致性和可用性。</p>
+
+<p>例如，考虑这样一种情况，其中相同的 Modifier 参数在整个布局层次结构中重复使用，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyButtons</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
+</span><span class='line'>      <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
+</span><span class='line'>      <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
+</span><span class='line'>      <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Not Rounded&quot;</span>
+</span><span class='line'>      <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>乍一看，代码似乎运行正常。但是，当你在调用点修改Modifier时，你会注意到意外的行为，可能会以意想不到的方式改变整个布局。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">MyButtons</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">)</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了确保行为正确并避免意外问题，你应避免在多个组件中重复使用Modifier。在本节中，你了解了在设计 Compose 组件时管理Modifier的最佳实践。接下来，让我们通过实现主题来深入了解如何提供一致的 UI 样式。</p>
+
+<h2>主题确保 UI 一致性</h2>
+
+<p>现在，假设你需要提供多种 Compose 组件，这些组件应共享一致的样式。如果这些组件是独立提供的，那么维护这些组件之间一致样式的责任就完全落在用户身上。这可能非常具有挑战性，因为每个组件可能会公开不同的 API 来自定义其样式，从而使同步变得繁琐且容易出错。</p>
+
+<p>在这种情况下，你可以从 Compose Material 库提供的<a href="https://developer.android.com/develop/ui/compose/designsystems/material3#material-theming"> MaterialTheme API </a>中汲取灵感。关键在于确保组件样式一致，同时允许用户无缝自定义并在各个组件之间保持一致的样式。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*AyJL0G8NsCGWX9_Q" alt="Theming Consistency" /></p>
+
+<p>Compose 的<a href="https://getstream.io/video/sdk/"> Stream Video SDK </a>通过提供名为<a href="https://getstream.io/video/docs/android/ui-components/video-theme/"> VideoTheme </a>的专用主题 API 展示了最佳实践。此 VideoTheme API 可确保 SDK 提供的所有 Compose 组件的样式一致，包括颜色、尺寸、排版、形状、涟漪效果等。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">VideoTheme</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">colors</span> <span class="p">=</span> <span class="n">StreamColors</span><span class="p">.</span><span class="n">defaultColors</span><span class="p">().</span><span class="n">copy</span><span class="p">(</span><span class="n">appBackground</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">dimens</span> <span class="p">=</span> <span class="n">StreamDimens</span><span class="p">.</span><span class="n">defaultDimens</span><span class="p">().</span><span class="n">copy</span><span class="p">(</span><span class="n">callAvatarSize</span> <span class="p">=</span> <span class="m">72.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">shapes</span> <span class="p">=</span> <span class="n">StreamShapes</span><span class="p">.</span><span class="n">defaultShapes</span><span class="p">().</span><span class="n">copy</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">avatar</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">callButton</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">callControls</span> <span class="p">=</span> <span class="n">RectangleShape</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">callControlsButton</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">CallContent</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
+</span><span class='line'>            <span class="n">call</span> <span class="p">=</span> <span class="n">call</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">onBackPressed</span> <span class="p">=</span> <span class="p">{</span> <span class="n">finish</span><span class="p">()</span> <span class="p">},</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>通过将 Stream SDK 提供的组件与 VideoTheme 包装在一起（如上例所示），自定义样式将自动一致地应用于所有组件。这种方法使用户能够轻松保持其 UI 的一致性，同时调整主题以满足其应用程序的设计要求。</p>
+
+<h3>实现自定义主题</h3>
+
+<p>让我们深入研究如何实现自定义主题。第一步是定义设计规范，这些规范将在你的组件之间共享或为用户提供自定义功能。考虑包括颜色、形状和尺寸等方面，因为这些通常是确保设计系统一致性的最重要因素。</p>
+
+<p>例如，在 Stream SDK 中，组件所需的所有颜色集均在<a href="https://github.com/GetStream/stream-video-android/blob/c12db8cb6367e10682be3ab323d50dfcc59032f3/stream-video-android-ui-compose/src/main/kotlin/io/getstream/video/android/compose/theme/StreamColors.kt#L24"> StreamColors </a>类中预定义，为用户提供了一种无缝的方式来保持其整个 UI 的一致性。以下是 Stream SDK 如何通过结构良好的颜色集确保一致性的示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">public</span> <span class="n">data</span> <span class="k">class</span> <span class="nc">StreamColors</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandPrimary</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandPrimaryLt</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandPrimaryDk</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandSecondary</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandSecondaryTransparent</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandCyan</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandGreen</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">brandYellow</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">..</span>
+</span><span class='line'>  <span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>接下来，你应该创建一个<a href="https://developer.android.com/develop/ui/compose/compositionlocal"> CompositionLocal </a>来保存设计规范。这将允许你的组件和用户通过使用 StreamTheme.colors 调用在自定义主题的上下文中无缝访问这些规范。</p>
+
+<p><strong>译注：</strong> CompositionLocal是Compose中用于在上下文函数调用中，隐式的传递常量性质参数的方法，可以参考这篇文章<a href="https://juejin.cn/post/7434543407636267071">用Compose中的CompositionLocal来暗渡陈仓</a>，以了解CompositionLocal的详细用法。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="cm">/**</span>
+</span><span class='line'><span class="cm"> * Local providers for various properties we connect to our components, for styling.</span>
+</span><span class='line'><span class="cm"> */</span>
+</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">LocalColors</span> <span class="p">=</span> <span class="n">compositionLocalOf</span><span class="p">&lt;</span><span class="n">StreamColors</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">error</span><span class="p">(</span><span class="s">&quot;No colors provided! Make sure to wrap all usages of Stream components in a VideoTheme.&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">public</span> <span class="n">interface</span> <span class="n">StreamTheme</span> <span class="p">{</span>
+</span><span class='line'>    <span class="cm">/**</span>
+</span><span class='line'><span class="cm">     * Retrieves the current [StreamColors] at the call site&#39;s position in the hierarchy.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="k">public</span> <span class="k">val</span> <span class="py">colors</span><span class="p">:</span> <span class="n">StreamColors</span>
+</span><span class='line'>        <span class="n">@Composable</span> <span class="n">@ReadOnlyComposable</span>
+</span><span class='line'>        <span class="k">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">LocalColors</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>然后，你需要利用<a href="https://developer.android.com/develop/ui/compose/compositionlocal"> CompositionLocal </a>将这些设计规范封装在自定义主题中。这种方法允许你在整个可组合层次结构中高效地提供和传播你的设计规范。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">VideoTheme</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">isInDarkMode</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="n">isSystemInDarkTheme</span><span class="p">(),</span>
+</span><span class='line'>    <span class="n">colors</span><span class="p">:</span> <span class="n">StreamColors</span> <span class="p">=</span> <span class="n">StreamColors</span><span class="p">.</span><span class="n">defaultColors</span><span class="p">(),</span>
+</span><span class='line'>    <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">CompositionLocalProvider</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">LocalColors</span> <span class="n">provides</span> <span class="n">colors</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">content</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在，你的所有组件都应假设它们都包含在自定义主题（例如本例中的 VideoTheme）中，并使用提供的设计规范来确保整个组件集的样式一致。这种方法不仅使你的组件 API 能够采用统一的样式，还允许用户利用这些设计规范进行自定义，从而同时提高灵活性和一致性。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">VideoRendererCallContent</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">video</span><span class="p">:</span> <span class="n">ParticipantState</span><span class="p">.</span><span class="n">Video</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onRendered</span><span class="p">:</span> <span class="p">(</span><span class="n">View</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{},</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">VideoRenderer</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">VideoTheme</span><span class="p">.</span><span class="n">colors</span><span class="p">.</span><span class="n">baseSheetTertiary</span><span class="p">),</span> <span class="c1">// use pre-defined color styles</span>
+</span><span class='line'>        <span class="n">call</span> <span class="p">=</span> <span class="n">call</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">video</span> <span class="p">=</span> <span class="n">video</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">onRendered</span> <span class="p">=</span> <span class="n">onRendered</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyScreen</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="n">VideoRendererCallContent</span><span class="p">(..)</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// some complicated components</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">MainActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>         <span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">VideoTheme</span> <span class="p">{</span>
+</span><span class='line'>               <span class="n">MyScreen</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>         <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这种方法不仅对于实现 API（库或 SDK）有效，对于构建应用程序也同样有效，因为它能够使用结构良好、预定义的设计规范轻松维护设计一致性。对于实际示例和实际用例，你可以在<a href="https://github.com/GetStream/stream-video-android/blob/c12db8cb6367e10682be3ab323d50dfcc59032f3/stream-video-android-ui-compose/src/main/kotlin/io/getstream/video/android/compose/theme/VideoTheme.kt"> GitHub </a>上探索实际最佳实践。</p>
+
+<h2>可定制性</h2>
+
+<p>在实现 UI 组件时，尤其是对于库或 SDK，为 UI 和 UX 行为提供强大的自定义和灵活性至关重要。这可确保用户可以轻松重复使用组件并根据其特定要求进行调整。你可以采用各种策略在 Jetpack Compose 中有效地实现这种级别的可定制性。</p>
+
+<h3>1. 利用样式类</h3>
+
+<p>如果你希望为特定组件提供更具针对性的定制，请考虑提供专用的样式类。此类可以定义并允许用户轻松修改组件的 UI 和 UX 行为以满足他们的特定需求。</p>
+
+<p>一个很好的例子是 TextStyle ，它是 Compose UI 库提供的默认类：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Immutable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">TextStyle</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">(</span>
+</span><span class='line'>  <span class="p">..</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">constructor</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">color</span><span class="p">:</span> <span class="n">Color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Unspecified</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontSize</span><span class="p">:</span> <span class="n">TextUnit</span> <span class="p">=</span> <span class="n">TextUnit</span><span class="p">.</span><span class="n">Unspecified</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontWeight</span><span class="p">:</span> <span class="n">FontWeight</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontStyle</span><span class="p">:</span> <span class="n">FontStyle</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontSynthesis</span><span class="p">:</span> <span class="n">FontSynthesis</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontFamily</span><span class="p">:</span> <span class="n">FontFamily</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">..</span>
+</span><span class='line'>     <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如上面的代码所示，TextStyle 类封装了 Text 可组合项的所有样式属性。只需将 TextStyle 实例传递给 Text 可组合项，你就可以轻松自定义其设计，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Stats&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">style</span> <span class="p">=</span> <span class="n">TextStyle</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">fontSize</span> <span class="p">=</span> <span class="m">16.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">lineHeight</span> <span class="p">=</span> <span class="m">24.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">(</span><span class="m">600</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">textAlign</span> <span class="p">=</span> <span class="n">TextAlign</span><span class="p">.</span><span class="n">Center</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">),</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用样式类的优点是，它们允许组件开发人员将所有设计规范整合到一个集中的类中。这种方法可以防止设计元素分散在多个布局中，从而使代码库更简洁、更易于管理。</p>
+
+<p>对于用户来说，样式类提供了一种直接且直观的修改设计的方法。此外，用户可以在多个布局中重复使用相同的样式实例，从而更方便地在不同布局中应用一致的自定义。</p>
+
+<p>一个潜在的缺点是，由于<a href="https://getstream.io/blog/jetpack-compose-stability/#jetpack-compose-phases">重组机制（Recomposition）</a>，每当输入发生变化时，Compose 运行时都会比较样式类的所有属性，以确定是否需要重组。与直接在可组合函数中定义单个参数相比，这使其成本略高。然而，从 API 设计的角度来看，改进的用户体验和简化的 API 管理通常超过了这一成本，因此在许多情况下，这是一种值得的权衡。</p>
+
+<h3>2. 借助插槽（Slots）的灵活性</h3>
+
+<p>增强自定义灵活性的另一种有效策略是提供接受可组合函数的插槽，让用户根据自己的需求定义特定的实现。通过提供默认实现，你可以确保用户无需付出额外努力即可利用所提供的功能，同时仍然可以根据需要进行自定义。</p>
+
+<p>例如，Stream Video SDK 提供的 CallContent 组件是一个高级 API，它集成了多个子组件，包括顶部应用栏、视频渲染器、布局结构、网格参与者等。虽然 CallContent API 包含默认实现以方便使用，但它还通过允许通过插槽参数进行自定义来确保灵活性，如以下代码所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">CallContent</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">style</span><span class="p">:</span> <span class="n">VideoRendererStyle</span> <span class="p">=</span> <span class="n">RegularVideoRendererStyle</span><span class="p">(),</span>
+</span><span class='line'>    <span class="n">appBarContent</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">(</span><span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">CallAppBar</span><span class="p">(..)</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'>    <span class="n">videoRenderer</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">(..)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">ParticipantVideo</span><span class="p">(..)</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'>    <span class="n">videoContent</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">RowScope</span><span class="p">.(</span><span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">ParticipantsLayout</span><span class="p">(..)</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="p">..</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这种方法允许用户实现自己的顶部应用栏、视频渲染器、布局结构、网格参与者等自定义版本。此外，另一种有效的策略是将相似类型的组件分组，并通过插槽使它们可自定义，这通常称为复合组件模式。</p>
+
+<p>复合组件模式涉及创建一个父组件来管理子组件集合，通过为每个子组件公开插槽来提供自定义。此模式允许用户替换或自定义单个子组件，同时保持整体结构和功能的一致性。</p>
+
+<p>想象一下视频通话屏幕上的控制面板包含多个操作按钮，如下图所示：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:886/format:webp/0*mNh-EWJlyCobHHed" alt="Control Panel" /></p>
+
+<p>有些用户可能喜欢不同的操作按钮顺序，例如将麦克风按钮放在第一位，而其他用户可能希望根据其特定用例添加、删除或自定义按钮。在这种情况下，复合组件模式被证明在满足这些不同的要求方面非常有效，例如下面的代码：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">ControlActions</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">actions</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;(</span><span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)&gt;</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">LazyRow</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">verticalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterVertically</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">VideoTheme</span><span class="p">.</span><span class="n">dimens</span><span class="p">.</span><span class="n">spacingM</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterHorizontally</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">items</span><span class="p">(</span><span class="n">actions</span><span class="p">)</span> <span class="p">{</span> <span class="n">action</span> <span class="p">-&gt;</span>
+</span><span class='line'>                <span class="n">action</span><span class="p">.</span><span class="n">invoke</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>上面的代码演示了一个接受 Composable 函数列表的单个插槽，然后使用 Row 或 LazyRow 进行渲染。这种方法允许你提供高度灵活的组件 API，同时保持对组件布局预期结构的控制。</p>
+
+<p>之后，你还可以提供默认实现，如下所示，以增加便利性。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">buildDefaultCallControlActions</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">onCallAction</span><span class="p">:</span> <span class="p">(</span><span class="n">CallAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">return</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>        <span class="p">{</span>
+</span><span class='line'>            <span class="n">ToggleCameraAction</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">onCallAction</span> <span class="p">=</span> <span class="n">onCallAction</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">},</span>
+</span><span class='line'>        <span class="p">{</span>
+</span><span class='line'>            <span class="n">ToggleMicrophoneAction</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">onCallAction</span> <span class="p">=</span> <span class="n">onCallAction</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">},</span>
+</span><span class='line'>        <span class="p">{</span>
+</span><span class='line'>            <span class="n">FlipCameraAction</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">onCallAction</span> <span class="p">=</span> <span class="n">onCallAction</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">},</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">ControlActions</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onCallAction</span><span class="p">:</span> <span class="p">(</span><span class="n">CallAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span> <span class="n">DefaultOnCallActionHandler</span><span class="p">.</span><span class="n">onCallAction</span><span class="p">(</span><span class="n">call</span><span class="p">,</span> <span class="n">it</span><span class="p">)</span> <span class="p">},</span>
+</span><span class='line'>    <span class="n">actions</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;(</span><span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)&gt;</span> <span class="p">=</span> <span class="n">buildDefaultCallControlActions</span><span class="p">(</span><span class="n">onCallAction</span><span class="p">)</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如需了解更多<a href="https://getstream.io/video/docs/android/ui-components/call/call-controls/"> ControlActions </a>的真实示例，你可以探索<a href="https://github.com/GetStream/stream-video-android/blob/c12db8cb6367e10682be3ab323d50dfcc59032f3/stream-video-android-ui-compose/src/main/kotlin/io/getstream/video/android/compose/ui/components/call/controls/ControlActions.kt#L48"> GitHub </a>上的实现。</p>
+
+<h3>3. 使用主题进行定制</h3>
+
+<p>设计 Compose 组件时的另一个常见挑战是，随着组件层次结构的变大，提供清晰、直接的可定制性变得更加困难。例如，假设你想为组件多个部分使用的视频渲染器提供可定制性，但 UI 层次结构嵌套很深且很复杂，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">CallContent</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">ParticipantsLayout</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">ParticipantsRegularGrid</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">OrientationVideoRenderer</span> <span class="p">{</span>
+</span><span class='line'>          <span class="n">LazyVerticalGrid</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">VideoRenderer</span><span class="p">()</span> <span class="c1">// &lt;-- users want to customize this renderer style</span>
+</span><span class='line'>          <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>      <span class="n">FloatingVideoRenderer</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">VideoRenderer</span><span class="p">()</span> <span class="c1">// &lt;-- users want to customize this renderer style</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在这种情况下，将插槽或样式参数从最顶层的组件一直传递到 VideoRenderer 组件并不理想。随着你在不同组件之间添加更多可定制性，最顶层的组件 (CallContent) 可能会因大量插槽和样式参数而变得过载。这不仅使你的 API 更难维护，而且还增加了用户混淆或误用的可能性，因为不清楚哪个参数用于什么用途。</p>
+
+<p>为了解决这个问题，你可以利用自定义主题和<a href="https://developer.android.com/develop/ui/compose/compositionlocal"> CompositionLocal</a>来实现可定制性，同时保持 API 更清晰、更易于管理，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Immutable</span>
+</span><span class='line'><span class="k">public</span> <span class="n">data</span> <span class="k">class</span> <span class="nc">VideoRendererStyle</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">backgroundColor</span><span class="p">:</span> <span class="n">Color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">..</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">LocalVideoRendererStyle</span> <span class="p">=</span> <span class="n">compositionLocalOf</span><span class="p">&lt;</span><span class="n">VideoRendererStyle</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">error</span><span class="p">(</span><span class="s">&quot;No VideoRendererStyle provided! Make sure to wrap all usages of Stream components in a VideoTheme.&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">VideoTheme</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">videoRendererStyle</span><span class="p">:</span> <span class="n">VideoRendererStyle</span> <span class="p">=</span> <span class="n">VideoRendererStyle</span><span class="p">(),</span>
+</span><span class='line'>    <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">CompositionLocalProvider</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">LocalVideoRendererStyle</span> <span class="n">provides</span> <span class="n">videoRendererStyle</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">content</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在，你可以通过在不同的组件中使用提供的样式来确保组件样式的一致性，而无需将它们作为参数反复传递。此外，用户可以通过创建自己的自定义主题轻松自定义样式，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">VideoTheme</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">videoRendererStyle</span> <span class="p">=</span> <span class="n">VideoRendererStyle</span><span class="p">(</span><span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="p">..</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果你希望更广泛地应用此策略并高效地管理更多样式，则可以将它们合并为一个类，例如 StreamStyles ，并提供统一的样式类，而不是 CompositionLocal 中的多个单独样式。有些同学可能会担心 CompositionLocal 带来的性能影响，因为它会在值更改时触发布局层次结构的重组，但主题通常不会在应用程序中频繁更新。它们通常是静态的，以确保设计一致性，因此在这种情况下使用 CompositionLocal 是一种合适且有效的选择。</p>
+
+<h2>预览（Preview）的兼容性</h2>
+
+<p>提供预览非常重要，尤其是在构建组件 API 时，因为它们允许开发人员直接在 Android Studio 中可视化和验证他们的 UI 设计。
+一些同学依靠<a href="https://developer.android.com/develop/ui/compose/tooling#live-edit-literals"> Live Literals </a>来动态展示预览中的变化，而其他同学则使用屏幕截图测试来确保其组件的视觉一致性。因此，在实现 Compose 组件时，必须确保它们与 Android Studio 中的预览功能完全兼容，如下面的屏幕截图所示：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*R74xLmTnWswi86ww" alt="Preview" /></p>
+
+<p>有时，你的组件可能会产生副作用，例如在发出网络请求或处理动态状态后渲染图像，这可能会导致预览出现故障。在这种情况下，你可以利用<a href="https://developer.android.com/develop/ui/compose/tooling/previews#localinspectionmode"> LocalInspectionMode</a>。</p>
+
+<p>LocalInspectionMode 允许你确定可组合项是否在预览模式下呈现，从而使你可以呈现专门用于预览目的的专用布局。这种方法可确保预览保持功能，即使你的组件依赖于复杂的逻辑或外部资源。你可以从<a href="https://github.com/skydoves/landscapist"> Landscapist </a>中找到一个用于网络图像加载的 Jetpack Compose 库的真实示例，它演示了处理预览的最佳实践。</p>
+
+<p>下面的可组合函数会检查它是否处于预览模式。如果是，它会渲染静态图像，而不是执行诸如获取网络数据之类的副作用。这种方法允许用户为 GlideImage 可组合函数构建自己的预览，而不会在预览渲染期间遇到运行时错误。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">GlideImage</span><span class="p">(</span>
+</span><span class='line'>  <span class="n">imageModel</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Any</span><span class="p">?,</span>
+</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>  <span class="n">previewPlaceholder</span><span class="p">:</span> <span class="n">Painter</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>  <span class="p">..</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">LocalInspectionMode</span><span class="p">.</span><span class="n">current</span> <span class="p">&amp;&amp;</span> <span class="n">previewPlaceholder</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">Image</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">painter</span> <span class="p">=</span> <span class="n">previewPlaceholder</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">..</span>
+</span><span class='line'>      <span class="p">)</span>
+</span><span class='line'>      <span class="k">return</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// complex logic about requesting network data and render it</span>
+</span><span class='line'>  <span class="p">..</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了增强项目中的整体预览策略，请考虑探索<a href="https://getstream.io/blog/effective-compose-preview/">设计有效的 UI 以增强 Compose 预览</a>。此资源提供了有价值的见解和技术，可有效优化你的 Compose 预览。</p>
+
+<h2>结论</h2>
+
+<p>在本文中，我们探讨了在 Jetpack Compose 中制作有效 UI 组件的策略，重点关注最佳实践，例如高效处理Modifier、确保设计与主题一致、实施可定制性策略以及增强预览兼容性。设计直观且强大的 API 始终是一项挑战，但努力终将获得回报，因为用户体验和开发者满意度显著提升。</p>
+
+<p>如果你对本文有任何疑问或反馈，可以在 Twitter<a href="https://twitter.com/github_skydoves"> @github_skydoves </a>或<a href="https://github.com/skydoves"> GitHub </a>上找到作者。如果你想随时了解 Stream 的最新动态，请在 Twitter 上关注我们<a href="https://twitter.com/getstream_io"> @getstream_io</a>，获取更多精彩的技术内容。</p>
+
+<p>老规矩，祝你编码愉快！ &ndash; <a href="https://github.com/skydoves">Jaewoong</a></p>
+
+<p>最初<a href="https://getstream.io/blog/designing-effective-compose/">发布于 GetStream.io</a>。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Understanding Algorithm Tarjan]]></title>
@@ -5088,281 +6026,6 @@ DiffUtils使用 LCS 的概念来最小化更改（插入和删除），并且还
 <li><a href="https://www.geeksforgeeks.org/array-subarray-subsequence-and-subset/">Subarrays, Subsequences, and Subsets in Array</a></li>
 <li><a href="https://www.geeksforgeeks.org/count-distinct-subsequences/">Count Distinct Subsequences</a></li>
 <li><a href="https://www.geeksforgeeks.org/count-of-subarrays-in-an-array-containing-numbers-from-1-to-the-length-of-subarray/">Count of Subarrays in an array containing numbers from 1 to the length of subarray</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[降Compose十八掌之『神龙摆尾』| Architecture]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/09/12/architecture-in-compose/"/>
-    <updated>2024-09-12T22:27:58+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/09/12/architecture-in-compose</id>
-    <content type="html"><![CDATA[<p>通过前面的<a href="https://juejin.cn/column/7367555191338467337">一系列文章</a>，我们已经掌握了足够的Jetpack Compose的开发基础。为了更好的在实际项目中使用Compose，我们还需要了解一下现代应用开发的架构原则，以及使用Jetpack Compose时如何更好的遵循这些原则。这篇文章将聚焦于架构原则这一话题，进行一些探讨和总结。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2024/09/12/architecture-in-compose/"><img src="https://www.sixt.tech/assets/jetpack-compose/jetpack-compose.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>现代Android应用开发的架构方式</h2>
-
-<p>Jetpack Compose是一个声明式的UI框架，用它来开发应用程序，因此根本上仍是在做应用程序开发，所以需要遵循现代应用程序的架构原则。</p>
-
-<p>一提到架构自然会想到Bob大叔的<a href="https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html">The Clean Architecture</a>，这里面的最主要的核心思想就是分层，把不同的概念按照抽象的层次进行分离，层与层之间有特定的依赖规则，也即只能从控制层往业务逻辑依赖。分层最大的益处就是方便移植和替换，降低维护成本，这也是架构的意义所在。</p>
-
-<p><img src="https://blog.cleancoder.com/uncle-bob/images/2012-08-13-the-clean-architecture/CleanArchitecture.jpg" alt="图1. The Clean Architecture" /></p>
-
-<p>对于移动应用开发，谷歌也给出比较实用的<a href="https://developer.android.com/topic/architecture#common-principles">现代应用架构原则</a>，其中有四个核心原则：</p>
-
-<ol>
-<li>远离系统组件，系统组件（Activity，Service和Fragment等）仅能作为一个入口和必要的依赖对象，以及协调和连接不同的对象。深层次的原因是系统组件实例不可控，系统随时会重新创建实例，所以应该把对系统组件的依赖降到最低；</li>
-<li>由数据来驱动UI，且数据最好是不可变的（Immutable data）。这个原则要求把逻辑尽可能的放在数据层而非UI层，UI层就是展示数据层，处理用户事件和UI自己的逻辑，但不应该做的业务逻辑处理。比如说新闻类应用，数据层把一坨列表传过来，UI就展示，如果列表为空，那显示加载错误，用户点击刷新就让数据层刷新数据。但不应该对列表中的数据做更新或者更改，比如说把不同的列表融合为一个，这些都是业务逻辑，应该由数据层来做。这样的好处是能让UI层尽可能的简单，方便移植，方便测试。而且这符合响应式的数据流，可以使用响应式编程范式（MVVM或者MVI）；</li>
-<li>单一数据源（Single Source Of Truth），也就是说任何数据都应该只由它的生产者来修改，其他模块只是使用不能修改，因此每一层返回的数据都应该是不可修改类型（Immutable objects）;</li>
-<li>单向数据流动（Unidirectional Data Flow），UI层展示数据，获得用户事件，调用业务逻辑层处理事件，业务逻辑层再去数据层请求新的数据，新的数据再来驱动刷新UI，而不可以业务逻辑层修改数据后一边去刷新UI，一边再去让数据层修改数据，这会导致难以调试的bug。</li>
-</ol>
-
-
-<p><img src="https://developer.android.com/static/topic/libraries/architecture/images/mad-arch-overview.png" alt="图2. 现代应用典型架构" /></p>
-
-<p>下面我们围绕Jetpack Compose来深入探讨一下如何把这些架构原则落到实处。</p>
-
-<h2>使用Jetpack Compose落实架构原则</h2>
-
-<p>Jetpack Compose是声明式UI框架，所以它只能出现在UI层，用UI元素展示数据， 以及获取用户事件。其余的部分，如业务逻辑层（ViewModels）和数据层（Models and Data）都与Compose没有关系，也不应该受到Compose的影响。这就是架构分层带来的好处，不同层之间通过约定 的接口进行协作，每一层都可以用不同的技术栈去实现，不会对其他层造成影响。</p>
-
-<p><img src="https://developer.android.com/static/topic/libraries/architecture/images/mad-arch-overview-ui.png" alt="图3. 应用架构中的UI层的角色" /></p>
-
-<h3>典型的项目结构</h3>
-
-<p>按照架构原则，一个典型的项目模块结构应该是酱紫的：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose_libs/project_org.png" alt="图4. 典型项目模块结构" /></p>
-
-<p>Activity（对应着Activity实例）和AndroidApp（对应着Application实例）是应用程序的入口，可能需要在里面做一些必要的初始化工作，比如有些三方的库可能需要在Application#onCreate中去做初始化工作。ui package对应着UI层，负责UI的展示；package model对应着Model层，里面定义着供UI层使用的数据类型，以及获取 这些数据的接口；package data对应着数据层（data layer），实现着model中的接口定义。当然也可以把model与data合并成一个package，不过，单独把数据的定义和数据层的接口拿出来放在一个包里，会更清晰一些，因为UI层只需关心有哪些接口可以获得什么数据，它只需要知道model就够了。</p>
-
-<p>Jetpack Compose的入口应该用一个名字为App的函数，在这里做初始化工作，比如创建数据层的实例，进行弹窗，创建导航等等。此处作为一个桥接，用以把Android的组件与Compose连接起来，创建必要的实例并把各实例协调起来。当然也可以直接把这些事情放入Activity中，但独立出来更方便测试和移植，让系统组件变得更为简单。Activity直接调用App即可：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MainActivity</span> <span class="p">:</span> <span class="n">AppCompatActivity</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">AeolusApp</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">())</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">AeolusApp</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">AeolusTheme</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// A surface container using the &#39;background&#39; color from the theme</span>
-</span><span class='line'>        <span class="n">Surface</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">background</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">CurrentLocationPermission</span> <span class="p">{</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">dataContainer</span> <span class="p">=</span> <span class="n">DataContainerImpl</span><span class="p">(</span><span class="n">LocalContext</span><span class="p">.</span><span class="n">current</span><span class="p">)</span>
-</span><span class='line'>                <span class="n">AeolusNavGraph</span><span class="p">(</span><span class="n">appContainer</span> <span class="p">=</span> <span class="n">dataContainer</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>创建导航</h3>
-
-<p>导航是把所有的UI页面组织在一起形成一个逻辑清晰的交互整体，可以参照之前的文章<a href="https://juejin.cn/post/7398728505872908315">降Compose十八掌之『密云不雨』| Navigation</a>来创建导航。</p>
-
-<p>需要注意的就是页面应该命名为Screen，其ViewModel应该作为参数传递给Screen，Screen和ViewModel的实例创建都在导航中来完成。</p>
-
-<h3>ViewModel应该保持独立</h3>
-
-<p>ViewModel作为UI层与数据层的中间层而存在，目的是让UI层专注于数据展示。为了更好的可移植性，ViewModel不应该有平台相关的依赖，比如<a href="https://juejin.cn/post/7409869765177147430">平台的生命周期</a>或者Context，它只应该依赖model层。并且为了方便依赖注入，应该把Model层的数据接口对象（通常是Repository）作为参数传递给ViewModel：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">FavoritesViewModel</span><span class="p">(</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">locationRepo</span><span class="p">:</span> <span class="n">LocationRepository</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">weatherRepo</span><span class="p">:</span> <span class="n">WeatherRepository</span>
-</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>具体的Repository对象可以在导航创建ViewModel时创建，或者用依赖注入框架（如Hilt）来注入实例。</p>
-
-<h3>并发原则</h3>
-
-<p>现代的应用肯定都会用并发，无论是协程还是Flow，为了能让并发更加的结构化和可控，应该遵循以下原则：</p>
-
-<ol>
-<li>Model层的方法都应该是suspend，对于所有Model层公开出来的方法都应该用suspend来修饰。</li>
-<li>Repository（即Data层）的每个方法的实现都要指定明确的Dispatcher，最好接收一个Dispatcher作为构造参数，以方便进行注入或者测试。</li>
-<li>ViewModel要把所有对Model的方法调用包裹在协程作用域viewModelScope中。</li>
-</ol>
-
-
-<h3>层与层之间的交互要定义接口</h3>
-
-<p>比如Model层提供给ViewModel的能力要定义为接口，然后在Data层中去实现这些接口。接口的最大好处是方便替换具体的实现，比如换个实现方式时，或者Mock测试时都能很方便的进行替换，甚至还可以使用动态代理在运行时进行替换。</p>
-
-<h3>对外部的依赖要作为构造器参数传入</h3>
-
-<p>作为构造参数传入外部依赖，而不是在内部直接创建，这样做的好处在于方便替换实例，无论是日后更换一种实现实例，还是Mock测试，都可以在不修改类本身的情况下进行实例替换。甚至可以使用依赖注入框架（如Hilt）做到让具体使用的实例可配置化。</p>
-
-<h2>Compose与ViewModel的交互原则</h2>
-
-<p>这部分我们具体谈一谈Compose与ViewModel在交互时的一些原则和建议。ViewModel暴露UiState给Compose展示，Compose则把事件（Event）给ViewModel去处理（可以是MVI式的把事件封装成Intent塞给ViewModel，也可以直接调用ViewModel的接口）。</p>
-
-<p><img src="https://developer.android.com/static/develop/ui/compose/images/state-unidirectional-flow.png" alt="图5. Compose与ViewModel的UDF" /></p>
-
-<p>比如说一个典型的登录场景，其Composable和ViewModel应该像这样的：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_uiState</span> <span class="p">=</span> <span class="n">mutableStateOf</span><span class="p">&lt;</span><span class="n">UiState</span><span class="p">&gt;(</span><span class="n">UiState</span><span class="p">())</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">uiState</span><span class="p">:</span> <span class="n">State</span><span class="p">&lt;</span><span class="n">UiState</span><span class="p">&gt;</span>
-</span><span class='line'>        <span class="k">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">_uiState</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">UiState</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">loading</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">false</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">signedIn</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">false</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">error</span><span class="p">:</span> <span class="n">String</span> <span class="p">=</span> <span class="s">&quot;&quot;</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">MyComposable</span><span class="p">(</span><span class="n">viewModel</span><span class="p">:</span> <span class="n">MyViewModel</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">uiState</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">uiState</span><span class="p">.</span><span class="n">collectAsStateWithLifecycle</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">uiState</span><span class="p">.</span><span class="n">loading</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// show loading</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">uiState</span><span class="p">.</span><span class="n">signedIn</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// show signed in status</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// show uiState.error</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>一定要定义专用的UiState数据对象</h3>
-
-<p>从ViewModel给UI的数据要封装成一个不可变的数据对象（data class）作为UiState，即使其数据与从Model处获得的数据没有变化，也应该定义并做基本转换。</p>
-
-<p>原因就是让UI层和Model不会相互影响，假如直接把Model的数据传给UI，那假如以后Model层的数据有变动，这就会影响到UI。架构分层的目的就是要封装和隔离，每一层都应该定义自己的输出数据类型，把依赖和耦合降到最低。</p>
-
-<h3>当数据特别多时，分成多个UiState对象</h3>
-
-<p>如果页面较复杂，需要的字段特别多，这时应该把页面分成几个区域，同时UiState也应该分成几个不同的对象，而不是大一统的装在一个对象里面。</p>
-
-<p>原因在于Compose会把从ViewModel处获得的UiState装在一个状态里面，从<a href="https://juejin.cn/post/7376094685495001139">前面的文章中</a>我们知道，状态是用于触发重组的，状态发生变化就会触发重组。因为数据多半部分变化的，甚至有些业务逻辑总是某几个字段在变化。因为字段都放在了一个对象中，那么即使只有一个字段变了，对于Compose来说，也是状态变化了，就要进行重组。</p>
-
-<p>把字段按其变化的性质进行拆分，用几个UiState来表示，这样能把变化降到最低，只让真正有变化的UiState触发重组进而刷新UI。</p>
-
-<h3>Compose中要尽可能拆解为无状态函数</h3>
-
-<p>这里的意思是说我们应该把从ViewModel处获得的UiState拆解开来，变成具体的参数用无状态函数去展示，而不应该全都把UiState当成参数传给每一个composables。比如说对于一个新闻页面，对于标题元素就应该只接受两个String作为参数，而不应该把整个NewsUiState作为参数：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">Header</span><span class="p">(</span><span class="n">title</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">subtitle</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// 只有当title和subtitle发生变化时才会重组</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">Header</span><span class="p">(</span><span class="n">news</span><span class="p">:</span> <span class="n">NewsUiState</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// 只要状态变了就会重组，哪怕有关的title和subtitle没有变化</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这样做的目的也是为了尽可能减少重组。</p>
-
-<h3>ViewModel塞给UI的数据要能够直接展示</h3>
-
-<p>UI层负责数据展示，不应该有过多的逻辑，特别是不能有涉及非UI直接相关的逻辑。ViewModel存在的意义就是为了把非UI相关的业务逻辑全从UI中拿走，把UI做的尽可能薄一些，这里薄的意思是逻辑要少。背后的核心原因在于方便测试和移植，众所周知UI是与每个平台强相关的，每个平台的UI构建方式都不一样，并且UI是极难做单元测试的，依赖太多很难Mock。</p>
-
-<p>UI层很薄，仅是数据的展示，逻辑都放在ViewModel中，但ViewModel依赖很少，没有对平台和依赖，它的依赖对象都是可以Mock的，那么ViewModel就很容易做测试，只要测试保证ViewModel没什么问题，那么就基本上可以认为UI也不会有问题，毕竟光做展示一般不会出问题。</p>
-
-<p>这里的最重要的一点就是要保证ViewModel递给UI的数据要是经过逻辑处理后的，可以直接展示的数据。举个粟子，比如说展示时间间隔的字段，类似于『100 ms』，『10 seconds』，『2 mins 10ms』或者『1 hour 10 mins』 这种，那么就不可以直接把一个Int或者Long传给UI，让UI去换算，而是让ViewModel做换算，把结果String传给UI，UI用一个Text直接显示String。这样一来就可测试了，我们Mock几个不同的字段值给ViewModel，再检查它吐出来的UiState中的时长String字段是否符合预期，就能保证这段逻辑没有问题。对于UI可以不用测试了，一个Text显示一个String出错的可能性不大，可以忽略了。</p>
-
-<h2>总结</h2>
-
-<p>架构最难的地方在于它是<strong>形而上学（Metaphysics）</strong>的，不会像算法或者设计模式那样有非常明确的和具体的实施步骤，仅是有一些抽象的指导原则。在实际的项目中就要从实际的业务场景出发，使用可用的技术工具，把指导原则进行落地，要<strong>把『神似』而非『形似』</strong>作为目标。切忌生搬硬套网上一些所谓的应用架构框架，假如真的有通用的架构框架，那谷歌为啥不写在SDK里面？不同的业务，不同的规模，不同的技术栈，不同的版本策略都会影响架构的方式。比如像第一部分提到的四大原则，难道只有用MVVM或者MVI才能做到么？即使用了MVVM，你在ViewModel直接把未处理的数据丢给UI，UI中仍有大量的处理数据的if-else，ViewModel把数据改了后两头更新，这明显不符合架构原则，最后仍是维护一坨巨大的shi山难解的Bug满天飞。所以对于网上的各种架构框架看看就好，一定不能生搬硬套。</p>
-
-<p>可以通过谷歌提供的一些非常好的<a href="https://github.com/android/architecture-samples/tree/main">案例</a>来学习架构，仔细研读这些案例的源码，以深刻理解架构指导原则的内在涵义。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/topic/architecture">Guide to app architecture</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/architecture">Architecting your Compose UI</a></li>
-<li><a href="https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html">The Clean Architecture</a></li>
-<li><a href="https://www.geeksforgeeks.org/separation-of-concerns-soc/">Separation of Concerns (SoC)</a></li>
 </ul>
 
 ]]></content>
