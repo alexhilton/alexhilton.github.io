@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-03-16T20:39:50+08:00</updated>
+  <updated>2025-03-28T22:14:32+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,1843 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[实战：在Compose中优雅地实现提示]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/03/28/hints-in-compose/"/>
+    <updated>2025-03-28T22:05:00+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/03/28/hints-in-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/hints-in-compose-10b6470acc58">Hints in Compose</a>，原文由<a href="https://medium.com/@vitoksmile">Viktor Mykhailiv</a>发布于2025年2月13日，文章内容巨详细，TL;DR;。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2025/03/28/hints-in-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*0jBirMqQV-aXKXw5gekEkQ.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>有时我们的应用需要突出显示某些 UI 组件，例如在首次登录（首次使用）时，或者当我们添加新内容（“新功能”）时。</p>
+
+<p>在本文中，我将指导如何构建自定义解决方案来显示提示/工具提示，指向 Compose（Compose Multiplatform 和 Jetpack Compose）中的特定 UI 元素。</p>
+
+<h2>布局层次</h2>
+
+<p>要突出显示 UI 元素，首先我们应该了解“提示”(Hints)的主要概念。
+假设我们有一个带有 TopBar、BottomNavigation 和主要操作按钮的应用程序。我们想要突出显示 TopBar 的操作、主要按钮和 BottomNavigation 中的一个项目。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*7K0zoXqZM0ajYYZARn6I5w.png" alt="Layout hierarchy" /></p>
+
+<p>对于我们的“提示”，我们需要绘制一个暗淡的背景（也是为了拦截触摸事件），计算突出显示的 UI 元素的位置，剪掉（屏蔽）我们的元素形状以免变暗，最后绘制一个提示（例如带有背景的文本）。</p>
+
+<h2>1. 暗淡的背景</h2>
+
+<p>要在所有内容之上绘制一个暗淡的背景作为覆盖或弹出窗口，我们可以：</p>
+
+<h3>a. 使用自定义可组合项包装我们应用（根组件）的所有内容（例如带有 Modifier.background 的 Box）</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">AppContent</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">HintOverlay</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">MaterialTheme</span> <span class="p">{</span>
+</span><span class='line'>         <span class="n">Scaffold</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// 我的应用内容</span>
+</span><span class='line'>         <span class="p">}</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>   <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>b. 使用对话框</h3>
+
+<p>通过使用对话框，我们可以在所有内容之上显示一个覆盖层（例如，在 Android 上，对话框显示在自己的窗口中）。
+使用对话框时，Compose Multiplatform 中的 scrimColor 会出现问题。我们无法从 Compose 通用目标配置 scrimColor ，但每个目标（Android 除外）都为 scrimColor 提供了一个实际值。作为一种可能的解决方案，我们可以创建一个例外类来提供对话框属性并为每个目标提供实际实现。</p>
+
+<h3>c. 使用 Popup</h3>
+
+<p>Popup 在这里看起来更好，因为它默认不绘制 scrimColor，并且覆盖层显示在所有内容之上。</p>
+
+<p>我会采用第三种方法，不强制手动使用 HintOverlay。</p>
+
+<p>我还想为覆盖层背景添加 Brush 支持，而不仅仅是 Color 。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">LocalHintOverlayColor</span> <span class="p">=</span> <span class="n">staticCompositionLocalOf</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;</span> <span class="p">{</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">x44000000</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">LocalHintOverlayBrush</span> <span class="p">=</span> <span class="n">staticCompositionLocalOf</span><span class="p">&lt;</span><span class="n">Brush</span><span class="p">?&gt;</span> <span class="p">{</span> <span class="k">null</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">HintOverlay</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Popup</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">overlayBackground</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">align</span><span class="p">(</span><span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Draw hints here&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="cm">/**</span>
+</span><span class='line'><span class="cm"> * 从 [LocalHintOverlayBrush] 或 [LocalHintOverlayColor] 设置 `background`。</span>
+</span><span class='line'><span class="cm"> */</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">Modifier</span><span class="p">.</span><span class="n">overlayBackground</span><span class="p">():</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">composed</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">LocalHintOverlayBrush</span><span class="p">.</span><span class="n">current</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="n">background</span><span class="p">(</span><span class="n">it</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>        <span class="o">?:</span> <span class="n">background</span><span class="p">(</span><span class="n">LocalHintOverlayColor</span><span class="p">.</span><span class="n">current</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我可以使用CompositionLocalProvider 设置 Brush 来覆盖覆盖的背景。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">CompositionLocalProvider</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">LocalHintOverlayBrush</span> <span class="n">provides</span> <span class="n">Brush</span><span class="p">.</span><span class="n">linearGradient</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">Color</span><span class="p">.</span><span class="n">Red</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="m">0.5f</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="m">0.5f</span><span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">),</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">HintOverlay</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*KrHuSNZT0zE-Eddz1GBA2A.png" alt="Dimmed background" /></p>
+
+<h2>2. 计算锚点坐标</h2>
+
+<p>要获取 Compose 中 UI 元素的坐标，我们可以使用OnGloballyPositionedModifier ，当内容的全局位置可能发生变化时，会使用布局的最终​​ LayoutCoordinates 调用该方法。</p>
+
+<p>使用示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Column</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">Modifier</span><span class="p">.</span><span class="n">onGloballyPositioned</span> <span class="p">{</span> <span class="n">coordinates</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="c1">// 这将是Column的大小。</span>
+</span><span class='line'>        <span class="n">coordinates</span><span class="p">.</span><span class="n">size</span>
+</span><span class='line'>        <span class="c1">// Column相对于应用程序窗口的位置。</span>
+</span><span class='line'>        <span class="n">coordinates</span><span class="p">.</span><span class="n">positionInWindow</span><span class="p">()</span>
+</span><span class='line'>        <span class="c1">// Column相对于 Compose 根的位置。</span>
+</span><span class='line'>        <span class="n">coordinates</span><span class="p">.</span><span class="n">positionInRoot</span><span class="p">()</span>
+</span><span class='line'>        <span class="c1">// 这些将是提供给布局的对齐线（此处的Column为空）。</span>
+</span><span class='line'>        <span class="n">coordinates</span><span class="p">.</span><span class="n">providedAlignmentLines</span>
+</span><span class='line'>        <span class="c1">// 这将是与 Column 的父级相对应的 LayoutCoordinates 实例。</span>
+</span><span class='line'>        <span class="n">coordinates</span><span class="p">.</span><span class="n">parentLayoutCoordinates</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">).</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">))</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">).</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于我们的提示，我们需要创建一个状态来保存锚点的坐标和大小，并引入一个修改器来更新状态：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Stable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">HintAnchorState</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">var</span> <span class="py">size</span><span class="p">:</span> <span class="n">IntSize</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">IntSize</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">var</span> <span class="py">offset</span><span class="p">:</span> <span class="n">Offset</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">Offset</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberHintAnchorState</span><span class="p">():</span> <span class="n">HintAnchorState</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">HintAnchorState</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">fun</span> <span class="nf">Modifier</span><span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span><span class="n">state</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">):</span> <span class="n">Modifier</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">onGloballyPositioned</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">state</span><span class="p">.</span><span class="n">size</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">size</span>
+</span><span class='line'>        <span class="n">state</span><span class="p">.</span><span class="n">offset</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">positionInWindow</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>因此，我们只需订阅所需 UI 元素的大小和坐标变化即可更新锚点的状态。
+现在我们需要将此 hintAnchor 修饰符应用于我们的内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">topAppBarActionHintAnchor</span> <span class="p">=</span> <span class="n">rememberHintAnchorState</span><span class="p">()</span>
+</span><span class='line'><span class="k">val</span> <span class="py">actionHintAnchor</span> <span class="p">=</span> <span class="n">rememberHintAnchorState</span><span class="p">()</span>
+</span><span class='line'><span class="k">val</span> <span class="py">bottomNavigationHintAnchor</span> <span class="p">=</span> <span class="n">rememberHintAnchorState</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">IconButton</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span><span class="n">topAppBarActionHintAnchor</span><span class="p">),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="p">{},</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span><span class="n">actionHintAnchor</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="p">{},</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Action&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">BottomNavigationItem</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span><span class="n">topAppBarActionHintAnchor</span><span class="p">),</span>
+</span><span class='line'>    <span class="c1">//... 传入其他需要的参数</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p><strong>注意：</strong> 修饰符顺序在 Compose 中始终很重要，我们在 hintAnchor 后设置 4.dp，以便在此按钮周围留出额外空间（锚点的尺寸将比实际按钮的尺寸大 4.dp）。</p></blockquote>
+
+<p>HintOverlay 可组合项需要进行一些更改才能使用 HintAnchorState为此锚点绘制提示。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">HintOverlay</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">anchors</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">&gt;,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">overlayBackground</span><span class="p">(</span><span class="n">anchors</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="cm">/**</span>
+</span><span class='line'><span class="cm"> * 从 [LocalHintOverlayBrush] 或 [LocalHintOverlayColor] 设置“background”。</span>
+</span><span class='line'><span class="cm"> */</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">Modifier</span><span class="p">.</span><span class="n">overlayBackground</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">anchors</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">&gt;,</span>
+</span><span class='line'><span class="p">):</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">composed</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">backgroundBrush</span> <span class="p">=</span> <span class="n">LocalHintOverlayBrush</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">backgroundColor</span> <span class="p">=</span> <span class="n">LocalHintOverlayColor</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">drawWithCache</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">onDrawWithContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">backgroundBrush</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">drawRect</span><span class="p">(</span><span class="n">backgroundBrush</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">drawRect</span><span class="p">(</span><span class="n">backgroundColor</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="n">anchors</span><span class="p">().</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">anchor</span> <span class="p">-&gt;</span>
+</span><span class='line'>                <span class="n">drawRect</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Red</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">topLeft</span> <span class="p">=</span> <span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">size</span> <span class="p">=</span> <span class="n">anchor</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">toSize</span><span class="p">(),</span>
+</span><span class='line'>                    <span class="n">style</span> <span class="p">=</span> <span class="n">Stroke</span><span class="p">(</span><span class="n">width</span> <span class="p">=</span> <span class="m">5f</span><span class="p">),</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="n">drawContent</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在我们只需在锚点周围画一个红色矩形：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*EqvV4AHsimwvwZxajIgtXg.png" alt="Anchors" /></p>
+
+<p>但如果我们在移动设备上运行，我们会在 Android 上得到错误的数字：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*2wennrPOIcKArOK4MuayAQ.png" alt="With Window Insets" /></p>
+
+<p>该问题与 WindowInsets 有关。让我们减去这些 insets 来修复它：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">Modifier</span><span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span><span class="n">state</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">):</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">composed</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">statusBarInsets</span> <span class="p">=</span> <span class="n">WindowInsets</span><span class="p">.</span><span class="n">statusBars</span><span class="p">.</span><span class="n">getTop</span><span class="p">(</span><span class="n">LocalDensity</span><span class="p">.</span><span class="n">current</span><span class="p">).</span><span class="n">toFloat</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">onGloballyPositioned</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">state</span><span class="p">.</span><span class="n">size</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">size</span>
+</span><span class='line'>        <span class="n">state</span><span class="p">.</span><span class="n">offset</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">positionInWindow</span><span class="p">()</span>
+</span><span class='line'>            <span class="c1">// 修复 Android 上的 WindowInsets</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">minus</span><span class="p">(</span><span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">statusBarInsets</span><span class="p">))</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*LlrCLPAEgpk7q--X7i3UsA.png" alt="Fixed window insets" /></p>
+
+<h2>3. 剪辑出锚点的形状</h2>
+
+<p>要剪辑形状，我们将使用 Path 和 PathOperation 。修改 hintAnchor Modifier 以接受 Shape ，它将用于在锚点周围设置所需的形状。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">Modifier</span><span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">state</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">shape</span><span class="p">:</span> <span class="n">Shape</span> <span class="p">=</span> <span class="n">RectangleShape</span><span class="p">,</span>
+</span><span class='line'><span class="p">):</span> <span class="n">Modifier</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">state</span><span class="p">.</span><span class="n">shape</span> <span class="p">=</span> <span class="n">shape</span>
+</span><span class='line'>    <span class="c1">//..onGloballyPositioned</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Stable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">HintAnchorState</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">//...其他的状态放这里</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">var</span> <span class="py">shape</span><span class="p">:</span> <span class="n">Shape</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">RectangleShape</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>根据提供的形状，我们可以创建一个轮廓，用于将锚点的形状从背景中剪掉：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">internal</span> <span class="k">fun</span> <span class="nf">Modifier</span><span class="p">.</span><span class="n">overlayBackground</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">anchors</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">&gt;,</span>
+</span><span class='line'><span class="p">):</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">composed</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">backgroundBrush</span> <span class="p">=</span> <span class="n">LocalHintOverlayBrush</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">backgroundColor</span> <span class="p">=</span> <span class="n">LocalHintOverlayColor</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">layoutDirection</span> <span class="p">=</span> <span class="n">LocalLayoutDirection</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">density</span> <span class="p">=</span> <span class="n">LocalDensity</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">drawWithCache</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 准备背景路径</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">path</span> <span class="p">=</span> <span class="n">Path</span><span class="p">().</span><span class="n">apply</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">lineTo</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span><span class="p">,</span> <span class="m">0f</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">lineTo</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">width</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">lineTo</span><span class="p">(</span><span class="m">0f</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">lineTo</span><span class="p">(</span><span class="m">0f</span><span class="p">,</span> <span class="m">0f</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">close</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">anchors</span><span class="p">().</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">anchor</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="c1">// 为锚点准备路径</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">anchorPath</span> <span class="p">=</span> <span class="n">Path</span><span class="p">()</span>
+</span><span class='line'>            <span class="n">anchorPath</span><span class="p">.</span><span class="n">addOutline</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">anchor</span><span class="p">.</span><span class="n">shape</span><span class="p">.</span><span class="n">createOutline</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">size</span> <span class="p">=</span> <span class="n">anchor</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">toSize</span><span class="p">(),</span>
+</span><span class='line'>                    <span class="n">layoutDirection</span> <span class="p">=</span> <span class="n">layoutDirection</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">density</span> <span class="p">=</span> <span class="n">density</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="n">anchorPath</span><span class="p">.</span><span class="n">translate</span><span class="p">(</span><span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">anchorPath</span><span class="p">.</span><span class="n">close</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="c1">// 裁剪掉锚点</span>
+</span><span class='line'>            <span class="n">path</span><span class="p">.</span><span class="n">op</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">anchorPath</span><span class="p">,</span> <span class="n">PathOperation</span><span class="p">.</span><span class="n">Xor</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">onDrawWithContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// 我们不仅仅绘制路径，而不是像以前一样绘制矩形</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">backgroundBrush</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">drawPath</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">backgroundBrush</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">drawPath</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">backgroundColor</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="n">drawContent</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>让我们传递 CircleShape 和 RoundedCornerShape 来看看提示现在是什么样子：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*i2dWMv3Wa9at-fzGiKm8KQ.png" alt="Clip" /></p>
+
+<p>此时，我们知道如何绘制背景覆盖层、计算锚点的位置以及如何剪裁背景。</p>
+
+<h2>4. 绘制提示</h2>
+
+<p>在实际绘制之前，我们应该定义提示需要呈现哪些信息。</p>
+
+<p>为了不强制只提供文本，我们采用slot方法。通过定义slot，我们允许使用任何所需的composables。</p>
+
+<p>我将介绍一个新的类 Hint 来保存我们的Composable内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Stable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">Hint</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">var</span> <span class="py">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">({})</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberHint</span><span class="p">(</span><span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">):</span> <span class="n">Hint</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">remember</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Hint</span><span class="p">().</span><span class="n">also</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">content</span> <span class="p">=</span> <span class="n">content</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>并将此 Hint 添加为 HintAnchorState 的一部分：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Stable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">HintAnchorState</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">val</span> <span class="py">hint</span><span class="p">:</span> <span class="n">Hint</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">//...其他的状态放这里</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberHintAnchorState</span><span class="p">(</span><span class="n">hint</span><span class="p">:</span> <span class="n">Hint</span><span class="p">):</span> <span class="n">HintAnchorState</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">remember</span><span class="p">(</span><span class="n">hint</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">HintAnchorState</span><span class="p">(</span><span class="n">hint</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在 HintOverlay 内部，我们可以采用最简单的解决方案 — BoxWithConstraints ：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">HintOverlay</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">anchors</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">&gt;,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">//...</span>
+</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">overlayBackground</span><span class="p">(</span><span class="n">anchors</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">anchors</span><span class="p">().</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">anchor</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>                    <span class="p">.</span><span class="n">graphicsLayer</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">translationX</span> <span class="p">=</span> <span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">.</span><span class="n">x</span>
+</span><span class='line'>                        <span class="n">translationY</span> <span class="p">=</span> <span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">.</span><span class="n">y</span> <span class="p">+</span> <span class="n">anchor</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">height</span>
+</span><span class='line'>                    <span class="p">},</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">anchor</span><span class="p">.</span><span class="n">hint</span><span class="p">.</span><span class="n">content</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>修改应用程序内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">topAppBarHint</span> <span class="p">=</span> <span class="n">rememberHint</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">OutlinedButton</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{})</span> <span class="p">{</span> <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Hint for TopAppBar&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="k">val</span> <span class="py">topAppBarActionHintAnchor</span> <span class="p">=</span> <span class="n">rememberHintAnchorState</span><span class="p">(</span><span class="n">topAppBarHint</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">actionHint</span> <span class="p">=</span> <span class="n">rememberHint</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Hint for Action&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="k">val</span> <span class="py">actionHintAnchor</span> <span class="p">=</span> <span class="n">rememberHintAnchorState</span><span class="p">(</span><span class="n">actionHint</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">bottomNavigationHint</span> <span class="p">=</span> <span class="n">rememberHint</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Row</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">verticalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterVertically</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">).</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Magenta</span><span class="p">,</span> <span class="n">CircleShape</span><span class="p">))</span>
+</span><span class='line'>        <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Hint for BottomNavigation&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="k">val</span> <span class="py">bottomNavigationHintAnchor</span> <span class="p">=</span> <span class="n">rememberHintAnchorState</span><span class="p">(</span><span class="n">bottomNavigationHint</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>结果如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*mMenE2fp2jph6YUBlxX4pA.png" alt="Hint for action" /></p>
+
+<p>让我们引入一个应用程序特定的代码来绘制提示背景。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberHintContainer</span><span class="p">(</span><span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">):</span> <span class="n">Hint</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">rememberHint</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Yellow</span><span class="p">,</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">CompositionLocalProvider</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">LocalTextStyle</span> <span class="n">provides</span> <span class="n">TextStyle</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">fontSize</span> <span class="p">=</span> <span class="m">12.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">),</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">content</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*xn8pxlU_nUQvywbtqVwUtw.png" alt="Hint2" /></p>
+
+<p>我们遇到了 2 个问题：</p>
+
+<ol>
+<li>水平对齐，提示应与其锚点居中对齐。</li>
+<li>BottomNavigation 的提示超出了屏幕范围。</li>
+</ol>
+
+
+<p>让我们改用自定义布局并修复这些问题。</p>
+
+<p>要测量和布局多个可组合项，请使用 Layout。此composable允许我们手动测量和布局子项。所有更高级别的布局（如 Column 和 Row）都是使用 Layout 实现的。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">internal</span> <span class="k">fun</span> <span class="nf">HintsContainer</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">anchors</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">&gt;,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">anchors</span> <span class="p">=</span> <span class="n">anchors</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Layout</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">overlayBackground</span><span class="p">(</span><span class="n">anchors</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">content</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">anchors</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">hint</span><span class="p">.</span><span class="n">content</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">},</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span> <span class="n">measurables</span><span class="p">,</span> <span class="n">constraints</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="c1">// 测量每一个提示</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">placeables</span> <span class="p">=</span> <span class="n">measurables</span><span class="p">.</span><span class="n">map</span> <span class="p">{</span> <span class="n">measurable</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">measurable</span><span class="p">.</span><span class="n">measure</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">constraints</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">minWidth</span> <span class="p">=</span> <span class="m">0</span><span class="p">,</span> <span class="n">minHeight</span> <span class="p">=</span> <span class="m">0</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 将布局尺寸设置得尽可能大</span>
+</span><span class='line'>        <span class="n">layout</span><span class="p">(</span><span class="n">constraints</span><span class="p">.</span><span class="n">maxWidth</span><span class="p">,</span> <span class="n">constraints</span><span class="p">.</span><span class="n">maxHeight</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// 将每个提示相对于其锚点放置</span>
+</span><span class='line'>            <span class="n">placeables</span><span class="p">.</span><span class="n">forEachIndexed</span> <span class="p">{</span> <span class="n">index</span><span class="p">,</span> <span class="n">placeable</span> <span class="p">-&gt;</span>
+</span><span class='line'>                <span class="k">val</span> <span class="py">anchor</span> <span class="p">=</span> <span class="n">anchors</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="c1">// 将此提示居中对齐</span>
+</span><span class='line'>                <span class="k">val</span> <span class="py">x</span> <span class="p">=</span> <span class="p">(</span><span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">.</span><span class="n">x</span><span class="p">.</span><span class="n">toInt</span><span class="p">()</span> <span class="p">-</span> <span class="p">(</span><span class="n">placeable</span><span class="p">.</span><span class="n">width</span> <span class="p">-</span> <span class="n">anchor</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">width</span><span class="p">)</span> <span class="p">/</span> <span class="m">2</span><span class="p">)</span>
+</span><span class='line'>                    <span class="c1">// 修复超出屏幕的坐标</span>
+</span><span class='line'>                    <span class="p">.</span><span class="n">coerceAtLeast</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+</span><span class='line'>                    <span class="p">.</span><span class="n">coerceAtMost</span><span class="p">(</span><span class="n">constraints</span><span class="p">.</span><span class="n">maxWidth</span> <span class="p">-</span> <span class="n">placeable</span><span class="p">.</span><span class="n">width</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="c1">// 把这个提示放在它的锚点下面</span>
+</span><span class='line'>                <span class="k">var</span> <span class="py">y</span> <span class="p">=</span> <span class="p">(</span><span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">.</span><span class="n">y</span><span class="p">.</span><span class="n">toInt</span><span class="p">()</span> <span class="p">+</span> <span class="n">anchor</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">)</span>
+</span><span class='line'>                    <span class="c1">// 如果超出屏幕，则修复 y 坐标</span>
+</span><span class='line'>                    <span class="p">.</span><span class="n">coerceAtMost</span><span class="p">(</span><span class="n">constraints</span><span class="p">.</span><span class="n">maxHeight</span> <span class="p">-</span> <span class="n">placeable</span><span class="p">.</span><span class="n">height</span><span class="p">)</span>
+</span><span class='line'>                <span class="k">if</span> <span class="p">(</span><span class="n">y</span> <span class="p">&lt;</span> <span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">.</span><span class="n">y</span> <span class="p">+</span> <span class="n">anchor</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="c1">// 提示与锚点重叠，请将此提示放在其锚点上方</span>
+</span><span class='line'>                    <span class="n">y</span> <span class="p">=</span> <span class="n">anchor</span><span class="p">.</span><span class="n">offset</span><span class="p">.</span><span class="n">y</span><span class="p">.</span><span class="n">toInt</span><span class="p">()</span> <span class="p">-</span> <span class="n">placeable</span><span class="p">.</span><span class="n">height</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="n">placeable</span><span class="p">.</span><span class="n">placeRelative</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">y</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*syuJkuAd-_BgiYfFP8bKgQ.png" alt="Hint3" /></p>
+
+<p>因为我们允许传递任何可组合项作为提示，所以调用者可以完全控制提示的外观，例如，我们可以只使用 Text ，或者使用包含许多子项的复杂 Row 。</p>
+
+<h2>5. 如何控制提示？</h2>
+
+<p>我们静态地添加了提示以将其显示在屏幕上。但真正产品应用程序并非如此。让我们引入 HintController 来控制何时显示提示。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Stable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">HintController</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">var</span> <span class="py">hint</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">?&gt;(</span><span class="k">null</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">show</span><span class="p">(</span><span class="n">hint</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">this</span><span class="p">.</span><span class="n">hint</span> <span class="p">=</span> <span class="n">hint</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberHintController</span><span class="p">():</span> <span class="n">HintController</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">controller</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">HintController</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">controller</span><span class="p">.</span><span class="n">hint</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="n">hint</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">HintOverlay</span><span class="p">(</span><span class="n">anchor</span> <span class="p">=</span> <span class="n">hint</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">return</span> <span class="n">controller</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>修改应用程序内容，以便在我们点击锚点时显示提示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">hintController</span> <span class="p">=</span> <span class="n">rememberHintController</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">IconButton</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span><span class="n">topAppBarActionHintAnchor</span><span class="p">,</span> <span class="n">CircleShape</span><span class="p">),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">hintController</span><span class="p">.</span><span class="n">show</span><span class="p">(</span><span class="n">topAppBarActionHintAnchor</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">BottomNavigationItem</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">bottomNavigationHintAnchor</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">50f</span><span class="p">),</span>
+</span><span class='line'>        <span class="p">),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">hintController</span><span class="p">.</span><span class="n">show</span><span class="p">(</span><span class="n">bottomNavigationHintAnchor</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">hintAnchor</span><span class="p">(</span><span class="n">actionHintAnchor</span><span class="p">,</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">hintController</span><span class="p">.</span><span class="n">show</span><span class="p">(</span><span class="n">actionHintAnchor</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p>注意：我们不再需要显示的 HintOverlay ，它现在变得内置了。</p></blockquote>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*jIOTXOSnHVeL_jjyEx1gdg.png" alt="Control" /></p>
+
+<p>现在我们可以逐一显示提示，但还有两个部分缺失：如何关闭提示，以及如何覆盖覆盖颜色。</p>
+
+<p>对提示控制器进行更改以允许传递覆盖颜色：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberHintController</span><span class="p">(</span><span class="n">overlay</span><span class="p">:</span> <span class="n">Brush</span><span class="p">):</span> <span class="n">HintController</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">rememberHintController</span><span class="p">(</span><span class="n">overlay</span> <span class="p">=</span> <span class="n">LocalHintOverlayBrush</span> <span class="n">provides</span> <span class="n">overlay</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberHintController</span><span class="p">(</span><span class="n">overlay</span><span class="p">:</span> <span class="n">Color</span> <span class="p">=</span> <span class="n">HintOverlayColorDefault</span><span class="p">):</span> <span class="n">HintController</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">rememberHintController</span><span class="p">(</span><span class="n">overlay</span> <span class="p">=</span> <span class="n">LocalHintOverlayColor</span> <span class="n">provides</span> <span class="n">overlay</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">rememberHintController</span><span class="p">(</span><span class="n">overlay</span><span class="p">:</span> <span class="n">ProvidedValue</span><span class="p">&lt;*&gt;):</span> <span class="n">HintController</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">controller</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">HintController</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">controller</span><span class="p">.</span><span class="n">hint</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="n">hint</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">overlay</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">HintOverlay</span><span class="p">(</span><span class="n">anchor</span> <span class="p">=</span> <span class="n">hint</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">return</span> <span class="n">controller</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了消除我们的提示，让我们引入以下变化：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Stable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">HintController</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">var</span> <span class="py">hint</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">?&gt;(</span><span class="k">null</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">show</span><span class="p">(</span><span class="n">hint</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">this</span><span class="p">.</span><span class="n">hint</span> <span class="p">=</span> <span class="n">hint</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">dismiss</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">hint</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我们使用 Popup 作为覆盖层的容器，如果用户点击 Android 上的返回按钮(BACK)，Popup 就会被关闭。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">internal</span> <span class="k">fun</span> <span class="nf">HintOverlay</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">anchor</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onDismiss</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Popup</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">onDismissRequest</span> <span class="p">=</span> <span class="n">onDismiss</span><span class="p">,</span>
+</span><span class='line'>        <span class="c1">// 设置可聚焦以处理按压back事件</span>
+</span><span class='line'>        <span class="n">properties</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">PopupProperties</span><span class="p">(</span><span class="n">focusable</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span> <span class="p">},</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">//...在这里画出我们的提示</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">internal</span> <span class="k">fun</span> <span class="nf">HintsContainer</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">anchor</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onDismiss</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Layout</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">overlayBackground</span><span class="p">(</span><span class="n">anchor</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">clickable</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">interactionSource</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>                <span class="c1">// 禁用ripple</span>
+</span><span class='line'>                <span class="n">indication</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">onClick</span> <span class="p">=</span> <span class="n">onDismiss</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>结果演示视频 <a href="https://youtu.be/eo49PKlhO5Y">https://youtu.be/eo49PKlhO5Y</a></p>
+
+<p>现在，HintController 允许我们按时间显示一个提示，但如果我们想按顺序显示多个提示，则没有实际的队列。</p>
+
+<p>可以扩展 HintController 并添加暂停修饰符以知道提示的显示时间（例如，在显示提示后立即执行某项操作）。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Stable</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">HintController</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">queue</span> <span class="p">=</span> <span class="n">mutableStateListOf</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">&gt;()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">val</span> <span class="py">hint</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">?</span> <span class="k">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">queue</span><span class="p">.</span><span class="n">firstOrNull</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">pendingRequests</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">,</span> <span class="n">Continuation</span><span class="p">&lt;</span><span class="n">Unit</span><span class="p">&gt;&gt;()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">show</span><span class="p">(</span><span class="n">hint</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">suspendCoroutine</span> <span class="p">{</span> <span class="n">continuation</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">pendingRequests</span><span class="p">[</span><span class="n">hint</span><span class="p">]</span> <span class="p">=</span> <span class="n">continuation</span>
+</span><span class='line'>            <span class="n">queue</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">hint</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">show</span><span class="p">(</span><span class="k">vararg</span> <span class="n">hint</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">show</span><span class="p">(</span><span class="n">hint</span><span class="p">.</span><span class="n">toList</span><span class="p">())</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">show</span><span class="p">(</span><span class="n">hints</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">HintAnchorState</span><span class="p">&gt;)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">suspendCoroutine</span> <span class="p">{</span> <span class="n">continuation</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">pendingRequests</span><span class="p">[</span><span class="n">hints</span><span class="p">.</span><span class="n">last</span><span class="p">()]</span> <span class="p">=</span> <span class="n">continuation</span>
+</span><span class='line'>            <span class="n">queue</span><span class="p">.</span><span class="n">addAll</span><span class="p">(</span><span class="n">hints</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">fun</span> <span class="nf">onDismissed</span><span class="p">(</span><span class="n">hint</span><span class="p">:</span> <span class="n">HintAnchorState</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">pendingRequests</span><span class="p">[</span><span class="n">hint</span><span class="p">]</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="n">continuation</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">continuation</span><span class="p">.</span><span class="n">resume</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">pendingRequests</span><span class="p">.</span><span class="n">remove</span><span class="p">(</span><span class="n">hint</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">queue</span><span class="p">.</span><span class="n">remove</span><span class="p">(</span><span class="n">hint</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">dismiss</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">pendingRequests</span><span class="p">.</span><span class="n">values</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">continuation</span> <span class="p">-&gt;</span>
+</span><span class='line'>                <span class="n">continuation</span><span class="p">.</span><span class="n">resumeWithException</span><span class="p">(</span><span class="n">CancellationException</span><span class="p">(</span><span class="s">&quot;Hint was dismissed&quot;</span><span class="p">))</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="n">pendingRequests</span><span class="p">.</span><span class="n">clear</span><span class="p">()</span>
+</span><span class='line'>        <span class="n">queue</span><span class="p">.</span><span class="n">clear</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在为了在应用程序内部显示提示，我们需要一个 CoroutineScope ：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">coroutineScope</span> <span class="p">=</span> <span class="n">rememberCoroutineScope</span><span class="p">()</span>
+</span><span class='line'><span class="k">val</span> <span class="py">hintController</span> <span class="p">=</span> <span class="n">rememberHintController</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 现在我们可以从提示本身中忽略所有待处理的提示</span>
+</span><span class='line'><span class="k">val</span> <span class="py">topAppBarHint</span> <span class="p">=</span> <span class="n">rememberHintContainer</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">OutlinedButton</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">hintController</span><span class="p">.</span><span class="n">dismiss</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span> <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Hint for TopAppBar&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 显示 1 条提示</span>
+</span><span class='line'><span class="n">BottomNavigationItem</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">coroutineScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">hintController</span><span class="p">.</span><span class="n">show</span><span class="p">(</span><span class="n">bottomNavigationHintAnchor</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">scaffoldState</span><span class="p">.</span><span class="n">snackbarHostState</span><span class="p">.</span><span class="n">showSnackbar</span><span class="p">(</span><span class="s">&quot;One hint was shown&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 连续显示多个提示</span>
+</span><span class='line'><span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">coroutineScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">hintController</span><span class="p">.</span><span class="n">show</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">topAppBarActionHintAnchor</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">actionHintAnchor</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">bottomNavigationHintAnchor</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="n">scaffoldState</span><span class="p">.</span><span class="n">snackbarHostState</span><span class="p">.</span><span class="n">showSnackbar</span><span class="p">(</span><span class="s">&quot;Many hints were shown&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p><strong>注意：</strong> 如果我们通过调用 hintController.dismiss() 来关闭提示，则 hintController.show 之后的代码将不会被调用。</p></blockquote>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">coroutineScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">hintController</span><span class="p">.</span><span class="n">show</span><span class="p">(</span><span class="n">topAppBarActionHintAnchor</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">// 如果通过调用 hintController.dismiss 关闭了之前的提示，则不会显示 Snackbar</span>
+</span><span class='line'>    <span class="n">scaffoldState</span><span class="p">.</span><span class="n">snackbarHostState</span><span class="p">.</span><span class="n">showSnackbar</span><span class="p">(</span><span class="s">&quot;One hint was shown&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>最终结果如这个视频演示 <a href="https://youtu.be/tyZUNJLEVxQ">https://youtu.be/tyZUNJLEVxQ</a>：我们可以显示单个提示，也可以显示提示列表。</p>
+
+<p>由于该项目使用 Compose Multiplatform，我们可以针对不同的目标运行该应用程序：</p>
+
+<ul>
+<li>Android结果演示 <a href="https://youtu.be/BVBCipnbIUc">https://youtu.be/BVBCipnbIUc</a></li>
+<li>iOS结果演示 <a href="https://youtu.be/Z1uasddgqwo">https://youtu.be/Z1uasddgqwo</a></li>
+</ul>
+
+
+<h2>总结</h2>
+
+<p>Compose 和 Kotlin Multiplatform 是一个强大的组合，它允许我们使用 Kotlin 来实现 UI 和业务逻辑。CMP 库仅与Jetpack Compose Android 项目完全兼容。</p>
+
+<p>可以在 GitHub 上查看我的repo：<a href="https://github.com/vitoksmile/ComposeHints">https://github.com/vitoksmile/ComposeHints</a>。</p>
+
+<p>感谢你的阅读，期待在 GitHub 上获得你的Star :)。</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[实战：在Compose中绘制睡眠时间线]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose/"/>
+    <updated>2025-03-26T21:41:40+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/sleep-timeline-graph-in-compose-15c99f9a4af0">Draw sleep timeline graph in Compose</a>，原文由<a href="https://medium.com/@vitoksmile">Viktor Mykhailiv</a>发布于2025年1月31日。</p></blockquote>
+
+<p><strong>译者按：</strong> 我们在前面的<a href="https://juejin.cn/column/7367555191338467337">降Compose十八掌</a>系列中讲解过在Compose自定义绘制的方法，可以先温习一下<a href="https://juejin.cn/post/7381826917086920742">上一篇文章</a>。这篇文章是提升自定义绘制技巧的一个非常好的实战例子。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OUAsgvNoNx9VpSk9Eyqgzg.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>当内置组件不能完全满足我们的应用需求时，自定义绘图非常有用。本文提供了创建自定义睡眠时间线图表的指南，类似于你在<a href="https://play.google.com/store/apps/details?id=com.fitbit.FitbitMobile">Fitbit 应用</a>中找到的图表。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*cA9uPgAG29Gu2AhajArq9w.jpeg" alt="Screenshots from Fitbit Android app" /></p>
+
+<h2>在 Compose 中如何绘图？</h2>
+
+<p>要开始在 Compose 中绘图，我们可以使用绘图Modifier或 Canvas可组合函数，这为我们提供了 DrawScope — 一种声明式、无状态的API，用于绘制形状和路径，而无需消费者维护底层状态。DrawScope实现还提供了尺寸信息，并且变幻是相对于本地平移完成的。</p>
+
+<blockquote><p><strong>注意：</strong> Jetpack Compose（仅限 Android）和 Compose Multiplatform（桌面、Android、iOS、Web）具有类似的绘图 API。下面的屏幕截图是在桌面（macOS）上制作的，但所有平台上的结果都是相同的（查看最后一张屏幕截图）。</p></blockquote>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">rotate</span><span class="p">(</span><span class="n">degrees</span> <span class="p">=</span> <span class="m">45F</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">drawRect</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Gray</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">3F</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3F</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">size</span> <span class="p">=</span> <span class="n">size</span> <span class="p">/</span> <span class="m">3F</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*_qkChFEn25kC_cfgiRXgKg.png" alt="Compose中的自定义绘制" /></p>
+
+<h2>啥是睡眠时间表？</h2>
+
+<p>我们可以在 Health Connect 中读取或写入睡眠数据。睡眠数据显示为会话，可分为以下睡眠阶段：</p>
+
+<ul>
+<li>清醒：用户在睡眠周期内清醒。</li>
+<li>浅睡眠：用户处于浅睡眠周期。</li>
+<li>深睡眠：用户处于深睡眠周期。</li>
+<li>REM：用户处于 REM 睡眠周期。</li>
+</ul>
+
+
+<p>这些值表示用户在一定时间范围内经历的睡眠类型。SleepSessionRecord 数据类型包含两部分：</p>
+
+<ol>
+<li>整个睡眠过程，涵盖整个睡眠时间。</li>
+<li>睡眠过程中的各个阶段，例如浅睡眠或深睡眠。</li>
+</ol>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">record</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">SleepSessionRecord</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T21:10:10Z&quot;</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T07:32:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">startZoneOffset</span> <span class="p">=</span> <span class="n">UtcOffset</span><span class="p">(</span><span class="n">hours</span> <span class="p">=</span> <span class="m">2</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">endZoneOffset</span> <span class="p">=</span> <span class="n">UtcOffset</span><span class="p">(</span><span class="n">hours</span> <span class="p">=</span> <span class="m">2</span><span class="p">),</span>
+</span><span class='line'>        <span class="n">stages</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T21:10:10Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T23:15:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T23:15:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T01:56:32Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T01:56:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T03:16:22Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T03:16:22Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:32:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">REM</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:32:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T05:12:56Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T05:12:56Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T07:32:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:11:56Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:17:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:39:56Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:51:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:47:56Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:54:13Z&quot;</span><span class="p">),</span>
+</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>        <span class="p">),</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>需要一点数学计算</h2>
+
+<p>在睡眠期间，我们可以在不同时刻多次处于同一阶段。我们需要计算相对于睡眠的起点和终点。</p>
+
+<p>要在 Compose 中绘制矩形，我们需要 topOffset 和 size。</p>
+
+<p><img src="" alt="Math" /></p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">calculate</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">canvasSize</span><span class="p">:</span> <span class="n">Size</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">recordStartTime</span><span class="p">:</span> <span class="n">Instant</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">recordEndTime</span><span class="p">:</span> <span class="n">Instant</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">stages</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">&gt;,</span>
+</span><span class='line'><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">SleepStageDrawPoint</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">totalDuration</span> <span class="p">=</span> <span class="p">(</span><span class="n">recordEndTime</span> <span class="p">-</span> <span class="n">recordStartTime</span><span class="p">).</span><span class="n">inWholeSeconds</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">coerceAtLeast</span><span class="p">(</span><span class="m">1f</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">return</span> <span class="n">stages</span><span class="p">.</span><span class="n">map</span> <span class="p">{</span> <span class="n">stage</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">stageOffset</span> <span class="p">=</span>
+</span><span class='line'>            <span class="p">(</span><span class="n">stage</span><span class="p">.</span><span class="n">startTime</span> <span class="p">-</span> <span class="n">recordStartTime</span><span class="p">).</span><span class="n">inWholeSeconds</span> <span class="p">/</span> <span class="n">totalDuration</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">stageDuration</span> <span class="p">=</span>
+</span><span class='line'>            <span class="p">(</span><span class="n">stage</span><span class="p">.</span><span class="n">endTime</span> <span class="p">-</span> <span class="n">stage</span><span class="p">.</span><span class="n">startTime</span><span class="p">).</span><span class="n">inWholeSeconds</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">/</span> <span class="n">totalDuration</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">SleepStageDrawPoint</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="n">canvasSize</span><span class="p">.</span><span class="n">width</span> <span class="p">*</span> <span class="n">stageOffset</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="m">0f</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">size</span> <span class="p">=</span> <span class="n">canvasSize</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">width</span> <span class="p">=</span> <span class="n">canvasSize</span><span class="p">.</span><span class="n">width</span> <span class="p">*</span> <span class="n">stageDuration</span><span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>绘制</h2>
+
+<p>让我们构建自定义 Canvas 来绘制睡眠过程的一个阶段，例如深度睡眠。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SleepSessionCanvas</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">record</span><span class="p">:</span> <span class="n">SleepSessionRecord</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Spacer</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">drawWithCache</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">points</span> <span class="p">=</span> <span class="n">calculate</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">canvasSize</span> <span class="p">=</span> <span class="n">size</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">recordStartTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">startTime</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">recordEndTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">endTime</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">stages</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">stages</span><span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="k">type</span> <span class="p">==</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span> <span class="p">},</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="n">onDrawWithContent</span> <span class="p">{</span>
+</span><span class='line'>                <span class="c1">// 画背景</span>
+</span><span class='line'>                <span class="n">drawRoundRect</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">LightGray</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">4f</span><span class="p">),</span>
+</span><span class='line'>                    <span class="n">size</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">height</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">),</span>
+</span><span class='line'>                    <span class="n">cornerRadius</span> <span class="p">=</span> <span class="n">CornerRadius</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">),</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="c1">// 绘制阶段点</span>
+</span><span class='line'>                <span class="n">points</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">point</span> <span class="p">-&gt;</span>
+</span><span class='line'>                    <span class="n">drawRect</span><span class="p">(</span>
+</span><span class='line'>                        <span class="n">topLeft</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">topLeft</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">size</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">size</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF673AB7</span><span class="p">),</span>
+</span><span class='line'>                    <span class="p">)</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果我们使用之前定义的睡眠会话运行项目，我们将看到 3 个矩形：1 个灰色矩形表示背景，2 个紫色矩形表示深度睡眠阶段。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">SleepSessionCanvas</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">320.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>    <span class="n">record</span> <span class="p">=</span> <span class="n">record</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*ANITvvaUEuuwwcACzY21qA.png" alt="深度睡眠阶段" /></p>
+
+<p>为了绘制睡眠过程的所有阶段（清醒、快速眼动、浅睡眠和深睡眠），我们需要进行一些调整，将每个阶段类型垂直绘制为列组件，办法是逐行绘制并对下一行应用一些偏移量（offset）。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SleepSessionCanvas</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">record</span><span class="p">:</span> <span class="n">SleepSessionRecord</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">stageHeight</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">48.</span><span class="n">dp</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">stagesSpacing</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">colors</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mapOf</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFFF9800</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF2196F3</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF673AB7</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">REM</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF795548</span><span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">stageHeightPx</span> <span class="p">=</span> <span class="n">with</span><span class="p">(</span><span class="n">LocalDensity</span><span class="p">.</span><span class="n">current</span><span class="p">)</span> <span class="p">{</span> <span class="n">stageHeight</span><span class="p">.</span><span class="n">toPx</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">stagesSpacingPx</span> <span class="p">=</span> <span class="n">with</span><span class="p">(</span><span class="n">LocalDensity</span><span class="p">.</span><span class="n">current</span><span class="p">)</span> <span class="p">{</span> <span class="n">stagesSpacing</span><span class="p">.</span><span class="n">toPx</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Spacer</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">requiredHeight</span><span class="p">(</span><span class="n">stageHeight</span> <span class="p">*</span> <span class="n">colors</span><span class="p">.</span><span class="n">size</span> <span class="p">+</span> <span class="n">stagesSpacing</span> <span class="p">*</span> <span class="p">(</span><span class="n">colors</span><span class="p">.</span><span class="n">size</span> <span class="p">-</span> <span class="m">1</span><span class="p">))</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">drawWithCache</span> <span class="p">{</span>
+</span><span class='line'>                <span class="k">val</span> <span class="py">stages</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">REM</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">).</span><span class="n">map</span> <span class="p">{</span> <span class="k">type</span> <span class="p">-&gt;</span>
+</span><span class='line'>                    <span class="k">type</span> <span class="n">to</span> <span class="n">calculate</span><span class="p">(</span>
+</span><span class='line'>                        <span class="n">canvasSize</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">height</span> <span class="p">=</span> <span class="n">stageHeightPx</span><span class="p">),</span>
+</span><span class='line'>                        <span class="n">recordStartTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">startTime</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">recordEndTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">endTime</span><span class="p">,</span>
+</span><span class='line'>                        <span class="n">stages</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">stages</span><span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="k">type</span> <span class="p">==</span> <span class="k">type</span> <span class="p">},</span>
+</span><span class='line'>                    <span class="p">)</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="n">onDrawWithContent</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="k">var</span> <span class="py">offset</span> <span class="p">=</span> <span class="m">0f</span>
+</span><span class='line'>                    <span class="n">stages</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="p">(</span><span class="k">type</span><span class="p">,</span> <span class="n">points</span><span class="p">)</span> <span class="p">-&gt;</span>
+</span><span class='line'>                        <span class="n">translate</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="n">offset</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                            <span class="c1">// 画背景</span>
+</span><span class='line'>                            <span class="n">drawRoundRect</span><span class="p">(</span>
+</span><span class='line'>                                <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">LightGray</span><span class="p">,</span>
+</span><span class='line'>                                <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">stageHeightPx</span> <span class="p">/</span> <span class="m">4</span><span class="p">),</span>
+</span><span class='line'>                                <span class="n">size</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">height</span> <span class="p">=</span> <span class="n">stageHeightPx</span> <span class="p">/</span> <span class="m">2</span><span class="p">),</span>
+</span><span class='line'>                                <span class="n">cornerRadius</span> <span class="p">=</span> <span class="n">CornerRadius</span><span class="p">(</span><span class="n">stageHeightPx</span> <span class="p">/</span> <span class="m">2</span><span class="p">),</span>
+</span><span class='line'>                            <span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>                            <span class="c1">// 绘制阶段点</span>
+</span><span class='line'>                            <span class="n">points</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">point</span> <span class="p">-&gt;</span>
+</span><span class='line'>                                <span class="n">drawRect</span><span class="p">(</span>
+</span><span class='line'>                                    <span class="n">topLeft</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">topLeft</span><span class="p">,</span>
+</span><span class='line'>                                    <span class="n">size</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">size</span><span class="p">,</span>
+</span><span class='line'>                                    <span class="n">color</span> <span class="p">=</span> <span class="n">colors</span><span class="p">.</span><span class="n">getValue</span><span class="p">(</span><span class="k">type</span><span class="p">),</span>
+</span><span class='line'>                                <span class="p">)</span>
+</span><span class='line'>                            <span class="p">}</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                        <span class="n">offset</span> <span class="p">+=</span> <span class="n">stageHeightPx</span> <span class="p">+</span> <span class="n">stagesSpacingPx</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*iXIS4tbsvx5AhTtRqlWi7A.png" alt="最终的图形" /></p>
+
+<h3>添加文本</h3>
+
+<p>要在 Compose 中绘制文本，我们通常可以使用 Text 可组合项。但是，在我们的示例中，我们处于 DrawScope 中，我们可以使用 DrawScope.drawText()方法。</p>
+
+<p>绘制文本与其他绘制命令略有不同。通常，我们为绘制命令提供绘制形状/图像的大小（宽度和高度）。对于文本，有几个参数可以控制渲染文本的大小，例如字体大小、字体、连字符和字母间距。我们需要使用 TextMeasurer 来获取文本的测量大小，具体取决于上述因素。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*QB1QvINWUWMlpRoPSzrcUQ.png" alt="Desktop效果" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*U_LBREiTciw2F3ghYiHqCw.jpeg" alt="Android和iOS效果" /></p>
+
+<p>请到我的Github repo中查找完整示例代码：<a href="https://github.com/vitoksmile/Sleep-timeline-graph">https://github.com/vitoksmile/Sleep-timeline-graph</a>。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[高效地在Jetpack Compose中设计UI组件]]></title>
@@ -5660,372 +7497,6 @@ DiffUtils使用 LCS 的概念来最小化更改（插入和删除），并且还
 <li><a href="https://betterprogramming.pub/jetpack-compose-request-permissions-in-two-ways-fd81c4a702c">2 Ways to Request Permissions in Jetpack Compose</a></li>
 <li><a href="https://www.howtodoandroid.com/runtime-permission-on-jetpack-compose/">Best ways to handle runtime permission on jetpack compose</a></li>
 <li><a href="https://www.freecodecamp.org/news/requesting-location-permissions-in-jetpack-compose/">How to Request Location Permissions in Jetpack Compose</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[轻松解决Jetpack Compose中的一些痛点问题]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/09/21/compose-best-practices/"/>
-    <updated>2024-09-21T10:59:35+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/09/21/compose-best-practices</id>
-    <content type="html"><![CDATA[<p>暑去秋来，金桂飘香，不知不觉中我们已经练完了<a href="https://juejin.cn/column/7367555191338467337">『降Compose十八掌』</a>，相信通过这一系列文章能够对Jetpack Compose有足够的理解，并能在实际项目中进行运用。今天将继续Compose之旅，总结一下Compose使用过程中经常会遇到的一些痛点问题，并学会如何优雅的解决这些问题。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2024/09/21/compose-best-practices/"><img src="https://innovationm.co/wp-content/uploads/2021/05/Jetpack-compose.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>定义slot时要注明布局作用域</h2>
-
-<p>先来看一个比较常规的问题，Compose开发过程中，非常鼓励开发者把可以复用的部分抽象成为一个函数，然后接收一个尾部lambda作为参数进行差异化的定制。这种范式叫做<a href="https://developer.android.com/develop/ui/compose/layouts/basics#slot-based-layouts">slot模式</a>，slot模式的好处在于能够大大加强代码复用，开发者在构建UI的时候，像搭积木那样把一个一个的slot叠在一起。Compose自己的API中都大量的采用了这种模式。</p>
-
-<p>为了让slot更加的通用，我们需要<strong>明确传入的lambda与slot之间的约定</strong>，这就要求我们对lamdba的类型进行严格的限制。</p>
-
-<p>首先要添加注解&#64;Composable，这个是显而易见的，因为slot是为了绘制一些自定义UI元素而准备的，所以肯定是要加上&#64;Composable，否则在lambda中无法写UI，因为非Composable不能调用Compose的方法。</p>
-
-<p>另外，不是那么明显的就是这个lamdba的类型，要指定<a href="https://kotlinlang.org/docs/lambdas.html#function-literals-with-receiver">其Receiver</a>，以限定它所在的布局。比如说slot是用在一个Column里面的，那么要给lamdba指定ColumnScope作为receiver，这样在实现lambada的时候就知道是作为Column的一部分，并且可以使用Column布局的特有相关参数，如左右居中和垂直排列：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="n">MyLayout</span><span class="p">(</span>
-</span><span class='line'>     <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>     <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">ColumnScope</span><span class="p">.()-&gt;</span><span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>     <span class="n">Column</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>          <span class="c1">// 共用的一部分</span>
-</span><span class='line'>
-</span><span class='line'>          <span class="n">content</span><span class="p">()</span>
-</span><span class='line'>     <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// 调用的地方</span>
-</span><span class='line'><span class="n">MyLayout</span> <span class="p">{</span> <span class="c1">// this = ColumnScope</span>
-</span><span class='line'>     <span class="c1">// 隐式this指针指向一个ColumnScope对象，就像在一个Column中一样</span>
-</span><span class='line'>     <span class="c1">// 定制的部分</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>UI元素很多都会涉及到居中，对齐的调整，以及内部元素的排列，而对齐和排列又会明确的受到所在父布局的影响，比如说Box与Column的对齐和排列方式就是不同的。所以在使用slot时一定要明确 标注它所在的布局，以让调用者能够明确地知道lambda所在的布局作用域。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://chrisbanes.me/posts/slotting-in-with-compose-ui/">Slotting in with Compose UI</a></li>
-<li><a href="https://www.valueof.io/blog/compose-slot-api-example-composable-content-lambda">Practical Compose Slot API example</a></li>
-<li><a href="https://proandroiddev.com/designing-slot-apis-in-jetpack-compose-4a981ddbc776">Designing Slot APIs in Jetpack Compose</a></li>
-<li><a href="https://tech.pic-collage.com/%E5%88%9D%E6%8E%A2-jetpack-compose-slot-api-8d3f153f77e3">初探 Jetpack Compose — Slot API</a></li>
-</ul>
-
-
-<h2>如何在ViewModel中使用平台相关的资源</h2>
-
-<p>我们在<a href="https://juejin.cn/post/7411812014047461387">降Compose十八掌之『神龙摆尾』| Architecture</a>中讨论过，ViewModel作为Domain层，目的是把逻辑尽可能的从UI层中抽出来，让UI尽可能的只做UI渲染。ViewModel也要做到平台独立，这样才方便移植和测试。ViewModel中吐出来的数据要是加工过的可以直接方便地在UI层展示的数据，如字符串或者图片。</p>
-
-<p>但有一个问题，资源文件如何管理都是平台强相关的。对于要展示给用户的文案，也不可能直接把字符串传给UI，因为UI语言都要能够本地化以适应不同的国家和地区，当然了如果说不需要考虑多语言的问题，比如我的应用只给某一个语言使用，那当然也可以直接把处理好的字符串当作UiState传给UI层。</p>
-
-<p>最为理想的解决方案就是ViewModel层定义一些<strong>状态码</strong>，对应着不同的提示语言，由UI负责一一对应的，把状态码再转成字符串。对于其他的资源也可以采用类似方式处理。这是从ViewModel输出到UI层的情况。</p>
-
-<p>还会反过来，对于需要从UI层输入到ViewModel的资源，也是要<strong>去除平台的相关性</strong>，比如转成ViewModel中定义的状态码，或者转成原始数据类型String，或者转成平台无关的输入输出流等等。</p>
-
-<h3>字符串资源</h3>
-
-<p>对于Android平台来说，可以用一个简单的方式来解决字符串资源问题，因为资源的引用是一个整数，所以可以直接把资源的ID当作字段传给UI，Compose拿到后直接用函数stringResource取出来就可以了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">UiState</span><span class="p">(</span>
-</span><span class='line'>     <span class="k">val</span> <span class="py">loading</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">false</span><span class="p">,</span>
-</span><span class='line'>     <span class="n">@StringRes</span> <span class="k">val</span> <span class="py">errorMsg</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">class</span> <span class="nc">HomeViewModel</span> <span class="p">{</span>
-</span><span class='line'>     <span class="k">val</span> <span class="py">timeout</span> <span class="p">=</span> <span class="n">UiState</span><span class="p">(</span><span class="k">false</span><span class="p">,</span> <span class="n">R</span><span class="p">.</span><span class="n">string</span><span class="p">.</span><span class="n">error_message_timeout</span><span class="p">)</span>
-</span><span class='line'>     <span class="n">_state</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">timeout</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// 在Compose中</span>
-</span><span class='line'><span class="n">HomeScreen</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="n">stringResource</span><span class="p">(</span><span class="n">uiState</span><span class="p">.</span><span class="n">errorMsg</span><span class="p">))</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>虽然说这并不太通用，因为换成其他平台时可能不是用资源ID来获取资源，但转成状态码的方式也会很容易，所以问题不大。</p>
-
-<p>如果是输入的话，在Compose中直接读取资源变成String传给ViewModel就好了。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://stackoverflow.com/questions/47628646/how-should-i-get-resourcesr-string-in-viewmodel-in-android-mvvm-and-databindi">How should I get Resources(R.string) in viewModel in Android (MVVM and databinding)</a></li>
-<li><a href="https://medium.com/@margin555/using-string-resources-in-a-viewmodel-e334611b73da">Using String Resources in a ViewModel</a></li>
-</ul>
-
-
-<h3>图片资源</h3>
-
-<p>图片资源一般来说都是UI自己指定，但有些时候可能会有逻辑，比如一些需要经过运算才能得到的复杂的状态，其代表的Icon，由ViewModel来直接指定要好一些。图片资源也可以直接使用资源ID，然后在Compose中使用painterResource来获取：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">UiState</span><span class="p">(</span>
-</span><span class='line'>     <span class="n">@DrawableRes</span> <span class="k">val</span> <span class="py">icon</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// in ViewModel</span>
-</span><span class='line'><span class="k">val</span> <span class="py">state</span> <span class="p">=</span> <span class="n">UiState</span><span class="p">(</span><span class="n">R</span><span class="p">.</span><span class="n">drawable</span><span class="p">.</span><span class="n">ic_windy</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// in Compose</span>
-</span><span class='line'><span class="n">Icon</span><span class="p">(</span><span class="n">painterResource</span><span class="p">(</span><span class="n">uiState</span><span class="p">.</span><span class="n">icon</span><span class="p">))</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果是输入的话，可以在Compose中把图片资源转成输入流传给ViewModel去处理。</p>
-
-<h3>其他资源</h3>
-
-<p>其他资源如dimen或者color，也可以如法炮制。</p>
-
-<p>输入的话，对于普通的资源像字符串资源，dimen或者color等读出来转成基础数据类型String，Int或者Array传给ViewModel就好。而像比较麻烦的资源，如Assets中的资源，就转成输入流传给ViewModel处理。</p>
-
-<h2>如何在常规函数中调用Composables</h2>
-
-<p>在Compose的开发过程中最为令人不爽的地方在于Compose 的API，只能在被注解&#64;Composable标注的函数中调用，其他地方是无法调用的。一般来说，这个问题也不大，因为Compose的入口是肯定是一个composable啊，一坨坨的composables的调用最终<a href="https://juejin.cn/post/7407643004490956810">会生成UI树</a>。</p>
-
-<p>但有些地方却跑出了Composable之外，比如像很多UI元素的事件响应，比如<a href="https://developer.android.com/develop/ui/compose/components/button">Button</a>，它的事件响应onClick接收的就是一个普通的lambda：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">MainContent</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">serviceOn</span><span class="p">:</span> <span class="n">Boolean</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">context</span><span class="p">:</span> <span class="n">Context</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Column</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">AccessibilityHelper</span><span class="p">.</span><span class="n">gotoChronosSettings</span><span class="p">(</span><span class="n">context</span><span class="p">)</span> <span class="p">},</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="n">stringResource</span><span class="p">(</span><span class="k">if</span> <span class="p">(</span><span class="n">serviceOn</span><span class="p">)</span> <span class="n">R</span><span class="p">.</span><span class="n">string</span><span class="p">.</span><span class="n">turn_off_service</span> <span class="k">else</span> <span class="n">R</span><span class="p">.</span><span class="n">string</span><span class="p">.</span><span class="n">enable_service</span><span class="p">))</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>在Button的onClick里面可以执行一些普通函数调用，比如调用ViewModel等，但是不可以调用Compose的API，因为它是非Composable的，已经跑到了Composable之外。有些场景，这会带来比较大的不方便。</p>
-
-<p>响应点击按扭的方式可能有很多，有些是执行一些普通函数调用，但有些时候也会修改UI，大部分时候也会创建新UI，比如说会弹出对话框。对于修改UI，可以直接通过修改状态的值，状态的值发生改变会触发重组，进而UI状态就会改变（通过读取状态的值显示 不同的UI）。</p>
-
-<p>对话框<a href="https://developer.android.com/develop/ui/compose/components/dialog">Dialog</a>也是一个Composable，它只能被Composable调用，无法在Button的onClick中直接调用Dialog。解决的办法依旧是借助状态，用一个Boolean型值的状态，当其为true时显示Dialog，在Button的onClick中更改此状态为true，状态变了触发重组，在重组时值为true就会显示Dialog了：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">InputSettingsEntry</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">label</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">description</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">value</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">onChange</span><span class="p">:</span> <span class="p">(</span><span class="n">String</span><span class="p">)-&gt;</span><span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">showing</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>     <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">showing</span> <span class="p">=</span> <span class="k">true</span> <span class="p">})</span> <span class="p">{</span>
-</span><span class='line'>          <span class="n">Text</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
-</span><span class='line'>     <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">showing</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">InputDialog</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">title</span> <span class="p">=</span> <span class="n">label</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">message</span> <span class="p">=</span> <span class="n">description</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">value</span> <span class="p">=</span> <span class="n">value</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">onDismiss</span> <span class="p">=</span> <span class="p">{</span> <span class="n">showing</span> <span class="p">=</span> <span class="k">false</span> <span class="p">},</span>
-</span><span class='line'>            <span class="n">onConfirm</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">onChange</span><span class="p">(</span><span class="n">it</span><span class="p">)</span>
-</span><span class='line'>                <span class="n">showing</span> <span class="p">=</span> <span class="k">false</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>另外，其实Dialog本身的一些事件响应也都是非Composable的，都是通过状态来控制Dialog的显示与否。</p>
-
-<p>扩展阅读：</p>
-
-<ul>
-<li><a href="https://stackoverflow.com/questions/66952179/not-able-to-show-alertdialog-from-onclick-in-jetpack-compose">Not able to show AlertDialog from onClick in Jetpack Compose</a></li>
-<li><a href="https://medium.com/@esthcarelle/alert-dialog-with-jetpack-compose-a-step-by-step-guide-04dc3e9dfc1d">Alert Dialog with Jetpack compose: A Step-by-Step Guide</a></li>
-</ul>
-
-
-<h2>总结</h2>
-
-<p>Jetpack Compose博大精深，看似简单就是一坨函数，但在实际项目使用中会遇到各种细节问题。遇到问题也不用慌，用我们的<a href="https://juejin.cn/column/7367555191338467337">『降Compose十八掌』</a>都能解决，没事就多读一读，理解了Compose的思想与原理，做到心中无剑，很多问题都能迎刃而解。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://climbtheladder.com/10-android-jetpack-compose-best-practices/">10 Android Jetpack Compose Best Practices</a></li>
-<li><a href="https://getstream.io/blog/jetpack-compose-guidelines/">6 Jetpack Compose Best Practices for Optimizing Your App Performance</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Sub Array and Seb Sequences Made Easy]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/09/18/sub-array-and-seb-sequences-made-easy/"/>
-    <updated>2024-09-18T22:11:15+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/09/18/sub-array-and-seb-sequences-made-easy</id>
-    <content type="html"><![CDATA[<p>子数组和子序列，特别是在一个区间内，或者一个窗口内的子数组个数或者子序列个数问题是非常常见的一类题目，与其他算法结合在一起，求子数组或者子序列数量是非常常见的题目，今天就来总结 一下。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2024/09/18/sub-array-and-seb-sequences-made-easy/"><img src="https://media.geeksforgeeks.org/wp-content/cdn-uploads/20220620163127/subarray.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>如何统计区间内子数组数量</h2>
-
-<p>子数组的数量只与区间长度有关系，对于一个区间长度为n的数组，其非空子数组数量为n * (n+1)/2。</p>
-
-<p>具体计算过程，可以用子数组长度来递推：</p>
-
-<p>1). 长度为1，这时子数组数量为n个
-2). 长度为2时，这时子数组数量为n - 1个
-3). 长度为n - 1时，这时子数组数量为2
-4). 长度为n时，这时子数组数量只有一个1，为1</p>
-
-<p>可以发现， 这是一个等差数列，求和之后就是n*(n+1)/2。</p>
-
-<h2>如何统计区间内子序列数量</h2>
-
-<p>子序列是子数组的特殊形式，它不要求保留在原数组中的顺序。一个长度为k的区间内所有子序列的个数就是一个幂集，每个元素都有「选」和「不选」，因此这个区间所有子序列个数是2<sup>k</sup>个，包括空子序列，如果要求非空，那就再减去一个1。</p>
-
-<p>具体计算过程，需要用到组合数学：</p>
-
-<p>1). 一个都不选C(n, 0) = 1
-2). 一个一个的选，C(n, 1) = n
-2). 两个选，C(n,2)
-3). n - 1个，C(n, n - 1)
-4). n个，C(n, n) = 1</p>
-
-<p>求和就是2<sup>n</sup>，如果非空就是2<sup>n</sup> - 1。</p>
-
-<h3>典型题目</h3>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;"> 题目 </th>
-<th style="text-align:left;"> 题解 </th>
-<th style="text-align:left;"> 说明 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/number-of-subsequences-that-satisfy-the-given-sum-condition/description/">1498. 满足条件的子序列数目</a> </td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href=""></a></td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href=""></a></td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href=""></a></td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-</tbody>
-</table>
-
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://www.geeksforgeeks.org/array-subarray-subsequence-and-subset/">Subarrays, Subsequences, and Subsets in Array</a></li>
-<li><a href="https://www.geeksforgeeks.org/count-distinct-subsequences/">Count Distinct Subsequences</a></li>
-<li><a href="https://www.geeksforgeeks.org/count-of-subarrays-in-an-array-containing-numbers-from-1-to-the-length-of-subarray/">Count of Subarrays in an array containing numbers from 1 to the length of subarray</a></li>
 </ul>
 
 ]]></content>

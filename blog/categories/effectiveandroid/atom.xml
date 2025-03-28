@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-03-16T20:39:50+08:00</updated>
+  <updated>2025-03-28T22:14:32+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,1066 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[实战：在Compose中优雅地实现提示]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/03/28/hints-in-compose/"/>
+    <updated>2025-03-28T22:05:00+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/03/28/hints-in-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/hints-in-compose-10b6470acc58">Hints in Compose</a>，原文由<a href="https://medium.com/@vitoksmile">Viktor Mykhailiv</a>发布于2025年2月13日，文章内容巨详细，TL;DR;。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*0jBirMqQV-aXKXw5gekEkQ.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>有时我们的应用需要突出显示某些 UI 组件，例如在首次登录（首次使用）时，或者当我们添加新内容（“新功能”）时。</p>
+
+<p>在本文中，我将指导如何构建自定义解决方案来显示提示/工具提示，指向 Compose（Compose Multiplatform 和 Jetpack Compose）中的特定 UI 元素。</p>
+
+<h2>布局层次</h2>
+
+<p>要突出显示 UI 元素，首先我们应该了解“提示”(Hints)的主要概念。
+假设我们有一个带有 TopBar、BottomNavigation 和主要操作按钮的应用程序。我们想要突出显示 TopBar 的操作、主要按钮和 BottomNavigation 中的一个项目。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*7K0zoXqZM0ajYYZARn6I5w.png" alt="Layout hierarchy" /></p>
+
+<p>对于我们的“提示”，我们需要绘制一个暗淡的背景（也是为了拦截触摸事件），计算突出显示的 UI 元素的位置，剪掉（屏蔽）我们的元素形状以免变暗，最后绘制一个提示（例如带有背景的文本）。</p>
+
+<h2>1. 暗淡的背景</h2>
+
+<p>要在所有内容之上绘制一个暗淡的背景作为覆盖或弹出窗口，我们可以：</p>
+
+<h3>a. 使用自定义可组合项包装我们应用（根组件）的所有内容（例如带有 Modifier.background 的 Box）</h3>
+
+<pre><code class="Kotlin">@Composable
+fun AppContent() {
+   HintOverlay {
+      MaterialTheme {
+         Scaffold {
+            // 我的应用内容
+         }
+      }
+   }
+}
+</code></pre>
+
+<h3>b. 使用对话框</h3>
+
+<p>通过使用对话框，我们可以在所有内容之上显示一个覆盖层（例如，在 Android 上，对话框显示在自己的窗口中）。
+使用对话框时，Compose Multiplatform 中的 scrimColor 会出现问题。我们无法从 Compose 通用目标配置 scrimColor ，但每个目标（Android 除外）都为 scrimColor 提供了一个实际值。作为一种可能的解决方案，我们可以创建一个例外类来提供对话框属性并为每个目标提供实际实现。</p>
+
+<h3>c. 使用 Popup</h3>
+
+<p>Popup 在这里看起来更好，因为它默认不绘制 scrimColor，并且覆盖层显示在所有内容之上。</p>
+
+<p>我会采用第三种方法，不强制手动使用 HintOverlay。</p>
+
+<p>我还想为覆盖层背景添加 Brush 支持，而不仅仅是 Color 。</p>
+
+<pre><code class="Kotlin">val LocalHintOverlayColor = staticCompositionLocalOf&lt;Color&gt; { Color(0x44000000) }
+
+val LocalHintOverlayBrush = staticCompositionLocalOf&lt;Brush?&gt; { null }
+
+@Composable
+fun HintOverlay() {
+    Popup {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .overlayBackground()
+        ) {
+            Text(
+                modifier = Modifier.align(Alignment.Center),
+                text = "Draw hints here",
+                color = Color.White,
+            )
+        }
+    }
+}
+
+/**
+ * 从 [LocalHintOverlayBrush] 或 [LocalHintOverlayColor] 设置 `background`。
+ */
+private fun Modifier.overlayBackground(): Modifier = composed {
+    LocalHintOverlayBrush.current?.let { background(it) }
+        ?: background(LocalHintOverlayColor.current)
+}
+</code></pre>
+
+<p>我可以使用CompositionLocalProvider 设置 Brush 来覆盖覆盖的背景。</p>
+
+<pre><code class="Kotlin">CompositionLocalProvider(
+    LocalHintOverlayBrush provides Brush.linearGradient(
+        listOf(
+            Color.Red.copy(alpha = 0.5f),
+            Color.Blue.copy(alpha = 0.5f),
+        )
+    ),
+) {
+    HintOverlay()
+}
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*KrHuSNZT0zE-Eddz1GBA2A.png" alt="Dimmed background" /></p>
+
+<h2>2. 计算锚点坐标</h2>
+
+<p>要获取 Compose 中 UI 元素的坐标，我们可以使用OnGloballyPositionedModifier ，当内容的全局位置可能发生变化时，会使用布局的最终​​ LayoutCoordinates 调用该方法。</p>
+
+<p>使用示例：</p>
+
+<pre><code class="Kotlin">Column(
+    Modifier.onGloballyPositioned { coordinates -&gt;
+        // 这将是Column的大小。
+        coordinates.size
+        // Column相对于应用程序窗口的位置。
+        coordinates.positionInWindow()
+        // Column相对于 Compose 根的位置。
+        coordinates.positionInRoot()
+        // 这些将是提供给布局的对齐线（此处的Column为空）。
+        coordinates.providedAlignmentLines
+        // 这将是与 Column 的父级相对应的 LayoutCoordinates 实例。
+        coordinates.parentLayoutCoordinates
+    }
+) {
+    Box(Modifier.size(20.dp).background(Color.Green))
+    Box(Modifier.size(20.dp).background(Color.Blue))
+}
+</code></pre>
+
+<p>对于我们的提示，我们需要创建一个状态来保存锚点的坐标和大小，并引入一个修改器来更新状态：</p>
+
+<pre><code class="Kotlin">@Stable
+class HintAnchorState internal constructor() {
+
+    internal var size: IntSize by mutableStateOf(IntSize.Zero)
+
+    internal var offset: Offset by mutableStateOf(Offset.Zero)
+}
+
+@Composable
+fun rememberHintAnchorState(): HintAnchorState {
+    return remember { HintAnchorState() }
+}
+
+fun Modifier.hintAnchor(state: HintAnchorState): Modifier {
+    return onGloballyPositioned {
+        state.size = it.size
+        state.offset = it.positionInWindow()
+    }
+}
+</code></pre>
+
+<p>因此，我们只需订阅所需 UI 元素的大小和坐标变化即可更新锚点的状态。
+现在我们需要将此 hintAnchor 修饰符应用于我们的内容：</p>
+
+<pre><code class="Kotlin">val topAppBarActionHintAnchor = rememberHintAnchorState()
+val actionHintAnchor = rememberHintAnchorState()
+val bottomNavigationHintAnchor = rememberHintAnchorState()
+
+IconButton(
+    modifier = Modifier
+        .hintAnchor(topAppBarActionHintAnchor),
+    onClick = {},
+)
+
+Button(
+    modifier = Modifier
+        .hintAnchor(actionHintAnchor)
+        .padding(4.dp),
+    onClick = {},
+) {
+    Text("Action")
+}
+
+BottomNavigationItem(
+    modifier = Modifier
+        .hintAnchor(topAppBarActionHintAnchor),
+    //... 传入其他需要的参数
+)
+</code></pre>
+
+<blockquote><p><strong>注意：</strong> 修饰符顺序在 Compose 中始终很重要，我们在 hintAnchor 后设置 4.dp，以便在此按钮周围留出额外空间（锚点的尺寸将比实际按钮的尺寸大 4.dp）。</p></blockquote>
+
+<p>HintOverlay 可组合项需要进行一些更改才能使用 HintAnchorState为此锚点绘制提示。</p>
+
+<pre><code class="Kotlin">@Composable
+fun HintOverlay(
+    anchors: () -&gt; List&lt;HintAnchorState&gt;,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .overlayBackground(anchors)
+    )
+}
+
+/**
+ * 从 [LocalHintOverlayBrush] 或 [LocalHintOverlayColor] 设置“background”。
+ */
+private fun Modifier.overlayBackground(
+    anchors: () -&gt; List&lt;HintAnchorState&gt;,
+): Modifier = composed {
+    val backgroundBrush = LocalHintOverlayBrush.current
+    val backgroundColor = LocalHintOverlayColor.current
+
+    drawWithCache {
+        onDrawWithContent {
+            if (backgroundBrush != null) {
+                drawRect(backgroundBrush)
+            } else {
+                drawRect(backgroundColor)
+            }
+
+            anchors().forEach { anchor -&gt;
+                drawRect(
+                    color = Color.Red,
+                    topLeft = anchor.offset,
+                    size = anchor.size.toSize(),
+                    style = Stroke(width = 5f),
+                )
+            }
+
+            drawContent()
+        }
+    }
+}
+</code></pre>
+
+<p>现在我们只需在锚点周围画一个红色矩形：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*EqvV4AHsimwvwZxajIgtXg.png" alt="Anchors" /></p>
+
+<p>但如果我们在移动设备上运行，我们会在 Android 上得到错误的数字：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*2wennrPOIcKArOK4MuayAQ.png" alt="With Window Insets" /></p>
+
+<p>该问题与 WindowInsets 有关。让我们减去这些 insets 来修复它：</p>
+
+<pre><code class="Kotlin">fun Modifier.hintAnchor(state: HintAnchorState): Modifier = composed {
+    val statusBarInsets = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
+
+    onGloballyPositioned {
+        state.size = it.size
+        state.offset = it.positionInWindow()
+            // 修复 Android 上的 WindowInsets
+            .minus(Offset(x = 0f, y = statusBarInsets))
+    }
+}
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*LlrCLPAEgpk7q--X7i3UsA.png" alt="Fixed window insets" /></p>
+
+<h2>3. 剪辑出锚点的形状</h2>
+
+<p>要剪辑形状，我们将使用 Path 和 PathOperation 。修改 hintAnchor Modifier 以接受 Shape ，它将用于在锚点周围设置所需的形状。</p>
+
+<pre><code class="Kotlin">fun Modifier.hintAnchor(
+    state: HintAnchorState,
+    shape: Shape = RectangleShape,
+): Modifier {
+    state.shape = shape
+    //..onGloballyPositioned
+}
+
+@Stable
+class HintAnchorState internal constructor() {
+
+    //...其他的状态放这里
+
+    internal var shape: Shape by mutableStateOf(RectangleShape)
+}
+</code></pre>
+
+<p>根据提供的形状，我们可以创建一个轮廓，用于将锚点的形状从背景中剪掉：</p>
+
+<pre><code class="Kotlin">internal fun Modifier.overlayBackground(
+    anchors: () -&gt; List&lt;HintAnchorState&gt;,
+): Modifier = composed {
+    val backgroundBrush = LocalHintOverlayBrush.current
+    val backgroundColor = LocalHintOverlayColor.current
+    val layoutDirection = LocalLayoutDirection.current
+    val density = LocalDensity.current
+
+    drawWithCache {
+        // 准备背景路径
+        val path = Path().apply {
+            lineTo(size.width, 0f)
+            lineTo(size.width, size.height)
+            lineTo(0f, size.height)
+            lineTo(0f, 0f)
+            close()
+        }
+
+        anchors().forEach { anchor -&gt;
+            // 为锚点准备路径
+            val anchorPath = Path()
+            anchorPath.addOutline(
+                anchor.shape.createOutline(
+                    size = anchor.size.toSize(),
+                    layoutDirection = layoutDirection,
+                    density = density,
+                )
+            )
+            anchorPath.translate(anchor.offset)
+            anchorPath.close()
+
+            // 裁剪掉锚点
+            path.op(path, anchorPath, PathOperation.Xor)
+        }
+
+        onDrawWithContent {
+            // 我们不仅仅绘制路径，而不是像以前一样绘制矩形
+            if (backgroundBrush != null) {
+                drawPath(path, backgroundBrush)
+            } else {
+                drawPath(path, backgroundColor)
+            }
+
+            drawContent()
+        }
+    }
+}
+</code></pre>
+
+<p>让我们传递 CircleShape 和 RoundedCornerShape 来看看提示现在是什么样子：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*i2dWMv3Wa9at-fzGiKm8KQ.png" alt="Clip" /></p>
+
+<p>此时，我们知道如何绘制背景覆盖层、计算锚点的位置以及如何剪裁背景。</p>
+
+<h2>4. 绘制提示</h2>
+
+<p>在实际绘制之前，我们应该定义提示需要呈现哪些信息。</p>
+
+<p>为了不强制只提供文本，我们采用slot方法。通过定义slot，我们允许使用任何所需的composables。</p>
+
+<p>我将介绍一个新的类 Hint 来保存我们的Composable内容：</p>
+
+<pre><code class="Kotlin">@Stable
+class Hint internal constructor() {
+
+    internal var content: @Composable () -&gt; Unit by mutableStateOf({})
+}
+
+@Composable
+fun rememberHint(content: @Composable () -&gt; Unit): Hint {
+    return remember {
+        Hint().also { it.content = content }
+    }
+}
+</code></pre>
+
+<p>并将此 Hint 添加为 HintAnchorState 的一部分：</p>
+
+<pre><code class="Kotlin">@Stable
+class HintAnchorState internal constructor(
+    internal val hint: Hint,
+) {
+    //...其他的状态放这里
+}
+
+@Composable
+fun rememberHintAnchorState(hint: Hint): HintAnchorState {
+    return remember(hint) {
+        HintAnchorState(hint)
+    }
+}
+</code></pre>
+
+<p>在 HintOverlay 内部，我们可以采用最简单的解决方案 — BoxWithConstraints ：</p>
+
+<pre><code class="Kotlin">@Composable
+fun HintOverlay(
+    anchors: () -&gt; List&lt;HintAnchorState&gt;,
+) {
+    //...
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .overlayBackground(anchors)
+    ) {
+        anchors().forEach { anchor -&gt;
+            Box(
+                modifier = Modifier
+                    .graphicsLayer {
+                        translationX = anchor.offset.x
+                        translationY = anchor.offset.y + anchor.size.height
+                    },
+            ) {
+                anchor.hint.content()
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>修改应用程序内容：</p>
+
+<pre><code class="Kotlin">val topAppBarHint = rememberHint {
+    OutlinedButton(onClick = {}) { Text("Hint for TopAppBar") }
+}
+val topAppBarActionHintAnchor = rememberHintAnchorState(topAppBarHint)
+
+val actionHint = rememberHint {
+    Text("Hint for Action")
+}
+val actionHintAnchor = rememberHintAnchorState(actionHint)
+
+val bottomNavigationHint = rememberHint {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.size(32.dp).background(Color.Magenta, CircleShape))
+        Spacer(Modifier.size(8.dp))
+        Text("Hint for BottomNavigation")
+    }
+}
+val bottomNavigationHintAnchor = rememberHintAnchorState(bottomNavigationHint)
+</code></pre>
+
+<p>结果如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*mMenE2fp2jph6YUBlxX4pA.png" alt="Hint for action" /></p>
+
+<p>让我们引入一个应用程序特定的代码来绘制提示背景。</p>
+
+<pre><code class="Kotlin">@Composable
+fun rememberHintContainer(content: @Composable () -&gt; Unit): Hint {
+    return rememberHint {
+        Box(
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .background(Color.Yellow, shape = RoundedCornerShape(16.dp))
+                .padding(16.dp),
+        ) {
+            CompositionLocalProvider(
+                LocalTextStyle provides TextStyle(
+                    color = Color.Black,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Light,
+                ),
+            ) {
+                content()
+            }
+        }
+    }
+}
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*xn8pxlU_nUQvywbtqVwUtw.png" alt="Hint2" /></p>
+
+<p>我们遇到了 2 个问题：</p>
+
+<ol>
+<li>水平对齐，提示应与其锚点居中对齐。</li>
+<li>BottomNavigation 的提示超出了屏幕范围。</li>
+</ol>
+
+
+<p>让我们改用自定义布局并修复这些问题。</p>
+
+<p>要测量和布局多个可组合项，请使用 Layout。此composable允许我们手动测量和布局子项。所有更高级别的布局（如 Column 和 Row）都是使用 Layout 实现的。</p>
+
+<pre><code class="Kotlin">@Composable
+internal fun HintsContainer(
+    modifier: Modifier,
+    anchors: () -&gt; List&lt;HintAnchorState&gt;,
+) {
+    val anchors = anchors()
+
+    Layout(
+        modifier = modifier
+            .overlayBackground(anchors),
+        content = {
+            anchors.forEach { it.hint.content() }
+        },
+    ) { measurables, constraints -&gt;
+        // 测量每一个提示
+        val placeables = measurables.map { measurable -&gt;
+            measurable.measure(
+                constraints.copy(minWidth = 0, minHeight = 0)
+            )
+        }
+
+        // 将布局尺寸设置得尽可能大
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            // 将每个提示相对于其锚点放置
+            placeables.forEachIndexed { index, placeable -&gt;
+                val anchor = anchors[index]
+
+                // 将此提示居中对齐
+                val x = (anchor.offset.x.toInt() - (placeable.width - anchor.size.width) / 2)
+                    // 修复超出屏幕的坐标
+                    .coerceAtLeast(0)
+                    .coerceAtMost(constraints.maxWidth - placeable.width)
+
+                // 把这个提示放在它的锚点下面
+                var y = (anchor.offset.y.toInt() + anchor.size.height)
+                    // 如果超出屏幕，则修复 y 坐标
+                    .coerceAtMost(constraints.maxHeight - placeable.height)
+                if (y &lt; anchor.offset.y + anchor.size.height) {
+                    // 提示与锚点重叠，请将此提示放在其锚点上方
+                    y = anchor.offset.y.toInt() - placeable.height
+                }
+
+                placeable.placeRelative(x = x, y = y)
+            }
+        }
+    }
+}
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*syuJkuAd-_BgiYfFP8bKgQ.png" alt="Hint3" /></p>
+
+<p>因为我们允许传递任何可组合项作为提示，所以调用者可以完全控制提示的外观，例如，我们可以只使用 Text ，或者使用包含许多子项的复杂 Row 。</p>
+
+<h2>5. 如何控制提示？</h2>
+
+<p>我们静态地添加了提示以将其显示在屏幕上。但真正产品应用程序并非如此。让我们引入 HintController 来控制何时显示提示。</p>
+
+<pre><code class="Kotlin">@Stable
+class HintController internal constructor() {
+
+    internal var hint by mutableStateOf&lt;HintAnchorState?&gt;(null)
+
+    fun show(hint: HintAnchorState) {
+        this.hint = hint
+    }
+}
+
+@Composable
+fun rememberHintController(): HintController {
+    val controller = remember { HintController() }
+
+    controller.hint?.let { hint -&gt;
+        HintOverlay(anchor = hint)
+    }
+
+    return controller
+}
+</code></pre>
+
+<p>修改应用程序内容，以便在我们点击锚点时显示提示：</p>
+
+<pre><code class="Kotlin">val hintController = rememberHintController()
+
+IconButton(
+    modifier = Modifier
+        .hintAnchor(topAppBarActionHintAnchor, CircleShape),
+    onClick = {
+        hintController.show(topAppBarActionHintAnchor)
+    },
+)
+
+BottomNavigationItem(
+    modifier = Modifier
+        .hintAnchor(
+            bottomNavigationHintAnchor,
+            shape = RoundedCornerShape(50f),
+        ),
+    onClick = {
+        hintController.show(bottomNavigationHintAnchor)
+    },
+)
+
+Button(
+    modifier = Modifier
+        .hintAnchor(actionHintAnchor, RoundedCornerShape(16.dp))
+        .padding(4.dp),
+    onClick = {
+        hintController.show(actionHintAnchor)
+    },
+)
+</code></pre>
+
+<blockquote><p>注意：我们不再需要显示的 HintOverlay ，它现在变得内置了。</p></blockquote>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*jIOTXOSnHVeL_jjyEx1gdg.png" alt="Control" /></p>
+
+<p>现在我们可以逐一显示提示，但还有两个部分缺失：如何关闭提示，以及如何覆盖覆盖颜色。</p>
+
+<p>对提示控制器进行更改以允许传递覆盖颜色：</p>
+
+<pre><code class="Kotlin">@Composable
+fun rememberHintController(overlay: Brush): HintController {
+    return rememberHintController(overlay = LocalHintOverlayBrush provides overlay)
+}
+
+@Composable
+fun rememberHintController(overlay: Color = HintOverlayColorDefault): HintController {
+    return rememberHintController(overlay = LocalHintOverlayColor provides overlay)
+}
+
+@Composable
+private fun rememberHintController(overlay: ProvidedValue&lt;*&gt;): HintController {
+    val controller = remember { HintController() }
+
+    controller.hint?.let { hint -&gt;
+        CompositionLocalProvider(overlay) {
+            HintOverlay(anchor = hint)
+        }
+    }
+
+    return controller
+}
+</code></pre>
+
+<p>为了消除我们的提示，让我们引入以下变化：</p>
+
+<pre><code class="Kotlin">@Stable
+class HintController internal constructor() {
+
+    internal var hint by mutableStateOf&lt;HintAnchorState?&gt;(null)
+
+    fun show(hint: HintAnchorState) {
+        this.hint = hint
+    }
+
+    fun dismiss() {
+        hint = null
+    }
+}
+</code></pre>
+
+<p>我们使用 Popup 作为覆盖层的容器，如果用户点击 Android 上的返回按钮(BACK)，Popup 就会被关闭。</p>
+
+<pre><code class="Kotlin">@Composable
+internal fun HintOverlay(
+    anchor: HintAnchorState,
+    onDismiss: () -&gt; Unit,
+) {
+    Popup(
+        onDismissRequest = onDismiss,
+        // 设置可聚焦以处理按压back事件
+        properties = remember { PopupProperties(focusable = true) },
+    ) {
+        //...在这里画出我们的提示
+    }
+}
+
+@Composable
+internal fun HintsContainer(
+    modifier: Modifier,
+    anchor: HintAnchorState,
+    onDismiss: () -&gt; Unit,
+) {
+    Layout(
+        modifier = modifier
+            .overlayBackground(anchor)
+            .clickable(
+                interactionSource = null,
+                // 禁用ripple
+                indication = null,
+                onClick = onDismiss,
+            )
+    )
+}
+</code></pre>
+
+<p>结果演示视频 <a href="https://youtu.be/eo49PKlhO5Y">https://youtu.be/eo49PKlhO5Y</a></p>
+
+<p>现在，HintController 允许我们按时间显示一个提示，但如果我们想按顺序显示多个提示，则没有实际的队列。</p>
+
+<p>可以扩展 HintController 并添加暂停修饰符以知道提示的显示时间（例如，在显示提示后立即执行某项操作）。</p>
+
+<pre><code class="Kotlin">@Stable
+class HintController internal constructor() {
+
+    private var queue = mutableStateListOf&lt;HintAnchorState&gt;()
+
+    internal val hint: HintAnchorState? get() = queue.firstOrNull()
+
+    private val pendingRequests = mutableMapOf&lt;HintAnchorState, Continuation&lt;Unit&gt;&gt;()
+
+    suspend fun show(hint: HintAnchorState) {
+        suspendCoroutine { continuation -&gt;
+            pendingRequests[hint] = continuation
+            queue.add(hint)
+        }
+    }
+
+    suspend fun show(vararg hint: HintAnchorState) {
+        show(hint.toList())
+    }
+
+    suspend fun show(hints: List&lt;HintAnchorState&gt;) {
+        suspendCoroutine { continuation -&gt;
+            pendingRequests[hints.last()] = continuation
+            queue.addAll(hints)
+        }
+    }
+
+    internal fun onDismissed(hint: HintAnchorState) {
+        pendingRequests[hint]?.let { continuation -&gt;
+            continuation.resume(Unit)
+            pendingRequests.remove(hint)
+        }
+        queue.remove(hint)
+    }
+
+    fun dismiss() {
+        pendingRequests.values
+            .forEach { continuation -&gt;
+                continuation.resumeWithException(CancellationException("Hint was dismissed"))
+            }
+        pendingRequests.clear()
+        queue.clear()
+    }
+}
+</code></pre>
+
+<p>现在为了在应用程序内部显示提示，我们需要一个 CoroutineScope ：</p>
+
+<pre><code class="Kotlin">val coroutineScope = rememberCoroutineScope()
+val hintController = rememberHintController()
+
+// 现在我们可以从提示本身中忽略所有待处理的提示
+val topAppBarHint = rememberHintContainer {
+    OutlinedButton(
+        onClick = {
+            hintController.dismiss()
+        }
+    ) { Text("Hint for TopAppBar") }
+}
+
+// 显示 1 条提示
+BottomNavigationItem(
+    onClick = {
+        coroutineScope.launch {
+            hintController.show(bottomNavigationHintAnchor)
+            scaffoldState.snackbarHostState.showSnackbar("One hint was shown")
+        }
+    },
+)
+
+// 连续显示多个提示
+Button(
+    onClick = {
+        coroutineScope.launch {
+            hintController.show(
+                topAppBarActionHintAnchor,
+                actionHintAnchor,
+                bottomNavigationHintAnchor,
+            )
+            scaffoldState.snackbarHostState.showSnackbar("Many hints were shown")
+        }
+    },
+)
+</code></pre>
+
+<blockquote><p><strong>注意：</strong> 如果我们通过调用 hintController.dismiss() 来关闭提示，则 hintController.show 之后的代码将不会被调用。</p></blockquote>
+
+<pre><code class="Kotlin">coroutineScope.launch {
+    hintController.show(topAppBarActionHintAnchor)
+    // 如果通过调用 hintController.dismiss 关闭了之前的提示，则不会显示 Snackbar
+    scaffoldState.snackbarHostState.showSnackbar("One hint was shown")
+}
+</code></pre>
+
+<p>最终结果如这个视频演示 <a href="https://youtu.be/tyZUNJLEVxQ">https://youtu.be/tyZUNJLEVxQ</a>：我们可以显示单个提示，也可以显示提示列表。</p>
+
+<p>由于该项目使用 Compose Multiplatform，我们可以针对不同的目标运行该应用程序：</p>
+
+<ul>
+<li>Android结果演示 <a href="https://youtu.be/BVBCipnbIUc">https://youtu.be/BVBCipnbIUc</a></li>
+<li>iOS结果演示 <a href="https://youtu.be/Z1uasddgqwo">https://youtu.be/Z1uasddgqwo</a></li>
+</ul>
+
+
+<h2>总结</h2>
+
+<p>Compose 和 Kotlin Multiplatform 是一个强大的组合，它允许我们使用 Kotlin 来实现 UI 和业务逻辑。CMP 库仅与Jetpack Compose Android 项目完全兼容。</p>
+
+<p>可以在 GitHub 上查看我的repo：<a href="https://github.com/vitoksmile/ComposeHints">https://github.com/vitoksmile/ComposeHints</a>。</p>
+
+<p>感谢你的阅读，期待在 GitHub 上获得你的Star :)。</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[实战：在Compose中绘制睡眠时间线]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose/"/>
+    <updated>2025-03-26T21:41:40+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/sleep-timeline-graph-in-compose-15c99f9a4af0">Draw sleep timeline graph in Compose</a>，原文由<a href="https://medium.com/@vitoksmile">Viktor Mykhailiv</a>发布于2025年1月31日。</p></blockquote>
+
+<p><strong>译者按：</strong> 我们在前面的<a href="https://juejin.cn/column/7367555191338467337">降Compose十八掌</a>系列中讲解过在Compose自定义绘制的方法，可以先温习一下<a href="https://juejin.cn/post/7381826917086920742">上一篇文章</a>。这篇文章是提升自定义绘制技巧的一个非常好的实战例子。</p>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OUAsgvNoNx9VpSk9Eyqgzg.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>当内置组件不能完全满足我们的应用需求时，自定义绘图非常有用。本文提供了创建自定义睡眠时间线图表的指南，类似于你在<a href="https://play.google.com/store/apps/details?id=com.fitbit.FitbitMobile">Fitbit 应用</a>中找到的图表。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*cA9uPgAG29Gu2AhajArq9w.jpeg" alt="Screenshots from Fitbit Android app" /></p>
+
+<h2>在 Compose 中如何绘图？</h2>
+
+<p>要开始在 Compose 中绘图，我们可以使用绘图Modifier或 Canvas可组合函数，这为我们提供了 DrawScope — 一种声明式、无状态的API，用于绘制形状和路径，而无需消费者维护底层状态。DrawScope实现还提供了尺寸信息，并且变幻是相对于本地平移完成的。</p>
+
+<blockquote><p><strong>注意：</strong> Jetpack Compose（仅限 Android）和 Compose Multiplatform（桌面、Android、iOS、Web）具有类似的绘图 API。下面的屏幕截图是在桌面（macOS）上制作的，但所有平台上的结果都是相同的（查看最后一张屏幕截图）。</p></blockquote>
+
+<pre><code class="Kotlin">Canvas(modifier = Modifier.fillMaxSize()) {
+    rotate(degrees = 45F) {
+        drawRect(
+            color = Color.Gray,
+            topLeft = Offset(x = size.width / 3F, y = size.height / 3F),
+            size = size / 3F
+        )
+    }
+}
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*_qkChFEn25kC_cfgiRXgKg.png" alt="Compose中的自定义绘制" /></p>
+
+<h2>啥是睡眠时间表？</h2>
+
+<p>我们可以在 Health Connect 中读取或写入睡眠数据。睡眠数据显示为会话，可分为以下睡眠阶段：</p>
+
+<ul>
+<li>清醒：用户在睡眠周期内清醒。</li>
+<li>浅睡眠：用户处于浅睡眠周期。</li>
+<li>深睡眠：用户处于深睡眠周期。</li>
+<li>REM：用户处于 REM 睡眠周期。</li>
+</ul>
+
+
+<p>这些值表示用户在一定时间范围内经历的睡眠类型。SleepSessionRecord 数据类型包含两部分：</p>
+
+<ol>
+<li>整个睡眠过程，涵盖整个睡眠时间。</li>
+<li>睡眠过程中的各个阶段，例如浅睡眠或深睡眠。</li>
+</ol>
+
+
+<pre><code class="Kotlin">val record = remember {
+    SleepSessionRecord(
+        startTime = Instant.parse("2025-01-28T21:10:10Z"),
+        endTime = Instant.parse("2025-01-29T07:32:13Z"),
+        startZoneOffset = UtcOffset(hours = 2),
+        endZoneOffset = UtcOffset(hours = 2),
+        stages = listOf(
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-28T21:10:10Z"),
+                endTime = Instant.parse("2025-01-28T23:15:13Z"),
+                type = SleepSessionStageType.Light,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-28T23:15:13Z"),
+                endTime = Instant.parse("2025-01-29T01:56:32Z"),
+                type = SleepSessionStageType.Deep,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-29T01:56:13Z"),
+                endTime = Instant.parse("2025-01-29T03:16:22Z"),
+                type = SleepSessionStageType.Light,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-29T03:16:22Z"),
+                endTime = Instant.parse("2025-01-29T04:32:13Z"),
+                type = SleepSessionStageType.REM,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-29T04:32:13Z"),
+                endTime = Instant.parse("2025-01-29T05:12:56Z"),
+                type = SleepSessionStageType.Deep,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-29T05:12:56Z"),
+                endTime = Instant.parse("2025-01-29T07:32:13Z"),
+                type = SleepSessionStageType.Light,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-28T22:11:56Z"),
+                endTime = Instant.parse("2025-01-28T22:17:13Z"),
+                type = SleepSessionStageType.Awake,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-28T22:39:56Z"),
+                endTime = Instant.parse("2025-01-28T22:51:13Z"),
+                type = SleepSessionStageType.Awake,
+            ),
+            SleepSessionRecord.Stage(
+                startTime = Instant.parse("2025-01-29T04:47:56Z"),
+                endTime = Instant.parse("2025-01-29T04:54:13Z"),
+                type = SleepSessionStageType.Awake,
+            ),
+        ),
+    )
+}
+</code></pre>
+
+<h2>需要一点数学计算</h2>
+
+<p>在睡眠期间，我们可以在不同时刻多次处于同一阶段。我们需要计算相对于睡眠的起点和终点。</p>
+
+<p>要在 Compose 中绘制矩形，我们需要 topOffset 和 size。</p>
+
+<p><img src="" alt="Math" /></p>
+
+<pre><code class="Kotlin">private fun calculate(
+    canvasSize: Size,
+    recordStartTime: Instant,
+    recordEndTime: Instant,
+    stages: List&lt;SleepSessionRecord.Stage&gt;,
+): List&lt;SleepStageDrawPoint&gt; {
+    val totalDuration = (recordEndTime - recordStartTime).inWholeSeconds.toFloat()
+        .coerceAtLeast(1f)
+
+    return stages.map { stage -&gt;
+        val stageOffset =
+            (stage.startTime - recordStartTime).inWholeSeconds / totalDuration
+        val stageDuration =
+            (stage.endTime - stage.startTime).inWholeSeconds.toFloat() / totalDuration
+
+        SleepStageDrawPoint(
+            topLeft = Offset(x = canvasSize.width * stageOffset, y = 0f),
+            size = canvasSize.copy(width = canvasSize.width * stageDuration),
+        )
+    }
+}
+</code></pre>
+
+<h2>绘制</h2>
+
+<p>让我们构建自定义 Canvas 来绘制睡眠过程的一个阶段，例如深度睡眠。</p>
+
+<pre><code class="Kotlin">@Composable
+fun SleepSessionCanvas(
+    modifier: Modifier,
+    record: SleepSessionRecord,
+) {
+    Spacer(
+        modifier = modifier.drawWithCache {
+            val points = calculate(
+                canvasSize = size,
+                recordStartTime = record.startTime,
+                recordEndTime = record.endTime,
+                stages = record.stages.filter { it.type == SleepSessionStageType.Deep },
+            )
+
+            onDrawWithContent {
+                // 画背景
+                drawRoundRect(
+                    color = Color.LightGray,
+                    topLeft = Offset(x = 0f, y = size.height / 4f),
+                    size = size.copy(height = size.height / 2f),
+                    cornerRadius = CornerRadius(size.height / 2f),
+                )
+
+                // 绘制阶段点
+                points.forEach { point -&gt;
+                    drawRect(
+                        topLeft = point.topLeft,
+                        size = point.size,
+                        color = Color(0xFF673AB7),
+                    )
+                }
+            }
+        }
+    )
+}
+</code></pre>
+
+<p>如果我们使用之前定义的睡眠会话运行项目，我们将看到 3 个矩形：1 个灰色矩形表示背景，2 个紫色矩形表示深度睡眠阶段。</p>
+
+<pre><code class="Kotlin">SleepSessionCanvas(
+    modifier = Modifier
+        .fillMaxWidth()
+        .height(320.dp)
+        .padding(16.dp),
+    record = record,
+)
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*ANITvvaUEuuwwcACzY21qA.png" alt="深度睡眠阶段" /></p>
+
+<p>为了绘制睡眠过程的所有阶段（清醒、快速眼动、浅睡眠和深睡眠），我们需要进行一些调整，将每个阶段类型垂直绘制为列组件，办法是逐行绘制并对下一行应用一些偏移量（offset）。</p>
+
+<pre><code class="Kotlin">@Composable
+fun SleepSessionCanvas(
+    modifier: Modifier,
+    record: SleepSessionRecord,
+    stageHeight: Dp = 48.dp,
+    stagesSpacing: Dp = 16.dp,
+) {
+    val colors = remember {
+        mapOf(
+            SleepSessionStageType.Awake to Color(0xFFFF9800),
+            SleepSessionStageType.Light to Color(0xFF2196F3),
+            SleepSessionStageType.Deep to Color(0xFF673AB7),
+            SleepSessionStageType.REM to Color(0xFF795548),
+        )
+    }
+
+    val stageHeightPx = with(LocalDensity.current) { stageHeight.toPx() }
+    val stagesSpacingPx = with(LocalDensity.current) { stagesSpacing.toPx() }
+
+    Spacer(
+        modifier = modifier
+            .requiredHeight(stageHeight * colors.size + stagesSpacing * (colors.size - 1))
+            .drawWithCache {
+                val stages = listOf(
+                    SleepSessionStageType.Awake,
+                    SleepSessionStageType.REM,
+                    SleepSessionStageType.Light,
+                    SleepSessionStageType.Deep,
+                ).map { type -&gt;
+                    type to calculate(
+                        canvasSize = size.copy(height = stageHeightPx),
+                        recordStartTime = record.startTime,
+                        recordEndTime = record.endTime,
+                        stages = record.stages.filter { it.type == type },
+                    )
+                }
+
+                onDrawWithContent {
+                    var offset = 0f
+                    stages.forEach { (type, points) -&gt;
+                        translate(top = offset) {
+                            // 画背景
+                            drawRoundRect(
+                                color = Color.LightGray,
+                                topLeft = Offset(x = 0f, y = stageHeightPx / 4),
+                                size = size.copy(height = stageHeightPx / 2),
+                                cornerRadius = CornerRadius(stageHeightPx / 2),
+                            )
+
+                            // 绘制阶段点
+                            points.forEach { point -&gt;
+                                drawRect(
+                                    topLeft = point.topLeft,
+                                    size = point.size,
+                                    color = colors.getValue(type),
+                                )
+                            }
+                        }
+                        offset += stageHeightPx + stagesSpacingPx
+                    }
+                }
+            }
+    )
+}
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*iXIS4tbsvx5AhTtRqlWi7A.png" alt="最终的图形" /></p>
+
+<h3>添加文本</h3>
+
+<p>要在 Compose 中绘制文本，我们通常可以使用 Text 可组合项。但是，在我们的示例中，我们处于 DrawScope 中，我们可以使用 DrawScope.drawText()方法。</p>
+
+<p>绘制文本与其他绘制命令略有不同。通常，我们为绘制命令提供绘制形状/图像的大小（宽度和高度）。对于文本，有几个参数可以控制渲染文本的大小，例如字体大小、字体、连字符和字母间距。我们需要使用 TextMeasurer 来获取文本的测量大小，具体取决于上述因素。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*QB1QvINWUWMlpRoPSzrcUQ.png" alt="Desktop效果" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*U_LBREiTciw2F3ghYiHqCw.jpeg" alt="Android和iOS效果" /></p>
+
+<p>请到我的Github repo中查找完整示例代码：<a href="https://github.com/vitoksmile/Sleep-timeline-graph">https://github.com/vitoksmile/Sleep-timeline-graph</a>。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[高效地在Jetpack Compose中设计UI组件]]></title>
@@ -845,347 +1905,6 @@ public fun GlideImage(
 <li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices">https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices</a></li>
 <li><a href="https://square.github.io/leakcanary/">https://square.github.io/leakcanary/</a></li>
 </ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[选择Retrofit还是Ktor：给Android开发者的指南]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/02/26/retrofit-vs-ktor/"/>
-    <updated>2025-02-26T22:50:55+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/02/26/retrofit-vs-ktor</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/when-to-use-retrofit-and-when-to-use-ktor-a-guide-for-android-developers-918491dcf69a">When to Use Retrofit and When to Use Ktor: A Guide for Android Developers</a></p></blockquote>
-
-<p>作为 Android 开发人员，为你的项目选择正确的 HTTP 客户端是一项关键的决定。当今最受欢迎的两个选项莫过于 Retrofit 和 Ktor。虽然Retrofit 多年来一直是事实上的标准，但 Ktor 因其现代架构和灵活性而势头强劲。</p>
-
-<p><a href=""><img src="https://robotqa.com/blog/wp-content/uploads/2024/06/202406120818248.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在本文中，我们将探讨你应该选择 Retrofit 或 Ktor 的场景，以及它们的优势如何满足你的应用要求。</p>
-
-<h2>了解基础知识</h2>
-
-<p>先来了解一下基础知识：</p>
-
-<h3>Retrofit</h3>
-
-<p>Retrofit 是 Square 开发的适用于 Android 和 Java 的类型安全 HTTP 客户端。它将 API 调用抽象为声明式接口，并使用 Gson 或 Moshi 等库无缝地将 JSON 解析为 Java/Kotlin 对象。</p>
-
-<h3>Ktor</h3>
-
-<p>Ktor 由 JetBrains 开发，是一款基于 Kotlin 的异步框架，用于构建联网应用程序。它不仅仅是一个 HTTP 客户端，而是一个多用途框架，让你能够使用同一个库构建后端服务并发出网络请求。</p>
-
-<h2>何时使用 Retrofit？</h2>
-
-<h3>1. 你需要简单和可读性</h3>
-
-<p>如果你更喜欢使用预定义接口以直观的方式进行 API 调用，Retrofit 是一个绝佳的选择。</p>
-
-<p>例子：</p>
-
-<pre><code class="Kotlin">interface ApiService {
-    @GET("posts")
-    suspend fun getPosts(): List&lt;Post&gt;
-}
-</code></pre>
-
-<p>使用 Retrofit，你可以预先定义 API 结构并专注于业务逻辑。</p>
-
-<h3>2. 你的团队已经熟悉 Retrofit</h3>
-
-<p>如果你的团队已有使用 Retrofit 的经验，那么坚持使用它可以降低学习曲线并加速开发。</p>
-
-<h3>3. 你需要开箱即用的功能</h3>
-
-<p>Retrofit 提供强大的功能，例如：</p>
-
-<ul>
-<li>自动解析 JSON 响应。</li>
-<li>内置对 OkHttp 拦截器的支持。</li>
-<li>轻松实现重试、缓存和日志记录。</li>
-</ul>
-
-
-<h3>4. 你在多语言环境中工作</h3>
-
-<p>Retrofit 非常适合涉及 Java 和 Kotlin 的项目，因此它对于遗留代码库来说是一个绝佳的选择。</p>
-
-<h3>5.你需要一个庞大的社区和资源</h3>
-
-<p>Retrofit 的成熟意味着丰富的文档、教程和社区支持，这使其成为许多团队更安全的选择。</p>
-
-<h2>何时使用 Ktor？</h2>
-
-<h3>1. 你需要高度可定制性</h3>
-
-<p>Ktor 允许你构建 HTTP 客户端，并对请求构建、日志记录和自定义管道进行细粒度的控制。</p>
-
-<p>例子：</p>
-
-<pre><code class="Kotlin">val client = HttpClient {
-    install(JsonFeature) {
-        serializer = KotlinxSerializer()
-    }
-}
-</code></pre>
-
-<h3>2. 你想利用 Kotlin Multiplatform</h3>
-
-<p>Ktor 的多平台支持是其突出的功能之一。如果你正在为 Android、iOS 和其他平台构建应用程序，Ktor 可确保你在所有平台上使用相同的网络逻辑。</p>
-
-<h3>3. 你正在构建轻量级或模块化应用程序</h3>
-
-<p>Ktor 的模块化设计使其成为轻量级应用程序或网络堆栈需要精简和集中的项目的理想选择。</p>
-
-<h3>4.你需要异步通信</h3>
-
-<p>Ktor 原生使用协程，这使得处理并发比传统的基于回调的方法更简单、更高效。</p>
-
-<h3>5. 你需要统一的后端和前端代码</h3>
-
-<p>借助 Ktor，你可以使用相同的框架构建服务器端 API 和移动应用程序，从而简化开发并确保一致性。</p>
-
-<h2>你应该选择哪一个？</h2>
-
-<p>用一张表格来总结一下两者各自的特点：</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:center;"> 特点 </th>
-<th style="text-align:center;"> Retrofit </th>
-<th style="text-align:center;"> Ktor </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:center;"> 易于使用 </td>
-<td style="text-align:center;"> 高 </td>
-<td style="text-align:center;"> 中等 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> Kotlin-first 设计 </td>
-<td style="text-align:center;"> 否 </td>
-<td style="text-align:center;"> 是 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 跨平台支持 </td>
-<td style="text-align:center;"> 否 </td>
-<td style="text-align:center;"> 是 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 可定制性 </td>
-<td style="text-align:center;"> 中等 </td>
-<td style="text-align:center;"> 高 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 学习曲线 </td>
-<td style="text-align:center;"> 低 </td>
-<td style="text-align:center;"> 中等 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 社区支持 </td>
-<td style="text-align:center;"> 规模很大 </td>
-<td style="text-align:center;"> 快速发展 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 与协程集成 </td>
-<td style="text-align:center;"> 通过添加suspend </td>
-<td style="text-align:center;"> 是（集成了原生协程） </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 后端能力 </td>
-<td style="text-align:center;"> 否 </td>
-<td style="text-align:center;"> 是 </td>
-</tr>
-</tbody>
-</table>
-
-
-<h3>如果符合以下情况则选择 Retrofit：</h3>
-
-<ul>
-<li>你正在开发一个 Kotlin 或 Java 项目，其中简单性和快速开发是首要任务。</li>
-<li>你的项目依赖于久经考验的工具和广泛的社区支持。</li>
-<li>你需要对 REST API 进行最低限度的配置。</li>
-</ul>
-
-
-<h3>以下情况请选择 Ktor：</h3>
-
-<ul>
-<li>你正在构建一个 Kotlin Multiplatform 项目。</li>
-<li>你需要一个现代、灵活的网络堆栈。</li>
-<li>你需要同时支持前端和后端开发。</li>
-</ul>
-
-
-<h2>结论</h2>
-
-<p>在 Retrofit 和 Ktor 之间进行选择取决于你的项目需求和你的团队对这些工具的熟悉程度。Retrofit 是传统 Android 项目的可靠选择，而 Ktor 则在现代 Kotlin 优先和多平台应用程序中表现出色。了解这些差异将有助于你为下一个 Android 应用做出正确的选择。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[一文带你理解OkHttp中的Gzip压缩]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/02/25/understanding-okhttp-gzip-compression/"/>
-    <updated>2025-02-25T22:28:09+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/02/25/understanding-okhttp-gzip-compression</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="ttps://medium.com/tech-insider/okhttps-gzip-compression-904919638458">OkHttp’s Gzip Compression</a>，原文发布于2020年5月1日。本文假定读者对HTTP有基本的了解，以及使用过OkHttp，否则理解起来可能会一点困难。</p></blockquote>
-
-<p><strong>译注：</strong> OkHttp确实会自动添加gzip并处理响应。但如果显示的给请求添加除了gzip之外的字段，如&#8221;Accept-Encoding: gzip, deflate, br&#8221;，那么就需要手动处理响应。其实一般时候我们并不需要手动设置，除非是模拟浏览器时（比如用了浏览器的UA），或者某些服务器强制deflate字段。更多的信息可以<a href="https://stackoverflow.com/questions/51901333/okhttp-3-how-to-decompress-gzip-deflate-response-manually-using-java-android">看这里</a>。</p>
-
-<p><a href=""><img src="https://img-blog.csdnimg.cn/879e064594104e0ab5671f6710ffea24.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>压缩是一种简单有效的节省带宽和加快移动用户交互速度的方法。当用户点击你的页面屏幕时，会调用你的服务器来提供请求的响应。响应越大，屏幕上显示数据的时间就越长。通过压缩，即使你的访问者的互联网连接速度非常慢并且你的 API 响应过于繁重，他们也能享受快速加载。</p>
-
-<h2>这是如何工作的呢？</h2>
-
-<p><strong>Gzip 会找到相似的字符串，并用一些占位符临时替换这些字符串，以缩小整体大小。</strong>如果你使用大量重复文本，并且有大量空格， 这也没有问题。你可以使用 Gzip 压缩你的响应主体以及请求主体。由于文件小得多，此操作可大大减少传输时间。</p>
-
-<p><strong>注意：</strong>如果你尝试使用postman，它会默认在header的隐藏部分中添加 Accept-Encoding: gzip字段。</p>
-
-<blockquote><p>重要提示：OkHttp 也会自动在请求中添加字段 Accept-Encoding 并自动识别响应中的 Content-Encoding，因此会自行解压缩响应数据，因此无需单独设置，但假设当我们必须将压缩的请求数据发送到服务器时，我们就必须编写自己的拦截器。</p></blockquote>
-
-<p>这种压缩的棘手之处在于请求者和服务器都知道可以发送压缩文件。你必须告诉服务器您接受这种编码，然后它才会提供。该协议分为两部分：</p>
-
-<ul>
-<li>请求者发送一个header，告知服务器它接受压缩内容：Accept-Encoding：gzip</li>
-<li>服务器使用此header确认你的请求：Content-Encoding：gzip</li>
-</ul>
-
-
-<p>说得够多的了，我想你还有耐心，所以让我们看一些代码。</p>
-
-<h2>编写自己的拦截器</h2>
-
-<p>先决条件：了解 OkHttp 中的<a href="https://square.github.io/okhttp/features/interceptors/">拦截器（Interceptors）</a>。</p>
-
-<ol>
-<li>解开 Gzip 响应：在请求header中添加 Accept-Encoding: gzip，并在获取响应时在其响应header中查找 Content-Encoding: gzip。如果存在则解压缩，否则直接返回响应。</li>
-</ol>
-
-
-<pre><code class="Java">import java.io.IOException;
-
-import okhttp3.Headers;
-import okhttp3.Interceptor;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
-import okio.GzipSource;
-import okio.Okio;
-
-public class GzipInterceptor implements Interceptor {
-    @Override
-    public Response intercept(Chain chain) throws IOException {
-        Request.Builder newRequest = chain.request().newBuilder();
-        newRequest.addHeader("Accept-Encoding", "gzip");
-        Response response = chain.proceed(newRequest.build());
-
-        if (isGzipped(response)) {
-            return unzip(response);
-        } else {
-            return response;
-        }
-    }
-
-    private Response unzip(final Response response) throws IOException {
-
-        if (response.body() == null) {
-            return response;
-        }
-
-        GzipSource gzipSource = new GzipSource(response.body().source());
-        String bodyString = Okio.buffer(gzipSource).readUtf8();
-
-        ResponseBody responseBody = ResponseBody.create(response.body().contentType(), bodyString);
-
-        Headers strippedHeaders = response.headers().newBuilder()
-                .removeAll("Content-Encoding")
-                .removeAll("Content-Length")
-                .build();
-        return response.newBuilder()
-                .headers(strippedHeaders)
-                .body(responseBody)
-                .message(response.message())
-                .build();
-
-    }
-
-    private Boolean isGzipped(Response response) {
-        return response.header("Content-Encoding") != null &amp;&amp; response.header("Content-Encoding").equals("gzip");
-    }
-}
-</code></pre>
-
-<ol>
-<li>创建 Gzip 请求：如果你的请求过大，那么我们可以使用它来压缩我们的请求。为了通知服务器，我们将在请求header中添加 Content-Encoding: gzip。</li>
-</ol>
-
-
-<pre><code class="Java">import java.io.IOException;
-
-import okhttp3.Interceptor;
-import okhttp3.MediaType;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
-import okio.BufferedSink;
-import okio.GzipSink;
-import okio.Okio;
-
-public class GzipInterceptor implements Interceptor {
-    @Override public Response intercept(Interceptor.Chain chain) throws IOException {
-        Request originalRequest = chain.request();
-
-        if (originalRequest.body() == null || originalRequest.header("Content-Encoding") != null) {
-            return chain.proceed(originalRequest);
-        }
-
-        Request compressedRequest = originalRequest.newBuilder()
-                .header("Content-Encoding", "gzip")
-                .method(originalRequest.method(), gzip(originalRequest.body()))
-                .build();
-        return chain.proceed(compressedRequest);
-    }
-
-    private RequestBody gzip(final RequestBody body) {
-        return new RequestBody() {
-            @Override public MediaType contentType() {
-                return body.contentType();
-            }
-
-            @Override public long contentLength() {
-                return -1; // 事先不知道请求内容的长度
-            }
-
-            @Override public void writeTo(BufferedSink sink) throws IOException {
-                BufferedSink gzipSink = Okio.buffer(new GzipSink(sink));
-                body.writeTo(gzipSink);
-                gzipSink.close();
-            }
-        };
-    }
-}
-</code></pre>
-
-<p>好了，就到这里吧，如果你愿意的话，可以赞一下。</p>
-
-<p>参考资料：</p>
-
-<ol>
-<li><a href="https://square.github.io/okhttp/">https://square.github.io/okhttp/</a></li>
-<li><a href="https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-compression-in-web-development">https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-
-compression-in-web-development</a></li>
-<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://en.wikipedia.org/wiki/Gzip</a></li>
-<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://www.youtube.com/watch?v=Mjab_aZsdxw</a></li>
-</ol>
 
 ]]></content>
   </entry>
