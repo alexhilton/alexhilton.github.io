@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-04-12T17:34:50+08:00</updated>
+  <updated>2025-04-23T22:53:52+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,411 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack Compose的性能优化建议]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/04/22/performance-optimization-in-jetpack-compose/"/>
+    <updated>2025-04-22T22:34:25+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/04/22/performance-optimization-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Performance Optimization in Jetpack Compose」，原文链接<a href="https://carrion.dev/en/posts/performance-optimization-compose/">https://carrion.dev/en/posts/performance-optimization-compose/</a>，由Ignacio Carrión，发布于2025年4月8日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2025/04/22/performance-optimization-in-jetpack-compose/"><img src="https://www.itmob.cn/upload/2023/01/banner-jetpack-compose-a452c3e8f1ad489a8560a4f0a9f88e07.jpg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p><strong>译者按：</strong> Jetpack Compose是一个优秀的声明式UI框架，对开发者非常友好，可以高效率的撸各种UI页面和UI元素。但它仍然并不是很成熟，有些事情还做不了，而且渲染性能也略输于原生的View方式，毕竟它比原生的View多了一层组合树和渲染树。因此，在享受声明式UI带来的便捷的同时，就需要深入地了解其内部的工作机制，和学习一些高级技巧，以提升运行时的渲染性能。另外，需要 注意虽然这篇文章是针对for Android的Jetpack Compose，但大部分也适用于Compose Multiplatform。</p>
+
+<p>性能优化对于在Jetpack Compose应用中提供流畅的用户体验至关重要。本文探讨了关键技术和最佳实践，以确保你的可组合函数高效且性能卓越。</p>
+
+<h2>理解组合（Composition）和重组（ReComposition）</h2>
+
+<p><strong>译注：</strong> 组合与重组是Compose中非常重要 的概念，如果不熟悉的同学可以复习一下之前的文章<a href="https://juejin.cn/post/7379437165486112805">降Compose十八掌之『潜龙勿用』| Thinking in Compose</a>和<a href="https://juejin.cn/post/7401358349877346338">降Compose十八掌之『损则有孚』| Lifecycle</a>。</p>
+
+<p>Compose 性能的一个基本方面是了解合成和重组的工作原理：</p>
+
+<h3>智能重组（Smart Recomposition）</h3>
+
+<p>Compose 使用智能重组功能，仅更新界面中需要更改的部分。了解触发重组的原因以及如何最小化重组的影响范围对于性能优化至关重要。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ExpensiveCalculation</span><span class="p">(</span><span class="n">numbers</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 不好：每次重组都会执行昂贵的操作</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">average</span> <span class="p">=</span> <span class="n">numbers</span><span class="p">.</span><span class="n">takeIf</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">isNotEmpty</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>        <span class="o">?.</span><span class="n">average</span><span class="p">()</span>
+</span><span class='line'>        <span class="o">?:</span> <span class="m">0.0</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 优点：昂贵的操作被缓存，并且仅在输入发生变化时重新计算</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">cachedAverage</span> <span class="p">=</span> <span class="n">remember</span><span class="p">(</span><span class="n">numbers</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">numbers</span><span class="p">.</span><span class="n">takeIf</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">isNotEmpty</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>            <span class="o">?.</span><span class="n">average</span><span class="p">()</span>
+</span><span class='line'>            <span class="o">?:</span> <span class="m">0.0</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 每次重组时都会重新计算</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Current Average: ${&quot;</span><span class="p">%.</span><span class="m">2f</span><span class="s">&quot;.format(average)}&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 这将使用缓存住的值</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Cached Average: ${&quot;</span><span class="p">%.</span><span class="m">2f</span><span class="s">&quot;.format(cachedAverage)}&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>稳定类型（Stable types）和不可变性（Immutability）</h3>
+
+<p>稳定的类型对于Compose的智能重组系统至关重要。当Compose能够保证其 equals() 方法与其属性一致，并且属性本身不会在不触发重组的情况下发生变化时，该类型即被视为稳定类型。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 不好：类型不稳定 - 可变属性可能会在不通知Compose的情况下发生变化</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">UserState</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">name</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="c1">// 可变属性可以偷偷地改变</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">age</span><span class="p">:</span> <span class="n">Int</span>      <span class="c1">// 而且更改不会触发重组</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 优点：稳定类型 - 不可变属性和显式稳定性</span>
+</span><span class='line'><span class="n">@Stable</span>  <span class="c1">// 告诉Compose此类型具有可预测的相等性</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">UserState</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">name</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>  <span class="c1">// 不可变属性</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">age</span><span class="p">:</span> <span class="n">Int</span>      <span class="c1">// 如要更改需要创建新实例</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用稳定类型有以下几个好处：</p>
+
+<ol>
+<li>更高效的重组 - 当Compose确定数据未发生变化时，它可以跳过重组部分UI，换句话说可以减少很多不必要的重组，进而提高性能</li>
+<li>可预测的行为 - 数据更改始终会触发正确的UI更新</li>
+<li>线程安全（Thread safety） - 不可变数据可以安全地在协程之间共享</li>
+</ol>
+
+
+<p><strong>译注：</strong> 这里说的应该是可以在线程之间安全地共享，协程如果没有线程切换是不会有线程安全问题的。</p>
+
+<h2>性能优化的关键点</h2>
+
+<h3>1. 合理地使用 remember 和 derivedStateOf 进行状态（State）管理</h3>
+
+<p>remember 和 derivedStateOf 函数在状态管理中起到不同的作用：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">UserProfile</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">,</span> <span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Item</span><span class="p">&gt;)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 缺点：每次重新组合时都重新计算</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">filteredItems</span> <span class="p">=</span> <span class="n">items</span><span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">userId</span> <span class="p">==</span> <span class="n">user</span><span class="p">.</span><span class="n">id</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 好：使用记忆缓存计算</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">cachedItems</span> <span class="p">=</span> <span class="n">remember</span><span class="p">(</span><span class="n">items</span><span class="p">,</span> <span class="n">user</span><span class="p">.</span><span class="n">id</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">items</span><span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">userId</span> <span class="p">==</span> <span class="n">user</span><span class="p">.</span><span class="n">id</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 更好的方式：使用 derivedStateOf 进行反应式计算</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">reactiveItems</span> <span class="k">by</span> <span class="n">remember</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">derivedStateOf</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">items</span><span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">userId</span> <span class="p">==</span> <span class="n">user</span><span class="p">.</span><span class="n">id</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 当 items 发生变化时，reactiveItems 会自动更新</span>
+</span><span class='line'>    <span class="c1">// 并且仅在过滤结果发生变化时触发重组</span>
+</span><span class='line'>    <span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">itemsIndexed</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">items</span> <span class="p">=</span> <span class="n">reactiveItems</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">key</span> <span class="p">=</span> <span class="p">{</span> <span class="n">_</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span> <span class="n">item</span><span class="p">:</span> <span class="n">Item</span> <span class="p">-&gt;</span> <span class="n">item</span><span class="p">.</span><span class="n">id</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span> <span class="n">_</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span> <span class="n">item</span><span class="p">:</span> <span class="n">Item</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">ItemRow</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>译注：</strong> 对于状态的管理，可以复习一下之前专门讲解副作用(Side effects)的文章<a href="https://juejin.cn/post/7405158681078104127">降Compose十八掌之『龙战于野』| Side Effects</a>。</p>
+
+<h3>2. 合理地使用CompositionLocal</h3>
+
+<p><strong>译注：</strong> 关于CompositionLocal的使用可以看前面写过的文章<a href="https://juejin.cn/post/7434543407636267071">用Compose中的CompositionLocal来暗渡陈仓</a>，下面的示例是想要说明，应该在合理的地方访问CompositionLocal里面的数据，因数对CompositionLocal的访问地方会被触发重组（<a href="https://juejin.cn/post/7401358349877346338">之前的文章有讲过</a>重组的触发是状态使用的地方，而不是定义的地方），如果在所有的地方都 直接访问CompositionLocal，特别是嵌套较深的地方也都 直接访问，那都会触发重组，但大部分其实是不必要的。像下样示例展示的那样，在一定的级别中访问CompositionLocal，然后它的内部嵌套调用直接复用数值，可以避免过度重组。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 不好：每个子组件都访问 CompositionLocal</span>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">DeepNestedContent</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">theme</span> <span class="p">=</span> <span class="n">LocalTheme</span><span class="p">.</span><span class="n">current</span>  <span class="c1">// 直接访问</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">strings</span> <span class="p">=</span> <span class="n">LocalStrings</span><span class="p">.</span><span class="n">current</span>  <span class="c1">// 多个 CompositionLocal 访问</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">dimensions</span> <span class="p">=</span> <span class="n">LocalDimensions</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="n">strings</span><span class="p">.</span><span class="n">title</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">style</span> <span class="p">=</span> <span class="n">theme</span><span class="p">.</span><span class="n">textStyle</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">dimensions</span><span class="p">.</span><span class="n">padding</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="c1">// 具有重复 CompositionLocal 访问的更多嵌套内容</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 好：提升 CompositionLocal的值以最小化查找</span>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ParentContent</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 单独访问 CompositionLocal 值</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">theme</span> <span class="p">=</span> <span class="n">LocalTheme</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">strings</span> <span class="p">=</span> <span class="n">LocalStrings</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">dimensions</span> <span class="p">=</span> <span class="n">LocalDimensions</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">DeepNestedContent</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">theme</span> <span class="p">=</span> <span class="n">theme</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">strings</span> <span class="p">=</span> <span class="n">strings</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">dimensions</span> <span class="p">=</span> <span class="n">dimensions</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">DeepNestedContent</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">theme</span><span class="p">:</span> <span class="n">Theme</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">strings</span><span class="p">:</span> <span class="n">Strings</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">dimensions</span><span class="p">:</span> <span class="n">Dimensions</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// 使用传递的参数而不是查找 CompositionLocal 值</span>
+</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="n">strings</span><span class="p">.</span><span class="n">title</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">style</span> <span class="p">=</span> <span class="n">theme</span><span class="p">.</span><span class="n">textStyle</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">dimensions</span><span class="p">.</span><span class="n">padding</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="c1">// 使用传递的参数进行更多嵌套内容</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3. LazyList 优化技巧</h3>
+
+<p>高效的列表渲染对于流畅的滚动性能至关重要。以下是针对 LazyList 组件的关键优化：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="err">&lt;</span><span class="nf">T</span> <span class="p">:</span> <span class="n">Any</span><span class="p">&gt;</span> <span class="n">OptimizedList</span><span class="p">(</span><span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">itemsIndexed</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">items</span> <span class="p">=</span> <span class="n">items</span><span class="p">,</span>
+</span><span class='line'>            <span class="c1">// 稳定的key有助于Compose在更新过程中跟踪项目</span>
+</span><span class='line'>            <span class="n">key</span> <span class="p">=</span> <span class="p">{</span> <span class="n">_</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span> <span class="n">item</span><span class="p">:</span> <span class="n">T</span> <span class="p">-&gt;</span> <span class="n">item</span><span class="p">.</span><span class="n">hashCode</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span> <span class="n">_</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span> <span class="n">item</span><span class="p">:</span> <span class="n">T</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="c1">// 每个item的内容</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>LazyList 的关键优化点：</p>
+
+<ol>
+<li>提供稳定的键，帮助Compose在更新过程中跟踪项目</li>
+<li>尽可能使用固定大小以避免重新测量</li>
+<li>保持项目可组合项的轻量级</li>
+<li>避免在项目内容中进行不必要的分配</li>
+<li>记住要为每个项目缓存昂贵的计算</li>
+</ol>
+
+
+<h2>测量和监控性能</h2>
+
+<h3>Layout Inspector和Composition Traces</h3>
+
+<p>Android Studio 中的布局检查器是一款强大的Compose界面性能调试工具。它能够帮助你深入了解应用的视图层次结构、重组计数以及应用于每个可组合项的修饰符。</p>
+
+<p>要将布局检查器与Compose结合使用，请执行以下操作：</p>
+
+<ol>
+<li>在调试模式下运行你的应用</li>
+<li>在“正在运行的设备”窗口中，你将看到一个用于切换布局检查器的按钮</li>
+<li>检查Compose层次结构：
+
+<ul>
+<li>查看组件树</li>
+<li>检查重组计数</li>
+<li>分析修饰符链</li>
+<li>检查可组合项参数</li>
+</ul>
+</li>
+</ol>
+
+
+<p><img src="https://carrion.dev/images/kotlin/layout-inspector.png" alt="Layout Inspector" /></p>
+
+<p>布局检查器中需要监控的关键指标：</p>
+
+<ol>
+<li>重组计数 - 数值较高表示存在潜在的优化机会</li>
+<li>跳过计数 - 检查可组合项是否在应该跳过重组时跳过</li>
+<li>修饰符链复杂度 - 较长的修饰符链可能会影响测量/布局性能</li>
+</ol>
+
+
+<h3>性能测试</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Test</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">performanceTest</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">benchmarkRule</span><span class="p">.</span><span class="n">measureRepeated</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">packageName</span> <span class="p">=</span> <span class="s">&quot;com.example.app&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">metrics</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">FrameTimingMetric</span><span class="p">()),</span>
+</span><span class='line'>        <span class="n">iterations</span> <span class="p">=</span> <span class="m">5</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">composeTestRule</span><span class="p">.</span><span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">YourComposable</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>最佳实践总结</h2>
+
+<ol>
+<li>使用稳定类型(Stable types)和不可变数据结构(Immutable data structures)</li>
+<li>使用remember提升高开销计算</li>
+<li>在惰性列表(lazy list)中实现合适的键(key)</li>
+<li>最小化重组范围</li>
+<li>定期分析和测量性能</li>
+</ol>
+
+
+<p>遵循这些优化技巧将有助于确保你的Compose UI保持响应迅速且高效，从而为你的应用提供更好的用户体验。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Compose Multiplatform支持热重载(Hot Reload)了]]></title>
@@ -6636,310 +7041,6 @@ DiffUtils使用 LCS 的概念来最小化更改（插入和删除），并且还
 <li><a href="https://cloud.tencent.com/developer/article/1666741">JNI线程相关</a></li>
 <li><a href="https://developer.android.com/studio/projects/add-native-code">Add C and C++ code to your project</a></li>
 <li><a href="https://developer.android.com/training/articles/perf-jni">JNI tips</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[让Activity更加优雅地跳转]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/10/14/activity-result-launcher/"/>
-    <updated>2024-10-14T22:24:55+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/10/14/activity-result-launcher</id>
-    <content type="html"><![CDATA[<p>有过Android开发经验的小伙伴对<a href="https://developer.android.com/reference/android/app/Activity#startActivityForResult(android.content.Intent,%20int">startActivityForResult</a>)以及<a href="https://developer.android.com/reference/android/app/Activity#onActivityResult(int,%20int,%20android.content.Intent,%20android.app.ComponentCaller">onActivityResult</a>)一定不陌生，正是这一对API让组件 的复用变成可能。今天就来学习一下如何在函数式的范式中驾驭Activity的跳转。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2024/10/14/activity-result-launcher/"><img src="https://akexorcist.dev/content/images/size/w2000/2021/12/activity_result_api-header.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>缘起</h2>
-
-<p>系统组件复用，特别是Activity的复用，是Android系统中非常重要的一个设计理念。组件复用打破了应用程序之间的壁垒，在整个系统范围内可以共享和复用一些公共的组件，比如像打开网页，拍照片，查看图片等等，开发者不必再用原始API去实现一套，直接使用startActivityForResult和onActivityResult就可以取到需要的资源。</p>
-
-<p>这套API最大的问题在于它并不是常规的异步式的回调，调用了startActivityForResult后，结果的处理，必须要在Activity的继承体系内覆写onActivityResult，并且因为Activity实例只能由系统创建，这就导致了组件复用的逻辑必须都在Activity内部。这就导致了Activity的体积通常会相当的臃肿，上千行，甚至大几千行的Activity随处可见。理想的情况下Activity，作为一个系统的容器和接口，应该越薄越好，但要能把逻辑移出Activity才行。</p>
-
-<p>另一方面，onActivityResult无法在函数式的情境中使用，因为它会跑到函数外面去，比如在Jetpack Compose中就无法直接使用startActivityForResult和onActivityResult。</p>
-
-<p>为了解决这两个问题，就需要使用到Jetpack中的<a href="https://developer.android.com/reference/androidx/activity/result/package-summary">Activity Result API</a>了。</p>
-
-<h2>Activity Result API的使用方法</h2>
-
-<p>在Jetpack的AndroidX中的<a href="https://developer.android.com/jetpack/androidx/releases/activity">Activity</a>和<a href="https://developer.android.com/jetpack/androidx/releases/fragment">Fragment</a>中，可以像常规的回调那样向系统注册一个处理result的回调，一旦系统派发了activity result就能被系统回调到。</p>
-
-<p><strong>注意：</strong> 这里提到的方法都在AndroidX中的<a href="https://developer.android.com/reference/androidx/activity/ComponentActivity">ComponentActivity</a>和<a href="https://developer.android.com/reference/androidx/fragment/app/Fragment">Fragment</a>里面，也就是说要继承AndroidX中的组件才可以。</p>
-
-<h3>注册一个activity result回调</h3>
-
-<p>这套API的方式是在ComponentActivity和Fragment中，提供了一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultCaller#public-methods_1">registerForActivityResult</a>方法用于注册activity result的回调。参数是一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract">ActivityResultContract</a>实例和一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultCallback">ActivityResultCallback</a>实例。返回的是一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher">ActivityResultLauncher</a>，这个launcher可以用来启动目标Activity，也即触发获取资源的流程，相当于原来的startActivityForResult：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">getContent</span> <span class="p">=</span> <span class="n">registerForActivityResult</span><span class="p">(</span><span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span><span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">-&gt;</span>
-</span><span class='line'>    <span class="c1">// 处理结果</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>一个ActivityResultContract，如它的名字所示，定义着组件复用的的接口，即输入类型和输出类型。API中定义了<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts">大量的现成可用的，也是常见的接口</a>，比如拍照，权限请求等等。当然也可以创建<a href="https://developer.android.com/training/basics/intents/result#custom">自定义接口</a>。</p>
-
-<p>回调ActivityResultCallback是只有一个方法onActivityResult()的接口，此方法的参数由ActivityResultContract来定义。</p>
-
-<h3>启动目标Activity</h3>
-
-<p>当调用registerForActivityResult时，能拿到一个launcher，但此API仅是向系统注册一个回调，这时还没有启动目标（即还没有发起请求）。发起请求需要使用ActivityResultLauncher来完成。</p>
-
-<p>调用其<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher#launch(I">方法launch</a>)就会发起请求，启动目标Activity，开启获取结果的流程。如果给launch传递了参数，会依据ActivityResultContract做进一步的匹配（其实这些输入最终会转化为Intent对象提供给startActivityForResult）。用户在目标Activity页面完成了操作后，就会返回到当前页面，回调ActivityResultCallback的方法onActivityResult就会被执行：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">getContent</span> <span class="p">=</span> <span class="n">registerForActivityResult</span><span class="p">(</span><span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span><span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">-&gt;</span>
-</span><span class='line'>    <span class="c1">// 处理结果，即返回的Uri</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">val</span> <span class="py">selectButton</span> <span class="p">=</span> <span class="n">findViewById</span><span class="p">&lt;</span><span class="n">Button</span><span class="p">&gt;(</span><span class="n">R</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">select_button</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">selectButton</span><span class="p">.</span><span class="n">setOnClickListener</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// 接口是获取内空，这里传mime type作为参数，那么就是要获取一个图片内容</span>
-</span><span class='line'>        <span class="n">getContent</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="s">&quot;image/*&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果需要多个组件复用，那就传递不同的参数多次调用registerForActivityResult。并且registerForActivityResult可以在任何时候调用，在onCreate之前调用也是安全的，所以可以在声明ActivityResultLauncher的时候就直接调用，这样可以直接初始化。</p>
-
-<p>但是要特别注意，使用launcher来启动Activity则必须在onCreate之后。</p>
-
-<p>还有一点需要特别注意，因为launch之后，onActivityResult之前这段时间会离开当前的Activity，这个时间内Activity可能会被系统回收，也即触发了状态恢复。所以处理结果时，也即onActivityResult中的逻辑，如果有依赖其他状态，这些状态需要在onSaveInstanceState中进行保存。</p>
-
-<h3>处理结果</h3>
-
-<p>结果的处理就在ActivityResultCallback中的方法onActivityResult，这里使用返回的参数就可以了。</p>
-
-<h2>在Activity之外使用</h2>
-
-<p>如前面所述，使用这套Result API的最大的好处在于把结果的处理从Activity中解耦出来，因此，最为理想的方式是能在独立的class中做这些事情。</p>
-
-<p>这就需要使用<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultRegistry">ActivityResultRegistry</a>，它才是核心，另外三个类（launcher，contract和callback）都是一些封装，事实上Activity和Fragment里面的方法registerForActivityResult其实也是使用这个registry来实现的。从Activity中可以拿到registry的实例，以此作为参数，就可以在自定义的class中使用Result APIs了。</p>
-
-<p>比如单独封装获取图片的流程可以这样写：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyLifecycleObserver</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">registry</span> <span class="p">:</span> <span class="n">ActivityResultRegistry</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">:</span> <span class="n">DefaultLifecycleObserver</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">lateinit</span> <span class="k">var</span> <span class="py">getContent</span> <span class="p">:</span> <span class="n">ActivityResultLauncher</span><span class="p">&lt;</span><span class="n">String</span><span class="p">&gt;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">owner</span><span class="p">:</span> <span class="n">LifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">getContent</span> <span class="p">=</span> <span class="n">registry</span><span class="p">.</span><span class="n">register</span><span class="p">(</span><span class="s">&quot;key&quot;</span><span class="p">,</span> <span class="n">owner</span><span class="p">,</span> <span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="c1">// Handle the returned Uri</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">selectImage</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">getContent</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="s">&quot;image/*&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">class</span> <span class="nc">MyFragment</span> <span class="p">:</span> <span class="n">Fragment</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">lateinit</span> <span class="k">var</span> <span class="py">observer</span> <span class="p">:</span> <span class="n">MyLifecycleObserver</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// ...</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">observer</span> <span class="p">=</span> <span class="n">MyLifecycleObserver</span><span class="p">(</span><span class="n">requireActivity</span><span class="p">().</span><span class="n">activityResultRegistry</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">lifecycle</span><span class="p">.</span><span class="n">addObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onViewCreated</span><span class="p">(</span><span class="n">view</span><span class="p">:</span> <span class="n">View</span><span class="p">,</span> <span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">selectButton</span> <span class="p">=</span> <span class="n">view</span><span class="p">.</span><span class="n">findViewById</span><span class="p">&lt;</span><span class="n">Button</span><span class="p">&gt;(</span><span class="n">R</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">select_button</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">selectButton</span><span class="p">.</span><span class="n">setOnClickListener</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">// 触发获取图片的流程</span>
-</span><span class='line'>            <span class="n">observer</span><span class="p">.</span><span class="n">selectImage</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这个示例把获取图片的流程（发起和结果处理）都封装在了一个单独的类中，同时又是明是监听了Activity组件的生命周期。谷歌是强烈建议同时要<a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/LifecycleObserver">监听生命周期</a>（通过扩展LifecycleObserver），这是因为<a href="https://developer.android.com/reference/androidx/lifecycle/LifecycleOwner">LifecycleOwner</a>会在destroy时自动帮你反注册ActivityResultLauncher，不然的话就要手动的<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResultLauncher#unregister(">反注册</a>)。</p>
-
-<h2>自定义Contract</h2>
-
-<p>尽管谷歌已经在<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts">ActivityResultContracts</a>中已经预定义了大量的contracts可以使用，但仍然会有一些特殊的场景因预定义的contract无法满足需求而需要自定义一个contract。这个contract实际上就是约定了组件复用的接口，就像普通的interface一样，定义好输入与输出的类型就可以了，所以需要给contract提供输入输出的类型，如果不需要输入或者输出就使用Void?或者Unit。</p>
-
-<p>此外还需要实现一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract#createIntent(android.content.Context,kotlin.Any">createIntent方法</a>)，这个方法接收一个Context和其他输入（即contract约定的输入，最终是由ActivityResultLauncher中方法launch时提供）作为参数并返回一个Intent对象，此Intent会是startActivityForResult的输入参数。同时还需要实现另外一个<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContract#parseResult(kotlin.Int,android.content.Intent">方法parseIntent</a>)，此方法将<a href="https://developer.android.com/reference/android/app/Activity#onActivityResult(int,%20int,%20android.content.Intent,%20android.app.ComponentCaller">Activity的标准钩子onActivityResult</a>)中的参数resultCode和Intent转化为contract中约定的输出（此输出会作为回调ActivityResultCallback函数方法onActivityResult的输入参数）。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">PickRingtone</span> <span class="p">:</span> <span class="n">ActivityResultContract</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">,</span> <span class="n">Uri</span><span class="p">?&gt;()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">createIntent</span><span class="p">(</span><span class="n">context</span><span class="p">:</span> <span class="n">Context</span><span class="p">,</span> <span class="n">ringtoneType</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">=</span>
-</span><span class='line'>        <span class="n">Intent</span><span class="p">(</span><span class="n">RingtoneManager</span><span class="p">.</span><span class="n">ACTION_RINGTONE_PICKER</span><span class="p">).</span><span class="n">apply</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">putExtra</span><span class="p">(</span><span class="n">RingtoneManager</span><span class="p">.</span><span class="n">EXTRA_RINGTONE_TYPE</span><span class="p">,</span> <span class="n">ringtoneType</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">parseResult</span><span class="p">(</span><span class="n">resultCode</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span> <span class="n">result</span><span class="p">:</span> <span class="n">Intent</span><span class="p">?)</span> <span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">resultCode</span> <span class="p">!=</span> <span class="n">Activity</span><span class="p">.</span><span class="n">RESULT_OK</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">return</span> <span class="k">null</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">result</span><span class="o">?.</span><span class="n">getParcelableExtra</span><span class="p">(</span><span class="n">RingtoneManager</span><span class="p">.</span><span class="n">EXTRA_RINGTONE_PICKED_URI</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果现有的contracts不满足需求，且也无具体的输入输出要求，那么可以用一个万用contract，即<a href="https://developer.android.com/reference/androidx/activity/result/contract/ActivityResultContracts.StartActivityForResult">StartActivityForResult</a>。这个万用contract的输入是一个Intent，输出是一个<a href="https://developer.android.com/reference/androidx/activity/result/ActivityResult">ActivityResult</a>，在回调方法onActivityResult中可以直接从ActivityResult实例中取出resultCode和目标返回的Intent对象：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">startForResult</span> <span class="p">=</span> <span class="n">registerForActivityResult</span><span class="p">(</span><span class="n">StartActivityForResult</span><span class="p">())</span> <span class="p">{</span> <span class="n">result</span><span class="p">:</span> <span class="n">ActivityResult</span> <span class="p">-&gt;</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">resultCode</span> <span class="p">==</span> <span class="n">Activity</span><span class="p">.</span><span class="n">RESULT_OK</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">intent</span> <span class="p">=</span> <span class="n">result</span><span class="p">.</span><span class="n">data</span>
-</span><span class='line'>        <span class="c1">// 处理目标返回的Intent</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">val</span> <span class="py">startButton</span> <span class="p">=</span> <span class="n">findViewById</span><span class="p">(</span><span class="n">R</span><span class="p">.</span><span class="n">id</span><span class="p">.</span><span class="n">start_button</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">startButton</span><span class="p">.</span><span class="n">setOnClickListener</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// 传入想要启动的Intent对象</span>
-</span><span class='line'>        <span class="n">startForResult</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="n">Intent</span><span class="p">(</span><span class="k">this</span><span class="p">,</span> <span class="n">ResultProducingActivity</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">))</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>从这里我们可以看出，这套Result API本质上仍是依赖于原始的startActivityForResult和onActivityResult。</p>
-
-<h2>在Compose中使用Result API</h2>
-
-<p>接下来我们看看如何在Jetpack Compose使用这套API，这套API与Activity彻底解耦且支持函数式写法，所以可以在Compose中使用。这套API的核心是ActivityResultRegistry，有了它其他几个就可以使用起来了，而它的实例可以直接从Activity中取出来，所以这套API在Compose中完全可以用起来，与前面讲到的在Activity之外的逻辑完全一样：获取此对象用于register一个contract，同时得到一个launcher对象，在回调中处理结果，在合适的时机触发launch。</p>
-
-<p>幸运的是完全用不着自己折腾，Compose中已经做好了封装，直接使用<a href="https://developer.android.com/reference/kotlin/androidx/activity/compose/package-summary#rememberlauncherforactivityresult">rememberLauncherForActivityResult</a>即可：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">GetContentExample</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">imageUri</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">&lt;</span><span class="n">Uri</span><span class="p">?&gt;(</span><span class="k">null</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">launcher</span> <span class="p">=</span> <span class="n">rememberLauncherForActivityResult</span><span class="p">(</span><span class="n">ActivityResultContracts</span><span class="p">.</span><span class="n">GetContent</span><span class="p">())</span> <span class="p">{</span> <span class="n">uri</span><span class="p">:</span> <span class="n">Uri</span><span class="p">?</span> <span class="p">-&gt;</span>
-</span><span class='line'>        <span class="n">imageUri</span> <span class="p">=</span> <span class="n">uri</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">launcher</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="s">&quot;image/*&quot;</span><span class="p">)</span> <span class="p">})</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Load Image&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="n">Image</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">painter</span> <span class="p">=</span> <span class="n">rememberAsyncImagePainter</span><span class="p">(</span><span class="n">imageUri</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;My Image&quot;</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>今天我们学习了Jetpack中提供的新式处理activity result的方法，这不仅能让在函数式编程范式中复用组件变成可能，也可以把很多逻辑从Activity中抽离出来，能给Activity瘦身，让组件跳转变得更为优雅。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://blog.dogukangun.de/the-usage-of-activity-result-launcher-9c3d2241ec8">The Usage of Activity Result Launcher</a></li>
-<li><a href="https://developer.android.com/training/basics/intents/result">Get a result from an activity</a></li>
-<li><a href="https://stackoverflow.com/questions/64721218/jetpack-compose-launch-activityresultcontract-request-from-composable-function">Jetpack Compose: Launch ActivityResultContract request from Composable function</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/libraries">Compose and other libraries</a></li>
 </ul>
 
 ]]></content>
