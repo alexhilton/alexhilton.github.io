@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-04-23T22:53:52+08:00</updated>
+  <updated>2025-04-26T21:33:36+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,271 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[深入理解Jetpack Compose中的函数的执行顺序]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/04/26/understanding-execution-order-in-jetpack-compose/"/>
+    <updated>2025-04-26T21:21:31+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/04/26/understanding-execution-order-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Understanding Execution Order in Jetpack Compose: DisposableEffect, LaunchedEffect, and Composables」，原文链接<a href="https://proandroiddev.com/understanding-execution-order-in-jetpack-compose-disposableeffect-launchedeffect-and-composables-d2d0b75b7ec8">https://proandroiddev.com/understanding-execution-order-in-jetpack-compose-disposableeffect-launchedeffect-and-composables-d2d0b75b7ec8</a>，由Sahil Thakar发布于2025年4月13日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*44_HTD27S8k-mxkIc_A9zg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>大家好，今天我们又来聊聊Jetpack-Compose的小话题。无论对于新手还是经验丰富的开发者来说，这都是一个小话题，但却是很关键的。我们将讨论一下Jetpack Compose中副作用和可组合项（composables）的执行顺序，特别是 DisposableEffect、LaunchedEffect 和可组合函数的执行顺序以及其生命周期交互过程。</p>
+
+<p>我们将仔细探究 DisposableEffect 和 LaunchedEffect 在可组合项之间导航切换时是如何执行的，特别关注它们在返回之前访问过的页面时的行为。（许多经验丰富的开发者会告诉我我知道这一点，但我敢打赌，你们中的很多人并不知道）。</p>
+
+<p>那么，让我们开始吧。</p>
+
+<pre><code class="Kotlin">@Composable
+fun MyComposable(cartId: String) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // DisposableEffect observes the lifecycleOwner
+    DisposableEffect(lifecycleOwner) {
+        Log.e("Init", "DisposableEffect")
+
+        onDispose {
+            Log.e("Init", "DisposableEffect - onDispose")
+        }
+    }
+
+    // LaunchedEffect triggers when cartId changes
+    LaunchedEffect(key1 = cartId) {
+        Log.e("Init", "LaunchedEffect")
+    }
+
+    // Scaffold is the UI container
+    Column {
+        Log.e("Init", "Column")
+        // You can add your screen content here
+    }
+}
+
+Output:-
+
+E/Init: Column
+E/Init: DisposableEffect
+E/Init: LaunchedEffect
+</code></pre>
+
+<h2>执行顺序迷题：为什么Column先执行？</h2>
+
+<p>答案在于这些副作用 API（DisposableEffect、LaunchedEffect）相对于组合(Composition)的实际执行时间。</p>
+
+<h3>1. 组合阶段优先</h3>
+
+<ul>
+<li>Jetpack Compose 首先在组合期间构建UI树。</li>
+<li>此时，Column 是一个可组合函数。它会在组合阶段立即执行，以构建 UI。</li>
+<li>因此：Column() 首先运行 → 打出日志 “Column”。</li>
+</ul>
+
+
+<h3>2. 副作用在组合期间注册，但在组合完成后执行</h3>
+
+<ul>
+<li>DisposableEffect 和 LaunchedEffect 在组合期间注册其工作，
+但它们的实际执行发生在组合完成后。</li>
+<li>Compose 使用内部调度程序（通过 Recomposer）在提交帧后运行副作用。</li>
+</ul>
+
+
+<p>因此，实际时间线如下所示：</p>
+
+<pre><code class="Bash">组合（Composition） 开始
+   → Column() 运行 → 打印日志 "Column"
+   → 注册 DisposableEffect 代码块
+   → 注册 LaunchedEffect 代码块
+组合 结束
+→ 副作用函数开始执行
+   → DisposableEffect 执行 → 打印日志 "DisposableEffect"
+   → LaunchedEffect 启动协程 → 打印日志 "LaunchedEffect"
+</code></pre>
+
+<p>这里我们讨论了composables和副作用之间的执行顺序。
+那么在 LaunchedEffect和 DisposableEffect副作用函数之间，谁又将先执行呢？</p>
+
+<p>让我们来仔细看看。</p>
+
+<p><strong>副作用函数的执行顺序（组合完成后）：</strong></p>
+
+<ol>
+<li>DisposableEffect → 首先运行</li>
+<li>LaunchedEffect → 随后运行</li>
+</ol>
+
+
+<p>为啥子呢？</p>
+
+<p>此顺序由Compose运行时定义的：</p>
+
+<ul>
+<li>DisposableEffect 是同步的，用于在组合后立即处理设置/清理。</li>
+<li>LaunchedEffect 会启动一个协程，而协程的启动是异步的，计划在其他同步效果（例如 DisposableEffect）之后运行。</li>
+</ul>
+
+
+<p>内部机制：Jetpack Compose 维护了明确定义的效果应用顺序。</p>
+
+<ol>
+<li>DisposableEffect、SideEffect、SnapshotFlow 等副作用会在组合后立即触发（同步）。</li>
+<li>然后，基于协程的效果（例如 LaunchedEffect）会被调度到下一个运行（异步，通过 Recomposer）。</li>
+</ol>
+
+
+<p>现在，让我们看看在可组合项之间导航切换时 DisposableEffect 和 LaunchedEffect 是如何执行的，尤其关注它们在返回之前访问过的屏幕时的行为。</p>
+
+<p>输出结果会让你大吃一惊。</p>
+
+<pre><code class="Kotlin">@Composable
+fun MyApp() {
+    val navController = rememberNavController()
+
+    NavHost(navController = navController, startDestination = "screenA") {
+        composable("screenA") {
+            ScreenA(
+                cartId = "123",
+                onNavigateToB = { navController.navigate("screenB") }
+            )
+        }
+        composable("screenB") {
+            ScreenB(
+                cartId = "456",
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+    }
+}
+
+@Composable
+fun ScreenA(cartId: String, onNavigateToB: () -&gt; Unit) {
+    DisposableEffect(Unit) {
+        println("😇 ScreenA -&gt; DisposableEffect")
+        onDispose {
+            println("😇 ScreenA -&gt; DisposableEffect - onDispose")
+        }
+    }
+
+    LaunchedEffect(cartId) {
+        println("😇ScreenA -&gt; LaunchedEffect")
+    }
+
+    Column(modifier = Modifier.padding(top = 100.dp)) {
+        Button(onClick = onNavigateToB) {
+            Text(text = "Navigate To ScreenB")
+        }
+    }
+
+}
+
+@Composable
+fun ScreenB(cartId: String, onNavigateBack: () -&gt; Unit) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        println("😇 ScreenB -&gt; DisposableEffect")
+        onDispose {
+            println("😇 ScreenB -&gt; DisposableEffect - onDispose")
+        }
+    }
+
+    LaunchedEffect(cartId) {
+        println("😇 ScreenB -&gt; LaunchedEffect")
+    }
+
+    Column{
+        Column(modifier = Modifier) {
+            Button(onClick = onNavigateBack) {
+                Text("Back to Screen A")
+            }
+        }
+    }
+}
+
+Output:- 
+
+when ScreenA init
+😇 ScreenA -&gt; DisposableEffect
+😇 ScreenA -&gt; LaunchedEffect
+
+Navigate To ScreenA -&gt; ScreenB
+😇 ScreenB -&gt; DisposableEffect
+😇 ScreenB -&gt; LaunchedEffect
+😇 ScreenA -&gt; DisposableEffect - onDispose
+
+Navigate back to ScreenB -&gt; ScreenA
+😇 ScreenA -&gt; DisposableEffect
+😇 ScreenA -&gt; LaunchedEffect
+😇 ScreenB -&gt; DisposableEffect - onDispose
+</code></pre>
+
+<h2>它（Jetpack Compose导航）内部实际发生了什么？</h2>
+
+<p>Compose Navigation在 NavHost中围绕可组合项的行为遵循以下逻辑：</p>
+
+<ol>
+<li>首先进行新目的地（此处为 ScreenA）的组合。
+
+<ul>
+<li>导航切换时，Compose会立即为新屏幕创建UI。</li>
+<li>新页面（此处为 ScreenA）的 DisposableEffect 和 LaunchedEffect 会在新页面组合期间或之后立即执行。</li>
+</ul>
+</li>
+<li>在新目的地成功组合并提交到 UI 层次结构后，会处理上一个页面的可组合项（此处为 ScreenB）。
+
+<ul>
+<li>Compose 会保持上一个可组合项（此处为 ScreenB）短暂处于活动状态，直到新可组合项（此处为 ScreenA）稳定，以确保导航顺畅。</li>
+<li>只有在新的可组合项（此处为 ScreenA）完全组合后，Compose 才会清理并移除（dispose）上一个可组合项（此处为 ScreenB）。</li>
+</ul>
+</li>
+</ol>
+
+
+<p>因此，导航期间的实际生命周期流程是酱婶儿的：</p>
+
+<pre><code class="Bash">导航返回 (ScreenB → ScreenA)
+│
+├── 1️⃣ Compose 立即创建 ScreenA
+│      ├─ ScreenA DisposableEffect executes instantly.
+│      └─ ScreenA LaunchedEffect coroutine launched.
+│
+└── 2️⃣ 在ScreenA成功运行之后:
+       └─ ScreenB DisposableEffect onDispose runs.
+</code></pre>
+
+<h2>为啥Compose要酱紫 搞？</h2>
+
+<p>Compose Navigation 会谨慎处理页面的组合，以确保丝滑（seamless）的用户体验和稳定性：</p>
+
+<ul>
+<li>它不会在确保目标页面 (ScreenA) 已组合并准备就绪之前过早地处理上一个可组合项 (ScreenB)。</li>
+<li>这可以避免在导航切换过程中出现视觉故障或空白屏幕。</li>
+<li>只有在确保新页面安全到位后，Compose 才会触发处理上一个屏幕的操作。</li>
+</ul>
+
+
+<h2>Jetpack Compose NavHost内部机制（简化版本）：</h2>
+
+<p>在调用 popBackStack() 或 navigate() 时，Compose 的 NavHost 内部的工作方式如下：</p>
+
+<ul>
+<li>新的路由组合开始（可组合项创建）。</li>
+<li>成功组合并提交帧后，不再位于 NavHost 后栈中的旧可组合项节点将被标记为待处理。</li>
+<li>然后，Compose 会在下一帧中运行这些已移除可组合项的处置逻辑 (onDispose)。</li>
+</ul>
+
+
+<p>因此，即使你在视觉上立即导航回原点，销毁式的操作（如onDispose）也会略微延迟执行，以保证界面的整体稳定性。</p>
+
+<p>如果你有任何疑问，请留言，我会尽快回复你。💬✨
+我们很快会深入探讨Jetpack Compose，敬请期待！🚀
+在此之前，祝你coding愉快！🎉👨‍💻</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack Compose的性能优化建议]]></title>
@@ -1398,289 +1663,6 @@ Button(
 <p>可以在 GitHub 上查看我的repo：<a href="https://github.com/vitoksmile/ComposeHints">https://github.com/vitoksmile/ComposeHints</a>。</p>
 
 <p>感谢你的阅读，期待在 GitHub 上获得你的Star :)。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[实战：在Compose中绘制睡眠时间线]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose/"/>
-    <updated>2025-03-26T21:41:40+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/sleep-timeline-graph-in-compose-15c99f9a4af0">Draw sleep timeline graph in Compose</a>，原文由<a href="https://medium.com/@vitoksmile">Viktor Mykhailiv</a>发布于2025年1月31日。</p></blockquote>
-
-<p><strong>译者按：</strong> 我们在前面的<a href="https://juejin.cn/column/7367555191338467337">降Compose十八掌</a>系列中讲解过在Compose自定义绘制的方法，可以先温习一下<a href="https://juejin.cn/post/7381826917086920742">上一篇文章</a>。这篇文章是提升自定义绘制技巧的一个非常好的实战例子。</p>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OUAsgvNoNx9VpSk9Eyqgzg.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>当内置组件不能完全满足我们的应用需求时，自定义绘图非常有用。本文提供了创建自定义睡眠时间线图表的指南，类似于你在<a href="https://play.google.com/store/apps/details?id=com.fitbit.FitbitMobile">Fitbit 应用</a>中找到的图表。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*cA9uPgAG29Gu2AhajArq9w.jpeg" alt="Screenshots from Fitbit Android app" /></p>
-
-<h2>在 Compose 中如何绘图？</h2>
-
-<p>要开始在 Compose 中绘图，我们可以使用绘图Modifier或 Canvas可组合函数，这为我们提供了 DrawScope — 一种声明式、无状态的API，用于绘制形状和路径，而无需消费者维护底层状态。DrawScope实现还提供了尺寸信息，并且变幻是相对于本地平移完成的。</p>
-
-<blockquote><p><strong>注意：</strong> Jetpack Compose（仅限 Android）和 Compose Multiplatform（桌面、Android、iOS、Web）具有类似的绘图 API。下面的屏幕截图是在桌面（macOS）上制作的，但所有平台上的结果都是相同的（查看最后一张屏幕截图）。</p></blockquote>
-
-<pre><code class="Kotlin">Canvas(modifier = Modifier.fillMaxSize()) {
-    rotate(degrees = 45F) {
-        drawRect(
-            color = Color.Gray,
-            topLeft = Offset(x = size.width / 3F, y = size.height / 3F),
-            size = size / 3F
-        )
-    }
-}
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*_qkChFEn25kC_cfgiRXgKg.png" alt="Compose中的自定义绘制" /></p>
-
-<h2>啥是睡眠时间表？</h2>
-
-<p>我们可以在 Health Connect 中读取或写入睡眠数据。睡眠数据显示为会话，可分为以下睡眠阶段：</p>
-
-<ul>
-<li>清醒：用户在睡眠周期内清醒。</li>
-<li>浅睡眠：用户处于浅睡眠周期。</li>
-<li>深睡眠：用户处于深睡眠周期。</li>
-<li>REM：用户处于 REM 睡眠周期。</li>
-</ul>
-
-
-<p>这些值表示用户在一定时间范围内经历的睡眠类型。SleepSessionRecord 数据类型包含两部分：</p>
-
-<ol>
-<li>整个睡眠过程，涵盖整个睡眠时间。</li>
-<li>睡眠过程中的各个阶段，例如浅睡眠或深睡眠。</li>
-</ol>
-
-
-<pre><code class="Kotlin">val record = remember {
-    SleepSessionRecord(
-        startTime = Instant.parse("2025-01-28T21:10:10Z"),
-        endTime = Instant.parse("2025-01-29T07:32:13Z"),
-        startZoneOffset = UtcOffset(hours = 2),
-        endZoneOffset = UtcOffset(hours = 2),
-        stages = listOf(
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-28T21:10:10Z"),
-                endTime = Instant.parse("2025-01-28T23:15:13Z"),
-                type = SleepSessionStageType.Light,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-28T23:15:13Z"),
-                endTime = Instant.parse("2025-01-29T01:56:32Z"),
-                type = SleepSessionStageType.Deep,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-29T01:56:13Z"),
-                endTime = Instant.parse("2025-01-29T03:16:22Z"),
-                type = SleepSessionStageType.Light,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-29T03:16:22Z"),
-                endTime = Instant.parse("2025-01-29T04:32:13Z"),
-                type = SleepSessionStageType.REM,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-29T04:32:13Z"),
-                endTime = Instant.parse("2025-01-29T05:12:56Z"),
-                type = SleepSessionStageType.Deep,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-29T05:12:56Z"),
-                endTime = Instant.parse("2025-01-29T07:32:13Z"),
-                type = SleepSessionStageType.Light,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-28T22:11:56Z"),
-                endTime = Instant.parse("2025-01-28T22:17:13Z"),
-                type = SleepSessionStageType.Awake,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-28T22:39:56Z"),
-                endTime = Instant.parse("2025-01-28T22:51:13Z"),
-                type = SleepSessionStageType.Awake,
-            ),
-            SleepSessionRecord.Stage(
-                startTime = Instant.parse("2025-01-29T04:47:56Z"),
-                endTime = Instant.parse("2025-01-29T04:54:13Z"),
-                type = SleepSessionStageType.Awake,
-            ),
-        ),
-    )
-}
-</code></pre>
-
-<h2>需要一点数学计算</h2>
-
-<p>在睡眠期间，我们可以在不同时刻多次处于同一阶段。我们需要计算相对于睡眠的起点和终点。</p>
-
-<p>要在 Compose 中绘制矩形，我们需要 topOffset 和 size。</p>
-
-<p><img src="" alt="Math" /></p>
-
-<pre><code class="Kotlin">private fun calculate(
-    canvasSize: Size,
-    recordStartTime: Instant,
-    recordEndTime: Instant,
-    stages: List&lt;SleepSessionRecord.Stage&gt;,
-): List&lt;SleepStageDrawPoint&gt; {
-    val totalDuration = (recordEndTime - recordStartTime).inWholeSeconds.toFloat()
-        .coerceAtLeast(1f)
-
-    return stages.map { stage -&gt;
-        val stageOffset =
-            (stage.startTime - recordStartTime).inWholeSeconds / totalDuration
-        val stageDuration =
-            (stage.endTime - stage.startTime).inWholeSeconds.toFloat() / totalDuration
-
-        SleepStageDrawPoint(
-            topLeft = Offset(x = canvasSize.width * stageOffset, y = 0f),
-            size = canvasSize.copy(width = canvasSize.width * stageDuration),
-        )
-    }
-}
-</code></pre>
-
-<h2>绘制</h2>
-
-<p>让我们构建自定义 Canvas 来绘制睡眠过程的一个阶段，例如深度睡眠。</p>
-
-<pre><code class="Kotlin">@Composable
-fun SleepSessionCanvas(
-    modifier: Modifier,
-    record: SleepSessionRecord,
-) {
-    Spacer(
-        modifier = modifier.drawWithCache {
-            val points = calculate(
-                canvasSize = size,
-                recordStartTime = record.startTime,
-                recordEndTime = record.endTime,
-                stages = record.stages.filter { it.type == SleepSessionStageType.Deep },
-            )
-
-            onDrawWithContent {
-                // 画背景
-                drawRoundRect(
-                    color = Color.LightGray,
-                    topLeft = Offset(x = 0f, y = size.height / 4f),
-                    size = size.copy(height = size.height / 2f),
-                    cornerRadius = CornerRadius(size.height / 2f),
-                )
-
-                // 绘制阶段点
-                points.forEach { point -&gt;
-                    drawRect(
-                        topLeft = point.topLeft,
-                        size = point.size,
-                        color = Color(0xFF673AB7),
-                    )
-                }
-            }
-        }
-    )
-}
-</code></pre>
-
-<p>如果我们使用之前定义的睡眠会话运行项目，我们将看到 3 个矩形：1 个灰色矩形表示背景，2 个紫色矩形表示深度睡眠阶段。</p>
-
-<pre><code class="Kotlin">SleepSessionCanvas(
-    modifier = Modifier
-        .fillMaxWidth()
-        .height(320.dp)
-        .padding(16.dp),
-    record = record,
-)
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*ANITvvaUEuuwwcACzY21qA.png" alt="深度睡眠阶段" /></p>
-
-<p>为了绘制睡眠过程的所有阶段（清醒、快速眼动、浅睡眠和深睡眠），我们需要进行一些调整，将每个阶段类型垂直绘制为列组件，办法是逐行绘制并对下一行应用一些偏移量（offset）。</p>
-
-<pre><code class="Kotlin">@Composable
-fun SleepSessionCanvas(
-    modifier: Modifier,
-    record: SleepSessionRecord,
-    stageHeight: Dp = 48.dp,
-    stagesSpacing: Dp = 16.dp,
-) {
-    val colors = remember {
-        mapOf(
-            SleepSessionStageType.Awake to Color(0xFFFF9800),
-            SleepSessionStageType.Light to Color(0xFF2196F3),
-            SleepSessionStageType.Deep to Color(0xFF673AB7),
-            SleepSessionStageType.REM to Color(0xFF795548),
-        )
-    }
-
-    val stageHeightPx = with(LocalDensity.current) { stageHeight.toPx() }
-    val stagesSpacingPx = with(LocalDensity.current) { stagesSpacing.toPx() }
-
-    Spacer(
-        modifier = modifier
-            .requiredHeight(stageHeight * colors.size + stagesSpacing * (colors.size - 1))
-            .drawWithCache {
-                val stages = listOf(
-                    SleepSessionStageType.Awake,
-                    SleepSessionStageType.REM,
-                    SleepSessionStageType.Light,
-                    SleepSessionStageType.Deep,
-                ).map { type -&gt;
-                    type to calculate(
-                        canvasSize = size.copy(height = stageHeightPx),
-                        recordStartTime = record.startTime,
-                        recordEndTime = record.endTime,
-                        stages = record.stages.filter { it.type == type },
-                    )
-                }
-
-                onDrawWithContent {
-                    var offset = 0f
-                    stages.forEach { (type, points) -&gt;
-                        translate(top = offset) {
-                            // 画背景
-                            drawRoundRect(
-                                color = Color.LightGray,
-                                topLeft = Offset(x = 0f, y = stageHeightPx / 4),
-                                size = size.copy(height = stageHeightPx / 2),
-                                cornerRadius = CornerRadius(stageHeightPx / 2),
-                            )
-
-                            // 绘制阶段点
-                            points.forEach { point -&gt;
-                                drawRect(
-                                    topLeft = point.topLeft,
-                                    size = point.size,
-                                    color = colors.getValue(type),
-                                )
-                            }
-                        }
-                        offset += stageHeightPx + stagesSpacingPx
-                    }
-                }
-            }
-    )
-}
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*iXIS4tbsvx5AhTtRqlWi7A.png" alt="最终的图形" /></p>
-
-<h3>添加文本</h3>
-
-<p>要在 Compose 中绘制文本，我们通常可以使用 Text 可组合项。但是，在我们的示例中，我们处于 DrawScope 中，我们可以使用 DrawScope.drawText()方法。</p>
-
-<p>绘制文本与其他绘制命令略有不同。通常，我们为绘制命令提供绘制形状/图像的大小（宽度和高度）。对于文本，有几个参数可以控制渲染文本的大小，例如字体大小、字体、连字符和字母间距。我们需要使用 TextMeasurer 来获取文本的测量大小，具体取决于上述因素。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*QB1QvINWUWMlpRoPSzrcUQ.png" alt="Desktop效果" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*U_LBREiTciw2F3ghYiHqCw.jpeg" alt="Android和iOS效果" /></p>
-
-<p>请到我的Github repo中查找完整示例代码：<a href="https://github.com/vitoksmile/Sleep-timeline-graph">https://github.com/vitoksmile/Sleep-timeline-graph</a>。</p>
 ]]></content>
   </entry>
   

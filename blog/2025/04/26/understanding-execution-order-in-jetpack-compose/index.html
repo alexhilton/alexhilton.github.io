@@ -1,0 +1,729 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>深入理解Jetpack Compose中的函数的执行顺序 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="通过实例，深入浅出地讲解Jetpack Compose中的不同函数的执行顺序，包括副作用函数DisposableEffect、LaunchedEffect 和常规的Composables。">
+  <meta name="keywords" content="jetpack compose">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2025/04/26/understanding-execution-order-in-jetpack-compose">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">深入理解Jetpack Compose中的函数的执行顺序</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2025-04-26T21:21:31+08:00'><span class='date'><span class='date-month'>Apr</span> <span class='date-day'>26</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>9:21 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Understanding Execution Order in Jetpack Compose: DisposableEffect, LaunchedEffect, and Composables」，原文链接<a href="https://proandroiddev.com/understanding-execution-order-in-jetpack-compose-disposableeffect-launchedeffect-and-composables-d2d0b75b7ec8">https://proandroiddev.com/understanding-execution-order-in-jetpack-compose-disposableeffect-launchedeffect-and-composables-d2d0b75b7ec8</a>，由Sahil Thakar发布于2025年4月13日。</p></blockquote>
+
+<p><a href="/blog/2025/04/26/understanding-execution-order-in-jetpack-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*44_HTD27S8k-mxkIc_A9zg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>大家好，今天我们又来聊聊Jetpack-Compose的小话题。无论对于新手还是经验丰富的开发者来说，这都是一个小话题，但却是很关键的。我们将讨论一下Jetpack Compose中副作用和可组合项（composables）的执行顺序，特别是 DisposableEffect、LaunchedEffect 和可组合函数的执行顺序以及其生命周期交互过程。</p>
+
+<p>我们将仔细探究 DisposableEffect 和 LaunchedEffect 在可组合项之间导航切换时是如何执行的，特别关注它们在返回之前访问过的页面时的行为。（许多经验丰富的开发者会告诉我我知道这一点，但我敢打赌，你们中的很多人并不知道）。</p>
+
+<p>那么，让我们开始吧。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyComposable</span><span class="p">(</span><span class="n">cartId</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// DisposableEffect observes the lifecycleOwner</span>
+</span><span class='line'>    <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="s">&quot;Init&quot;</span><span class="p">,</span> <span class="s">&quot;DisposableEffect&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="s">&quot;Init&quot;</span><span class="p">,</span> <span class="s">&quot;DisposableEffect - onDispose&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// LaunchedEffect triggers when cartId changes</span>
+</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">key1</span> <span class="p">=</span> <span class="n">cartId</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="s">&quot;Init&quot;</span><span class="p">,</span> <span class="s">&quot;LaunchedEffect&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Scaffold is the UI container</span>
+</span><span class='line'>    <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="s">&quot;Init&quot;</span><span class="p">,</span> <span class="s">&quot;Column&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="c1">// You can add your screen content here</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Output</span><span class="p">:-</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">E</span><span class="p">/</span><span class="n">Init</span><span class="p">:</span> <span class="n">Column</span>
+</span><span class='line'><span class="n">E</span><span class="p">/</span><span class="n">Init</span><span class="p">:</span> <span class="n">DisposableEffect</span>
+</span><span class='line'><span class="n">E</span><span class="p">/</span><span class="n">Init</span><span class="p">:</span> <span class="n">LaunchedEffect</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>执行顺序迷题：为什么Column先执行？</h2>
+
+<p>答案在于这些副作用 API（DisposableEffect、LaunchedEffect）相对于组合(Composition)的实际执行时间。</p>
+
+<h3>1. 组合阶段优先</h3>
+
+<ul>
+<li>Jetpack Compose 首先在组合期间构建UI树。</li>
+<li>此时，Column 是一个可组合函数。它会在组合阶段立即执行，以构建 UI。</li>
+<li>因此：Column() 首先运行 → 打出日志 “Column”。</li>
+</ul>
+
+
+<h3>2. 副作用在组合期间注册，但在组合完成后执行</h3>
+
+<ul>
+<li>DisposableEffect 和 LaunchedEffect 在组合期间注册其工作，
+但它们的实际执行发生在组合完成后。</li>
+<li>Compose 使用内部调度程序（通过 Recomposer）在提交帧后运行副作用。</li>
+</ul>
+
+
+<p>因此，实际时间线如下所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'>组合（Composition） 开始
+</span><span class='line'>   → Column<span class="o">()</span> 运行 → 打印日志 <span class="s2">&quot;Column&quot;</span>
+</span><span class='line'>   → 注册 DisposableEffect 代码块
+</span><span class='line'>   → 注册 LaunchedEffect 代码块
+</span><span class='line'>组合 结束
+</span><span class='line'>→ 副作用函数开始执行
+</span><span class='line'>   → DisposableEffect 执行 → 打印日志 <span class="s2">&quot;DisposableEffect&quot;</span>
+</span><span class='line'>   → LaunchedEffect 启动协程 → 打印日志 <span class="s2">&quot;LaunchedEffect&quot;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里我们讨论了composables和副作用之间的执行顺序。
+那么在 LaunchedEffect和 DisposableEffect副作用函数之间，谁又将先执行呢？</p>
+
+<p>让我们来仔细看看。</p>
+
+<p><strong>副作用函数的执行顺序（组合完成后）：</strong></p>
+
+<ol>
+<li>DisposableEffect → 首先运行</li>
+<li>LaunchedEffect → 随后运行</li>
+</ol>
+
+
+<p>为啥子呢？</p>
+
+<p>此顺序由Compose运行时定义的：</p>
+
+<ul>
+<li>DisposableEffect 是同步的，用于在组合后立即处理设置/清理。</li>
+<li>LaunchedEffect 会启动一个协程，而协程的启动是异步的，计划在其他同步效果（例如 DisposableEffect）之后运行。</li>
+</ul>
+
+
+<p>内部机制：Jetpack Compose 维护了明确定义的效果应用顺序。</p>
+
+<ol>
+<li>DisposableEffect、SideEffect、SnapshotFlow 等副作用会在组合后立即触发（同步）。</li>
+<li>然后，基于协程的效果（例如 LaunchedEffect）会被调度到下一个运行（异步，通过 Recomposer）。</li>
+</ol>
+
+
+<p>现在，让我们看看在可组合项之间导航切换时 DisposableEffect 和 LaunchedEffect 是如何执行的，尤其关注它们在返回之前访问过的屏幕时的行为。</p>
+
+<p>输出结果会让你大吃一惊。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+<span class='line-number'>66</span>
+<span class='line-number'>67</span>
+<span class='line-number'>68</span>
+<span class='line-number'>69</span>
+<span class='line-number'>70</span>
+<span class='line-number'>71</span>
+<span class='line-number'>72</span>
+<span class='line-number'>73</span>
+<span class='line-number'>74</span>
+<span class='line-number'>75</span>
+<span class='line-number'>76</span>
+<span class='line-number'>77</span>
+<span class='line-number'>78</span>
+<span class='line-number'>79</span>
+<span class='line-number'>80</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyApp</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">navController</span> <span class="p">=</span> <span class="n">rememberNavController</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">NavHost</span><span class="p">(</span><span class="n">navController</span> <span class="p">=</span> <span class="n">navController</span><span class="p">,</span> <span class="n">startDestination</span> <span class="p">=</span> <span class="s">&quot;screenA&quot;</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">composable</span><span class="p">(</span><span class="s">&quot;screenA&quot;</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">ScreenA</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">cartId</span> <span class="p">=</span> <span class="s">&quot;123&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">onNavigateToB</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">navigate</span><span class="p">(</span><span class="s">&quot;screenB&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">composable</span><span class="p">(</span><span class="s">&quot;screenB&quot;</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">ScreenB</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">cartId</span> <span class="p">=</span> <span class="s">&quot;456&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">onNavigateBack</span> <span class="p">=</span> <span class="p">{</span> <span class="n">navController</span><span class="p">.</span><span class="n">popBackStack</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ScreenA</span><span class="p">(</span><span class="n">cartId</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">onNavigateToB</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;😇 ScreenA -&gt; DisposableEffect&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">println</span><span class="p">(</span><span class="s">&quot;😇 ScreenA -&gt; DisposableEffect - onDispose&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">cartId</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;😇ScreenA -&gt; LaunchedEffect&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="m">100.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="n">onNavigateToB</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Navigate To ScreenB&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ScreenB</span><span class="p">(</span><span class="n">cartId</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">onNavigateBack</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;😇 ScreenB -&gt; DisposableEffect&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">println</span><span class="p">(</span><span class="s">&quot;😇 ScreenB -&gt; DisposableEffect - onDispose&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">cartId</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;😇 ScreenB -&gt; LaunchedEffect&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Column</span><span class="p">{</span>
+</span><span class='line'>        <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="n">onNavigateBack</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Back to Screen A&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Output</span><span class="p">:-</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">when</span> <span class="n">ScreenA</span> <span class="n">init</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenA</span> <span class="p">-&gt;</span> <span class="n">DisposableEffect</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenA</span> <span class="p">-&gt;</span> <span class="n">LaunchedEffect</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Navigate</span> <span class="n">To</span> <span class="n">ScreenA</span> <span class="p">-&gt;</span> <span class="n">ScreenB</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenB</span> <span class="p">-&gt;</span> <span class="n">DisposableEffect</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenB</span> <span class="p">-&gt;</span> <span class="n">LaunchedEffect</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenA</span> <span class="p">-&gt;</span> <span class="n">DisposableEffect</span> <span class="p">-</span> <span class="n">onDispose</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Navigate</span> <span class="n">back</span> <span class="n">to</span> <span class="n">ScreenB</span> <span class="p">-&gt;</span> <span class="n">ScreenA</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenA</span> <span class="p">-&gt;</span> <span class="n">DisposableEffect</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenA</span> <span class="p">-&gt;</span> <span class="n">LaunchedEffect</span>
+</span><span class='line'><span class="err">😇</span> <span class="n">ScreenB</span> <span class="p">-&gt;</span> <span class="n">DisposableEffect</span> <span class="p">-</span> <span class="n">onDispose</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>它（Jetpack Compose导航）内部实际发生了什么？</h2>
+
+<p>Compose Navigation在 NavHost中围绕可组合项的行为遵循以下逻辑：</p>
+
+<ol>
+<li>首先进行新目的地（此处为 ScreenA）的组合。
+
+<ul>
+<li>导航切换时，Compose会立即为新屏幕创建UI。</li>
+<li>新页面（此处为 ScreenA）的 DisposableEffect 和 LaunchedEffect 会在新页面组合期间或之后立即执行。</li>
+</ul>
+</li>
+<li>在新目的地成功组合并提交到 UI 层次结构后，会处理上一个页面的可组合项（此处为 ScreenB）。
+
+<ul>
+<li>Compose 会保持上一个可组合项（此处为 ScreenB）短暂处于活动状态，直到新可组合项（此处为 ScreenA）稳定，以确保导航顺畅。</li>
+<li>只有在新的可组合项（此处为 ScreenA）完全组合后，Compose 才会清理并移除（dispose）上一个可组合项（此处为 ScreenB）。</li>
+</ul>
+</li>
+</ol>
+
+
+<p>因此，导航期间的实际生命周期流程是酱婶儿的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'>导航返回 <span class="o">(</span>ScreenB → ScreenA<span class="o">)</span>
+</span><span class='line'>│
+</span><span class='line'>├── 1️⃣ Compose 立即创建 ScreenA
+</span><span class='line'>│      ├─ ScreenA DisposableEffect executes instantly.
+</span><span class='line'>│      └─ ScreenA LaunchedEffect coroutine launched.
+</span><span class='line'>│
+</span><span class='line'>└── 2️⃣ 在ScreenA成功运行之后:
+</span><span class='line'>       └─ ScreenB DisposableEffect onDispose runs.
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>为啥Compose要酱紫 搞？</h2>
+
+<p>Compose Navigation 会谨慎处理页面的组合，以确保丝滑（seamless）的用户体验和稳定性：</p>
+
+<ul>
+<li>它不会在确保目标页面 (ScreenA) 已组合并准备就绪之前过早地处理上一个可组合项 (ScreenB)。</li>
+<li>这可以避免在导航切换过程中出现视觉故障或空白屏幕。</li>
+<li>只有在确保新页面安全到位后，Compose 才会触发处理上一个屏幕的操作。</li>
+</ul>
+
+
+<h2>Jetpack Compose NavHost内部机制（简化版本）：</h2>
+
+<p>在调用 popBackStack() 或 navigate() 时，Compose 的 NavHost 内部的工作方式如下：</p>
+
+<ul>
+<li>新的路由组合开始（可组合项创建）。</li>
+<li>成功组合并提交帧后，不再位于 NavHost 后栈中的旧可组合项节点将被标记为待处理。</li>
+<li>然后，Compose 会在下一帧中运行这些已移除可组合项的处置逻辑 (onDispose)。</li>
+</ul>
+
+
+<p>因此，即使你在视觉上立即导航回原点，销毁式的操作（如onDispose）也会略微延迟执行，以保证界面的整体稳定性。</p>
+
+<p>如果你有任何疑问，请留言，我会尽快回复你。💬✨
+我们很快会深入探讨Jetpack Compose，敬请期待！🚀
+在此之前，祝你coding愉快！🎉👨‍💻</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2025-04-26T21:21:31+08:00'><span class='date'><span class='date-month'>Apr</span> <span class='date-day'>26</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>9:21 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2025/04/22/performance-optimization-in-jetpack-compose/" title="Previous Post: Jetpack Compose的性能优化建议">&laquo; Jetpack Compose的性能优化建议</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2025/04/26/shortest-path-in-graph/" title="Next Post: Shortest-Path-in-Graph">Shortest-Path-in-Graph &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2025 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
