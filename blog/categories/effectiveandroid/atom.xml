@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-04-26T21:33:36+08:00</updated>
+  <updated>2025-05-01T11:40:35+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,224 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[理解Jetpack Compose中副作用函数的内部原理]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/05/01/understanding-side-effect-handlers/"/>
+    <updated>2025-05-01T11:05:24+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/05/01/understanding-side-effect-handlers</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Understanding the Internals of Side-Effect Handlers in Jetpack Compose」，原文链接<a href="https://proandroiddev.com/understanding-the-internals-of-side-effect-handlers-in-jetpack-compose-d55fbf914fde">https://proandroiddev.com/understanding-the-internals-of-side-effect-handlers-in-jetpack-compose-d55fbf914fde</a>，由Jaewoong Eum发布于2025年4月10日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*GNgL_XzYpw16hn6BxocOww.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>近年来，Jetpack Compose生态呈指数级增长，现已被广泛用于构建 Android 应用的产品级UI。现在，我们可以说 Jetpack Compose 代表了 Android UI 开发的未来。</p>
+
+<p>Compose 最大的优势之一是其声明式（declarative）方法——它允许开发者描述 UI 应该显示的内容，而框架则负责处理 UI 在底层状态发生变化时应如何更新。这种模型将焦点从命令式（imperative）UI 转移到更直观、更具响应式的思维方式。</p>
+
+<p>然而，尽管声明式 UI有很多优势，但妥善管理副作用也至关重要。可组合函数可能会因各种原因（例如状态或参数的变化）而被重组，如果副作用处理不当，应用的行为可能会变得不可预测。</p>
+
+<p>在本文中，你将探索 Jetpack Compose 默认提供的副作用处理 API。你还将研究它们的内部工作流程，以更好地了解 Compose 如何在底层管理这些操作。</p>
+
+<h2>副作用（Side Effect）是啥？</h2>
+
+<p>副作用（Side Effect）是指发生在可组合函数作用域之外的应用状态变化。在 Jetpack Compose 中，由于状态变化、参数更新或其他事件触发的重组，可组合函数可能会频繁且不可预测地重新执行（译注：也就是说Compose的重组是不受开发者控制的）。因此，你不能假设一个可组合函数只会被调用一次。</p>
+
+<p>换句话说，在可组合函数内部直接调用业务逻辑（例如从网络获取数据或查询数据库）是有风险的。由于潜在的重组，这些操作可能会无意中运行多次，从而导致错误或性能问题。</p>
+
+<p>为了解决这个问题，Jetpack Compose 提供了一组专门用于以安全可控的方式管理副作用的API。这些 API包括 LaunchedEffect 、 DisposableEffect 、 SideEffect 、 rememberCoroutineScope 等等。在本文中，你将重点介绍三个最常用的处理程序—— LaunchedEffect 、 DisposableEffect 和 SideEffect ——并仔细研究它们的内部实现，以便更好地理解它们的底层工作原理。</p>
+
+<h2>LaunchedEffect</h2>
+
+<p>LaunchedEffect是Jetpack Compose中最常用的副作用处理 API之一。它允许你以可组合生命周期感知的方式（而非 Android 生命周期）启动协程，并确保除非指定的关键参数（keys）之一发生变化，否则不会重新执行提供的代码块。这种行为使得 LaunchedEffect 特别适合执行与特定状态相关的一次性事件，例如显示 Toast或Snackbar、记录事件或触发业务逻辑，正如你在 Now in Android 项目中的示例代码中所见：</p>
+
+<pre><code class="Kotlin">val snackbarHostState = remember { SnackbarHostState() }
+val isOffline by appState.isOffline.collectAsStateWithLifecycle()
+
+// 如果用户未连接到互联网，则显示一个Snackbar来通知他们。
+val notConnectedMessage = stringResource(R.string.not_connected)
+LaunchedEffect(isOffline) {
+    if (isOffline) {
+        snackbarHostState.showSnackbar(
+            message = notConnectedMessage,
+            duration = Indefinite,
+        )
+    }
+  }
+</code></pre>
+
+<p>需要注意的是，LaunchedEffect 会在底层创建一个新的协程作用域。这意味着它主要用于在可组合函数作用域内执行基于协程的任务，并在可组合函数离开组合时自动取消其协程。因此，LaunchedEffect 最适合用于与协程相关的操作，例如数据获取、延迟效果或事件处理，而不是简单地执行非暂停函数。现在，让我们深入探究一下，以更好地理解 LaunchedEffect 的内部工作原理。</p>
+
+<pre><code class="Kotlin">@Composable
+fun LaunchedEffect(
+    key1: Any?,
+    block: suspend CoroutineScope.() -&gt; Unit
+) {
+    val applyContext = currentComposer.applyCoroutineContext
+    remember(key1) { LaunchedEffectImpl(applyContext, block) }
+}
+
+internal class LaunchedEffectImpl(
+    parentCoroutineContext: CoroutineContext,
+    private val task: suspend CoroutineScope.() -&gt; Unit
+) : RememberObserver {
+    private val scope = CoroutineScope(parentCoroutineContext)
+    private var job: Job? = null
+
+    override fun onRemembered() {
+        // 这不应该发生，但为了安全起见留在这里
+        job?.cancel("Old job was still running!")
+        job = scope.launch(block = task)
+    }
+
+    override fun onForgotten() {
+        job?.cancel(LeftCompositionCancellationException())
+        job = null
+    }
+
+    override fun onAbandoned() {
+        job?.cancel(LeftCompositionCancellationException())
+        job = null
+    }
+}
+</code></pre>
+
+<p>正如你在LaunchedEffect的内部实现中所看到的，它会创建LaunchedEffectImpl并将其存储在内存中，并将给定的键值作为参数，以便在键发生变化时重新创建 LaunchedEffectImpl 实例。</p>
+
+<p>如果你查看内部 LaunchedEffectImpl 类，你会发现它实现了RememberObserver接口，并首先创建一个新的 CoroutineScope。然后，当可组合项进入组合阶段时，提供的 lambda 会在此范围内启动。当可组合项离开组合阶段时，协程范围会自动取消，从而确保资源得到正确清理，并避免潜在的内存泄漏或性能问题。</p>
+
+<p>话虽如此，如果你的任务不涉及任何与协程相关的操作，而只是需要在键发生变化时重新执行，那么使用 LaunchedEffect 可能略显多余。虽然创建协程作用域的开销通常很小，但在实际不使用协程的情况下，它仍然是不必要的。在这种情况下，你可以考虑使用更轻量级的副作用处理library (<a href="https://github.com/skydoves/compose-effects?tab=readme-ov-file#rememberedeffect">RememberedEffect</a>)，它更适合非挂起（non-suspending）任务。</p>
+
+<p>另一个常见的误解是LaunchedEffect能够感知 Android生命周期——但事实并非如此。从内部实现可以看出，LaunchedEffect的作用域完全限定于Jetpack Compose组合生命周期，与 Android组件（Activity和Fragment）的生命周期没有直接关联。</p>
+
+<p>换句话说，它本身并不了解任何有关 Activity、Fragment 或 onStop()或 onDestroy()等生命周期事件的信息。这意味着，如果你在 LaunchedEffect 中启动一个协程，并且 Android 组件（例如 Activity）在可组合项未离开组合的情况下被停止或销毁，则该协程可能会继续运行，除非它明确与Android组件生命周期绑定。</p>
+
+<h2>DisposableEffect</h2>
+
+<p>DisposableEffect是Jetpack Compose 运行时提供的另一个副作用处理API。它允许你与可组合项的生命周期同步执行设置和清理逻辑。与LaunchedEffect不同，它提供了一个 DisposableEffectScope 作为接收器（receiver），使你能够定义一个清理代码块（clean-up code block），该代码块在可组合项离开组合时自动运行。这使得它非常适合管理需要显式卸载的外部资源，例如监听器、回调或广播接收器。</p>
+
+<pre><code class="Kotlin">val lifecycleOwner = LocalLifecycleOwner.current
+
+// 如果 `lifecycleOwner` 发生变化，则释放并重置效果
+DisposableEffect(lifecycleOwner) {
+  // 创建一个观察者，触发我们记住的回调以发送分析事件
+  val observer = LifecycleEventObserver { _, event -&gt;
+    if (event == Lifecycle.Event.ON_RESUME) {
+      // do something
+    } else if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
+      // do something
+    }
+  }
+
+  // Add the observer to the lifecycle
+  lifecycleOwner.lifecycle.addObserver(observer)
+
+  // 当效果离开 Composition 时，移除观察者
+  onDispose {
+    lifecycleOwner.lifecycle.removeObserver(observer)
+  }
+</code></pre>
+
+<p>上面的示例使用 DisposableEffect 将 LifecycleEventObserver注册到lifecycleOwner，使其能够观察生命周期变化并根据当前状态执行特定逻辑。观察者会在onDispose块内被安全地移除，确保在可组合项离开组合时进行适当的清理。现在，让我们深入了解DisposableEffect的内部工作原理。</p>
+
+<pre><code class="Kotlin">@Composable
+fun DisposableEffect(
+    key1: Any?,
+    effect: DisposableEffectScope.() -&gt; DisposableEffectResult
+) {
+    remember(key1) { DisposableEffectImpl(effect) }
+}
+
+private class DisposableEffectImpl(
+    private val effect: DisposableEffectScope.() -&gt; DisposableEffectResult
+) : RememberObserver {
+    private var onDispose: DisposableEffectResult? = null
+
+    override fun onRemembered() {
+        onDispose = InternalDisposableEffectScope.effect()
+    }
+
+    override fun onForgotten() {
+        onDispose?.dispose()
+        onDispose = null
+    }
+
+    override fun onAbandoned() {
+        // 由于未调用 [onRemembered]，因此无需执行任何操作。
+    }
+}
+
+class DisposableEffectScope {
+    inline fun onDispose(
+        crossinline onDisposeEffect: () -&gt; Unit
+    ): DisposableEffectResult = object : DisposableEffectResult {
+        override fun dispose() {
+            onDisposeEffect()
+        }
+    }
+}
+</code></pre>
+
+<p>如 DisposableEffect 的内部实现所示，它会创建一个 DisposableEffectImpl 实例，并使用提供的键将其存储在内存中。
+每当键发生变化时，都会创建一个新的DisposableEffectImpl 实例，以便相应地重新执行该效果。</p>
+
+<p>DisposableEffectImpl类实现了 RememberObserver 接口，并初始创建一个 DisposableEffectResult。当可组合项进入组合阶段时，效果 lambda 会在 DisposableEffectScope 中启动。退出组合时，会自动调用 DisposableEffectResult的onDispose 函数，以确保在可组合项完全从组合中移除之前正确清理资源并防止内存泄漏或性能问题。</p>
+
+<h2>SideEffect</h2>
+
+<p>Jetpack Compose中的SideEffect API 用于安全地将可组合项内发生的状态变化通知给外部非 Compose 管理的对象。它确保效果在重组成功后运行，使其成为触发依赖于界面最终稳定状态的副作用的理想选择。</p>
+
+<p>使用 SideEffect可以避免在重组阶段执行的操作可能会被丢弃的风险，如果你在未采取此保护措施的情况下直接在可组合项中编写效果，则可能会发生这种情况。因此，当你需要将 Compose 状态与外部系统（例如日志记录工具、分析工具或命令式界面组件）同步时，SideEffect 至关重要，如下例所示：</p>
+
+<pre><code class="Kotlin">@Composable
+fun rememberFirebaseAnalytics(user: User): FirebaseAnalytics {
+    val analytics: FirebaseAnalytics = remember {
+        FirebaseAnalytics()
+    }
+
+    // 每次成功组合后，使用当前用户的用户类型更新 FirebaseAnalytics，
+    // 确保将来的分析事件已附加此元数据
+    SideEffect {
+        analytics.setUserProperty("userType", user.userType)
+    }
+    return analytics
+}
+</code></pre>
+
+<p>现在，让我们探索一下 SideEffect API 的底层工作原理。</p>
+
+<pre><code class="Kotlin">@Composable
+fun SideEffect(
+    effect: () -&gt; Unit
+) {
+    currentComposer.recordSideEffect(effect)
+}
+
+/** 当我们应用组合变化时安排运行副作用。 */
+override fun recordSideEffect(effect: () -&gt; Unit) {
+    changeListWriter.sideEffect(effect)
+}
+</code></pre>
+
+<p>乍一看，上面的代码可能看似简单，但实际上却难以完全理解，这很正常。这是因为 SideEffect API与 Compose运行时底层内部机制紧密相关，尤其是 ChangeList，它用于跟踪和管理用于更新渲染UI的状态驱动变更列表。</p>
+
+<p>根据 Compose源代码中的内部注释，SideEffect API的表示如下：</p>
+
+<blockquote><p>安排效果在当前合成成功完成并应用更改时运行。SideEffect 可用于将副作用应用于合成管理的、未受快照支持的对象，以便在当前合成操作失败时避免这些对象处于不一致的状态。</p>
+
+<p>副作用将始终在合成的应用调度程序上运行，并且应用器永远不会与自身、彼此并发运行，也不会将更改应用于合成树或运行 RememberObserver 事件回调。SideEffect 始终在 RememberObserver 事件回调之后运行。</p></blockquote>
+
+<p>因此，SideEffect API 会在每次成功重组后运行。</p>
+
+<h2>结论</h2>
+
+<p>在本文中，你探索了 Jetpack Compose 中常用的三个主要副作用处理API。由于声明式UI（declarative UI）的特性，状态会影响运行时行为的诸多方面，因此正确地使用副作用函数对于确保任务执行的正确性和可预测性至关重要。</p>
+
+<p>本主题最初在<a href="https://github.com/doveletter/">Dove Letter</a>（译注：链接是<a href="https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3">https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3</a> Android 和 Kotlin 的每日见解，涵盖 Compose、架构、行业面试问题和实用代码技巧等主题。自上线以来的短短 37 周内，Dove Letter 已拥有超过 700 名个人订阅者和 20 名企业/终身订阅者。如果你渴望深入了解 Android、Kotlin 和 Compose，请务必查看<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903">“通过 Dove Letter 学习 Kotlin 和 Android”</a>（译注：链接是<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82">https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82</a></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[深入理解Jetpack Compose中的函数的执行顺序]]></title>
@@ -886,783 +1104,6 @@ SearchBar(
 <p><img src="https://joebirch.co/wp-content/uploads/2025/03/recs.png" alt="Recommendations" /></p>
 
 <p>有了上述内容，我们就可以实现一个浮动搜索栏，向用户显示搜索建议。使用 Material3 SearchBar 可组合项，实现在这两种不同状态之间转换的可组合项非常容易。也许你已经在应用中使用了 SearchBar，或者一直在寻找类似的功能，但无论如何，我期待看到更多应用通过 Jetpack Compose 中更广泛的组件支持来节省时间！</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[实战：在Compose中优雅地实现提示]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/03/28/hints-in-compose/"/>
-    <updated>2025-03-28T22:05:00+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/03/28/hints-in-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/hints-in-compose-10b6470acc58">Hints in Compose</a>，原文由<a href="https://medium.com/@vitoksmile">Viktor Mykhailiv</a>发布于2025年2月13日，文章内容巨详细，TL;DR;。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*0jBirMqQV-aXKXw5gekEkQ.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>有时我们的应用需要突出显示某些 UI 组件，例如在首次登录（首次使用）时，或者当我们添加新内容（“新功能”）时。</p>
-
-<p>在本文中，我将指导如何构建自定义解决方案来显示提示/工具提示，指向 Compose（Compose Multiplatform 和 Jetpack Compose）中的特定 UI 元素。</p>
-
-<h2>布局层次</h2>
-
-<p>要突出显示 UI 元素，首先我们应该了解“提示”(Hints)的主要概念。
-假设我们有一个带有 TopBar、BottomNavigation 和主要操作按钮的应用程序。我们想要突出显示 TopBar 的操作、主要按钮和 BottomNavigation 中的一个项目。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*7K0zoXqZM0ajYYZARn6I5w.png" alt="Layout hierarchy" /></p>
-
-<p>对于我们的“提示”，我们需要绘制一个暗淡的背景（也是为了拦截触摸事件），计算突出显示的 UI 元素的位置，剪掉（屏蔽）我们的元素形状以免变暗，最后绘制一个提示（例如带有背景的文本）。</p>
-
-<h2>1. 暗淡的背景</h2>
-
-<p>要在所有内容之上绘制一个暗淡的背景作为覆盖或弹出窗口，我们可以：</p>
-
-<h3>a. 使用自定义可组合项包装我们应用（根组件）的所有内容（例如带有 Modifier.background 的 Box）</h3>
-
-<pre><code class="Kotlin">@Composable
-fun AppContent() {
-   HintOverlay {
-      MaterialTheme {
-         Scaffold {
-            // 我的应用内容
-         }
-      }
-   }
-}
-</code></pre>
-
-<h3>b. 使用对话框</h3>
-
-<p>通过使用对话框，我们可以在所有内容之上显示一个覆盖层（例如，在 Android 上，对话框显示在自己的窗口中）。
-使用对话框时，Compose Multiplatform 中的 scrimColor 会出现问题。我们无法从 Compose 通用目标配置 scrimColor ，但每个目标（Android 除外）都为 scrimColor 提供了一个实际值。作为一种可能的解决方案，我们可以创建一个例外类来提供对话框属性并为每个目标提供实际实现。</p>
-
-<h3>c. 使用 Popup</h3>
-
-<p>Popup 在这里看起来更好，因为它默认不绘制 scrimColor，并且覆盖层显示在所有内容之上。</p>
-
-<p>我会采用第三种方法，不强制手动使用 HintOverlay。</p>
-
-<p>我还想为覆盖层背景添加 Brush 支持，而不仅仅是 Color 。</p>
-
-<pre><code class="Kotlin">val LocalHintOverlayColor = staticCompositionLocalOf&lt;Color&gt; { Color(0x44000000) }
-
-val LocalHintOverlayBrush = staticCompositionLocalOf&lt;Brush?&gt; { null }
-
-@Composable
-fun HintOverlay() {
-    Popup {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .overlayBackground()
-        ) {
-            Text(
-                modifier = Modifier.align(Alignment.Center),
-                text = "Draw hints here",
-                color = Color.White,
-            )
-        }
-    }
-}
-
-/**
- * 从 [LocalHintOverlayBrush] 或 [LocalHintOverlayColor] 设置 `background`。
- */
-private fun Modifier.overlayBackground(): Modifier = composed {
-    LocalHintOverlayBrush.current?.let { background(it) }
-        ?: background(LocalHintOverlayColor.current)
-}
-</code></pre>
-
-<p>我可以使用CompositionLocalProvider 设置 Brush 来覆盖覆盖的背景。</p>
-
-<pre><code class="Kotlin">CompositionLocalProvider(
-    LocalHintOverlayBrush provides Brush.linearGradient(
-        listOf(
-            Color.Red.copy(alpha = 0.5f),
-            Color.Blue.copy(alpha = 0.5f),
-        )
-    ),
-) {
-    HintOverlay()
-}
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*KrHuSNZT0zE-Eddz1GBA2A.png" alt="Dimmed background" /></p>
-
-<h2>2. 计算锚点坐标</h2>
-
-<p>要获取 Compose 中 UI 元素的坐标，我们可以使用OnGloballyPositionedModifier ，当内容的全局位置可能发生变化时，会使用布局的最终​​ LayoutCoordinates 调用该方法。</p>
-
-<p>使用示例：</p>
-
-<pre><code class="Kotlin">Column(
-    Modifier.onGloballyPositioned { coordinates -&gt;
-        // 这将是Column的大小。
-        coordinates.size
-        // Column相对于应用程序窗口的位置。
-        coordinates.positionInWindow()
-        // Column相对于 Compose 根的位置。
-        coordinates.positionInRoot()
-        // 这些将是提供给布局的对齐线（此处的Column为空）。
-        coordinates.providedAlignmentLines
-        // 这将是与 Column 的父级相对应的 LayoutCoordinates 实例。
-        coordinates.parentLayoutCoordinates
-    }
-) {
-    Box(Modifier.size(20.dp).background(Color.Green))
-    Box(Modifier.size(20.dp).background(Color.Blue))
-}
-</code></pre>
-
-<p>对于我们的提示，我们需要创建一个状态来保存锚点的坐标和大小，并引入一个修改器来更新状态：</p>
-
-<pre><code class="Kotlin">@Stable
-class HintAnchorState internal constructor() {
-
-    internal var size: IntSize by mutableStateOf(IntSize.Zero)
-
-    internal var offset: Offset by mutableStateOf(Offset.Zero)
-}
-
-@Composable
-fun rememberHintAnchorState(): HintAnchorState {
-    return remember { HintAnchorState() }
-}
-
-fun Modifier.hintAnchor(state: HintAnchorState): Modifier {
-    return onGloballyPositioned {
-        state.size = it.size
-        state.offset = it.positionInWindow()
-    }
-}
-</code></pre>
-
-<p>因此，我们只需订阅所需 UI 元素的大小和坐标变化即可更新锚点的状态。
-现在我们需要将此 hintAnchor 修饰符应用于我们的内容：</p>
-
-<pre><code class="Kotlin">val topAppBarActionHintAnchor = rememberHintAnchorState()
-val actionHintAnchor = rememberHintAnchorState()
-val bottomNavigationHintAnchor = rememberHintAnchorState()
-
-IconButton(
-    modifier = Modifier
-        .hintAnchor(topAppBarActionHintAnchor),
-    onClick = {},
-)
-
-Button(
-    modifier = Modifier
-        .hintAnchor(actionHintAnchor)
-        .padding(4.dp),
-    onClick = {},
-) {
-    Text("Action")
-}
-
-BottomNavigationItem(
-    modifier = Modifier
-        .hintAnchor(topAppBarActionHintAnchor),
-    //... 传入其他需要的参数
-)
-</code></pre>
-
-<blockquote><p><strong>注意：</strong> 修饰符顺序在 Compose 中始终很重要，我们在 hintAnchor 后设置 4.dp，以便在此按钮周围留出额外空间（锚点的尺寸将比实际按钮的尺寸大 4.dp）。</p></blockquote>
-
-<p>HintOverlay 可组合项需要进行一些更改才能使用 HintAnchorState为此锚点绘制提示。</p>
-
-<pre><code class="Kotlin">@Composable
-fun HintOverlay(
-    anchors: () -&gt; List&lt;HintAnchorState&gt;,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .overlayBackground(anchors)
-    )
-}
-
-/**
- * 从 [LocalHintOverlayBrush] 或 [LocalHintOverlayColor] 设置“background”。
- */
-private fun Modifier.overlayBackground(
-    anchors: () -&gt; List&lt;HintAnchorState&gt;,
-): Modifier = composed {
-    val backgroundBrush = LocalHintOverlayBrush.current
-    val backgroundColor = LocalHintOverlayColor.current
-
-    drawWithCache {
-        onDrawWithContent {
-            if (backgroundBrush != null) {
-                drawRect(backgroundBrush)
-            } else {
-                drawRect(backgroundColor)
-            }
-
-            anchors().forEach { anchor -&gt;
-                drawRect(
-                    color = Color.Red,
-                    topLeft = anchor.offset,
-                    size = anchor.size.toSize(),
-                    style = Stroke(width = 5f),
-                )
-            }
-
-            drawContent()
-        }
-    }
-}
-</code></pre>
-
-<p>现在我们只需在锚点周围画一个红色矩形：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*EqvV4AHsimwvwZxajIgtXg.png" alt="Anchors" /></p>
-
-<p>但如果我们在移动设备上运行，我们会在 Android 上得到错误的数字：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*2wennrPOIcKArOK4MuayAQ.png" alt="With Window Insets" /></p>
-
-<p>该问题与 WindowInsets 有关。让我们减去这些 insets 来修复它：</p>
-
-<pre><code class="Kotlin">fun Modifier.hintAnchor(state: HintAnchorState): Modifier = composed {
-    val statusBarInsets = WindowInsets.statusBars.getTop(LocalDensity.current).toFloat()
-
-    onGloballyPositioned {
-        state.size = it.size
-        state.offset = it.positionInWindow()
-            // 修复 Android 上的 WindowInsets
-            .minus(Offset(x = 0f, y = statusBarInsets))
-    }
-}
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*LlrCLPAEgpk7q--X7i3UsA.png" alt="Fixed window insets" /></p>
-
-<h2>3. 剪辑出锚点的形状</h2>
-
-<p>要剪辑形状，我们将使用 Path 和 PathOperation 。修改 hintAnchor Modifier 以接受 Shape ，它将用于在锚点周围设置所需的形状。</p>
-
-<pre><code class="Kotlin">fun Modifier.hintAnchor(
-    state: HintAnchorState,
-    shape: Shape = RectangleShape,
-): Modifier {
-    state.shape = shape
-    //..onGloballyPositioned
-}
-
-@Stable
-class HintAnchorState internal constructor() {
-
-    //...其他的状态放这里
-
-    internal var shape: Shape by mutableStateOf(RectangleShape)
-}
-</code></pre>
-
-<p>根据提供的形状，我们可以创建一个轮廓，用于将锚点的形状从背景中剪掉：</p>
-
-<pre><code class="Kotlin">internal fun Modifier.overlayBackground(
-    anchors: () -&gt; List&lt;HintAnchorState&gt;,
-): Modifier = composed {
-    val backgroundBrush = LocalHintOverlayBrush.current
-    val backgroundColor = LocalHintOverlayColor.current
-    val layoutDirection = LocalLayoutDirection.current
-    val density = LocalDensity.current
-
-    drawWithCache {
-        // 准备背景路径
-        val path = Path().apply {
-            lineTo(size.width, 0f)
-            lineTo(size.width, size.height)
-            lineTo(0f, size.height)
-            lineTo(0f, 0f)
-            close()
-        }
-
-        anchors().forEach { anchor -&gt;
-            // 为锚点准备路径
-            val anchorPath = Path()
-            anchorPath.addOutline(
-                anchor.shape.createOutline(
-                    size = anchor.size.toSize(),
-                    layoutDirection = layoutDirection,
-                    density = density,
-                )
-            )
-            anchorPath.translate(anchor.offset)
-            anchorPath.close()
-
-            // 裁剪掉锚点
-            path.op(path, anchorPath, PathOperation.Xor)
-        }
-
-        onDrawWithContent {
-            // 我们不仅仅绘制路径，而不是像以前一样绘制矩形
-            if (backgroundBrush != null) {
-                drawPath(path, backgroundBrush)
-            } else {
-                drawPath(path, backgroundColor)
-            }
-
-            drawContent()
-        }
-    }
-}
-</code></pre>
-
-<p>让我们传递 CircleShape 和 RoundedCornerShape 来看看提示现在是什么样子：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*i2dWMv3Wa9at-fzGiKm8KQ.png" alt="Clip" /></p>
-
-<p>此时，我们知道如何绘制背景覆盖层、计算锚点的位置以及如何剪裁背景。</p>
-
-<h2>4. 绘制提示</h2>
-
-<p>在实际绘制之前，我们应该定义提示需要呈现哪些信息。</p>
-
-<p>为了不强制只提供文本，我们采用slot方法。通过定义slot，我们允许使用任何所需的composables。</p>
-
-<p>我将介绍一个新的类 Hint 来保存我们的Composable内容：</p>
-
-<pre><code class="Kotlin">@Stable
-class Hint internal constructor() {
-
-    internal var content: @Composable () -&gt; Unit by mutableStateOf({})
-}
-
-@Composable
-fun rememberHint(content: @Composable () -&gt; Unit): Hint {
-    return remember {
-        Hint().also { it.content = content }
-    }
-}
-</code></pre>
-
-<p>并将此 Hint 添加为 HintAnchorState 的一部分：</p>
-
-<pre><code class="Kotlin">@Stable
-class HintAnchorState internal constructor(
-    internal val hint: Hint,
-) {
-    //...其他的状态放这里
-}
-
-@Composable
-fun rememberHintAnchorState(hint: Hint): HintAnchorState {
-    return remember(hint) {
-        HintAnchorState(hint)
-    }
-}
-</code></pre>
-
-<p>在 HintOverlay 内部，我们可以采用最简单的解决方案 — BoxWithConstraints ：</p>
-
-<pre><code class="Kotlin">@Composable
-fun HintOverlay(
-    anchors: () -&gt; List&lt;HintAnchorState&gt;,
-) {
-    //...
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxSize()
-            .overlayBackground(anchors)
-    ) {
-        anchors().forEach { anchor -&gt;
-            Box(
-                modifier = Modifier
-                    .graphicsLayer {
-                        translationX = anchor.offset.x
-                        translationY = anchor.offset.y + anchor.size.height
-                    },
-            ) {
-                anchor.hint.content()
-            }
-        }
-    }
-}
-</code></pre>
-
-<p>修改应用程序内容：</p>
-
-<pre><code class="Kotlin">val topAppBarHint = rememberHint {
-    OutlinedButton(onClick = {}) { Text("Hint for TopAppBar") }
-}
-val topAppBarActionHintAnchor = rememberHintAnchorState(topAppBarHint)
-
-val actionHint = rememberHint {
-    Text("Hint for Action")
-}
-val actionHintAnchor = rememberHintAnchorState(actionHint)
-
-val bottomNavigationHint = rememberHint {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Spacer(Modifier.size(32.dp).background(Color.Magenta, CircleShape))
-        Spacer(Modifier.size(8.dp))
-        Text("Hint for BottomNavigation")
-    }
-}
-val bottomNavigationHintAnchor = rememberHintAnchorState(bottomNavigationHint)
-</code></pre>
-
-<p>结果如下：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*mMenE2fp2jph6YUBlxX4pA.png" alt="Hint for action" /></p>
-
-<p>让我们引入一个应用程序特定的代码来绘制提示背景。</p>
-
-<pre><code class="Kotlin">@Composable
-fun rememberHintContainer(content: @Composable () -&gt; Unit): Hint {
-    return rememberHint {
-        Box(
-            modifier = Modifier
-                .padding(top = 8.dp)
-                .background(Color.Yellow, shape = RoundedCornerShape(16.dp))
-                .padding(16.dp),
-        ) {
-            CompositionLocalProvider(
-                LocalTextStyle provides TextStyle(
-                    color = Color.Black,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Light,
-                ),
-            ) {
-                content()
-            }
-        }
-    }
-}
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*xn8pxlU_nUQvywbtqVwUtw.png" alt="Hint2" /></p>
-
-<p>我们遇到了 2 个问题：</p>
-
-<ol>
-<li>水平对齐，提示应与其锚点居中对齐。</li>
-<li>BottomNavigation 的提示超出了屏幕范围。</li>
-</ol>
-
-
-<p>让我们改用自定义布局并修复这些问题。</p>
-
-<p>要测量和布局多个可组合项，请使用 Layout。此composable允许我们手动测量和布局子项。所有更高级别的布局（如 Column 和 Row）都是使用 Layout 实现的。</p>
-
-<pre><code class="Kotlin">@Composable
-internal fun HintsContainer(
-    modifier: Modifier,
-    anchors: () -&gt; List&lt;HintAnchorState&gt;,
-) {
-    val anchors = anchors()
-
-    Layout(
-        modifier = modifier
-            .overlayBackground(anchors),
-        content = {
-            anchors.forEach { it.hint.content() }
-        },
-    ) { measurables, constraints -&gt;
-        // 测量每一个提示
-        val placeables = measurables.map { measurable -&gt;
-            measurable.measure(
-                constraints.copy(minWidth = 0, minHeight = 0)
-            )
-        }
-
-        // 将布局尺寸设置得尽可能大
-        layout(constraints.maxWidth, constraints.maxHeight) {
-            // 将每个提示相对于其锚点放置
-            placeables.forEachIndexed { index, placeable -&gt;
-                val anchor = anchors[index]
-
-                // 将此提示居中对齐
-                val x = (anchor.offset.x.toInt() - (placeable.width - anchor.size.width) / 2)
-                    // 修复超出屏幕的坐标
-                    .coerceAtLeast(0)
-                    .coerceAtMost(constraints.maxWidth - placeable.width)
-
-                // 把这个提示放在它的锚点下面
-                var y = (anchor.offset.y.toInt() + anchor.size.height)
-                    // 如果超出屏幕，则修复 y 坐标
-                    .coerceAtMost(constraints.maxHeight - placeable.height)
-                if (y &lt; anchor.offset.y + anchor.size.height) {
-                    // 提示与锚点重叠，请将此提示放在其锚点上方
-                    y = anchor.offset.y.toInt() - placeable.height
-                }
-
-                placeable.placeRelative(x = x, y = y)
-            }
-        }
-    }
-}
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*syuJkuAd-_BgiYfFP8bKgQ.png" alt="Hint3" /></p>
-
-<p>因为我们允许传递任何可组合项作为提示，所以调用者可以完全控制提示的外观，例如，我们可以只使用 Text ，或者使用包含许多子项的复杂 Row 。</p>
-
-<h2>5. 如何控制提示？</h2>
-
-<p>我们静态地添加了提示以将其显示在屏幕上。但真正产品应用程序并非如此。让我们引入 HintController 来控制何时显示提示。</p>
-
-<pre><code class="Kotlin">@Stable
-class HintController internal constructor() {
-
-    internal var hint by mutableStateOf&lt;HintAnchorState?&gt;(null)
-
-    fun show(hint: HintAnchorState) {
-        this.hint = hint
-    }
-}
-
-@Composable
-fun rememberHintController(): HintController {
-    val controller = remember { HintController() }
-
-    controller.hint?.let { hint -&gt;
-        HintOverlay(anchor = hint)
-    }
-
-    return controller
-}
-</code></pre>
-
-<p>修改应用程序内容，以便在我们点击锚点时显示提示：</p>
-
-<pre><code class="Kotlin">val hintController = rememberHintController()
-
-IconButton(
-    modifier = Modifier
-        .hintAnchor(topAppBarActionHintAnchor, CircleShape),
-    onClick = {
-        hintController.show(topAppBarActionHintAnchor)
-    },
-)
-
-BottomNavigationItem(
-    modifier = Modifier
-        .hintAnchor(
-            bottomNavigationHintAnchor,
-            shape = RoundedCornerShape(50f),
-        ),
-    onClick = {
-        hintController.show(bottomNavigationHintAnchor)
-    },
-)
-
-Button(
-    modifier = Modifier
-        .hintAnchor(actionHintAnchor, RoundedCornerShape(16.dp))
-        .padding(4.dp),
-    onClick = {
-        hintController.show(actionHintAnchor)
-    },
-)
-</code></pre>
-
-<blockquote><p>注意：我们不再需要显示的 HintOverlay ，它现在变得内置了。</p></blockquote>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*jIOTXOSnHVeL_jjyEx1gdg.png" alt="Control" /></p>
-
-<p>现在我们可以逐一显示提示，但还有两个部分缺失：如何关闭提示，以及如何覆盖覆盖颜色。</p>
-
-<p>对提示控制器进行更改以允许传递覆盖颜色：</p>
-
-<pre><code class="Kotlin">@Composable
-fun rememberHintController(overlay: Brush): HintController {
-    return rememberHintController(overlay = LocalHintOverlayBrush provides overlay)
-}
-
-@Composable
-fun rememberHintController(overlay: Color = HintOverlayColorDefault): HintController {
-    return rememberHintController(overlay = LocalHintOverlayColor provides overlay)
-}
-
-@Composable
-private fun rememberHintController(overlay: ProvidedValue&lt;*&gt;): HintController {
-    val controller = remember { HintController() }
-
-    controller.hint?.let { hint -&gt;
-        CompositionLocalProvider(overlay) {
-            HintOverlay(anchor = hint)
-        }
-    }
-
-    return controller
-}
-</code></pre>
-
-<p>为了消除我们的提示，让我们引入以下变化：</p>
-
-<pre><code class="Kotlin">@Stable
-class HintController internal constructor() {
-
-    internal var hint by mutableStateOf&lt;HintAnchorState?&gt;(null)
-
-    fun show(hint: HintAnchorState) {
-        this.hint = hint
-    }
-
-    fun dismiss() {
-        hint = null
-    }
-}
-</code></pre>
-
-<p>我们使用 Popup 作为覆盖层的容器，如果用户点击 Android 上的返回按钮(BACK)，Popup 就会被关闭。</p>
-
-<pre><code class="Kotlin">@Composable
-internal fun HintOverlay(
-    anchor: HintAnchorState,
-    onDismiss: () -&gt; Unit,
-) {
-    Popup(
-        onDismissRequest = onDismiss,
-        // 设置可聚焦以处理按压back事件
-        properties = remember { PopupProperties(focusable = true) },
-    ) {
-        //...在这里画出我们的提示
-    }
-}
-
-@Composable
-internal fun HintsContainer(
-    modifier: Modifier,
-    anchor: HintAnchorState,
-    onDismiss: () -&gt; Unit,
-) {
-    Layout(
-        modifier = modifier
-            .overlayBackground(anchor)
-            .clickable(
-                interactionSource = null,
-                // 禁用ripple
-                indication = null,
-                onClick = onDismiss,
-            )
-    )
-}
-</code></pre>
-
-<p>结果演示视频 <a href="https://youtu.be/eo49PKlhO5Y">https://youtu.be/eo49PKlhO5Y</a></p>
-
-<p>现在，HintController 允许我们按时间显示一个提示，但如果我们想按顺序显示多个提示，则没有实际的队列。</p>
-
-<p>可以扩展 HintController 并添加暂停修饰符以知道提示的显示时间（例如，在显示提示后立即执行某项操作）。</p>
-
-<pre><code class="Kotlin">@Stable
-class HintController internal constructor() {
-
-    private var queue = mutableStateListOf&lt;HintAnchorState&gt;()
-
-    internal val hint: HintAnchorState? get() = queue.firstOrNull()
-
-    private val pendingRequests = mutableMapOf&lt;HintAnchorState, Continuation&lt;Unit&gt;&gt;()
-
-    suspend fun show(hint: HintAnchorState) {
-        suspendCoroutine { continuation -&gt;
-            pendingRequests[hint] = continuation
-            queue.add(hint)
-        }
-    }
-
-    suspend fun show(vararg hint: HintAnchorState) {
-        show(hint.toList())
-    }
-
-    suspend fun show(hints: List&lt;HintAnchorState&gt;) {
-        suspendCoroutine { continuation -&gt;
-            pendingRequests[hints.last()] = continuation
-            queue.addAll(hints)
-        }
-    }
-
-    internal fun onDismissed(hint: HintAnchorState) {
-        pendingRequests[hint]?.let { continuation -&gt;
-            continuation.resume(Unit)
-            pendingRequests.remove(hint)
-        }
-        queue.remove(hint)
-    }
-
-    fun dismiss() {
-        pendingRequests.values
-            .forEach { continuation -&gt;
-                continuation.resumeWithException(CancellationException("Hint was dismissed"))
-            }
-        pendingRequests.clear()
-        queue.clear()
-    }
-}
-</code></pre>
-
-<p>现在为了在应用程序内部显示提示，我们需要一个 CoroutineScope ：</p>
-
-<pre><code class="Kotlin">val coroutineScope = rememberCoroutineScope()
-val hintController = rememberHintController()
-
-// 现在我们可以从提示本身中忽略所有待处理的提示
-val topAppBarHint = rememberHintContainer {
-    OutlinedButton(
-        onClick = {
-            hintController.dismiss()
-        }
-    ) { Text("Hint for TopAppBar") }
-}
-
-// 显示 1 条提示
-BottomNavigationItem(
-    onClick = {
-        coroutineScope.launch {
-            hintController.show(bottomNavigationHintAnchor)
-            scaffoldState.snackbarHostState.showSnackbar("One hint was shown")
-        }
-    },
-)
-
-// 连续显示多个提示
-Button(
-    onClick = {
-        coroutineScope.launch {
-            hintController.show(
-                topAppBarActionHintAnchor,
-                actionHintAnchor,
-                bottomNavigationHintAnchor,
-            )
-            scaffoldState.snackbarHostState.showSnackbar("Many hints were shown")
-        }
-    },
-)
-</code></pre>
-
-<blockquote><p><strong>注意：</strong> 如果我们通过调用 hintController.dismiss() 来关闭提示，则 hintController.show 之后的代码将不会被调用。</p></blockquote>
-
-<pre><code class="Kotlin">coroutineScope.launch {
-    hintController.show(topAppBarActionHintAnchor)
-    // 如果通过调用 hintController.dismiss 关闭了之前的提示，则不会显示 Snackbar
-    scaffoldState.snackbarHostState.showSnackbar("One hint was shown")
-}
-</code></pre>
-
-<p>最终结果如这个视频演示 <a href="https://youtu.be/tyZUNJLEVxQ">https://youtu.be/tyZUNJLEVxQ</a>：我们可以显示单个提示，也可以显示提示列表。</p>
-
-<p>由于该项目使用 Compose Multiplatform，我们可以针对不同的目标运行该应用程序：</p>
-
-<ul>
-<li>Android结果演示 <a href="https://youtu.be/BVBCipnbIUc">https://youtu.be/BVBCipnbIUc</a></li>
-<li>iOS结果演示 <a href="https://youtu.be/Z1uasddgqwo">https://youtu.be/Z1uasddgqwo</a></li>
-</ul>
-
-
-<h2>总结</h2>
-
-<p>Compose 和 Kotlin Multiplatform 是一个强大的组合，它允许我们使用 Kotlin 来实现 UI 和业务逻辑。CMP 库仅与Jetpack Compose Android 项目完全兼容。</p>
-
-<p>可以在 GitHub 上查看我的repo：<a href="https://github.com/vitoksmile/ComposeHints">https://github.com/vitoksmile/ComposeHints</a>。</p>
-
-<p>感谢你的阅读，期待在 GitHub 上获得你的Star :)。</p>
 ]]></content>
   </entry>
   

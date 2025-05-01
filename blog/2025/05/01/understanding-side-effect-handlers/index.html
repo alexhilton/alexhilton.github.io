@@ -1,0 +1,681 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>理解Jetpack Compose中副作用函数的内部原理 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="通过实例来探究Jetpack Compose中副作用函数的内部工作原理，理解它们的作用以及它们是如何被执行的。">
+  <meta name="keywords" content="Jetpack Compose, Side effects">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2025/05/01/understanding-side-effect-handlers">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">理解Jetpack Compose中副作用函数的内部原理</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2025-05-01T11:05:24+08:00'><span class='date'><span class='date-month'>May</span> <span class='date-day'>1</span><span class='date-suffix'>st</span>, <span class='date-year'>2025</span></span> <span class='time'>11:05 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Understanding the Internals of Side-Effect Handlers in Jetpack Compose」，原文链接<a href="https://proandroiddev.com/understanding-the-internals-of-side-effect-handlers-in-jetpack-compose-d55fbf914fde">https://proandroiddev.com/understanding-the-internals-of-side-effect-handlers-in-jetpack-compose-d55fbf914fde</a>，由Jaewoong Eum发布于2025年4月10日。</p></blockquote>
+
+<p><a href="/blog/2025/05/01/understanding-side-effect-handlers/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*GNgL_XzYpw16hn6BxocOww.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>近年来，Jetpack Compose生态呈指数级增长，现已被广泛用于构建 Android 应用的产品级UI。现在，我们可以说 Jetpack Compose 代表了 Android UI 开发的未来。</p>
+
+<p>Compose 最大的优势之一是其声明式（declarative）方法——它允许开发者描述 UI 应该显示的内容，而框架则负责处理 UI 在底层状态发生变化时应如何更新。这种模型将焦点从命令式（imperative）UI 转移到更直观、更具响应式的思维方式。</p>
+
+<p>然而，尽管声明式 UI有很多优势，但妥善管理副作用也至关重要。可组合函数可能会因各种原因（例如状态或参数的变化）而被重组，如果副作用处理不当，应用的行为可能会变得不可预测。</p>
+
+<p>在本文中，你将探索 Jetpack Compose 默认提供的副作用处理 API。你还将研究它们的内部工作流程，以更好地了解 Compose 如何在底层管理这些操作。</p>
+
+<h2>副作用（Side Effect）是啥？</h2>
+
+<p>副作用（Side Effect）是指发生在可组合函数作用域之外的应用状态变化。在 Jetpack Compose 中，由于状态变化、参数更新或其他事件触发的重组，可组合函数可能会频繁且不可预测地重新执行（译注：也就是说Compose的重组是不受开发者控制的）。因此，你不能假设一个可组合函数只会被调用一次。</p>
+
+<p>换句话说，在可组合函数内部直接调用业务逻辑（例如从网络获取数据或查询数据库）是有风险的。由于潜在的重组，这些操作可能会无意中运行多次，从而导致错误或性能问题。</p>
+
+<p>为了解决这个问题，Jetpack Compose 提供了一组专门用于以安全可控的方式管理副作用的API。这些 API包括 LaunchedEffect 、 DisposableEffect 、 SideEffect 、 rememberCoroutineScope 等等。在本文中，你将重点介绍三个最常用的处理程序—— LaunchedEffect 、 DisposableEffect 和 SideEffect ——并仔细研究它们的内部实现，以便更好地理解它们的底层工作原理。</p>
+
+<h2>LaunchedEffect</h2>
+
+<p>LaunchedEffect是Jetpack Compose中最常用的副作用处理 API之一。它允许你以可组合生命周期感知的方式（而非 Android 生命周期）启动协程，并确保除非指定的关键参数（keys）之一发生变化，否则不会重新执行提供的代码块。这种行为使得 LaunchedEffect 特别适合执行与特定状态相关的一次性事件，例如显示 Toast或Snackbar、记录事件或触发业务逻辑，正如你在 Now in Android 项目中的示例代码中所见：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">snackbarHostState</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">SnackbarHostState</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'><span class="k">val</span> <span class="py">isOffline</span> <span class="k">by</span> <span class="n">appState</span><span class="p">.</span><span class="n">isOffline</span><span class="p">.</span><span class="n">collectAsStateWithLifecycle</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 如果用户未连接到互联网，则显示一个Snackbar来通知他们。</span>
+</span><span class='line'><span class="k">val</span> <span class="py">notConnectedMessage</span> <span class="p">=</span> <span class="n">stringResource</span><span class="p">(</span><span class="n">R</span><span class="p">.</span><span class="n">string</span><span class="p">.</span><span class="n">not_connected</span><span class="p">)</span>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">isOffline</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">isOffline</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">snackbarHostState</span><span class="p">.</span><span class="n">showSnackbar</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">message</span> <span class="p">=</span> <span class="n">notConnectedMessage</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">duration</span> <span class="p">=</span> <span class="n">Indefinite</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>需要注意的是，LaunchedEffect 会在底层创建一个新的协程作用域。这意味着它主要用于在可组合函数作用域内执行基于协程的任务，并在可组合函数离开组合时自动取消其协程。因此，LaunchedEffect 最适合用于与协程相关的操作，例如数据获取、延迟效果或事件处理，而不是简单地执行非暂停函数。现在，让我们深入探究一下，以更好地理解 LaunchedEffect 的内部工作原理。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">LaunchedEffect</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">key1</span><span class="p">:</span> <span class="n">Any</span><span class="p">?,</span>
+</span><span class='line'>    <span class="n">block</span><span class="p">:</span> <span class="n">suspend</span> <span class="n">CoroutineScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">applyContext</span> <span class="p">=</span> <span class="n">currentComposer</span><span class="p">.</span><span class="n">applyCoroutineContext</span>
+</span><span class='line'>    <span class="n">remember</span><span class="p">(</span><span class="n">key1</span><span class="p">)</span> <span class="p">{</span> <span class="n">LaunchedEffectImpl</span><span class="p">(</span><span class="n">applyContext</span><span class="p">,</span> <span class="n">block</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">internal</span> <span class="k">class</span> <span class="nc">LaunchedEffectImpl</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">parentCoroutineContext</span><span class="p">:</span> <span class="n">CoroutineContext</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">task</span><span class="p">:</span> <span class="n">suspend</span> <span class="n">CoroutineScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">RememberObserver</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">scope</span> <span class="p">=</span> <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">parentCoroutineContext</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">job</span><span class="p">:</span> <span class="n">Job</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onRemembered</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 这不应该发生，但为了安全起见留在这里</span>
+</span><span class='line'>        <span class="n">job</span><span class="o">?.</span><span class="n">cancel</span><span class="p">(</span><span class="s">&quot;Old job was still running!&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">job</span> <span class="p">=</span> <span class="n">scope</span><span class="p">.</span><span class="n">launch</span><span class="p">(</span><span class="n">block</span> <span class="p">=</span> <span class="n">task</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onForgotten</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">job</span><span class="o">?.</span><span class="n">cancel</span><span class="p">(</span><span class="n">LeftCompositionCancellationException</span><span class="p">())</span>
+</span><span class='line'>        <span class="n">job</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onAbandoned</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">job</span><span class="o">?.</span><span class="n">cancel</span><span class="p">(</span><span class="n">LeftCompositionCancellationException</span><span class="p">())</span>
+</span><span class='line'>        <span class="n">job</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>正如你在LaunchedEffect的内部实现中所看到的，它会创建LaunchedEffectImpl并将其存储在内存中，并将给定的键值作为参数，以便在键发生变化时重新创建 LaunchedEffectImpl 实例。</p>
+
+<p>如果你查看内部 LaunchedEffectImpl 类，你会发现它实现了RememberObserver接口，并首先创建一个新的 CoroutineScope。然后，当可组合项进入组合阶段时，提供的 lambda 会在此范围内启动。当可组合项离开组合阶段时，协程范围会自动取消，从而确保资源得到正确清理，并避免潜在的内存泄漏或性能问题。</p>
+
+<p>话虽如此，如果你的任务不涉及任何与协程相关的操作，而只是需要在键发生变化时重新执行，那么使用 LaunchedEffect 可能略显多余。虽然创建协程作用域的开销通常很小，但在实际不使用协程的情况下，它仍然是不必要的。在这种情况下，你可以考虑使用更轻量级的副作用处理library (<a href="https://github.com/skydoves/compose-effects?tab=readme-ov-file#rememberedeffect">RememberedEffect</a>)，它更适合非挂起（non-suspending）任务。</p>
+
+<p>另一个常见的误解是LaunchedEffect能够感知 Android生命周期——但事实并非如此。从内部实现可以看出，LaunchedEffect的作用域完全限定于Jetpack Compose组合生命周期，与 Android组件（Activity和Fragment）的生命周期没有直接关联。</p>
+
+<p>换句话说，它本身并不了解任何有关 Activity、Fragment 或 onStop()或 onDestroy()等生命周期事件的信息。这意味着，如果你在 LaunchedEffect 中启动一个协程，并且 Android 组件（例如 Activity）在可组合项未离开组合的情况下被停止或销毁，则该协程可能会继续运行，除非它明确与Android组件生命周期绑定。</p>
+
+<h2>DisposableEffect</h2>
+
+<p>DisposableEffect是Jetpack Compose 运行时提供的另一个副作用处理API。它允许你与可组合项的生命周期同步执行设置和清理逻辑。与LaunchedEffect不同，它提供了一个 DisposableEffectScope 作为接收器（receiver），使你能够定义一个清理代码块（clean-up code block），该代码块在可组合项离开组合时自动运行。这使得它非常适合管理需要显式卸载的外部资源，例如监听器、回调或广播接收器。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 如果 `lifecycleOwner` 发生变化，则释放并重置效果</span>
+</span><span class='line'><span class="n">DisposableEffect</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="c1">// 创建一个观察者，触发我们记住的回调以发送分析事件</span>
+</span><span class='line'>  <span class="k">val</span> <span class="py">observer</span> <span class="p">=</span> <span class="n">LifecycleEventObserver</span> <span class="p">{</span> <span class="n">_</span><span class="p">,</span> <span class="n">event</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">event</span> <span class="p">==</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_RESUME</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="c1">// do something</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">event</span> <span class="p">==</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_PAUSE</span> <span class="p">||</span> <span class="n">event</span> <span class="p">==</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">Event</span><span class="p">.</span><span class="n">ON_STOP</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="c1">// do something</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// Add the observer to the lifecycle</span>
+</span><span class='line'>  <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">addObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// 当效果离开 Composition 时，移除观察者</span>
+</span><span class='line'>  <span class="n">onDispose</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">.</span><span class="n">removeObserver</span><span class="p">(</span><span class="n">observer</span><span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>上面的示例使用 DisposableEffect 将 LifecycleEventObserver注册到lifecycleOwner，使其能够观察生命周期变化并根据当前状态执行特定逻辑。观察者会在onDispose块内被安全地移除，确保在可组合项离开组合时进行适当的清理。现在，让我们深入了解DisposableEffect的内部工作原理。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">DisposableEffect</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">key1</span><span class="p">:</span> <span class="n">Any</span><span class="p">?,</span>
+</span><span class='line'>    <span class="n">effect</span><span class="p">:</span> <span class="n">DisposableEffectScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">DisposableEffectResult</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">remember</span><span class="p">(</span><span class="n">key1</span><span class="p">)</span> <span class="p">{</span> <span class="n">DisposableEffectImpl</span><span class="p">(</span><span class="n">effect</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">private</span> <span class="k">class</span> <span class="nc">DisposableEffectImpl</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">effect</span><span class="p">:</span> <span class="n">DisposableEffectScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">DisposableEffectResult</span>
+</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">RememberObserver</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">onDispose</span><span class="p">:</span> <span class="n">DisposableEffectResult</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onRemembered</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">=</span> <span class="n">InternalDisposableEffectScope</span><span class="p">.</span><span class="n">effect</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onForgotten</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">onDispose</span><span class="o">?.</span><span class="n">dispose</span><span class="p">()</span>
+</span><span class='line'>        <span class="n">onDispose</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onAbandoned</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 由于未调用 [onRemembered]，因此无需执行任何操作。</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">DisposableEffectScope</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">inline</span> <span class="k">fun</span> <span class="nf">onDispose</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">crossinline</span> <span class="n">onDisposeEffect</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'>    <span class="p">):</span> <span class="n">DisposableEffectResult</span> <span class="p">=</span> <span class="k">object</span> <span class="err">: </span><span class="nc">DisposableEffectResult</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">override</span> <span class="k">fun</span> <span class="nf">dispose</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">onDisposeEffect</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如 DisposableEffect 的内部实现所示，它会创建一个 DisposableEffectImpl 实例，并使用提供的键将其存储在内存中。
+每当键发生变化时，都会创建一个新的DisposableEffectImpl 实例，以便相应地重新执行该效果。</p>
+
+<p>DisposableEffectImpl类实现了 RememberObserver 接口，并初始创建一个 DisposableEffectResult。当可组合项进入组合阶段时，效果 lambda 会在 DisposableEffectScope 中启动。退出组合时，会自动调用 DisposableEffectResult的onDispose 函数，以确保在可组合项完全从组合中移除之前正确清理资源并防止内存泄漏或性能问题。</p>
+
+<h2>SideEffect</h2>
+
+<p>Jetpack Compose中的SideEffect API 用于安全地将可组合项内发生的状态变化通知给外部非 Compose 管理的对象。它确保效果在重组成功后运行，使其成为触发依赖于界面最终稳定状态的副作用的理想选择。</p>
+
+<p>使用 SideEffect可以避免在重组阶段执行的操作可能会被丢弃的风险，如果你在未采取此保护措施的情况下直接在可组合项中编写效果，则可能会发生这种情况。因此，当你需要将 Compose 状态与外部系统（例如日志记录工具、分析工具或命令式界面组件）同步时，SideEffect 至关重要，如下例所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">rememberFirebaseAnalytics</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">):</span> <span class="n">FirebaseAnalytics</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">analytics</span><span class="p">:</span> <span class="n">FirebaseAnalytics</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">FirebaseAnalytics</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 每次成功组合后，使用当前用户的用户类型更新 FirebaseAnalytics，</span>
+</span><span class='line'>    <span class="c1">// 确保将来的分析事件已附加此元数据</span>
+</span><span class='line'>    <span class="n">SideEffect</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">analytics</span><span class="p">.</span><span class="n">setUserProperty</span><span class="p">(</span><span class="s">&quot;userType&quot;</span><span class="p">,</span> <span class="n">user</span><span class="p">.</span><span class="n">userType</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">analytics</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在，让我们探索一下 SideEffect API 的底层工作原理。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">SideEffect</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">effect</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">currentComposer</span><span class="p">.</span><span class="n">recordSideEffect</span><span class="p">(</span><span class="n">effect</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="cm">/** 当我们应用组合变化时安排运行副作用。 */</span>
+</span><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">recordSideEffect</span><span class="p">(</span><span class="n">effect</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">changeListWriter</span><span class="p">.</span><span class="n">sideEffect</span><span class="p">(</span><span class="n">effect</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>乍一看，上面的代码可能看似简单，但实际上却难以完全理解，这很正常。这是因为 SideEffect API与 Compose运行时底层内部机制紧密相关，尤其是 ChangeList，它用于跟踪和管理用于更新渲染UI的状态驱动变更列表。</p>
+
+<p>根据 Compose源代码中的内部注释，SideEffect API的表示如下：</p>
+
+<blockquote><p>安排效果在当前合成成功完成并应用更改时运行。SideEffect 可用于将副作用应用于合成管理的、未受快照支持的对象，以便在当前合成操作失败时避免这些对象处于不一致的状态。</p>
+
+<p>副作用将始终在合成的应用调度程序上运行，并且应用器永远不会与自身、彼此并发运行，也不会将更改应用于合成树或运行 RememberObserver 事件回调。SideEffect 始终在 RememberObserver 事件回调之后运行。</p></blockquote>
+
+<p>因此，SideEffect API 会在每次成功重组后运行。</p>
+
+<h2>结论</h2>
+
+<p>在本文中，你探索了 Jetpack Compose 中常用的三个主要副作用处理API。由于声明式UI（declarative UI）的特性，状态会影响运行时行为的诸多方面，因此正确地使用副作用函数对于确保任务执行的正确性和可预测性至关重要。</p>
+
+<p>本主题最初在<a href="https://github.com/doveletter/">Dove Letter</a>（译注：链接是<a href="https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3">https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3</a> Android 和 Kotlin 的每日见解，涵盖 Compose、架构、行业面试问题和实用代码技巧等主题。自上线以来的短短 37 周内，Dove Letter 已拥有超过 700 名个人订阅者和 20 名企业/终身订阅者。如果你渴望深入了解 Android、Kotlin 和 Compose，请务必查看<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903">“通过 Dove Letter 学习 Kotlin 和 Android”</a>（译注：链接是<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82">https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82</a></p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2025-05-01T11:05:24+08:00'><span class='date'><span class='date-month'>May</span> <span class='date-day'>1</span><span class='date-suffix'>st</span>, <span class='date-year'>2025</span></span> <span class='time'>11:05 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2025/04/26/shortest-path-in-graph/" title="Previous Post: Shortest Path in Graph">&laquo; Shortest Path in Graph</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2025 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
