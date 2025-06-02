@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-05-01T11:40:35+08:00</updated>
+  <updated>2025-06-02T21:59:19+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,942 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[揭秘原生View与Jetpack Compose之间的传送门]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/06/02/android-vies-in-compose/"/>
+    <updated>2025-06-02T21:44:19+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/06/02/android-vies-in-compose</id>
+    <content type="html"><![CDATA[<p>芳菲随春去，碧绿入夏来，不知不觉中<a href="https://juejin.cn/column/7367555191338467337">Compose专题</a>已经写了近40篇文章了，从Compose各组件的使用方法，到Compose的编程思想，再到内部原理和最佳实践。通过<a href="https://juejin.cn/column/7367555191338467337">这一系列的文章</a>相信对Compose已经有了足够的理解，能够在项目中进行实战和运用。学无止境，今天将继续学习，重点探讨如何在已有的项目中使用Compose。</p>
+
+<p><a href=""><img src="file:///Users/alexhilton/Downloads/portal_2.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>缘起</h2>
+
+<p>无疑Jetpack Compose是一个优秀的声明式UI框架，它与原生的View方式最大的区别，在于思考问题的方式上并不一样。声明式框架能把开发者从繁杂的命令式的UI细节中解放出来，重点思考一个好的体验应该是什么样子的，而具体的UI细节由框架来处理。尽管如此，毕竟Compose是近几年来发展起来的，现今大量的项目仍是原生View主导的。此外，Compose也还在发展中，有些特定业务领域如Camera，视频，3D渲染，还没有能力支持。因此，整合原生View和Compose是项目中很现实的一个难题，本文将重点讨论两个议题：一个是如何在原生View中嵌入Compose，另一个就是如何在Compose中嵌入原生View。</p>
+
+<p><strong>注意：</strong> 本文中提到的两个组件ComposeView和AndroidView都仅在Jetpack Compose（for Android）生效，并不适用于跨平台的Compose Multiplatform。</p>
+
+<h2>在原生View中嵌入Compose</h2>
+
+<p>第一个传送门是如何进入Compose的世界。相信现在绝大多数项目都是基于原生View的，借助<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/ComposeView">ComposeView</a>就可以进入到Compose的世界。</p>
+
+<pre><code class="Kotlin">    val composeView = ComposeView(context).apply {
+                setContent {
+                    // 这里调用Composables
+                }
+            }
+</code></pre>
+
+<p>ComposeView是View的一个子类，能够作为Compose的容器，在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/ComposeView#setContent(kotlin.Function0">其setContent方法</a>)中提供一个Composable即可。ComposeView与其他View一样，可以用在View tree中，用在Fragment里和Activity里面。实际上作为平台的入口ComponentActivity用的也是ComposeView。</p>
+
+<h3>在View层级中直接嵌入</h3>
+
+<p>ComposeView就是一个普通的Android View，跟其他View的子类是一样的，所以可以把它放在任何可以使用View的地方，比如一个布局里面，作为一个页面的一部分。</p>
+
+<pre><code class="xml">&lt;?xml version="1.0" encoding="utf-8"?&gt;
+&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    tools:context=".MainActivity"&gt;
+
+    &lt;androidx.compose.ui.platform.ComposeView
+        android:id="@+id/compose_view"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" /&gt;
+
+    &lt;Button
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="WidgetButton"
+        /&gt;
+&lt;/LinearLayout&gt;
+</code></pre>
+
+<p><strong>注意：</strong> 尽管可以把ComposeView当成普通的View，直接嵌入到布局中，作为页面中的一部分，但这并不是一个好的做法，一来是不能发挥Compose的优势，另外Compose本身是有特定的生命周期的（重组），它需要知道平台的生命周期，以管控它自己的生命周期。而常规的View tree之中是没有平台生命周期的，因为常规的View tree并不关心平台的生命周期，view tree主要受窗口影响（attachToWindow，detachFromWindow），这个与平台组件的生命周期没有关系。</p>
+
+<h3>用在Fragment中</h3>
+
+<p>想要在某个Fragment中集成Compose的方式就是把ComposeView作为Fragment的根View即可：</p>
+
+<pre><code class="Kotlin">class ExampleFragmentNoXml : Fragment() {
+
+    override fun onCreateView(
+        inflater: LayoutInflater,
+        container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View {
+        return ComposeView(requireContext()).apply {
+            // 当View的宿主destroy时销毁组合
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                MaterialTheme {
+                    // 进入到Compose世界
+                    Text("Hello Compose!")
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<h3>用在Activity中</h3>
+
+<p>这其实是最好的方式，在一个新的页面窗口中使用Compose，这就能与其余view独立开来，是最为理想的。</p>
+
+<pre><code class="Kotlin">class ExampleActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        setContent {
+            MaterialTheme {
+                Greeting(name = "compose")
+            }
+        }
+    }
+}
+
+@Composable
+fun Greeting(name: String) {
+    Text(text = "Hello $name!")
+}
+</code></pre>
+
+<h3>使用建议</h3>
+
+<p>虽然ComposeView可以当成一个普通的View来使用，但最为合理的方式就是在一个新的Activity中才使用Compose，也就是说当有一个全新的页面时，考虑使用Compose来开发，这样才能发挥出它的价值。</p>
+
+<p>除非有特别的需求，否则不要把ComposeView作为现有页面的一部分嵌入到View tree中（也就是作为页面的一部分）。</p>
+
+<p>至于在Fragment中使用，如果是一个全新的页面，而非现有布局的一部分，那也可以考虑使用Compose。</p>
+
+<p><strong>注意：</strong> 其根本原因在于，我们使用Jetpack Compose并不是图它能实现什么特别的UI效果，Compose能做的事情View都能做，甚至它不能做的事情View也能做。用Compose是因为它是声明式的UI框架，在开发效率和可扩展性上面有巨大的优势。所以，只应该在想要发挥声明式框架优势的时候，才考虑使用它，并且应该从一个全新的页面开始。</p>
+
+<h2>在Compose中嵌入原生View</h2>
+
+<p>Jetpack Compose提供了足够丰富的组件，足以应对常规的UI，但它毕竟还不是特别的成熟，总会遇到一些场景，发现Compose无法胜任，而且并不是通过自定义组件就能够解决的，比如一些特定领域的UI，如camera，如视频，如3D渲染。或者说，已经有了自定义好的View，并不想重复开发。再或者说对于一些三方的库，它并没有对应的Compose组件。这些场景就需要把原生的View嵌入到Compose之中。</p>
+
+<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/viewinterop/package-summary#AndroidView(kotlin.Function1,androidx.compose.ui.Modifier,kotlin.Function1,kotlin.Function1,kotlin.Function1">AndroidView</a>)就是专门用于把原生View嵌入到Compose中的一个特殊composable。它就像一个传送门一样，能把原生的View，无论是一个现成的自定义View，还是特定领域的View或者三方库的View，带入到Compose中，变成一个composable。</p>
+
+<h3>AndroidView的使用方法</h3>
+
+<p>AndroidView是一个composable，把它放在想要的位置即可。它有三个参数，一个是常规的Modifier用以约束这个composable的；另两个是lambda，一个是用于创建View的，返回一个View的实例，只会被调用一次；另一个就是用于更新View的，会被调用多次：</p>
+
+<pre><code class="Kotlin">@Composable
+fun CustomView() {
+    var selectedItem by remember { mutableStateOf(0) }
+
+    // 添加原生View到Compose
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { context -&gt;
+            // 创建View的实例
+            MyView(context).apply {
+                // 设置View的点击事件，更新状态，这会触发重组
+                setOnClickListener {
+                    selectedItem = 1
+                }
+            }
+        },
+        update = { view -&gt;
+            // 更新View的状态
+            // 这里读了状态，所以重组时update会被再次调用，view能拿到最新的状态
+            view.selectedItem = selectedItem
+        }
+    )
+}
+
+@Composable
+fun ContentExample() {
+    Column(Modifier.fillMaxSize()) {
+        Text("Look at this CustomView!")
+        CustomView()
+    }
+}
+</code></pre>
+
+<p><strong>注意：</strong> factory仅会被调用一次，用于创建View实例，update会被调用多次，用于更新view的状态，包括初次组合时，也就是factory执行之后，就会调用update。AndroidView函数会帮助提供View需要的参数context，以及管理View的实例，所以update中会把view当作参数传给我们，所以我们完全没有必要再用额外的状态（remember）去缓存View的实例了。</p>
+
+<h3>使用建议</h3>
+
+<p>虽然AndroidView是一个传送门，可以连接两个世界，但是能不用还是不要用，非必要不使用。如果能用Compose搞定的事情，还是要用Compose来搞，比如用Canvas去实现自定义组件。</p>
+
+<p>需要使用AndroidView的场景只有三个：一是有现成的自定义View，拿过来就可以用，不想二次开发；二是三方库的View；三就是Compose确实搞不定的特定领域，如WebView，如视频，如SurfaceView或者3D渲染（OpenGL ES）等等。除以之外，不建议使用。</p>
+
+<p>还需要特别注意的是，如果原生的View交互比较复杂，不光是点击，还涉及Touch事件处理，处理事件的同时还要不断更新View的状态，那也不应该使用它。比较理想的情况是，嵌入的这个View是一个比较纯粹的生产者，比如它只产生事件，不需要再往回更新状态；或者是一个比较纯粹的消费者，比如它就负责展示，只需要塞数据就行了。</p>
+
+<h2>总结</h2>
+
+<p>网上的教程或者Demo中的世界是很美好的，往往都是一个新建的项目，一个新的页面，直接就进入了Compose世界，也都在讲Compose能做的事情。但现实的世界往往不是这样子的，极少情况下是全新开始的项目，往往需要与遗留代码打交道，需要实现的需求也是多种多样的。本文中介绍了两个传送门，ComposeView和AndroidView可以方便地连接原生View和Compose两个世界，为现实项目中遇到的问题提供了一个可行的解决方案。</p>
+
+<h3>让Compose支持OpenGL ES</h3>
+
+<ul>
+<li><a href="https://stackoverflow.com/questions/78796021/how-to-render-opengl-alongside-jetpack-compose-ui-without-covering-other-element">How to render OpenGL alongside Jetpack Compose UI without covering other elements</a></li>
+<li><a href="https://www.reddit.com/r/Kotlin/comments/on36sy/experiment_to_make_opengl_work_together_with/?rdt=62185">Experiment to make OpenGL work together with Jetpack Compose</a></li>
+<li><a href="https://composables.com/foundation/androidexternalsurface">AndroidExternalSurface</a></li>
+<li><a href="https://youtrack.jetbrains.com/issue/CMP-3810/Using-Open-GL-with-Compose-Multiplatform">Using Open GL with Compose Multiplatform</a></li>
+</ul>
+
+
+<h2>References</h2>
+
+<ul>
+<li><a href="https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/compose-in-views">Using Compose in Views</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/views-in-compose">Using Views in Compose</a></li>
+<li><a href="https://medium.com/@seungbae2/jetpack-compose-androidview-seamless-integration-of-android-views-into-compose-ui-644f217437d3">Jetpack Compose AndroidView: Seamless Integration of Android Views into Compose UI</a></li>
+<li><a href="https://stackoverflow.com/questions/59995970/using-custom-views-with-jetpack-compose">Using Custom Views with Jetpack Compose</a></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[使用Jetpack Compose构建创意动画]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/05/31/animations-in-jetpack-compose/"/>
+    <updated>2025-05-31T23:19:03+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/05/31/animations-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Animating Inside and Outside the Box with Jetpack Compose」，原文链接<a href="https://medium.com/proandroiddev/animating-inside-and-outside-the-box-with-jetpack-compose-a56eba1b6af6">https://medium.com/proandroiddev/animating-inside-and-outside-the-box-with-jetpack-compose-a56eba1b6af6</a>，由Nirbhay Pherwani发布于2023年12月13日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*YDhqS2nzvjXmvlC58vcDNQ.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>缘起</h2>
+
+<p>动画能够让用户界面充满活力、引人入胜。在Android中，Jetpack Compose提供高级工具，让你轻松掌握这项强大功能，打造真正的动态UI。本文将深入探讨 Jetpack Compose 中动画的深层技术。</p>
+
+<p><strong>译注：</strong> 虽然原文是以Jetpack Compose为基础来写的，但其实动画这块并不涉及平台特性，也适用于Compose Multiplatform。</p>
+
+<p>我们将涵盖一系列技巧，从创建流畅的、基于物理的动效（增添真实感）到创建复杂的编排序列（为界面增添叙事质感）。无论你是想提升技能，还是仅仅想探索无限可能，本教程都将提供实用的见解，帮助你的应用不仅运行流畅，还能让用户在每次交互中都感到愉悦。</p>
+
+<p>让我们深入探索这些动画如何改变你的 UI设计方法，使其更加直观、响应迅速，并为用户带来愉悦的体验。</p>
+
+<h2>第 1 部分 — Jetpack Compose中的自定义动画</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*C1_mzDHNHOfSZkIiULgRzw.gif" alt="游戏角色的移动" /></p>
+
+<h3>利用自定义动画实现动态交互</h3>
+
+<p>在本节中，我们将探索如何在 Jetpack Compose中使用高级自定义动画来创建动态且可交互的 UI 元素。我们将重点介绍一个真实示例，该示例演示了用户交互如何以有意义的方式影响动画。</p>
+
+<h3>案例 - 交互式游戏角色移动</h3>
+
+<p>我们将通过一个示例来说明这一概念，其中游戏角色（由面部图标表示）沿着由用户可拖动控制点确定的路径移动。</p>
+
+<pre><code class="Kotlin">@Composable
+fun GameCharacterMovement() {
+    val startPosition = Offset(100f, 100f)
+    val endPosition = Offset(250f, 400f)
+    val controlPoint = remember { mutableStateOf(Offset(200f, 300f)) }
+    val position = remember { Animatable(startPosition, Offset.VectorConverter) }
+
+    LaunchedEffect(controlPoint.value) {
+        position.animateTo(
+            targetValue = endPosition,
+            animationSpec = keyframes {
+                durationMillis = 5000
+                controlPoint.value at 2500 // 可拖动控制点控制的中间点
+            }
+        )
+    }
+
+    val onControlPointChange: (offset: Offset) -&gt; Unit = {
+        controlPoint.value = it
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+
+        Icon(
+            Icons.Filled.Face, contentDescription = "Localized description", modifier = Modifier
+                .size(50.dp)
+                .offset(x = position.value.x.dp, y = position.value.y.dp)
+        )
+
+        DraggableControlPoint(controlPoint.value, onControlPointChange)
+    }
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>GameCharacterMovement 为代表游戏角色的图标设置动画。动画路径由 controlPoint 控制，该控制点通过用户交互设置和更新。</li>
+<li>Animatable 用于将图标的位置从 startPosition 平滑过渡到 endPosition。</li>
+<li>LaunchedEffect 监听 controlPoint 值的变化，并在控制点移动时重新触发动画。</li>
+<li>animationSpec — 这是一种配置项，用于定义动画的持续时间、延迟和缓动。它决定了动画值如何随时间变化。</li>
+<li>keyframes — 允许你在动画的特定时间点指定值，从而控制动画的中间点。这对于创建复杂的、精心设计的动画特别有用。</li>
+<li>keyframes 块将动画定义为一系列关键帧。在 2500 毫秒（中间点）时，角色到达控制点，然后继续移动到结束位置。</li>
+</ul>
+
+
+<pre><code class="Kotlin">@Composable
+fun DraggableControlPoint(controlPoint: Offset, onControlPointChange: (Offset) -&gt; Unit) {
+    var localPosition by remember { mutableStateOf(controlPoint) }
+    Box(
+        modifier = Modifier
+            .offset {
+                IntOffset(
+                    x = localPosition.x.roundToInt() - 15,
+                    y = localPosition.y.roundToInt() - 15
+                )
+            }
+            .size(30.dp)
+            .background(Color.Red, shape = CircleShape)
+            .pointerInput(Unit) {
+                detectDragGestures(onDragEnd = {
+                    onControlPointChange(localPosition)
+                }) { _, dragAmount -&gt;
+                    // adjust based on screen bounds
+                    val newX = (localPosition.x + dragAmount.x).coerceIn(0f, 600f)
+                    val newY = (localPosition.y + dragAmount.y).coerceIn(0f, 600f)
+                    localPosition = Offset(newX, newY)
+                }
+            }
+    )
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>DraggableControlPoint 是一个可组合项，允许用户以交互方式更改控制点的位置。</li>
+<li>拖动控制点会更新 localPosition，并在拖动手势完成（onDragEnd）后将其反馈回 GameCharacterMovement。此交互会改变动画图标的路径。</li>
+</ul>
+
+
+<h3>实际用例</h3>
+
+<ol>
+<li>交互式教育应用：在教育应用中，动画可用于提升学习的吸引力。例如，在天文学应用中，拖动行星沿其轨道运行即可查看不同的星座。</li>
+<li>交互式故事叙述和游戏：在数字故事叙述或游戏应用中，允许用户通过可拖动元素来影响故事或游戏环境，可以创造更具沉浸感的体验。</li>
+</ol>
+
+
+<h2>第 2 部分 — 在 Jetpack Compose中编排复杂动画</h2>
+
+<h3>同步多个元素以实现和谐效果</h3>
+
+<p>在本部分中，我们将深入探讨在 Jetpack Compose 中编排（Choreographing）复杂动画的艺术。我们专注于创建同步动画，使多个元素能够无缝交互，从而提升整体用户体验。</p>
+
+<h3>A) 连锁反应动画 — 多米诺骨牌效应</h3>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*iNeJJU3ixcdcZnQFHHSWYw.gif" alt="多米诺骨牌效应" /></p>
+
+<p>通过设置一系列动画可以在 UI 中创建多米诺骨牌效应，其中一个动画的完成会触发下一个动画的开始。</p>
+
+<pre><code class="Kotlin">@Composable
+fun DominoEffect() {
+    val animatedValues = List(6) { remember { Animatable(0f) } }
+
+    LaunchedEffect(Unit) {
+        animatedValues.forEachIndexed { index, animate -&gt;
+            animate.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 1000, delayMillis = index * 100)
+            )
+        }
+    }
+
+    Box (modifier = Modifier.fillMaxSize()){
+      animatedValues.forEachIndexed { index, value -&gt;
+        Box(
+            modifier = Modifier
+                .size(50.dp)
+                .offset(x = ((index+1) * 50).dp, y = ((index+1) * 30).dp)
+                .background(getRandomColor(index).copy(alpha = value.value))
+        )
+      }
+    }
+}
+
+fun getRandomColor(seed: Int): Color {
+    val random = Random(seed = seed).nextInt(256)
+    return Color(random, random, random)
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>animatedValues 是一个Animatable对象的列表，每个值控制一个框的 Alpha（不透明度）。</li>
+<li>LaunchedEffect 会触发这些值的一系列动画，从而创建一种交错效果，即每个框在前一个框之后淡入，类似于多米诺骨牌倒下。</li>
+<li>getRandomColor 函数会为每个框生成随机的灰色阴影，为序列中的每个组件添加独特的视觉元素。</li>
+<li>这些框沿屏幕对角线放置，增强了多米诺骨牌效应。</li>
+</ul>
+
+
+<h3>B) 交互式滚动时间轴</h3>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Kk-V0g5pEqy83NajRy_6lA.gif" alt="交互式滚动时间轴" /></p>
+
+<p>在这个时间轴中，每个元素都会随着用户滚动而淡入并移动到位。我们将使用 LazyColumn来呈现可滚动列表，并使用Animatable来呈现动画。</p>
+
+<pre><code class="Kotlin">@Composable
+fun InteractiveTimeline(timelineItems: List&lt;String&gt;) {
+    val scrollState = rememberLazyListState()
+
+    LazyColumn(state = scrollState) {
+        itemsIndexed(timelineItems) { index, item -&gt;
+            val animatableAlpha = remember { Animatable(0f) }
+            val isVisible = remember {
+                derivedStateOf {
+                    scrollState.firstVisibleItemIndex &lt;= index
+                }
+            }
+
+            LaunchedEffect(isVisible.value) {
+                if (isVisible.value) {
+                    animatableAlpha.animateTo(
+                        1f, animationSpec = tween(durationMillis = 1000)
+                    )
+
+                }
+            }
+
+            TimelineItem(
+                text = item,
+                alpha = animatableAlpha.value,
+            )
+        }
+    }
+}
+
+@Composable
+fun TimelineItem(text: String, alpha: Float) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.DarkGray.copy(alpha = alpha))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            modifier = Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Center,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>animatableAlpha 控制每个时间轴项目的 Alpha（不透明度），初始设置为 0（完全透明）。</li>
+<li>isVisible 状态源自当前滚动位置，用于确定项目是否可见。</li>
+<li>当用户滚动时，LaunchedEffect会触发进入视口的项目的淡入动画。</li>
+</ul>
+
+
+<h4>用例</h4>
+
+<p>此交互式时间轴非常适合那些希望以视觉吸引力十足的方式呈现一系列事件或步骤的应用。动画通过在项目进入视野时吸引用户的注意力来增强用户的参与度。</p>
+
+<p><strong>此类动画不仅引人入胜，还可以用来引导用户关注应用中的一系列事件或操作。</strong></p>
+
+<h2>第 3 部分 — Jetpack Compose中基于物理的真实动画</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*lZ_rpGorcFzewpUJN6WPAQ.gif" alt="弹性拖拽动画" /></p>
+
+<h3>利用物理原理增强UI动态效果</h3>
+
+<p>在本节中，我们将探索如何使用 Jetpack Compose将物理原理融入动画，为 UI 增添一层真实感和交互性。我们将重点介绍一个弹性拖拽交互示例。</p>
+
+<h3>拖拽时的弹性效果</h3>
+
+<p>此示例演示了图标上的弹性拖拽交互。垂直拖动时，图标会拉伸并回弹，产生弹性效果，模拟弹簧或橡皮筋​​的行为。</p>
+
+<pre><code class="Kotlin">@Composable
+fun ElasticDraggableBox() {
+    var animatableOffset by remember { mutableStateOf(Animatable(0f)) }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFFA732)), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .offset(y = animatableOffset.value.dp)
+                .draggable(
+                    orientation = Orientation.Vertical,
+                    state = rememberDraggableState { delta -&gt;
+                        animatableOffset = Animatable(animatableOffset.value + delta)
+                    },
+                    onDragStopped = {
+                        animatableOffset.animateTo(0f, animationSpec = spring())
+                    }
+                )
+                .size(350.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.Favorite,
+                contentDescription = "heart",
+                modifier = Modifier.size(animatableOffset.value.dp + 150.dp),
+                tint = Color.Red
+            )
+        }
+    }
+}
+</code></pre>
+
+<h4>说明</h4>
+
+<ul>
+<li>使用 draggable 修饰符将包含图标的 Box 可组合项设置为可拖动。</li>
+<li>animatableOffset 跟踪图标因拖动而产生的垂直偏移。</li>
+<li>在拖动过程中，图标的大小会根据拖动量而变化，从而产生拉伸效果。</li>
+<li>当拖动停止（onDragStopped）时，animatableOffset 会使用弹簧动画返回到 0f，从而使图标弹回其原始大小和位置。</li>
+</ul>
+
+
+<h2>第 4 节 — Jetpack Compose 中的手势动画</h2>
+
+<h3>通过响应式手势提升用户体验</h3>
+
+<p>在本部分中，我们将探索如何使用 Jetpack Compose 创建由用户手势控制的动画。我们将重点介绍两个示例——一个支持多点触控的可变形图像和一个由手势控制的音频波形。</p>
+
+<h3>A) 多点触控可变形图像</h3>
+
+<p>在本示例中，我们将创建一个图像视图，用户可以使用捏合、缩放和旋转等多点触控（Multi-touch）手势进行交互。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*34WxcBivTWhiCY6KVSVelQ.gif" alt="多点触控可变形图像" /></p>
+
+<pre><code class="Kotlin">@Composable
+fun TransformableImage(imageId: Int = R.drawable.android) {
+    var scale by remember { mutableStateOf(1f) }
+    var rotation by remember { mutableStateOf(0f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.DarkGray), contentAlignment = Alignment.Center) {
+        Image(
+            painter = painterResource(id = imageId),
+            contentDescription = "Transformable image",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(300.dp)
+                .graphicsLayer(
+                    scaleX = scale,
+                    scaleY = scale,
+                    rotationZ = rotation,
+                    translationX = offset.x,
+                    translationY = offset.y
+                )
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, rotate -&gt;
+                        scale *= zoom
+                        rotation += rotate
+                        offset += pan
+                    }
+                }
+        )
+    }
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>Image 可组合项通过 graphicsLayer 进行修改，以应用缩放、旋转和平移等变换。</li>
+<li>pointerInput 带有 detectTransformGestures 接口，用于处理多点触控手势，并相应地更新缩放、旋转和偏移。</li>
+</ul>
+
+
+<h3>B) 手势控制波形</h3>
+
+<p>这是一个波形可视化效果，它根据用户手势（例如滑动和捏合）改变外观，以控制幅度和频率等方面。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*qKzb1XpUrSGKdCL-OxhtLw.gif" alt="手势控制波形" /></p>
+
+<pre><code class="Kotlin">@Composable
+fun GestureControlledWaveform() {
+    var amplitude by remember { mutableStateOf(100f) }
+    var frequency by remember { mutableStateOf(1f) }
+
+    Canvas(modifier = Modifier
+        .fillMaxSize()
+        .pointerInput(Unit) {
+            detectDragGestures { _, dragAmount -&gt;
+                amplitude += dragAmount.y
+                frequency += dragAmount.x / 500f 
+                // 根据拖拽调整频率
+            }
+        }
+        .background(
+            Brush.verticalGradient(
+                colors = listOf(Color(0xFF003366), Color.White, Color(0xFF66B2FF))
+            )
+        )) {
+        val width = size.width
+        val height = size.height
+        val path = Path()
+
+        val halfHeight = height / 2
+        val waveLength = width / frequency
+
+        path.moveTo(0f, halfHeight)
+
+        for (x in 0 until width.toInt()) {
+            val theta = (2.0 * Math.PI * x / waveLength).toFloat()
+            val y = halfHeight + amplitude * sin(theta.toDouble()).toFloat()
+            path.lineTo(x.toFloat(), y)
+        }
+
+        val gradient = Brush.horizontalGradient(
+            colors = listOf(Color.Blue, Color.Cyan, Color.Magenta)
+        )
+
+        drawPath(
+            path = path,
+            brush = gradient
+        )
+    }
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>amplitude 和 frequency 是状态变量，分别控制波形的幅度和频率。</li>
+<li>Canvas 可组合项用于绘制波形。Canvas 内部的绘制逻辑根据正弦函数计算每个 X 位置的 Y 位置，从而创建波浪效果。</li>
+<li>detectDragGestures 修饰符用于根据用户拖动手势更新幅度和频率。水平拖动调整频率，垂直拖动调整幅度。</li>
+<li>当用户在屏幕上拖动时，波形的形状会相应变化，从而营造出互动体验。</li>
+</ul>
+
+
+<h4>注意事项</h4>
+
+<ul>
+<li>这是一个基本的实现。为了获得更逼真的音频波形，你需要集成实际的音频数据。</li>
+<li>可以通过调整拖动过程中幅度和频率的修改方式来微调波形对手势的响应能力。</li>
+</ul>
+
+
+<p>此示例演示了如何在 Compose 中创建基本的交互式波形，并且可以对其进行扩展或修改，以用于更复杂的用例或处理更复杂的手势。</p>
+
+<h2>第 5 节 — Jetpack Compose 中的状态驱动动画模式</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*nkfhmC6JjQnshL3y_izhKg.gif" alt="带动画线图" /></p>
+
+<h3>基于数据和状态变化的UI动画</h3>
+
+<p>本部分重点介绍如何创建由数据或UI 状态变化驱动的动画，从而增强应用的交互性和响应能力。我们将探讨两个具体示例——数据图动画和在多状态 UI 中实现状态转换。</p>
+
+<h3>A) 数据驱动的图形动画</h3>
+
+<p>本示例演示了一个动画线图，其中图形的路径（Path）会随着数据集的变化而变化。</p>
+
+<pre><code class="Kotlin">@Composable
+fun AnimatedGraphExample() {
+    var dataPoints by remember { mutableStateOf(generateRandomDataPoints(5)) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.DarkGray)
+    ) {
+        AnimatedLineGraph(dataPoints = dataPoints)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(
+            onClick = {
+                dataPoints = generateRandomDataPoints(5)
+            },
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            colors = ButtonDefaults.buttonColors(containerColor = Color.Green)
+        ) {
+            Text(
+                "Update Data",
+                fontWeight = FontWeight.Bold,
+                color = Color.DarkGray,
+                fontSize = 18.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun AnimatedLineGraph(dataPoints: List&lt;Float&gt;) {
+    val animatableDataPoints = remember { dataPoints.map { Animatable(it) } }
+    val path = remember { Path() }
+
+    LaunchedEffect(dataPoints) {
+        animatableDataPoints.forEachIndexed { index, animatable -&gt;
+            animatable.animateTo(dataPoints[index], animationSpec = TweenSpec(durationMillis = 500))
+        }
+    }
+
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(400.dp)
+    ) {
+        path.reset()
+        animatableDataPoints.forEachIndexed { index, animatable -&gt;
+            val x = (size.width / (dataPoints.size - 1)) * index
+            val y = size.height - (animatable.value * size.height)
+            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(path, Color.Green, style = Stroke(5f))
+    }
+}
+
+fun generateRandomDataPoints(size: Int): List&lt;Float&gt; {
+    return List(size) { Random.nextFloat() }
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>AnimatedGraphExample 可组合项创建了一个可以更新折线图数据点的环境。</li>
+<li>该图表绘制在 Canvas 中，其中 drawPath 方法使用来自 animatableDataPoints 的动画值。</li>
+<li>对于图表中的每个数据点，我们需要计算其在画布上对应的 x（水平）和 y（垂直）位置。</li>
+<li>x 计算 - x 位置是根据数据点的索引和画布的总宽度计算得出的。我们将数据点沿画布的宽度均匀分布。
+<code>Kotlin
+val x = (size.width / (dataPoints.size - 1)) * index
+</code></li>
+<li>y 计算——y 位置是根据数据点（animatable.value）的值和画布的高度计算的。
+<code>Kotlin
+val y = size.height - (animatable.value * size.height)
+</code></li>
+<li>路径从第一个数据点开始，然后使用 lineTo 绘制一条线到每个后续点，从而创建图形线。</li>
+<li>路径基于数据点的动画值绘制，从而在数据发生变化时创建动画效果。</li>
+</ul>
+
+
+<h3>B) 多状态 UI 中的状态转换</h3>
+
+<p>可以使用 Animatable 在多状态 UI 中实现状态转换，从而在不同 UI 状态之间进行动画处理。</p>
+
+<pre><code class="Kotlin">enum class UIState { StateA, StateB, StateC }
+
+@Composable
+fun StateTransitionUI() {
+    var currentState by remember { mutableStateOf(UIState.StateA) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(getBackgroundColorForState(currentState)),
+        contentAlignment = Alignment.Center
+    ) {
+        AnimatedContent(currentState = currentState)
+
+        Button(
+            onClick = { currentState = getNextState(currentState) },
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Text("Next State")
+        }
+    }
+}
+
+@Composable
+fun AnimatedContent(currentState: UIState) {
+    AnimatedVisibility(
+        visible = currentState == UIState.StateA,
+        enter = fadeIn(animationSpec = tween(durationMillis = 2000)) + expandVertically(),
+        exit = fadeOut(animationSpec = tween(durationMillis = 2000)) + shrinkVertically()
+    ) {
+        Text("This is ${currentState.name}", fontSize = 32.sp)
+    }
+
+    // 与B 和 C 的类似的代码块
+}
+
+fun getBackgroundColorForState(state: UIState): Color {
+    return when (state) {
+        UIState.StateA -&gt; Color.Red
+        UIState.StateB -&gt; Color.Green
+        UIState.StateC -&gt; Color.Blue
+    }
+}
+
+fun getNextState(currentState: UIState): UIState {
+    return when (currentState) {
+        UIState.StateA -&gt; UIState.StateB
+        UIState.StateB -&gt; UIState.StateC
+        UIState.StateC -&gt; UIState.StateA
+    }
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>在此示例中，AnimatedVisibility 用于为每个状态下内容的出现和消失添加动画效果。这会在状态变化时添加平滑的过渡效果。</li>
+<li>对于每个状态（StateA、StateB、StateC），都有一个 AnimatedVisibility 块，用于通过淡入淡出和展开/收缩动画控制其内容的可见性。</li>
+<li>AnimatedVisibility 的进入和退出参数分别定义了内容可见或隐藏时的动画。</li>
+</ul>
+
+
+<h2>第 6 节 — 在 Compose中改变（Morphing）形状</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*q82EIocVzR8XBMuG_14mdg.gif" alt="形状变形" /></p>
+
+<p>动画形状之间的变换涉及这些形状的属性的插值。</p>
+
+<pre><code class="Kotlin">@Composable
+fun ShapeMorphingAnimation() {
+    val animationProgress = remember { Animatable(0f) }
+
+    LaunchedEffect(Unit) {
+        animationProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2000, easing = LinearOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            )
+        )
+    }
+
+    Canvas(modifier = Modifier.padding(40.dp).fillMaxSize()) {
+        val sizeValue = size.width.coerceAtMost(size.height) / 2
+        val squareRect = Rect(center = center, sizeValue)
+
+        val morphedPath = interpolateShapes(progress = animationProgress.value, squareRect = squareRect)
+        drawPath(morphedPath, color = Color.Blue, style = Fill)
+    }
+}
+
+fun interpolateShapes(progress: Float, squareRect: Rect): Path {
+    val path = Path()
+
+    val cornerRadius = CornerRadius(
+        x = lerp(start = squareRect.width / 2, stop = 0f, fraction = progress),
+        y = lerp(start = squareRect.height / 2, stop = 0f, fraction = progress)
+    )
+
+    path.addRoundRect(
+        roundRect = RoundRect(rect = squareRect, cornerRadius = cornerRadius)
+    )
+
+    return path
+}
+
+fun lerp(start: Float, stop: Float, fraction: Float): Float {
+    return (1 - fraction) * start + fraction * stop
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>ShapeMorphingAnimation 设置了一个无限动画，将 animationProgress 的值在 0 和 1 之间切换。</li>
+<li>Canvas 可组合项用于绘制形状。在这里，我们根据画布大小定义正方形 (squareRect) 的尺寸。</li>
+<li>interpolateShapes 接收当前动画进度和正方形的矩形，在圆形和正方形之间进行插值。它使用 lerp（线性插值）逐步调整圆角矩形的 cornerRadius，该矩形代表我们的变形形状。</li>
+<li>当 progress 为 0 时，cornerRadius 是矩形大小的一半，使形状变为圆形。当 progress 为 1 时，cornerRadius 为 0，使形状变为正方形。</li>
+</ul>
+
+
+<h4>实际用例</h4>
+
+<ul>
+<li>加载和进度指示器——变形形状可用于创建更具吸引力的加载或进度指示器，以视觉上引人入胜的方式指示进度或加载状态。</li>
+<li>UI 中的图标过渡——变形图标可用于根据用户操作提供视觉反馈。例如，点击播放按钮时会变形为暂停按钮，汉堡菜单图标会变形为后退箭头。</li>
+<li>数据可视化——在复杂的数据可视化中，变形可以帮助在不同视图或数据状态之间过渡，使用户更容易跟踪和理解随时间或类别变化的变化。</li>
+</ul>
+
+
+<h2>想看雪花特效吗？</h2>
+
+<p>我们将演示一个简单的粒子系统（Particle system）来创建雪花效果。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*E26GhhxDZLGTpE8gMvJoHw.gif" alt="雪花特效" /></p>
+
+<pre><code class="Kotlin">data class Snowflake(
+    var x: Float,
+    var y: Float,
+    var radius: Float,
+    var speed: Float
+)
+
+@Composable
+fun SnowfallEffect() {
+    val snowflakes = remember { List(100) { generateRandomSnowflake() } }
+    val infiniteTransition = rememberInfiniteTransition(label = "")
+
+    val offsetY by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 5000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ), label = ""
+    )
+
+    Canvas(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        snowflakes.forEach { snowflake -&gt;
+            drawSnowflake(snowflake, offsetY % size.height)
+        }
+    }
+}
+
+fun generateRandomSnowflake(): Snowflake {
+    return Snowflake(
+        x = Random.nextFloat(),
+        y = Random.nextFloat() * 1000f,
+        radius = Random.nextFloat() * 2f + 2f, // Snowflake size
+        speed = Random.nextFloat() * 1.2f + 1f  // Falling speed
+    )
+}
+
+fun DrawScope.drawSnowflake(snowflake: Snowflake, offsetY: Float) {
+    val newY = (snowflake.y + offsetY * snowflake.speed) % size.height
+    drawCircle(Color.White, radius = snowflake.radius, center = Offset(snowflake.x * size.width, newY))
+}
+</code></pre>
+
+<h4>代码说明</h4>
+
+<ul>
+<li>SnowfallEffect 设置了一个包含多个雪花（Snowflake 对象）的粒子系统。</li>
+<li>每个雪花都具有位置 (x, y)、半径（大小）和速度等属性。</li>
+<li>rememberInfiniteTransition 和 animateFloat 用于创建连续的垂直运动效果，模拟降雪。</li>
+<li>Canvas 可组合函数用于绘制每片雪花。drawSnowflake 函数根据每片雪花的速度和动画的 offsetY 计算其新的位置。</li>
+<li>雪花从底部落下后会重新出现在顶部，从而产生循环降雪效果。</li>
+</ul>
+
+
+<h2>总结</h2>
+
+<p>随着我们对 Jetpack Compose 动画的探索逐渐深入，我们清楚地认识到，动画不仅仅是视觉上的点缀。它们是打造引人入胜、直观且赏心悦目的用户体验的关键工具。</p>
+
+<h3>拥抱互动性</h3>
+
+<p>从动态游戏角色运动到交互式时间轴，我们见证了动画如何让用户交互更具吸引力和信息量。</p>
+
+<h3>打造逼真的体验</h3>
+
+<p>雪花飘落效果和变形形状展现了该工具包将真实感和流畅性带入数字世界的能力。这些动画有助于打造与用户产生共鸣的沉浸式体验。</p>
+
+<h3>简化复杂性</h3>
+
+<p>无论是编排多个元素还是制作状态转换动画，其简单易用性都令人瞩目。</p>
+
+<h2>结束语</h2>
+
+<p>如果你喜欢本文，请随时留下宝贵的反馈或赞赏。我一直期待与其他开发者一起学习、合作、共同成长。</p>
+
+<p>如有任何疑问，请随时给我留言！</p>
+
+<p>在 Medium 上关注我，获取更多文章 — <a href="https://medium.com/@pherwani37">Medium 个人资料</a>（链接：<a href="https://medium.com/@pherwani37%EF%BC%89">https://medium.com/@pherwani37%EF%BC%89</a></p>
+
+<p>在<a href="https://linkedin.com/in/nirbhaypherwani">LinkedIn</a>（链接：<a href="https://linkedin.com/in/nirbhaypherwani%EF%BC%89%E5%92%8C">https://linkedin.com/in/nirbhaypherwani%EF%BC%89%E5%92%8C</a><a href="https://twitter.com/nirbhayph">Twitter</a>（链接：<a href="https://twitter.com/nirbhayph%EF%BC%89%E4%B8%8A%E4%B8%8E%E6%88%91%E8%81%94%E7%B3%BB%EF%BC%8C%E4%BB%A5%E4%BE%BF%E6%88%91%E4%BB%AC%E8%BF%9B%E8%A1%8C%E5%90%88%E4%BD%9C%E3%80%82">https://twitter.com/nirbhayph%EF%BC%89%E4%B8%8A%E4%B8%8E%E6%88%91%E8%81%94%E7%B3%BB%EF%BC%8C%E4%BB%A5%E4%BE%BF%E6%88%91%E4%BB%AC%E8%BF%9B%E8%A1%8C%E5%90%88%E4%BD%9C%E3%80%82</a></p>
+
+<p>祝你动画制作愉快！</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[理解Jetpack Compose中副作用函数的内部原理]]></title>
@@ -758,352 +1694,6 @@ fun performanceTest() {
 
 
 <p>遵循这些优化技巧将有助于确保你的Compose UI保持响应迅速且高效，从而为你的应用提供更好的用户体验。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Compose Multiplatform支持热重载(Hot Reload)了]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/04/12/compose-hot-reload/"/>
-    <updated>2025-04-12T17:11:47+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/04/12/compose-hot-reload</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自Compose Hot Reload is Now Available，原文链接<a href="https://medium.com/@wisemuji/compose-hot-reload-is-now-available-3a9aee58b0fe">Compose Hot Reload is Now Available</a>，由<a href="https://medium.com/@wisemuji">Suhyeon Kim</a>，发布于2025年3月19日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*FMBFWn5vJOuaM41zKE6aTg.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p><strong>译注：</strong>  需要注意的是Google通过Android Studio(after Giraffe)里面的<a href="https://developer.android.com/develop/ui/compose/tooling/iterative-development">Live Edit特性</a>提供了对Android上面的Jetpack Compose的实时更新支持。但它仅支持Jetpack Compose (for Adnroid)，并不支持CMP，也即不支持JetBrains的Compose。也正因为如此JetBrains才会开发面向CMP的Hot Reload。</p>
-
-<p>在Compose UI开发过程中，你是否经常需要构建运行？Compose 热重载现已在Maven Central中推出，可为Compose多平台（桌面）应用中的UI代码提供实时更新。我们无需重启应用即可立即查看UI代码的更改。</p>
-
-<p>让我们来一探究竟！</p>
-
-<h2>热重载(Hot Reload)是什么鬼？</h2>
-
-<p>许多声明式UI框架都提供了类似概念，热重载，即可以在开发过程中提供对UI更改的近乎即时的反馈（尽管它们的名称不同！）。</p>
-
-<p>例如隔壁的两家：</p>
-
-<ul>
-<li>Flutter热加载：<a href="https://docs.flutter.dev/tools/hot-reload">https://docs.flutter.dev/tools/hot-reload</a></li>
-<li>React Native快速刷新：<a href="https://reactnative.dev/docs/fast-refresh">https://reactnative.dev/docs/fast-refresh</a></li>
-</ul>
-
-
-<p>热重载允许开发者实时查看代码更改，无需重启应用或重新编译整个项目。在大多数情况下，热重载会保留应用的状态，因此开发者可以继续与应用交互，而不会丢失进度或上下文。这可以帮助开发者快速演示代码更改对UI的影响，从而提高工作效率，而无需等待漫长的构建。</p>
-
-<h2>Compose的热重载</h2>
-
-<p>看一下官方的介绍<a href="https://github.com/JetBrains/compose-hot-reload">https://github.com/JetBrains/compose-hot-reload</a>：</p>
-
-<blockquote><p>在Compose多平台应用中更改你的UI代码，并实时查看结果。
-无需重启应用。</p></blockquote>
-
-<p>目前，Compose Hot Reload 适用于针对桌面 JVM 的多平台项目（未来是否有可能扩展？我不确定。:D）。Compose Hot Reload 的最新版本是 v1.0.0-alpha02，于昨天（2025 年 3 月 17 日）发布。现在，开发者可以在Compose多平台应用中查看其UI代码的更改，而无需重启应用。这意味着开发者可以立即预览更改，而无需缓慢的构建和重启。</p>
-
-<p><strong>译注：</strong> 现在（2025年4月9日）最新版本是 v1.0.0-alpha04，主要是Bugfix，目前开发中的版本是 v1.0.0-alpha05 。</p>
-
-<h2>如何上手</h2>
-
-<p>要开始使用Compose Hot Reload，请查看<a href="https://github.com/JetBrains/compose-hot-reload">Compose Hot Reload</a>的 GitHub 代码库。</p>
-
-<p><strong>注意：</strong> 以下内容基于 v1.0.0-alpha02 编写。</p>
-
-<h3>依赖要求</h3>
-
-<ul>
-<li>一个以桌面为目标的Compose Multiplatform 项目（参见<a href="https://github.com/JetBrains/compose-hot-reload#faq">其FAQ</a>）</li>
-<li>Kotlin 2.1.20-Beta2 或更高版本</li>
-</ul>
-
-
-<p>对于 Android 应用，有一个小的解决方法：
-首先，你需要从Jetpack Compose插件切换到Compose Multiplatform 插件，
-然后添加一个单独的 Gradle 模块并配置桌面目标。</p>
-
-<h3>将 Gradle 插件应用到你的项目中</h3>
-
-<p>将 org.jetbrains.compose.hot-reload Gradle 插件添加到你的构建脚本：</p>
-
-<pre><code class="Kotlin">plugins {
-    kotlin("multiplatform") version "2.1.20-RC" // &lt;- Use Kotlin 2.1.20-RC or higher!
-    kotlin("plugin.compose") version "2.1.20-RC" // &lt;- Use Compose Compiler Plugin 2.1.20-RC or higher!
-    id("org.jetbrains.compose")
-    id("org.jetbrains.compose.hot-reload") version "1.0.0-alpha02" // &lt;- add this additionally
-}
-</code></pre>
-
-<h3>启用“OptimizeNonSkippingGroups”：</h3>
-
-<p>将以下内容添加到你的 build.gradle.kts ：</p>
-
-<pre><code class="Kotlin">import org.jetbrains.kotlin.compose.compiler.gradle.ComposeFeatureFlag
-// ...
-composeCompiler {
-    featureFlags.add(ComposeFeatureFlag.OptimizeNonSkippingGroups)
-}
-</code></pre>
-
-<h3>为UI热重载提供入口点</h3>
-
-<p>在项目的桌面源代码集中，使用 DevelopmentEntryPoint 包装窗口内容。</p>
-
-<pre><code class="Kotlin">import org.jetbrains.compose.reload.DevelopmentEntryPoint
-// ...
-fun main() {
-    singleWindowApplication(...) {
-        DevelopmentEntryPoint { // add this line
-            App()
-        }
-    }
-}
-</code></pre>
-
-<p>这就是我们需要折腾的全部内容。现在让我们看看它是如何工作的。</p>
-
-<h2>Demo演示</h2>
-
-<p>要了解Compose 热重载的实际效果，我们来看看我的示例项目<a href="https://github.com/wisemuji/compose-would-you-rather-game">“Would You Rather Game”</a>。这个项目是一个简单的 Compose 多平台桌面应用，用户可以在其中回答有趣的“Would You Rather”问题。Compose 热重载插件最近已实现。</p>
-
-<p>你可以参考 Compose 热重载的setup提交：<a href="https://github.com/wisemuji/compose-would-you-rather-game/commit/937375cea9010733ee751dc2d464a0df21318cee">setup提交</a>。</p>
-
-<p>如果你在项目上运行desktopRun，你会注意到桌面应用程序旁边会出现一个小的Compose图标。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1288/format:webp/1*TXn4jUzxwcSh5IfqRqFNkA.png" alt="HotReload Icon" /></p>
-
-<p>这将触发 Compose Hot Reload Tooling 模式，如下所示：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*37gLudPijGvh3A-rKdK_kw.png" alt="HotReload Demo" /></p>
-
-<h3>UI更改示例</h3>
-
-<p>假设我们想要更改<a href="https://github.com/wisemuji/compose-would-you-rather-game/blob/4e9bfc7172c7145f95190fd383169bbcdc25856f/composeApp/src/commonMain/kotlin/ui/game/GameScreen.kt#L226">GameScreen.kt</a>中的动画。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*b4xJXpWH9oA5YohC1zsWng.gif" alt="Full Demo" /></p>
-
-<p>看到没有！一旦我们保存文件，更改就会立即显示在正在运行的应用程序中。无需重启应用！</p>
-
-<h2>热重载当前支持的场景</h2>
-
-<p>目前，几乎所有代码更改都支持热重载（除了从类中删除超类型）。</p>
-
-<p><a href="https://hashnode.com/@sellmair">Sebastian Sellmair 的视频和博客文章</a>通过多个演示展示了这些功能，并详细解释了重载的底层工作原理。</p>
-
-<h2>局限性</h2>
-
-<p>由于它仅支持基于 JVM 的桌面应用，因此目前尚不支持 Android 和其他平台。
-此外，构建性能方面可能存在一些问题。在我的本地环境中，更改大约需要 3 到 5 秒，感觉比其他声明式UI框架中的热重载慢不少。估计它会在后面得到改善。</p>
-
-<p>由于这是一个 Alpha 版本，因此无法保证稳定性。开发者应该预料到可能会出现一些潜在的错误和迁移挑战，正如 JetBrains 团队所指出的：“Alpha 版本意味着使用风险自负，迁移问题也需谨慎。我们打算将这个想法产品化，但尚未最终成型。” 由于该功能仍在积极开发中，因此我们应该在未来的版本中持续关注更新。</p>
-
-<h2>提供反馈</h2>
-
-<p>如果你遇到任何问题或有改进建议，你可以通过<a href="https://slack-chats.kotlinlang.org/t/27038699/with-compose-hot-reload-now-being-available-on-maven-central"> Kotlinlang Slack - Compose Hot Reload </a>分享你的想法。</p>
-
-<blockquote><p>尤其欢迎提：</p>
-
-<ul>
-<li>设置时遇到的问题</li>
-<li>重新加载特定代码段时遇到的问题</li>
-<li>关于如何改进/功能请求的想法</li>
-</ul>
-
-
-<p>目前不太感兴趣的内容：</p>
-
-<ul>
-<li>构建性能：目前，“Gradle 重编译器”的速度将与你的项目速度一样快。强烈建议
-启用 Gradles 配置缓存，并保持项目非常干净。其他“重编译器”也会有所帮助！（IntelliJ、Amper 等）</li>
-</ul>
-</blockquote>
-
-<h2>总结</h2>
-
-<p>我相信 Compose 中的 Hot Reload 是开发 Compose UI的一大变革。
-它可以让开发人员在无需重启应用的情况下看到更改，从而加快UI开发速度，但它仍处于实验阶段。目前，它最适合个人或早期项目，你可以使用 alpha 版本进行开发。在你自己的 Compose Multiplatform 项目中试用它，体验即时UI反馈的好处！</p>
-
-<p>我迫不及待地想看到即将到来的更新！XD</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://github.com/JetBrains/compose-hot-reload">https://github.com/JetBrains/compose-hot-reload</a></li>
-<li><a href="https://blog.sellmair.io/say-hello-to-compose-hot-reload-firework">https://blog.sellmair.io/say-hello-to-compose-hot-reload-firework</a></li>
-<li><a href="https://www.youtube.com/watch?v=8Z-Vuo3wTd0">Firework: Introducing Compose Hot Reload</a></li>
-<li><a href="https://www.youtube.com/watch?v=I_FMnPaEBEA">How ‘Hot Reload’ is implemented for Compose</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[实战：探索Jetpack Compose中的SearchBar]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/04/09/searchbar-in-jetpack-compose/"/>
-    <updated>2025-04-09T22:40:46+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/04/09/searchbar-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自Exploring Jetpack Compose: SearchBar，原文链接：<a href="https://joebirch.co/android/exploring-the-searchbar-composable/">https://joebirch.co/android/exploring-the-searchbar-composable/</a>，作者是Joe Birch。</p></blockquote>
-
-<p>在应用内搜索内容是一项常见功能，事实上，你可以在设备上的大多数应用程序中发现此功能。在 Android 上，我们看到的此功能的常见 UI 组件是浮动搜索栏，放置在屏幕的显眼位置。在某些情况下，这还会向用户提供搜索建议，以简化搜索过程。Jetpack Compose Material3 软件包提供了对提供此功能的 SearchBar 可组合项的访问，在这篇博文中，我们将学习如何在我们自己的应用中使用它。</p>
-
-<p><a href=""><img src="https://joebirch.co/wp-content/uploads/2025/03/Group.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>SearchBar 可组合项允许我们显示一个浮动的搜索组件，该组件展开后会显示可选的推荐。如上所述，这是我们在许多应用中看到的常见模式，此可组合项提供了开箱即用的解决方案。SearchBar 可组合项提供了足够的自定义功能来控制组件的外观和感觉，同时使用基于插槽(slot)的方法让我们提供输入字段以供使用。</p>
-
-<pre><code class="Kotlin">@Composable
-fun SearchBar(
-    inputField: @Composable () -&gt; Unit,
-    expanded: Boolean,
-    onExpandedChange: (Boolean) -&gt; Unit,
-    modifier: Modifier = Modifier,
-    shape: Shape = SearchBarDefaults.inputFieldShape,
-    colors: SearchBarColors = SearchBarDefaults.colors(),
-    tonalElevation: Dp = SearchBarDefaults.TonalElevation,
-    shadowElevation: Dp = SearchBarDefaults.ShadowElevation,
-    windowInsets: WindowInsets = SearchBarDefaults.windowInsets,
-    content: @Composable ColumnScope.() -&gt; Unit,
-)
-</code></pre>
-
-<p>该组件为我们处理了大部分内部工作——其中两个关键部分需要我们自己提供。</p>
-
-<ul>
-<li>inputField – 这是表示内容输入的搜索字段的输入可组合项</li>
-<li>content – 这是搜索栏展开时用于显示推荐的内容区域</li>
-</ul>
-
-
-<p>除了这些字段之外，还有一组其他属性用于确定 SearchBar 的当前状态。例如，当搜索栏处于展开状态时，可组合项的内容将显示在输入字段下方。为了能够管理这一点，我们需要为可组合项提供一些参数，用于管理此状态。首先，expanded 参数用于描述 SearchBar 是否处于展开状态（这将决定是否显示内容区域），以及 onExpandedChange 参数，用于为实现提供展开状态的更新值（然后可用于反映我们自己的状态实现）。</p>
-
-<pre><code class="Kotlin">var expanded by remember { mutableStateOf(false) }
-
-SearchBar(
-    modifier = Modifier.fillMaxWidth(),
-    expanded = expanded,
-    onExpandedChange = {
-        expanded = it
-    }
-)
-</code></pre>
-
-<p>除了管理这种展开状态外，我们还需要提供用于 SearchBar 输入区域的 inputField。除了遵循可组合项的基于插槽的方法之外，这还允许可组合项遵循状态提升的概念，使我们能够完全管理 SearchBar 输入字段的状态概念。</p>
-
-<pre><code class="Kotlin">var expanded by remember { mutableStateOf(false) }
-var query by remember { mutableStateOf&lt;String?&gt;(null) }
-
-SearchBar(
-    modifier = Modifier.fillMaxWidth(),
-    expanded = expanded,
-    onExpandedChange = {
-        expanded = it
-    },
-    inputField = {
-        // ...
-    }
-)
-</code></pre>
-
-<p>为了简化此操作，SearchBarDefaults 类为我们提供了对 InputField 可组合项的访问 - 这使我们能够访问专门为 SearchBar 实现的可组合项。不需要使用此特定可组合项，但它是专门为基于搜索的输入字段提供的便利可组合项。此可组合项采用一些关键参数，用于将其配置为在 SearchBar 中使用：</p>
-
-<ul>
-<li>expanded 和 onExpandedChange - 用于管理字段的展开状态</li>
-<li>query 和 onQueryChange - 用于管理字段中显示的查询的状态</li>
-</ul>
-
-
-<p>除了这些核心属性外，你还会注意到对标准字段参数（如占位符、leadingIcon 和 trailingIcon）的支持。除了用于提供信息之外，我们还可以在下面的示例中看到我如何使用 trailingIcon 允许 SearchBar 在单击取消按钮时恢复到折叠状态。</p>
-
-<pre><code class="Kotlin">SearchBarDefaults.InputField(
-    onSearch = { expanded = false },
-    expanded = expanded,
-    onExpandedChange = { expanded = it },
-    placeholder = { Text("What are you looking for?") },
-    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-    trailingIcon = {
-        if (expanded) {
-            IconButton(onClick = {
-                expanded = false
-            }) {
-                Icon(Icons.Default.Close, contentDescription = null)
-            }
-        }
-    },
-    query = query ?: "",
-    onQueryChange = {
-        query = it
-    }
-)
-</code></pre>
-
-<p>然后可以将此 InputField 可组合项的实现插入到 SearchBar 可组合项的 inputField 参数中。</p>
-
-<pre><code class="Kotlin">var expanded by remember { mutableStateOf(false) }
-var query by remember { mutableStateOf&lt;String?&gt;(null) }
-
-SearchBar(
-    modifier = Modifier.fillMaxWidth(),
-    expanded = expanded,
-    onExpandedChange = {
-        expanded = it
-    },
-    inputField = {
-        SearchBarDefaults.InputField(
-            onSearch = { expanded = false },
-            expanded = expanded,
-            onExpandedChange = { expanded = it },
-            placeholder = { Text("What are you looking for?") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            trailingIcon = {
-                if (expanded) {
-                    IconButton(onClick = {
-                        expanded = false
-                    }) {
-                        Icon(Icons.Default.Close, contentDescription = null)
-                    }
-                }
-            },
-            query = query ?: "",
-            onQueryChange = {
-                query = it
-            }
-        )
-    }
-)
-</code></pre>
-
-<p>此时，我们将能够组合 SearchBar 并看到在我们的 UI 中显示的浮动组件。</p>
-
-<p><img src="https://joebirch.co/wp-content/uploads/2025/03/sea.png" alt="SearchBar" /></p>
-
-<p>此时我们剩下要实现的就是 SearchBar 的内容，这是 SearchBar 处于展开状态时显示的内容。此参数利用了 ColumnScope，因此此处提供的任何可组合项都将垂直堆叠。此内容区域的预期形式是用户可以选择的推荐列表，因此我们将继续编写几个 ListItem 可组合项，每个可组合项都用于向用户显示搜索推荐。当点击其中任何一项时，查询将更新为选定值，并且 SearchBar 的展开状态将重置。</p>
-
-<pre><code class="Kotlin">var expanded by remember { mutableStateOf(false) }
-var query by remember { mutableStateOf&lt;String?&gt;(null) }
-
-SearchBar(
-    ...
-) {
-    listOf("Result 1", "Result 2", "Result 3", "Result 4").forEach { text -&gt;
-        ListItem(
-            headlineContent = { Text(text) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-            modifier = Modifier.clickable {
-                query = text
-                expanded = false
-            }.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-    }
-}
-</code></pre>
-
-<p>有了此功能，我们现在就能够看到在浮动搜索栏下方显示的推荐。</p>
-
-<p><img src="https://joebirch.co/wp-content/uploads/2025/03/recs.png" alt="Recommendations" /></p>
-
-<p>有了上述内容，我们就可以实现一个浮动搜索栏，向用户显示搜索建议。使用 Material3 SearchBar 可组合项，实现在这两种不同状态之间转换的可组合项非常容易。也许你已经在应用中使用了 SearchBar，或者一直在寻找类似的功能，但无论如何，我期待看到更多应用通过 Jetpack Compose 中更广泛的组件支持来节省时间！</p>
 ]]></content>
   </entry>
   
