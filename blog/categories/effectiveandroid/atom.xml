@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-06-02T21:59:19+08:00</updated>
+  <updated>2025-07-01T22:55:55+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,952 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[长驻UI元素的UI层体系结构]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/06/07/ui-layer-architecture/"/>
+    <updated>2025-06-07T22:47:48+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/06/07/ui-layer-architecture</id>
+    <content type="html"><![CDATA[<p>本文译自「UI layer architecture for persistent UI elements」，原文链接<a href="https://www.tunjid.com/articles/ui-layer-architecture-for-persistent-ui-elements-68248e8ecc8e85f53ce1aa46">https://www.tunjid.com/articles/ui-layer-architecture-for-persistent-ui-elements-68248e8ecc8e85f53ce1aa46</a>，由TJ Dahunsi</p>
+
+<p>发布于2025年5月14日。</p>
+
+<p><a href=""><img src="file:///Users/alexhilton/Downloads/navi.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在移动应用中，某些 UI 元素会在多种上下文中贯穿整个用户界面。对于用于导航的 UI 元素尤其如此，例如：</p>
+
+<ol>
+<li>导航栏和导航栏。</li>
+<li>顶部和底部应用栏。</li>
+<li>浮动操作按钮。</li>
+</ol>
+
+
+<p>在为这些屏幕构建 UI 时，通常有两种布局方式：</p>
+
+<ol>
+<li>根级 UI 元素：整个应用在根级脚手架布局中共享这些元素的单个实例。在 Android 上，这通常处于 Activity 或 NavHostFragment 级别。</li>
+<li>每个屏幕的 UI 元素：每个导航目标负责绘制自己的 UI 元素。</li>
+</ol>
+
+
+<p>因此，问题是，一种方法通常比另一种更好吗？它们可以共存吗？令人满意的是，我认为这是经典的软件工程“视情况而定”答案不适用的少数情况之一。我坚信，对于 Jetpack Compose 应用，应该始终优先采用每个屏幕的 UI 元素方法。让我们简要回顾一下过去。</p>
+
+<h2>根级 UI 元素</h2>
+
+<p>在 Android 上，根级 UI 元素的起源可以追溯到最初的 Activity ActionBar API 以及随后引入的 Fragment API。Fragment 可以调用：</p>
+
+<ol>
+<li>getSupportActionBar() 在其父 Activity 中设置标题和其他 ActionBar 属性。</li>
+<li>setHasOptionsMenu() 在其父 Activity 中更新菜单项。</li>
+</ol>
+
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/action-bar.png" alt="经典的ActionBar" /></p>
+
+<p>由于 Activity 拥有 ActionBar，这隐式地建立了层级关系。这与转向单 Activity 架构相结合，为在某个根级别管理顶级装饰（例如浮动操作按钮、AppBar 和导航栏）奠定了基调。当然，这有利有弊：</p>
+
+<h3>优点</h3>
+
+<ul>
+<li>真正的持久性：UI 元素是同一个实例，保证了视觉一致性，无需在实例之间进行复杂的过渡。这对于使用浮动操作按钮的应用尤其有利，因为屏幕过渡不会因为每个屏幕使用不同的 FAB 实例而引入 UI/UX 噪音。</li>
+</ul>
+
+
+<h3>缺点</h3>
+
+<ul>
+<li>紧密耦合：屏幕与宿主 Activity 的实现细节和框架 API 紧密耦合。</li>
+<li>复杂的状态管理：宿主 Activity 成为瓶颈，需要复杂的逻辑来更新每个特定屏幕的标题、菜单选项、FAB 可见性/图标/操作，尤其是在屏幕进行动画处理时。这会导致扩展性不佳。</li>
+<li>灵活性受限：更改工具栏样式、在特定屏幕上彻底移除工具栏或处理边缘情况（如果不给主机增加更多条件复杂性）变得困难。</li>
+<li>测试挑战：由于屏幕依赖于主机 Activity 提供必要的 UI 组件和配置钩子，因此单独测试屏幕变得更加困难。</li>
+</ul>
+
+
+<h2>每个屏幕的 UI 元素</h2>
+
+<p>根级 UI 元素的弊端非常严重，以至于 fragment 的 setHasOptionsMenu() 方法在 2022 年被弃用。尽管 MenuHost 和 MenuProvider API 中提供了替代方案，但这主要是为了保持向后兼容性。</p>
+
+<p>至关重要的是，Jetpack Compose 已经发布了 1.1.1 版本，值得注意的是，它没有提供 ActionBar 或类似 MenuHost 的 API。事实上，最接近于提供如何管理导航目的地通用框架功能的 API 是 Scaffold 可组合组件。有趣的是，它：</p>
+
+<ul>
+<li>material3 Compose 库中的一个自成体系的实现。</li>
+<li>是一个基于每个屏幕的 UI 元素实现，为应用栏、浮动操作按钮等提供插槽。</li>
+<li>隐式地鼓励应用中的导航目的地替换整个屏幕内容，包括其特定的应用栏、浮动操作按钮等。</li>
+</ul>
+
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/scaffold_resized.png" alt="Now In Android 应用中脚手架" /></p>
+
+<p>同样，我们可以列出优缺点：</p>
+
+<h3>优点</h3>
+
+<ul>
+<li>封装和模块化：每个导航目的地都是独立的，并管理其自身的UI元素及其状态。这符合单一职责原则。</li>
+<li>高度灵活性：导航目的地可以轻松自定义持久UI元素，而不会影响其他元素。需要完全自定义的应用栏？没问题。不需要浮动操作按钮？那就不要添加它。</li>
+<li>简化状态管理：UI状态（标题、菜单项、导航栏状态）在屏幕的ViewModel或可组合状态中进行本地管理，使其更易于推理。</li>
+<li>提高可测试性：导航目的地可以更轻松地进行独立测试。</li>
+<li>解耦：导航目的地与宿主Activity在这些特定的UI元素方面解耦。</li>
+</ul>
+
+
+<h3>缺点</h3>
+
+<ul>
+<li>代码重复：如果没有适当的结构化，导航目的地之间可能会重复使用常用的UI元素。</li>
+<li>沉浸感受损：要使相同的应用栏或浮动操作按钮在屏幕之间顺利保持/转换，需要明确的过渡处理。</li>
+</ul>
+
+
+<h2>持久 UI 的 UI 层架构</h2>
+
+<p>通过比较这两种实现方式的优缺点，我们可以得出这样的印象：无论我们在 Compose 中使用每个屏幕的 UI 来降低复杂性方面获得了什么好处，我们都需要付出代价才能在 UX 中真正传达出 UI 元素是持久的，如下面的屏幕记录所示。</p>
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/noise_cropped.gif" alt="Bluesky 应用程序中的多个 FAB" /></p>
+
+<p>不过，有一个简单的解决方案：Compose 共享元素过渡和动画修改器 API，以及精心设计的 UI 层架构。</p>
+
+<h3>持久化 UI 和 UI 逻辑</h3>
+
+<p>上述动画 API 的入口点位于它们提供的作用域中：SharedTransitionScope 和 AnimatedVisibilityScope。对于导航目的地过渡，两者几乎总是串联使用，因此创建一个继承自两者的 UI 逻辑状态持有者非常有用。我个人喜欢将其称为 ScaffoldState。此 ScaffoldState 应该位于一个公共模块中，应用中所有显示导航目的地的模块都可以访问。我通常将此模块称为脚手架。</p>
+
+<p><strong>注意：</strong> 请勿将此处提到的 ScaffoldState 与原始 Material Compose 库中的 ScaffoldState 混淆。它是一个遗留实现，在 Compose Material3 中没有等效实现。</p>
+
+<p>ScaffoldState 的定义可以简单如下：</p>
+
+<pre><code class="Kotlin">class ScaffoldState internal constructor(
+    animatedVisibilityScope: AnimatedVisibilityScope,
+    sharedTransitionScope: SharedTransitionScope,
+    internal val isMediumScreenWidthOrWider: State&lt;Boolean&gt;,
+) : AnimatedVisibilityScope by animatedVisibilityScope,
+    SharedTransitionScope by sharedTransitionScope {
+
+    internal val canShowBottomNavigation get() = !isMediumScreenWidthOrWider.value
+
+    internal val canShowNavRail get() = isMediumScreenWidthOrWider.value
+                                            // implementation omitted
+                                            &amp;&amp; isAtDeviceEdge
+}
+</code></pre>
+
+<p><strong>注意：</strong> canShowBottomNavigation 和 canShowNavRail 并不一定意味着它们各自的界面元素一定会显示；这取决于在脚手架内实际调用 Composable 的情况（如下所述）。相反，它们定义了界面元素在被调用时能够显示的界面逻辑。</p>
+
+<p>ScaffoldState 有一个内部构造函数，其他模块可能无法创建它。相反，它们会使用同样在 scaffold 模块中定义的实用方法来记住它在组合中的实例：</p>
+
+<pre><code class="Kotlin">@Composable
+fun rememberScaffoldState(
+    animatedVisibilityScope: AnimatedVisibilityScope,
+    sharedTransitionScope: SharedTransitionScope,
+) : ScaffoldState {
+    val isMediumScreenWidthOrWider = isMediumScreenWidthOrWider()
+    return remember {
+        ScaffoldState(
+            animatedVisibilityScope = animatedVisibilityScope,
+            sharedTransitionScope = sharedTransitionScope,
+            isMediumScreenWidthOrWider = isMediumScreenWidthOrWider,
+        )
+    }
+}
+
+@Composable
+private fun isMediumScreenWidthOrWider(): State&lt;Boolean&gt; { 
+    val isMediumScreenWidthOrWider = currentWindowAdaptiveInfo()
+        .windowSizeClass
+        .isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)
+
+    return rememberUpdatedState(isMediumScreenWidthOrWider)
+}
+</code></pre>
+
+<p>上文中，定义显示哪个导航 UI 元素的 UI 逻辑是通过 ScaffoldState 中的 WindowSizeClass 实现的。AnimatedVisibilityScope 和 SharedTransitionScope 参数被显式传入。前者通常由导航库在定义目的地时提供，后者则由 CompositionLocal 或 prop drilling 提供。后面会介绍 CompositionLocal 的使用示例。</p>
+
+<h3>持久化 UI 脚手架</h3>
+
+<p>通过定义记住组合中 ScaffoldState 的方法，实际的 PersistentScaffold Composable 如下：</p>
+
+<pre><code class="Kotlin">@Composable
+fun ScaffoldState.PersistentScaffold(
+    modifier: Modifier = Modifier,
+    topBar: @Composable ScaffoldState.() -&gt; Unit = {},
+    floatingActionButton: @Composable ScaffoldState.() -&gt; Unit = {},
+    navigationBar: @Composable ScaffoldState.() -&gt; Unit = {},
+    navigationRail: @Composable ScaffoldState.() -&gt; Unit,
+    content: @Composable ScaffoldState.(PaddingValues) -&gt; Unit,
+) {
+    NavigationRailScaffold(
+        modifier = modifier,
+        navigationRail = navigationRail,
+        content = {
+            Scaffold(
+                modifier = modifier
+                    .animateBounds(lookaheadScope = this),
+                topBar = {
+                    topBar()
+                },
+                floatingActionButton = {
+                    floatingActionButton()
+                },
+                bottomBar = {
+                    navigationBar()
+                },
+                content = { paddingValues -&gt;
+                    content(paddingValues)
+                },
+            )
+        }
+    )
+}
+</code></pre>
+
+<p><strong>注意：</strong> 在上面的定义中，持久 UI 元素的每个可组合插槽都以 ScaffoldState 作为接收器，并且当 navigationRail 或 navigationBar 隐藏或显示时，使用 Modifier.animateBounds() 对 Scaffold 进行动画处理。</p>
+
+<p>上面使用了一个中间可组合项：NavigationRailScaffold。这只是一个简单的 Row，包含两个项目：navigationRail 和 content：</p>
+
+<pre><code class="Kotlin">@Composable
+private inline fun NavigationRailScaffold(
+    modifier: Modifier = Modifier,
+    navigationRail: @Composable () -&gt; Unit,
+    content: @Composable () -&gt; Unit,
+) {
+   Row(
+        modifier = modifier,
+        content = {
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 80.dp)
+                    .zIndex(2f),
+            ) {
+                navigationRail()
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(1f),
+            ) {
+                content()
+            }
+        },
+    )
+}
+</code></pre>
+
+<p><strong>注意：</strong> 导航轨道的 z 索引比内容更高。</p>
+
+<p>遗憾的是，NavigationSuiteScaffold 的 API 集无法在此处使用，因为与普通的 Scaffold 可组合函数不同，它们不允许通过插槽访问构成脚手架的持久化 UI 元素，因此无法将 Modifier 实例传递给它们。这使得本文的其余部分不适用于 NavigationSuiteScaffold。</p>
+
+<h3>持久化 UI 元素作为 UI 逻辑的扩展</h3>
+
+<p>为了营造这些 UI 元素在导航目标之间持久化的视觉效果，可以将这些 UI 元素的可组合函数编写为 ScaffoldState 的扩展，从而提供对 SharedTransitionScope 的访问权限，以便为元素提供共享元素修饰符。这些定义也应位于脚手架模块中。例如，PersistentNavigationAppBar 可以是：</p>
+
+<pre><code class="Kotlin">@Composable
+fun ScaffoldState.PersistentNavigationBar(
+    modifier: Modifier = Modifier,
+    enterTransition: EnterTransition = slideInVertically(initialOffsetY = { it }),
+    exitTransition: ExitTransition = slideOutVertically(targetOffsetY = { it }),
+    content: @Composable RowScope.() -&gt; Unit
+) {
+   AnimatedVisibility(
+       modifier = modifier
+            .sharedElement(
+                sharedContentState = rememberSharedContentState(
+                    BottomNavSharedElementKey
+                ),
+                animatedVisibilityScope = this,
+                zIndexInOverlay = BottomNavSharedElementZIndex,
+            ),
+        visible = canShowBottomNavigation,
+        enter = enterTransition,
+        exit = exitTransition,
+        content = {
+            NavigationBar { ... },
+        }
+    )
+}
+
+private data object BottomNavSharedElementKey
+</code></pre>
+
+<p><strong>注意：</strong> canShowBottomNavigation 是从 ScaffoldState 读取的，用于 AnimatedVisibility。</p>
+
+<p>可以为其他持久性 UI 元素（例如导航栏或浮动操作按钮）编写同类扩展。功能模块可以依赖于脚手架模块，并按如下方式使用脚手架：</p>
+
+<pre><code class="Kotlin">    @Composable
+    fun FeedRoute(
+        viewModel: ListingFeedViewModel,
+        //从导航库中获取。
+        // 在 Navigation Compose 中，它由composable&lt;Destination&gt; { } lambda 提供。
+        animatedVisibilityScope: AnimatedVisibilityScope,
+        // 从导航目的地声明中传递。
+        sharedTransitionScope: SharedTransitionScope,
+    ) { route -&gt;
+        rememberScaffoldState(
+            animatedVisibilityScope = animatedVisibilityScope,
+            sharedTransitionScope = sharedTransitionScope,
+        ).PersistentScaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Text(text = stringResource(id = R.string.listing_app))
+                    },
+                )
+            },
+            content = { paddingValues -&gt;
+                ListingFeedScreen(
+                    modifier = Modifier
+                        .padding(paddingValues),
+                    scaffoldState = this,
+                    state = viewModel.state.collectAsStateWithLifecycle().value,
+                    actions = viewModel.accept
+                )
+            },
+            navigationBar = {
+               PersistentNavigationAppBar(
+                    modifier = Modifier
+                        .animateEnterExit(
+                            enter = slideInVertically(initialOffsetY = { it }),
+                            exit = slideOutVertically(targetOffsetY = { it }),
+                        )
+                )
+            },
+            navigationRail = {
+                PersistentNavigationNavRail()
+            }
+        )
+    }
+</code></pre>
+
+<p>每个使用的 API 以及它们支持的 UI/UX 如下所示：</p>
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/shared_elements_cropped.gif" alt="A" /></p>
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/navigation_changes_cropped.gif" alt="B" /></p>
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/local_changes_cropped.gif" alt="C" /></p>
+
+<p>从上到下：跨导航目的地的持久 UI 共享元素、跨导航目的地的持久 UI 进入和退出以及同一目的地内的持久 UI 进入和退出。</p>
+
+<p>如上表所示，使用 ScaffoldState 作为界面状态容器，可以根据 Jetpack Compose 动画 API 的优势进行定制，同时将它们组合成一个整体。更详细地说：</p>
+
+<ol>
+<li>ScaffoldState 和 Modifier.sharedElement()：在不同导航目标上调用的持久化界面元素将使用共享元素 API 来保持视觉连续性。在所示的示例中，每个导航目标都负责其自身的浮动操作按钮，但仍保持了持久化的效果。在此特定示例中，图库目标脚手架与详情目标完全相同，只是它使用不同的参数调用 PersistentFab。</li>
+<li>ScaffoldState 和 AnimatedContent：持久化界面元素的调用可以使用 Modifier.animateEnterExit() 来定义 EnterTransition 和/或 ExitTransition 来用于导航更改。在此示例中，持久化导航栏通过垂直滑动来动画化地显示和隐藏。在此特定示例中，详情目标脚手架与动态目标完全相同，但以下几点不同：</li>
+<li>不调用 PersistentNavigationAppBar。</li>
+<li>调用 PersistentFab。</li>
+<li>ScaffoldState、AnimatedVisibility 和 Modifier.animateBounds()：调用 PersistentNavigationAppBar 和/或 PersistentNavigationNavRail 会根据当前 WindowSizeClass（即本地屏幕变化）自动隐藏或显示。当其中一个显示或隐藏时，内容可组合项会根据变化调整其大小和位置。用户还可以直接将 EnterTransition 或 ExitTransition 传递给可组合项来自定义动画。</li>
+</ol>
+
+
+<h3>持久的 UI 和业务逻辑</h3>
+
+<p>像导航栏或导航栏这样的持久性 UI 有时需要显示与其本地上下文相距甚远的状态；这就是业务逻辑。有时，这些信息可能位于不同的模块中。例如：</p>
+
+<ul>
+<li>未显示通知的通知标记。</li>
+<li>消息的未读计数。</li>
+<li>用户个人资料警报或提醒。</li>
+</ul>
+
+
+<p>在这种情况下，你的应用应该定义一个 AppState。在 Now In Android 示例中，这个 AppState 是 NiaAppState。在跨导航目标使用持久性 UI 时，这个 AppState 至关重要，因为它可以访问应用的导航语义以及填充导航栏中当前项目所需的所有资源。最简单的 AppState 可能如下所示：</p>
+
+<pre><code class="Kotlin">@Stable
+class AppState(
+    private val navigationStateHolder: NavigationStateHolder,
+) {
+    private val navState by navigationStateHolder.state
+
+    lateinit var sharedTransitionScope: SharedTransitionScope
+
+    val navItems: List&lt;NavItem&gt; get() = navItemsFrom(navState)
+}
+</code></pre>
+
+<p><strong>注意：</strong> 在上面，导航状态由 Compose 状态支持，但是当使用带有 NavigationController 的导航 API 时，这仍然适用。</p>
+
+<p>AppState 是应用层级服务的入口点。应用的导航状态、应用能够显示的窗格数量等等都驻留在 AppState 中。它可能需要访问业务逻辑，并且通常需要依赖注入的数据源。在 Now In Android 示例中，NiaAppState 使用数据源来确定哪些选项卡带有通知标记。</p>
+
+<p>为了从 AppState 为持久化 UI 元素提供状态，ScaffoldState 应该依赖 AppState 作为内部实现细节，并作为状态持有者复合的示例：</p>
+
+<pre><code class="Kotlin">class ScaffoldState internal constructor(
+    ...
+    internal val appState: AppState
+) : AnimatedVisibilityScope by animatedVisibilityScope,
+    // 从 AppState 中检索 SharedTransitionScope
+    SharedTransitionScope by appState.sharedTransitionScope {
+
+    ...
+
+    internal val canShowNavRail
+        get() = appState.isInEdgePane &amp;&amp; isMediumScreenWidthOrWider.value
+}
+
+internal val LocalAppState = staticCompositionLocalOf&lt;AppState&gt; {
+    throw IllegalArgumentException("AppState must be provided in the app scaffolding.")
+}
+</code></pre>
+
+<p>要检索要使用的 AppState，脚手架模块中应该有一个内部 LocalAppState 定义以及一个 App Composable。然后，此 AppState 会在应用的入口点提供给组合树，以便进行 Composing。</p>
+
+<pre><code class="Kotlin">@Composable
+fun App(
+    modifier: Modifier,
+    appState: AppState,
+) {
+    AppTheme {
+        Surface {
+            // 根 LookaheadScope 用于锚定所有共享元素转换
+            SharedTransitionLayout(
+                modifier = modifier.fillMaxSize()
+            ) {
+                // 你可以选择保留对 SharedElementTransitionScope 的引用
+                appState.sharedElementTransitionScope = this@SharedTransitionLayout
+                CompositionLocalProvider(
+                    LocalAppState provides appState,
+                ) {
+                    // 应用 UI 的其余部分都放在这里，例如 `NavHost`，等等。
+                }
+            }
+        }
+    }
+}
+
+internal val LocalAppState = staticCompositionLocalOf&lt;AppState&gt; {
+    throw IllegalStateException("CompositionLocal LocalAppState not present")
+}
+</code></pre>
+
+<p>在 Android 应用程序中，上述内容将在活动中使用，类似于以下内容：</p>
+
+<pre><code class="Kotlin">
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+
+        // 在此处创建你的应用状态。如果它需要依赖注入的数据源
+        // 或访问导航控制器或导航状态，也请在此处提供或在 Composition 中提供。
+
+        val appState: AppState = ...
+
+        setContent {
+            App(
+                modifier = Modifier,
+                appState = appState,
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>接下来，用于记住 ScaffoldState 的调用站点将更新为：</p>
+
+<pre><code class="Kotlin">@Composable
+fun rememberScaffoldState(
+    // 这是由导航库提供的
+    animatedVisibilityScope: AnimatedVisibilityScope,
+) : ScaffoldState {
+    val isMediumScreenWidthOrWider = isMediumScreenWidthOrWider
+    val appState = LocalAppState.current
+    return remember {
+        ScaffoldState(
+            animatedVisibilityScope = animatedVisibilityScope,
+            isMediumScreenWidthOrWider = isMediumScreenWidthOrWider,
+            // SharedTransitionScope 现在由 AppState 提供
+            appState = appState,
+        )
+    }
+}
+</code></pre>
+
+<p><strong>注意：</strong> LocalAppState 应该位于脚手架模块内部。</p>
+
+<p>只需指定要运行的修饰符或转换即可声明 PersistentNavigationAppBar：</p>
+
+<pre><code class="Kotlin">fun ScaffoldState.PersistentNavigationAppBar(
+    modifier: Modifier = Modifier,
+    ...,
+) {
+    AnimatedVisibility(
+       modifier = modifier
+            .sharedElement(...),
+        ...,
+        content = {
+            NavigationBar {
+                val appState = LocalAppState.current
+                appState.navItems.forEach { item -&gt;
+                    NavigationBarItem(...)
+                }
+            }
+        },
+    )
+}
+</code></pre>
+
+<h2>真正的持久化 UI</h2>
+
+<p>如果持久化 UI 元素中存在一些无法通过共享元素保存的局部瞬时状态，则可以使用可移动共享元素。请考虑此处描述和实现的导航栏设计，其中选中某个选项卡时，选项卡之间会呈现动画效果：</p>
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/transient_animation.gif" alt="导航栏中的局部瞬态动画" /></p>
+
+<p>幻想只能到此为止，此时需要真正的持久性。这可以通过添加可移动内容 API 来创建可移动的共享元素来实现。也就是说，架构将提升的不仅仅是 UI 状态，而是整个 UI 元素及其状态。要了解更多关于为什么此时需要可移动内容 API 的信息，请阅读以下详细介绍<a href="https://www.tunjid.com/articles/3-neat-animations-you-can-create-with-modifieranimatebounds-67e474130e9ba862fe18b5e5?open-graph-scrape=true">组合持久性概念的文章</a>。</p>
+
+<p>在 Compose 中使用 movedContentOf 时，必须注意确保可移动内容每次只在一个位置进行组合。例如，从目的地 A 导航到目的地 B 时，在动画持续时间内，有两个目的地可组合项共存：</p>
+
+<ol>
+<li>目的地 A 动画退出。</li>
+<li>目的地 B 动画进入。</li>
+</ol>
+
+
+<p>动画启动后，可移动导航栏必须立即与目的地 A 中的诱饵导航栏进行交换，同时，必须立即在目的地 B 开始组合。以下概述了实现此目的的界面逻辑。</p>
+
+<h3>定义可移动持久界面</h3>
+
+<p>ScaffoldState 导航栏首先将其声明拆分。仅依赖于 AppState 的部分作为 AppState 的扩展单独编写：</p>
+
+<pre><code class="Kotlin">@Composable
+internal fun AppState.NavigationBar(
+    modifier: Modifier = Modifier,
+) {
+    NavigationBar(
+        modifier = modifier,
+    ) {
+        navItems.forEach { item -&gt;
+            NavigationBarItem(...)
+        }
+    }
+}
+</code></pre>
+
+<h3>提升可移动持久化 UI</h3>
+
+<p>真正持久化的导航栏 (NavigationBar) 可以使用可移动内容 (movableContentOf) 提升到 AppState 中：</p>
+
+<pre><code class="Kotlin">class AppState(
+    ...
+) {
+    internal val movableNavigationBar = movableContentOf&lt;Modifier&gt; { modifier -&gt;
+        NavigationBar(
+            modifier = modifier,
+        )
+    }
+}
+</code></pre>
+
+<h3>可移动持久 UI 的 UI 逻辑</h3>
+
+<p>定义可移动导航栏后，将确定何时可以安全组合的逻辑添加到 ScaffoldState 中：</p>
+
+<pre><code class="Kotlin">class ScaffoldState internal constructor(
+    ...
+    internal val appState: AppState
+) : AnimatedVisibilityScope by animatedVisibilityScope,
+    SharedTransitionScope by appState.sharedTransitionScope {
+
+    internal val canShowNavigationBar get() = !isMediumScreenWidthOrWider
+
+    internal val canUseMovableNavigationBar
+        // 从 AnimatedVisibility Scope 读取过渡目标状态
+        get() = canShowNavigationBar &amp;&amp; transition.targetState == EnterExitState.Visible
+}
+</code></pre>
+
+<h3>构建可移动的持久化 UI</h3>
+
+<p>最后，在 ScaffoldState 的公共扩展方法中，根据 ScaffoldState 中定义的 UI 逻辑，在 AppState 中的持久化 UI 元素与其诱饵元素之间进行切换：</p>
+
+<pre><code class="Kotlin">@Composable
+fun ScaffoldState.PeristentNavigationBar(
+    modifier: Modifier = Modifier,
+    ...
+) {
+    AnimatedVisibility(
+        modifier = modifier
+            .sharedElement(...),
+        visible = canShowNavigationBar,
+        ...
+        content = {
+            if (canUseMovableNavigationBar) appState.movableNavigationBar(
+                Modifier,
+            )
+            else appState.NavigationBar(
+                modifier = Modifier,
+            )
+        },
+    )
+}
+</code></pre>
+
+<p>其结果如下所示：</p>
+
+<p><img src="https://storage.googleapis.com/tunji-web-public/articles/68248e8ecc8e85f53ce1aa46/cropped_persistent_navigation_bar.gif" alt="使用可移动内容 (movableContentOf) 在导航栏中保留局部瞬态动画" /></p>
+
+<h2>总结</h2>
+
+<p>以上描述了一种用于应用持久化 UI 的架构模式。该架构的一大优势在于它能够扩展到平板电脑和桌面设备；这将在后续的博客文章中介绍。</p>
+
+<p>总结一下，该架构支持以下功能：</p>
+
+<ul>
+<li>导航目标控制持久化 UI 动画，用于导航目标内部的局部变化，例如窗口大小变化。</li>
+<li>导航目标控制持久化 UI 动画，用于跨导航目标进行导航变化。</li>
+<li>完全自定义每个导航目标上哪些 UI 元素是持久化的，哪些不是。</li>
+<li>一种将持久化 UI 元素描述为导航目标 ScaffoldState 函数的模式。</li>
+<li>能够将具有内部瞬态状态的 UI 元素提升到 AppState，这些 UI 元素驱动的动画无法通过不同实例之间的共享元素过渡来近似实现。</li>
+</ul>
+
+
+<p>使用脚手架模块或类似组件，将 AppState 的细粒度控制分发到导航目标。</p>
+
+<p><a href="https://github.com/tunjid/listingApp?open-graph-scrape=true">这里</a>可以看到一个带有脚手架模块、AppState 和每个导航目的地定制的应用程序中上述内容的示例。</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[在Kotlin Multiplatform项目中使用DataStore]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/06/04/datastore-in-kmp/"/>
+    <updated>2025-06-04T23:05:35+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/06/04/datastore-in-kmp</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Implementing DataStore in Kotlin Multiplatform Projects」，原文链接<a href="https://carrion.dev/en/posts/datastore-in-kmp/">https://carrion.dev/en/posts/datastore-in-kmp/</a>，由 Ignacio Carrión发布于2025年5月9日。</p></blockquote>
+
+<p>DataStore 是 Google 开发的一种现代数据存储解决方案，用于替代 SharedPreferences。它提供了一个一致、类型安全的 API，用于存储键值对和类型化对象，并支持 Kotlin 协程和 Flow。随着 Kotlin Multiplatform (KMP) 的最新进展，我们现在可以将 DataStore 集成到 KMP 项目中，从而实现跨平台共享偏好设置和数据存储代码。这篇博文探讨了如何在 KMP 环境中配置、实现和优化 DataStore。</p>
+
+<p><a href=""><img src="file:///Users/alexhilton/Downloads/datastore.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>理解 Kotlin 多平台环境中的 DataStore</h2>
+
+<p>KMP 中的 DataStore 旨在提供跨平台一致的 API，同时利用平台特定的存储机制。DataStore 有两种类型：</p>
+
+<ol>
+<li>Preferences DataStore：用于存储键值对</li>
+<li>Proto DataStore：用于使用协议缓冲区存储类型化对象</li>
+</ol>
+
+
+<p>在 KMP 上下文中，DataStore：</p>
+
+<ol>
+<li>平台特定的实现提供实际的存储机制</li>
+<li>API 使用协程和 Flow，跨平台保持一致</li>
+</ol>
+
+
+<p>这种方法使我们能够用通用代码定义数据访问模式，而底层存储操作则由平台特定的实现处理。</p>
+
+<pre><code class="Kotlin">// In commonMain - DataStore interface
+interface UserPreferences {
+    val userData: Flow&lt;UserData&gt;
+    suspend fun updateUsername(name: String)
+    suspend fun updateEmail(email: String)
+    suspend fun clearData()
+}
+
+// In commonMain - Data model
+data class UserData(
+    val username: String = "",
+    val email: String = "",
+    val isLoggedIn: Boolean = false
+)
+</code></pre>
+
+<h2>在 KMP 项目中设置数据存储</h2>
+
+<p>要将 DataStore 集成到你的 KMP 项目中，你需要正确配置构建文件。以下是分步指南：</p>
+
+<h3>1. 在共享模块中配置 build.gradle.kts 文件</h3>
+
+<pre><code class="Kotlin">plugins {
+    kotlin("multiplatform")
+    id("com.android.library")
+    id("com.google.devtools.ksp") version "2.1.20-2.0.1" // For Proto DataStore
+}
+
+kotlin {
+    androidTarget()
+    iosX64()
+    iosArm64()
+    iosSimulatorArm64()
+
+    sourceSets {
+        val commonMain by getting {
+            dependencies {
+                // For Preferences DataStore
+                implementation("androidx.datastore:datastore-preferences-core:1.1.0")
+
+                // For coroutines
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
+            }
+        }
+    }
+}
+</code></pre>
+
+<h3>2. 从通用代码创建 DataStore 实例</h3>
+
+<pre><code class="Kotlin">/**
+ * 获取单例 DataStore 实例，如有必要则创建它。
+ */
+fun createDataStore(producePath: () -&gt; String): DataStore&lt;Preferences&gt; =
+   PreferenceDataStoreFactory.createWithPath(
+      produceFile = { producePath().toPath() }
+   )
+
+internal const val dataStoreFileName = "dice.preferences_pb"
+</code></pre>
+
+<h2>特定平台的考虑因素</h2>
+
+<h3>Android 实现</h3>
+
+<pre><code class="Kotlin">// shared/src/androidMain/kotlin/DataStore.kt
+
+fun createDataStoreAndroid(context: Context): DataStore&lt;Preferences&gt; = createDataStore(
+   producePath = { context.filesDir.resolve(dataStoreFileName).absolutePath }
+)
+</code></pre>
+
+<h3>iOS 实现</h3>
+
+<pre><code class="Kotlin">// shared/src/iosMain/kotlin/DataStore.kt
+
+fun createDataStoreIOS(): DataStore&lt;Preferences&gt; = createDataStore(
+   producePath = {
+      val documentDirectory: NSURL? = NSFileManager.defaultManager.URLForDirectory(
+         directory = NSDocumentDirectory,
+         inDomain = NSUserDomainMask,
+         appropriateForURL = null,
+         create = false,
+         error = null,
+      )
+      requireNotNull(documentDirectory).path + "/$dataStoreFileName"
+   }
+)
+</code></pre>
+
+<h2>实际示例：实现用户偏好存储库</h2>
+
+<p>为了演示完整的实现，让我们创建一个使用 DataStore 的存储库：</p>
+
+<pre><code class="Kotlin">// In commonMain
+class UserPreferencesRepository(private val dataStore: PreferencesDataStore) {
+    //定义preferences的键
+    private object PreferenceKeys {
+        val USERNAME = stringPreferencesKey("username")
+        val EMAIL = stringPreferencesKey("email")
+        val IS_LOGGED_IN = booleanPreferencesKey("is_logged_in")
+    }
+
+    // Get user data as a Flow
+    val userData: Flow&lt;UserData&gt; = dataStore.data.map { preferences -&gt;
+        UserData(
+            username = preferences[PreferenceKeys.USERNAME] ?: "",
+            email = preferences[PreferenceKeys.EMAIL] ?: "",
+            isLoggedIn = preferences[PreferenceKeys.IS_LOGGED_IN] ?: false
+        )
+    }
+
+    // Update username
+    suspend fun updateUsername(name: String) {
+        dataStore.updateData { preferences -&gt;
+            preferences.toMutablePreferences().apply {
+                this[PreferenceKeys.USERNAME] = name
+            }
+        }
+    }
+
+    // Update email
+    suspend fun updateEmail(email: String) {
+        dataStore.updateData { preferences -&gt;
+            preferences.toMutablePreferences().apply {
+                this[PreferenceKeys.EMAIL] = email
+            }
+        }
+    }
+
+    // Set login status
+    suspend fun setLoggedIn(isLoggedIn: Boolean) {
+        dataStore.updateData { preferences -&gt;
+            preferences.toMutablePreferences().apply {
+                this[PreferenceKeys.IS_LOGGED_IN] = isLoggedIn
+            }
+        }
+    }
+
+    // Clear all data
+    suspend fun clearData() {
+        dataStore.updateData { preferences -&gt;
+            preferences.toMutablePreferences().apply {
+                remove(PreferenceKeys.USERNAME)
+                remove(PreferenceKeys.EMAIL)
+                remove(PreferenceKeys.IS_LOGGED_IN)
+            }
+        }
+    }
+}
+
+// In commonMain - ViewModel or Presenter
+class UserViewModel(private val userPreferencesRepository: UserPreferencesRepository) {
+    val userData: Flow&lt;UserData&gt; = userPreferencesRepository.userData
+
+    suspend fun updateUserProfile(username: String, email: String) {
+        if (username.isNotBlank()) {
+            userPreferencesRepository.updateUsername(username)
+        }
+
+        if (email.isNotBlank()) {
+            userPreferencesRepository.updateEmail(email)
+        }
+    }
+
+    suspend fun login() {
+        userPreferencesRepository.setLoggedIn(true)
+    }
+
+    suspend fun logout() {
+        userPreferencesRepository.setLoggedIn(false)
+    }
+
+    suspend fun clearUserData() {
+        userPreferencesRepository.clearData()
+    }
+}
+</code></pre>
+
+<h2>KMP 中的高级数据存储功能</h2>
+
+<p>DataStore 提供了几种可在 KMP 环境中利用的高级功能：</p>
+
+<h3>1. 用于类型化对象的 Proto DataStore</h3>
+
+<p>如果你需要存储复杂对象，Proto DataStore 提供了一个类型安全的解决方案：</p>
+
+<pre><code class="proto">// 在 .proto 文件中定义数据结构
+syntax = "proto3";
+
+option java_package = "com.example.app";
+option java_multiple_files = true;
+
+message UserPreferences {
+  string username = 1;
+  string email = 2;
+  bool is_logged_in = 3;
+}
+</code></pre>
+
+<pre><code class="Kotlin">// In commonMain - 创建序列化器
+class UserPreferencesSerializer : Serializer&lt;UserPreferences&gt; {
+    override val defaultValue: UserPreferences = UserPreferences.getDefaultInstance()
+
+    override suspend fun readFrom(input: InputStream): UserPreferences {
+        return UserPreferences.parseFrom(input)
+    }
+
+    override suspend fun writeTo(t: UserPreferences, output: OutputStream) {
+        t.writeTo(output)
+    }
+}
+
+// Proto DataStore 的平台特定实现
+</code></pre>
+
+<h3>2.数据迁移</h3>
+
+<pre><code class="Kotlin">// In androidMain - 从 SharedPreferences 迁移到 DataStore
+val dataStore = context.createDataStore(
+    name = "user_preferences",
+    produceMigrations = { context -&gt;
+        listOf(
+            SharedPreferencesMigration(
+                context = context,
+                sharedPreferencesName = "legacy_preferences"
+            )
+        )
+    }
+)
+</code></pre>
+
+<h3>3.处理异常</h3>
+
+<pre><code class="Kotlin">// In commonMain - 数据操作过程中的异常处理
+val userData = dataStore.data
+    .catch { exception -&gt;
+        // 处理异常（例如数据损坏）
+        if (exception is IOException) {
+            emit(emptyPreferences())
+        } else {
+            throw exception
+        }
+    }
+    .map { preferences -&gt;
+        // Map preferences to your data model
+        UserData(
+            username = preferences[USERNAME] ?: "",
+            email = preferences[EMAIL] ?: ""
+        )
+    }
+</code></pre>
+
+<h2>KMP 中数据存储的最佳实践</h2>
+
+<ol>
+<li>利用协程和 Flow 进行异步操作
+
+<ul>
+<li>DataStore 操作本质上是异步的</li>
+<li>使用 Flow 观察存储数据的变化</li>
+<li>应用 Map、Filter 和 Combine 等 Flow 操作符进行数据转换</li>
+</ul>
+</li>
+<li>创建存储库层
+
+<ul>
+<li>将 DataStore 操作抽象到存储库后面</li>
+<li>这样可以更轻松地根据需要切换实现</li>
+<li>为你的业务逻辑提供简洁的 API</li>
+</ul>
+</li>
+<li>优雅地处理错误
+
+<ul>
+<li>使用 catch 操作符处理 Flow 中的异常</li>
+<li>在无法读取数据时提供回退值</li>
+<li>考虑为关键操作实现重试机制</li>
+</ul>
+</li>
+<li>优化性能
+
+<ul>
+<li>最大限度地减少 DataStore 更新次数</li>
+<li>将相关的更改集中处理</li>
+<li>使用 distinctUntilChanged() 避免不必要的排放</li>
+</ul>
+</li>
+<li>彻底测试你的 DataStore 代码
+
+<ul>
+<li>在 commonTest 中为你的存储库编写测试</li>
+<li>使用测试替身模拟不同的场景</li>
+</ul>
+</li>
+</ol>
+
+
+<h2>结论</h2>
+
+<p>将 DataStore 集成到 Kotlin Multiplatform 项目中，提供了一种现代化、类型安全的跨平台数据存储和访问方法。</p>
+
+<p>本文概述的方法提供了一种实用的方法，可以跨平台共享首选项和数据存储逻辑，并且只需极少的平台特定代码。DataStore 对协程和 Flow 的支持使其与 KMP 项目完美契合，能够通过一致的 API 实现响应式和异步数据操作。</p>
+
+<p>通过遵循本文概述的配置步骤、平台特定注意事项和最佳实践，你可以在 KMP 项目中成功实现 DataStore，并创建稳定、高效的跨平台数据存储解决方案，并且只需极少的平台特定代码。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[揭秘原生View与Jetpack Compose之间的传送门]]></title>
@@ -1164,536 +2110,6 @@ override fun recordSideEffect(effect: () -&gt; Unit) {
 <p>在本文中，你探索了 Jetpack Compose 中常用的三个主要副作用处理API。由于声明式UI（declarative UI）的特性，状态会影响运行时行为的诸多方面，因此正确地使用副作用函数对于确保任务执行的正确性和可预测性至关重要。</p>
 
 <p>本主题最初在<a href="https://github.com/doveletter/">Dove Letter</a>（译注：链接是<a href="https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3">https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3</a> Android 和 Kotlin 的每日见解，涵盖 Compose、架构、行业面试问题和实用代码技巧等主题。自上线以来的短短 37 周内，Dove Letter 已拥有超过 700 名个人订阅者和 20 名企业/终身订阅者。如果你渴望深入了解 Android、Kotlin 和 Compose，请务必查看<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903">“通过 Dove Letter 学习 Kotlin 和 Android”</a>（译注：链接是<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82">https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82</a></p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[深入理解Jetpack Compose中的函数的执行顺序]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/04/26/understanding-execution-order-in-jetpack-compose/"/>
-    <updated>2025-04-26T21:21:31+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/04/26/understanding-execution-order-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Understanding Execution Order in Jetpack Compose: DisposableEffect, LaunchedEffect, and Composables」，原文链接<a href="https://proandroiddev.com/understanding-execution-order-in-jetpack-compose-disposableeffect-launchedeffect-and-composables-d2d0b75b7ec8">https://proandroiddev.com/understanding-execution-order-in-jetpack-compose-disposableeffect-launchedeffect-and-composables-d2d0b75b7ec8</a>，由Sahil Thakar发布于2025年4月13日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*44_HTD27S8k-mxkIc_A9zg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>大家好，今天我们又来聊聊Jetpack-Compose的小话题。无论对于新手还是经验丰富的开发者来说，这都是一个小话题，但却是很关键的。我们将讨论一下Jetpack Compose中副作用和可组合项（composables）的执行顺序，特别是 DisposableEffect、LaunchedEffect 和可组合函数的执行顺序以及其生命周期交互过程。</p>
-
-<p>我们将仔细探究 DisposableEffect 和 LaunchedEffect 在可组合项之间导航切换时是如何执行的，特别关注它们在返回之前访问过的页面时的行为。（许多经验丰富的开发者会告诉我我知道这一点，但我敢打赌，你们中的很多人并不知道）。</p>
-
-<p>那么，让我们开始吧。</p>
-
-<pre><code class="Kotlin">@Composable
-fun MyComposable(cartId: String) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    // DisposableEffect observes the lifecycleOwner
-    DisposableEffect(lifecycleOwner) {
-        Log.e("Init", "DisposableEffect")
-
-        onDispose {
-            Log.e("Init", "DisposableEffect - onDispose")
-        }
-    }
-
-    // LaunchedEffect triggers when cartId changes
-    LaunchedEffect(key1 = cartId) {
-        Log.e("Init", "LaunchedEffect")
-    }
-
-    // Scaffold is the UI container
-    Column {
-        Log.e("Init", "Column")
-        // You can add your screen content here
-    }
-}
-
-Output:-
-
-E/Init: Column
-E/Init: DisposableEffect
-E/Init: LaunchedEffect
-</code></pre>
-
-<h2>执行顺序迷题：为什么Column先执行？</h2>
-
-<p>答案在于这些副作用 API（DisposableEffect、LaunchedEffect）相对于组合(Composition)的实际执行时间。</p>
-
-<h3>1. 组合阶段优先</h3>
-
-<ul>
-<li>Jetpack Compose 首先在组合期间构建UI树。</li>
-<li>此时，Column 是一个可组合函数。它会在组合阶段立即执行，以构建 UI。</li>
-<li>因此：Column() 首先运行 → 打出日志 “Column”。</li>
-</ul>
-
-
-<h3>2. 副作用在组合期间注册，但在组合完成后执行</h3>
-
-<ul>
-<li>DisposableEffect 和 LaunchedEffect 在组合期间注册其工作，
-但它们的实际执行发生在组合完成后。</li>
-<li>Compose 使用内部调度程序（通过 Recomposer）在提交帧后运行副作用。</li>
-</ul>
-
-
-<p>因此，实际时间线如下所示：</p>
-
-<pre><code class="Bash">组合（Composition） 开始
-   → Column() 运行 → 打印日志 "Column"
-   → 注册 DisposableEffect 代码块
-   → 注册 LaunchedEffect 代码块
-组合 结束
-→ 副作用函数开始执行
-   → DisposableEffect 执行 → 打印日志 "DisposableEffect"
-   → LaunchedEffect 启动协程 → 打印日志 "LaunchedEffect"
-</code></pre>
-
-<p>这里我们讨论了composables和副作用之间的执行顺序。
-那么在 LaunchedEffect和 DisposableEffect副作用函数之间，谁又将先执行呢？</p>
-
-<p>让我们来仔细看看。</p>
-
-<p><strong>副作用函数的执行顺序（组合完成后）：</strong></p>
-
-<ol>
-<li>DisposableEffect → 首先运行</li>
-<li>LaunchedEffect → 随后运行</li>
-</ol>
-
-
-<p>为啥子呢？</p>
-
-<p>此顺序由Compose运行时定义的：</p>
-
-<ul>
-<li>DisposableEffect 是同步的，用于在组合后立即处理设置/清理。</li>
-<li>LaunchedEffect 会启动一个协程，而协程的启动是异步的，计划在其他同步效果（例如 DisposableEffect）之后运行。</li>
-</ul>
-
-
-<p>内部机制：Jetpack Compose 维护了明确定义的效果应用顺序。</p>
-
-<ol>
-<li>DisposableEffect、SideEffect、SnapshotFlow 等副作用会在组合后立即触发（同步）。</li>
-<li>然后，基于协程的效果（例如 LaunchedEffect）会被调度到下一个运行（异步，通过 Recomposer）。</li>
-</ol>
-
-
-<p>现在，让我们看看在可组合项之间导航切换时 DisposableEffect 和 LaunchedEffect 是如何执行的，尤其关注它们在返回之前访问过的屏幕时的行为。</p>
-
-<p>输出结果会让你大吃一惊。</p>
-
-<pre><code class="Kotlin">@Composable
-fun MyApp() {
-    val navController = rememberNavController()
-
-    NavHost(navController = navController, startDestination = "screenA") {
-        composable("screenA") {
-            ScreenA(
-                cartId = "123",
-                onNavigateToB = { navController.navigate("screenB") }
-            )
-        }
-        composable("screenB") {
-            ScreenB(
-                cartId = "456",
-                onNavigateBack = { navController.popBackStack() }
-            )
-        }
-    }
-}
-
-@Composable
-fun ScreenA(cartId: String, onNavigateToB: () -&gt; Unit) {
-    DisposableEffect(Unit) {
-        println("😇 ScreenA -&gt; DisposableEffect")
-        onDispose {
-            println("😇 ScreenA -&gt; DisposableEffect - onDispose")
-        }
-    }
-
-    LaunchedEffect(cartId) {
-        println("😇ScreenA -&gt; LaunchedEffect")
-    }
-
-    Column(modifier = Modifier.padding(top = 100.dp)) {
-        Button(onClick = onNavigateToB) {
-            Text(text = "Navigate To ScreenB")
-        }
-    }
-
-}
-
-@Composable
-fun ScreenB(cartId: String, onNavigateBack: () -&gt; Unit) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    DisposableEffect(lifecycleOwner) {
-        println("😇 ScreenB -&gt; DisposableEffect")
-        onDispose {
-            println("😇 ScreenB -&gt; DisposableEffect - onDispose")
-        }
-    }
-
-    LaunchedEffect(cartId) {
-        println("😇 ScreenB -&gt; LaunchedEffect")
-    }
-
-    Column{
-        Column(modifier = Modifier) {
-            Button(onClick = onNavigateBack) {
-                Text("Back to Screen A")
-            }
-        }
-    }
-}
-
-Output:- 
-
-when ScreenA init
-😇 ScreenA -&gt; DisposableEffect
-😇 ScreenA -&gt; LaunchedEffect
-
-Navigate To ScreenA -&gt; ScreenB
-😇 ScreenB -&gt; DisposableEffect
-😇 ScreenB -&gt; LaunchedEffect
-😇 ScreenA -&gt; DisposableEffect - onDispose
-
-Navigate back to ScreenB -&gt; ScreenA
-😇 ScreenA -&gt; DisposableEffect
-😇 ScreenA -&gt; LaunchedEffect
-😇 ScreenB -&gt; DisposableEffect - onDispose
-</code></pre>
-
-<h2>它（Jetpack Compose导航）内部实际发生了什么？</h2>
-
-<p>Compose Navigation在 NavHost中围绕可组合项的行为遵循以下逻辑：</p>
-
-<ol>
-<li>首先进行新目的地（此处为 ScreenA）的组合。
-
-<ul>
-<li>导航切换时，Compose会立即为新屏幕创建UI。</li>
-<li>新页面（此处为 ScreenA）的 DisposableEffect 和 LaunchedEffect 会在新页面组合期间或之后立即执行。</li>
-</ul>
-</li>
-<li>在新目的地成功组合并提交到 UI 层次结构后，会处理上一个页面的可组合项（此处为 ScreenB）。
-
-<ul>
-<li>Compose 会保持上一个可组合项（此处为 ScreenB）短暂处于活动状态，直到新可组合项（此处为 ScreenA）稳定，以确保导航顺畅。</li>
-<li>只有在新的可组合项（此处为 ScreenA）完全组合后，Compose 才会清理并移除（dispose）上一个可组合项（此处为 ScreenB）。</li>
-</ul>
-</li>
-</ol>
-
-
-<p>因此，导航期间的实际生命周期流程是酱婶儿的：</p>
-
-<pre><code class="Bash">导航返回 (ScreenB → ScreenA)
-│
-├── 1️⃣ Compose 立即创建 ScreenA
-│      ├─ ScreenA DisposableEffect executes instantly.
-│      └─ ScreenA LaunchedEffect coroutine launched.
-│
-└── 2️⃣ 在ScreenA成功运行之后:
-       └─ ScreenB DisposableEffect onDispose runs.
-</code></pre>
-
-<h2>为啥Compose要酱紫 搞？</h2>
-
-<p>Compose Navigation 会谨慎处理页面的组合，以确保丝滑（seamless）的用户体验和稳定性：</p>
-
-<ul>
-<li>它不会在确保目标页面 (ScreenA) 已组合并准备就绪之前过早地处理上一个可组合项 (ScreenB)。</li>
-<li>这可以避免在导航切换过程中出现视觉故障或空白屏幕。</li>
-<li>只有在确保新页面安全到位后，Compose 才会触发处理上一个屏幕的操作。</li>
-</ul>
-
-
-<h2>Jetpack Compose NavHost内部机制（简化版本）：</h2>
-
-<p>在调用 popBackStack() 或 navigate() 时，Compose 的 NavHost 内部的工作方式如下：</p>
-
-<ul>
-<li>新的路由组合开始（可组合项创建）。</li>
-<li>成功组合并提交帧后，不再位于 NavHost 后栈中的旧可组合项节点将被标记为待处理。</li>
-<li>然后，Compose 会在下一帧中运行这些已移除可组合项的处置逻辑 (onDispose)。</li>
-</ul>
-
-
-<p>因此，即使你在视觉上立即导航回原点，销毁式的操作（如onDispose）也会略微延迟执行，以保证界面的整体稳定性。</p>
-
-<p>如果你有任何疑问，请留言，我会尽快回复你。💬✨
-我们很快会深入探讨Jetpack Compose，敬请期待！🚀
-在此之前，祝你coding愉快！🎉👨‍💻</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Jetpack Compose的性能优化建议]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/04/22/performance-optimization-in-jetpack-compose/"/>
-    <updated>2025-04-22T22:34:25+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/04/22/performance-optimization-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Performance Optimization in Jetpack Compose」，原文链接<a href="https://carrion.dev/en/posts/performance-optimization-compose/">https://carrion.dev/en/posts/performance-optimization-compose/</a>，由Ignacio Carrión，发布于2025年4月8日。</p></blockquote>
-
-<p><a href=""><img src="https://www.itmob.cn/upload/2023/01/banner-jetpack-compose-a452c3e8f1ad489a8560a4f0a9f88e07.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p><strong>译者按：</strong> Jetpack Compose是一个优秀的声明式UI框架，对开发者非常友好，可以高效率的撸各种UI页面和UI元素。但它仍然并不是很成熟，有些事情还做不了，而且渲染性能也略输于原生的View方式，毕竟它比原生的View多了一层组合树和渲染树。因此，在享受声明式UI带来的便捷的同时，就需要深入地了解其内部的工作机制，和学习一些高级技巧，以提升运行时的渲染性能。另外，需要 注意虽然这篇文章是针对for Android的Jetpack Compose，但大部分也适用于Compose Multiplatform。</p>
-
-<p>性能优化对于在Jetpack Compose应用中提供流畅的用户体验至关重要。本文探讨了关键技术和最佳实践，以确保你的可组合函数高效且性能卓越。</p>
-
-<h2>理解组合（Composition）和重组（ReComposition）</h2>
-
-<p><strong>译注：</strong> 组合与重组是Compose中非常重要 的概念，如果不熟悉的同学可以复习一下之前的文章<a href="https://juejin.cn/post/7379437165486112805">降Compose十八掌之『潜龙勿用』| Thinking in Compose</a>和<a href="https://juejin.cn/post/7401358349877346338">降Compose十八掌之『损则有孚』| Lifecycle</a>。</p>
-
-<p>Compose 性能的一个基本方面是了解合成和重组的工作原理：</p>
-
-<h3>智能重组（Smart Recomposition）</h3>
-
-<p>Compose 使用智能重组功能，仅更新界面中需要更改的部分。了解触发重组的原因以及如何最小化重组的影响范围对于性能优化至关重要。</p>
-
-<pre><code class="Kotlin">@Composable
-fun ExpensiveCalculation(numbers: List&lt;Int&gt;) {
-    // 不好：每次重组都会执行昂贵的操作
-    val average = numbers.takeIf { it.isNotEmpty() }
-        ?.average()
-        ?: 0.0
-
-    // 优点：昂贵的操作被缓存，并且仅在输入发生变化时重新计算
-    val cachedAverage = remember(numbers) {
-        numbers.takeIf { it.isNotEmpty() }
-            ?.average()
-            ?: 0.0
-    }
-
-    Column {
-        // 每次重组时都会重新计算
-        Text("Current Average: ${"%.2f".format(average)}")
-
-        // 这将使用缓存住的值
-        Text("Cached Average: ${"%.2f".format(cachedAverage)}")
-    }
-}
-</code></pre>
-
-<h3>稳定类型（Stable types）和不可变性（Immutability）</h3>
-
-<p>稳定的类型对于Compose的智能重组系统至关重要。当Compose能够保证其 equals() 方法与其属性一致，并且属性本身不会在不触发重组的情况下发生变化时，该类型即被视为稳定类型。</p>
-
-<pre><code class="Kotlin">// 不好：类型不稳定 - 可变属性可能会在不通知Compose的情况下发生变化
-data class UserState(
-    var name: String, // 可变属性可以偷偷地改变
-    var age: Int      // 而且更改不会触发重组
-)
-
-// 优点：稳定类型 - 不可变属性和显式稳定性
-@Stable  // 告诉Compose此类型具有可预测的相等性
-data class UserState(
-    val name: String,  // 不可变属性
-    val age: Int      // 如要更改需要创建新实例
-)
-</code></pre>
-
-<p>使用稳定类型有以下几个好处：</p>
-
-<ol>
-<li>更高效的重组 - 当Compose确定数据未发生变化时，它可以跳过重组部分UI，换句话说可以减少很多不必要的重组，进而提高性能</li>
-<li>可预测的行为 - 数据更改始终会触发正确的UI更新</li>
-<li>线程安全（Thread safety） - 不可变数据可以安全地在协程之间共享</li>
-</ol>
-
-
-<p><strong>译注：</strong> 这里说的应该是可以在线程之间安全地共享，协程如果没有线程切换是不会有线程安全问题的。</p>
-
-<h2>性能优化的关键点</h2>
-
-<h3>1. 合理地使用 remember 和 derivedStateOf 进行状态（State）管理</h3>
-
-<p>remember 和 derivedStateOf 函数在状态管理中起到不同的作用：</p>
-
-<pre><code class="Kotlin">@Composable
-fun UserProfile(user: User, items: List&lt;Item&gt;) {
-    // 缺点：每次重新组合时都重新计算
-    val filteredItems = items.filter { it.userId == user.id }
-
-    // 好：使用记忆缓存计算
-    val cachedItems = remember(items, user.id) {
-        items.filter { it.userId == user.id }
-    }
-
-    // 更好的方式：使用 derivedStateOf 进行反应式计算
-    val reactiveItems by remember(items) {
-        derivedStateOf {
-            items.filter { it.userId == user.id }
-        }
-    }
-
-    // 当 items 发生变化时，reactiveItems 会自动更新
-    // 并且仅在过滤结果发生变化时触发重组
-    LazyColumn {
-        itemsIndexed(
-            items = reactiveItems,
-            key = { _: Int, item: Item -&gt; item.id }
-        ) { _: Int, item: Item -&gt;
-            ItemRow(item)
-        }
-    }
-}
-</code></pre>
-
-<p><strong>译注：</strong> 对于状态的管理，可以复习一下之前专门讲解副作用(Side effects)的文章<a href="https://juejin.cn/post/7405158681078104127">降Compose十八掌之『龙战于野』| Side Effects</a>。</p>
-
-<h3>2. 合理地使用CompositionLocal</h3>
-
-<p><strong>译注：</strong> 关于CompositionLocal的使用可以看前面写过的文章<a href="https://juejin.cn/post/7434543407636267071">用Compose中的CompositionLocal来暗渡陈仓</a>，下面的示例是想要说明，应该在合理的地方访问CompositionLocal里面的数据，因数对CompositionLocal的访问地方会被触发重组（<a href="https://juejin.cn/post/7401358349877346338">之前的文章有讲过</a>重组的触发是状态使用的地方，而不是定义的地方），如果在所有的地方都 直接访问CompositionLocal，特别是嵌套较深的地方也都 直接访问，那都会触发重组，但大部分其实是不必要的。像下样示例展示的那样，在一定的级别中访问CompositionLocal，然后它的内部嵌套调用直接复用数值，可以避免过度重组。</p>
-
-<pre><code class="Kotlin">// 不好：每个子组件都访问 CompositionLocal
-@Composable
-fun DeepNestedContent() {
-    val theme = LocalTheme.current  // 直接访问
-    val strings = LocalStrings.current  // 多个 CompositionLocal 访问
-    val dimensions = LocalDimensions.current
-
-    Column {
-        Text(
-            text = strings.title,
-            style = theme.textStyle,
-            modifier = Modifier.padding(dimensions.padding)
-        )
-        // 具有重复 CompositionLocal 访问的更多嵌套内容
-    }
-}
-
-// 好：提升 CompositionLocal的值以最小化查找
-@Composable
-fun ParentContent() {
-    // 单独访问 CompositionLocal 值
-    val theme = LocalTheme.current
-    val strings = LocalStrings.current
-    val dimensions = LocalDimensions.current
-
-    DeepNestedContent(
-        theme = theme,
-        strings = strings,
-        dimensions = dimensions
-    )
-}
-
-@Composable
-fun DeepNestedContent(
-    theme: Theme,
-    strings: Strings,
-    dimensions: Dimensions
-) {
-    // 使用传递的参数而不是查找 CompositionLocal 值
-    Column {
-        Text(
-            text = strings.title,
-            style = theme.textStyle,
-            modifier = Modifier.padding(dimensions.padding)
-        )
-        // 使用传递的参数进行更多嵌套内容
-    }
-}
-</code></pre>
-
-<h3>3. LazyList 优化技巧</h3>
-
-<p>高效的列表渲染对于流畅的滚动性能至关重要。以下是针对 LazyList 组件的关键优化：</p>
-
-<pre><code class="Kotlin">@Composable
-fun &lt;T : Any&gt; OptimizedList(items: List&lt;T&gt;) {
-    LazyColumn {
-        itemsIndexed(
-            items = items,
-            // 稳定的key有助于Compose在更新过程中跟踪项目
-            key = { _: Int, item: T -&gt; item.hashCode() }
-        ) { _: Int, item: T -&gt;
-            // 每个item的内容
-        }
-    }
-}
-</code></pre>
-
-<p>LazyList 的关键优化点：</p>
-
-<ol>
-<li>提供稳定的键，帮助Compose在更新过程中跟踪项目</li>
-<li>尽可能使用固定大小以避免重新测量</li>
-<li>保持项目可组合项的轻量级</li>
-<li>避免在项目内容中进行不必要的分配</li>
-<li>记住要为每个项目缓存昂贵的计算</li>
-</ol>
-
-
-<h2>测量和监控性能</h2>
-
-<h3>Layout Inspector和Composition Traces</h3>
-
-<p>Android Studio 中的布局检查器是一款强大的Compose界面性能调试工具。它能够帮助你深入了解应用的视图层次结构、重组计数以及应用于每个可组合项的修饰符。</p>
-
-<p>要将布局检查器与Compose结合使用，请执行以下操作：</p>
-
-<ol>
-<li>在调试模式下运行你的应用</li>
-<li>在“正在运行的设备”窗口中，你将看到一个用于切换布局检查器的按钮</li>
-<li>检查Compose层次结构：
-
-<ul>
-<li>查看组件树</li>
-<li>检查重组计数</li>
-<li>分析修饰符链</li>
-<li>检查可组合项参数</li>
-</ul>
-</li>
-</ol>
-
-
-<p><img src="https://carrion.dev/images/kotlin/layout-inspector.png" alt="Layout Inspector" /></p>
-
-<p>布局检查器中需要监控的关键指标：</p>
-
-<ol>
-<li>重组计数 - 数值较高表示存在潜在的优化机会</li>
-<li>跳过计数 - 检查可组合项是否在应该跳过重组时跳过</li>
-<li>修饰符链复杂度 - 较长的修饰符链可能会影响测量/布局性能</li>
-</ol>
-
-
-<h3>性能测试</h3>
-
-<pre><code class="Kotlin">@Test
-fun performanceTest() {
-    benchmarkRule.measureRepeated(
-        packageName = "com.example.app",
-        metrics = listOf(FrameTimingMetric()),
-        iterations = 5
-    ) {
-        composeTestRule.setContent {
-            YourComposable()
-        }
-    }
-}
-</code></pre>
-
-<h2>最佳实践总结</h2>
-
-<ol>
-<li>使用稳定类型(Stable types)和不可变数据结构(Immutable data structures)</li>
-<li>使用remember提升高开销计算</li>
-<li>在惰性列表(lazy list)中实现合适的键(key)</li>
-<li>最小化重组范围</li>
-<li>定期分析和测量性能</li>
-</ol>
-
-
-<p>遵循这些优化技巧将有助于确保你的Compose UI保持响应迅速且高效，从而为你的应用提供更好的用户体验。</p>
 ]]></content>
   </entry>
   

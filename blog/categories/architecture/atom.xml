@@ -1,0 +1,1629 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Architecture | 稀有猿诉]]></title>
+  <link href="https://alexhilton.github.io/blog/categories/architecture/atom.xml" rel="self"/>
+  <link href="https://alexhilton.github.io/"/>
+  <updated>2025-07-01T22:55:55+08:00</updated>
+  <id>https://alexhilton.github.io/</id>
+  <author>
+    <name><![CDATA[Alex Hilton]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[在Kotlin ViewModel中正确处理相同的UI组件交互]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/07/01/handling-ui-action/"/>
+    <updated>2025-07-01T22:34:20+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/07/01/handling-ui-action</id>
+    <content type="html"><![CDATA[<p>本文译自「Handling UI Actions the Right Way in Kotlin ViewModels」，原文链接<a href="https://proandroiddev.com/handling-ui-actions-the-right-way-in-kotlin-viewmodels-119a06bb43ef">https://proandroiddev.com/handling-ui-actions-the-right-way-in-kotlin-viewmodels-119a06bb43ef</a>，由Vaibhav Jaiswal发布于2025年4月16日。</p>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*MLROq8NAKOSnutBMj3WivQ.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>缘起</h2>
+
+<p>作为Android开发者，我们经常会遇到需要在多个ViewModel中实现相同或者非常类似UI功能的情况。</p>
+
+<p>例如，我们有多个页面，它们具有类似的功能，例如显示帖子、撰写评论或处理用户交互。</p>
+
+<p>在每个ViewModel中分别处理这些UI交互很快就会变得混乱，导致大量的代码重复。随着应用规模的扩大和页面数量的增加，这个问题会变得更加棘手，导致代码库难以维护，并带来可扩展性问题。</p>
+
+<p>对于这种代码重复问题，我们Android开发者常用的几种常见解决方案包括：</p>
+
+<ul>
+<li>额外的辅助类方法</li>
+<li>“继承”或“使用委托的组合”方法</li>
+</ul>
+
+
+<p>在以下章节中，我们将详细探讨这些解决方案，了解每种方法如何解决代码重复问题，并重点介绍每种方法的局限性。然后，我们将深入探讨我的解决方案，它基于这些想法，并解决了它们的局限性，从而实现了更高效的UI交互管理。</p>
+
+<blockquote><p>这个解决方案我已经在<a href="https://medial.app/"> Medial 的应用</a>（链接 <a href="https://medial.app/%EF%BC%89%E4%BB%A3%E7%A0%81%E5%BA%93%E4%B8%AD%E4%BD%BF%E7%94%A8%E8%BF%87%E4%BA%86%E2%80%94%E2%80%94%E5%B0%86">https://medial.app/%EF%BC%89%E4%BB%A3%E7%A0%81%E5%BA%93%E4%B8%AD%E4%BD%BF%E7%94%A8%E8%BF%87%E4%BA%86%E2%80%94%E2%80%94%E5%B0%86</a> UI交互处理代码变成了近乎即插即用的体验。</p></blockquote>
+
+<p>我的解决方案根本不建议使用 BaseViewModel，也不基于 BaseViewModel。BaseViewModel 只是一个例子，用来说明我们可以使用从任何其他类/接口继承的功能，这些类/接口可以是 BaseViewModel、ViewModel、Decompose 的 ComponentContext 或其他任何东西。</p>
+
+<h2>⚡️ TL;DR: 处理ViewModel中的共享UI交互</h2>
+
+<p>当在多个页面上显示相同的UI组件时，在每个ViewModel中处理它们的交互会导致重复和逻辑混乱。我们探索了三种方法来解决这个问题：</p>
+
+<ol>
+<li>辅助类方法</li>
+<li>➖ 简单，但无法覆写任何行为</li>
+<li>➖ 并非ViewModel的直接功能</li>
+<li>通过 Kotlin 委托进行组合</li>
+<li>✅ 更好的设计，支持覆写行为。</li>
+<li>➖ 无法访问viewModelScope或其他ViewModel功能。</li>
+<li>➖ 无法从任何其他继承类访问任何内容。</li>
+<li>💡 我的解决方案 — 使用带有默认函数的接口</li>
+<li>✅ 简洁、可复用，支持覆写（Override）行为。</li>
+<li>✅ 完全访问ViewModel功能或任何其他继承类的功能。</li>
+<li>✅ 只需从接口实现即可轻松插入任何 ViewModel</li>
+</ol>
+
+
+<p>本博客中的所有解决方案均在<a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample">此示例项目</a>（链接 <a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E5%AE%9E%E7%8E%B0%EF%BC%9A">https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E5%AE%9E%E7%8E%B0%EF%BC%9A</a></p>
+
+<h2>🏗️ 设置</h2>
+
+<p>假设我们有一个后置UI 元素，它有一些UI 交互，并像 MVI 建议的那样，在一个密封的界面中呈现。</p>
+
+<pre><code class="Kotlin">sealed interface PostAction {
+    data class Clicked(val id: String) : PostAction
+    data class LikeClicked(val id: String) : PostAction
+    data class ShareClicked(val id: String) : PostAction
+}
+</code></pre>
+
+<p>我们还有一个 BaseViewModel 类，用于保存每个ViewModel所需的通用功能</p>
+
+<pre><code class="Kotlin">abstract class BaseViewModel : ViewModel() {
+
+    var showShackBar by mutableStateOf("")
+    var showBottomSheet by mutableStateOf("")
+
+    fun navigate() {
+      // 实现
+    }
+
+    fun showSnackbar(message: String) {
+      showSnackBar = message
+    }
+}
+</code></pre>
+
+<h3>额外的辅助类方法</h3>
+
+<p>在这种方法中，我们创建一个单独的辅助类来封装UI交互的处理。我们将这个类作为ViewModel的一个属性。</p>
+
+<p>首先，我们定义一个辅助类 PostActionHandler 来处理交互。</p>
+
+<pre><code class="Kotlin">class PostActionHandler(private val viewModel: BaseViewModel) {
+
+    fun handleAction(action: PostAction) = when (action) {
+        is PostAction.Clicked -&gt; viewModel.navigate()
+        is PostAction.LikeClicked -&gt; viewModel.showSnackBar("Liked")
+        is PostAction.ShareClicked -&gt; { /* 实现 */ }
+    }
+}
+</code></pre>
+
+<p>现在，在 PostScreenViewModel 中我们创建一个 PostActionHandler 实例</p>
+
+<pre><code class="Kotlin">class PostScreenViewModel : BaseViewModel() {
+    val actionHandler = PostActionHandler(this)
+}
+
+@Composable
+fun PostScreen(viewModel: PostScreenViewModel) {
+    PostItem(onAction = viewModel.actionHandler::handleAction)
+}
+
+@Composable
+fun PostItem(onAction: (PostAction) -&gt; Unit) {
+
+}
+</code></pre>
+
+<p>虽然这种方法确实解决了跨多个ViewModel重复代码的问题，但它也存在一些主要缺点，这些缺点包括：</p>
+
+<ul>
+<li>🚫 自定义功能有限：由于 PostActionHandler 是一个封装类，我们无法覆写任何行为。</li>
+<li>🚫 通过属性访问：我们不是将功能添加到ViewModel本身，而是将其作为ViewModel的一个属性添加。</li>
+</ul>
+
+
+<p><strong>无法覆写（Override）行为是这种方法不建议用于UI交互处理的主要原因。</strong></p>
+
+<h2>🧬 使用 Kotlin 委托进行组合（优雅但受限的解决方案）</h2>
+
+<p>这是互联网上解决这个问题的标准方法，也是最受推荐的方法。该解决方案基于继承，但不是继承自某个类，这样就无法再扩展任何类。我们利用 Kotlin 委托将实现委托给另一个类，这样就无需扩展某个类，也无需再终止继承。</p>
+
+<p>以下是我们实现该解决方案的方法</p>
+
+<pre><code class="Kotlin">interface PostActionHandler {
+    suspend fun handleAction(action: PostAction)
+}
+
+class PostActionHandlerImpl : PostActionHandler {
+
+    override fun handleAction(action: PostAction) = when (action) {
+        is PostAction.Clicked -&gt; handlePostClick(action.id)
+        is PostAction.LikeClicked -&gt; handleLikeClick(action.id)
+        is PostAction.ShareClicked -&gt; handleShareClick(action.id)
+    }
+
+    private fun handlePostClick(id: String) { }
+
+    private fun handleLikeClick(id: String) { }
+
+    private fun handleShareClick(id: String) { }
+
+}
+</code></pre>
+
+<p>这就是我们的使用方法</p>
+
+<pre><code class="Kotlin">class PostViewModel : BaseViewModel(), PostActionHandler by PostActionHandlerImpl() {
+
+}
+
+@Composable
+fun PostScreen(viewModel: PostViewModel) {
+    PostItem(onAction = viewModel::handleAction)
+}
+
+@Composable
+fun PostItem(onAction: (PostAction) -&gt; Unit) {
+
+}
+</code></pre>
+
+<p>这种方法解决了额外辅助类方法中存在的所有问题。</p>
+
+<ul>
+<li>✅ 覆写行为：通过使用接口和委托，我们可以轻松地覆写任何行为。</li>
+<li>✅ 更简洁的设计：功能直接成为ViewModel的一部分，允许我们像调用原生ViewModel方法一样调用这些函数。</li>
+</ul>
+
+
+<p>然而，这种方法有一个主要缺点，使其在处理UI交互和UI逻辑方面不够完善。</p>
+
+<h3>访问从其他类继承的功能</h3>
+
+<p>此模式的一个主要挑战是我们无法访问从其他类继承的功能，因为我们无法传递引用。</p>
+
+<p>让我们看看这个限制带来了哪些挑战：</p>
+
+<ul>
+<li>无法访问ViewModel功能：我们无法从实现类访问任何ViewModel功能。这是因为我们无法在实现类中传递当前类的引用。</li>
+<li>无法使用 viewModelScope：此限制带来的一个主要警告是，我们无法使用 viewModelScope，因此无法直接启动协程。我们必须在 viewModel 中创建包装函数，这会破坏可重用性，因为现在可组合函数会调用我们的ViewModel函数。</li>
+</ul>
+
+
+<p>当我们尝试将其作为构造函数参数传递时，Android Studio 会抛出一个错误：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*xcJAyapM8023-hqu06vwUw.png" alt="Kotlin Compiler showing error when passing “this”" /></p>
+
+<h2>🧩 我的解决方案：使用接口默认函数进行组合</h2>
+
+<p>在我自己实现使用委托的 Composition 方案时，我遇到了一个难题：如何传递当前ViewModel的引用来访问viewModelScope 和我的 BaseViewModel 功能。后来我想起了 Kotlin 接口中的默认函数，于是尝试了这个方案，完美地解决了这个问题。</p>
+
+<p>通过这个方案，我可以：</p>
+
+<ul>
+<li>💡 支持功能重写</li>
+<li>🔗 完全访问我的BaseViewModel和ViewModel 的功能，例如viewModelScope 等，或任何其他类的功能。</li>
+<li>❌ 无需单独的实现类</li>
+</ul>
+
+
+<blockquote><p>在我们<a href="https://medial.app/"> Medial 的应用</a>（链接 <a href="https://medial.app/%EF%BC%89%E7%94%9F%E4%BA%A7%E4%BB%A3%E7%A0%81%E4%B8%AD%EF%BC%8C%E6%88%91%E9%9B%86%E6%88%90%E4%BA%86%E8%BF%99%E4%B8%AA%E6%96%B9%E6%A1%88%EF%BC%8C%E4%BB%A5%E7%AE%80%E5%8C%96ViewModel%E5%A4%84%E7%90%86UI%E4%BA%A4%E4%BA%92%E7%9A%84%E6%96%B9%E5%BC%8F%E3%80%82%E7%BB%93%E6%9E%9C%E5%A6%82%E4%BD%95%EF%BC%9F%E6%AF%8F%E4%B8%AA%E6%96%B0%E9%A1%B5%E9%9D%A2%E5%8F%AA%E9%9C%80%E5%AE%9E%E7%8E%B0%E8%BF%99%E4%B8%AA%E6%8E%A5%E5%8F%A3%EF%BC%8C%E7%84%B6%E5%90%8E%EF%BC%8C%E5%AE%83%E5%B0%B1%E5%B9%B2%E5%87%80%E5%88%A9%E8%90%BD%E5%9C%B0%E8%8E%B7%E5%BE%97%E4%BA%86%E5%8A%9F%E8%83%BD%E3%80%82">https://medial.app/%EF%BC%89%E7%94%9F%E4%BA%A7%E4%BB%A3%E7%A0%81%E4%B8%AD%EF%BC%8C%E6%88%91%E9%9B%86%E6%88%90%E4%BA%86%E8%BF%99%E4%B8%AA%E6%96%B9%E6%A1%88%EF%BC%8C%E4%BB%A5%E7%AE%80%E5%8C%96ViewModel%E5%A4%84%E7%90%86UI%E4%BA%A4%E4%BA%92%E7%9A%84%E6%96%B9%E5%BC%8F%E3%80%82%E7%BB%93%E6%9E%9C%E5%A6%82%E4%BD%95%EF%BC%9F%E6%AF%8F%E4%B8%AA%E6%96%B0%E9%A1%B5%E9%9D%A2%E5%8F%AA%E9%9C%80%E5%AE%9E%E7%8E%B0%E8%BF%99%E4%B8%AA%E6%8E%A5%E5%8F%A3%EF%BC%8C%E7%84%B6%E5%90%8E%EF%BC%8C%E5%AE%83%E5%B0%B1%E5%B9%B2%E5%87%80%E5%88%A9%E8%90%BD%E5%9C%B0%E8%8E%B7%E5%BE%97%E4%BA%86%E5%8A%9F%E8%83%BD%E3%80%82</a></p></blockquote>
+
+<p>让我们来探索一下这个方案是如何解决我们的问题的。</p>
+
+<h3>设计 ActionHandler 接口</h3>
+
+<pre><code class="Kotlin">interface PostActionHandler {
+
+    val viewModel: BaseViewModel
+
+    fun handleAction(action: PostAction) = viewModel.viewModelScope.launch {
+        when (action) {
+            is PostAction.Clicked -&gt; handlePostClick(action.id)
+            is PostAction.LikeClicked -&gt; handleLikeClick(action.id)
+            is PostAction.ShareClicked -&gt; handleShareClick(action.id)
+        }
+    }
+
+    suspend fun handlePostClick(id: String) {
+        viewModel.navigate()
+    }
+
+    suspend fun handleLikeClick(id: String) {
+        viewModel.showToast("Liked")
+    }
+
+    suspend fun handleShareClick(id: String) {
+        // 实现
+    }
+
+}
+</code></pre>
+
+<h3>让我们的ViewModel实现这个接口</h3>
+
+<pre><code class="Kotlin">class PostViewModel : BaseViewModel(), PostActionHandler {
+
+    // 传入当前的baseViewModel
+    override valViewModel= this
+
+    override fun handleShareClick(id: String) {
+        // 添加 override实现
+    }
+
+}
+</code></pre>
+
+<h3>这是它在 Composable 中的使用方式</h3>
+
+<pre><code class="Kotlin">@Composable
+private fun PostScreen(viewModel: PostViewModel) {
+    PostItem(onAction = viewModel::handleAction)
+}
+
+@Composable
+private fun PostItem(
+    onAction: (PostAction) -&gt; Unit
+) {
+
+}
+</code></pre>
+
+<p>所以，正如你所见，我们只需要定义 viewModel 变量，就大功告成了，现在我们可以使用ViewModel和 BaseViewModel 提供的所有功能了。</p>
+
+<p>请注意，我们是如何解决使用委托进行组合的主要缺点的：</p>
+
+<ul>
+<li>通过将 viewModel 引用保留为接口属性，我们可以轻松地在ViewModel中定义它。这使我们能够直接访问 BaseViewModel 或任何其他ViewModel提供的所有功能。</li>
+<li>我们简化了 viewModelScope 的使用。现在，启动协程、收集流程以及执行其他任务都变得非常简单，无需任何复杂的变通方法或 hack。这就是此解决方案带来的优雅和简洁之处。</li>
+</ul>
+
+
+<p>这种方法只有一个小缺点，那就是</p>
+
+<ul>
+<li>我们必须在ViewModel中定义所有接口属性，这在大多数情况下是可以接受的，因为我们主要会引用 Repository 或 Domain Layer 类，以及一些可变状态（如果有的话）。</li>
+</ul>
+
+
+<p>这个问题比我们在这个解决方案中克服的缺点要小得多，这使得它成为处理任何共享UI交互或任何共享UI业务逻辑的最佳解决方案。</p>
+
+<blockquote><p>嗯，这一部分比前面几部分简单得多。这里没有复杂的问题需要深入研究——只是一个简单的解决方案，它确实做到了它应该做的事情，并解决了我们所有的问题。</p></blockquote>
+
+<h2>🥷🏻 让我们在实际用例中看看这个解决方案的实际应用。</h2>
+
+<p>假设我们有一个主页面，它以列表形式显示各种UI元素，例如包含帖子和新闻等项目的动态。每个元素都包含一组用户交互，例如点赞帖子、分享新闻文章或导航到详情视图。我们的解决方案可以帮助我们高效地处理跨不同ViewModel的这些交互，确保以可扩展的方式处理通用功能。</p>
+
+<h3>为每个UI组件设计UI交互</h3>
+
+<p>然后，我们使用 Kotlin 的 Sealed 接口，像在典型的 MVI 架构中一样设计UI交互：</p>
+
+<pre><code class="Kotlin">sealed interface PostAction {
+
+    data class Clicked(val post: Post) : PostAction
+    data class LikeClicked(val post: Post) : PostAction
+    data class ShareClicked(val post: Post) : PostAction
+
+}
+</code></pre>
+
+<pre><code class="Kotlin">sealed interface NewsAction {
+
+    data class Clicked(val news: News) : NewsAction
+    data class LikeClicked(val news: News) : NewsAction
+    data class BookmarkClicked(val news: News) : NewsAction
+
+}
+</code></pre>
+
+<h3>创建我们的动作处理程序接口</h3>
+
+<pre><code class="Kotlin">interface PostActionHandler {
+
+    val viewModel: BaseViewModel
+    val postRepo: PostRepository
+
+    fun handleAction(action: PostAction) = viewModel.viewModelScope.launch {
+      when (action) {
+          is PostAction.Clicked -&gt; handlePostClick(action.id)
+          is PostAction.LikeClicked -&gt; handleLikeClick(action.id)
+        }
+    }
+
+    suspend fun handlePostClick(id: String) {
+      viewModel.navigate(......)
+    }
+
+    suspend fun handleLikeClick(id: String) {
+      postRepo.like(id)
+      viewModel.showSnackbar("Post Liked")
+    }
+
+}
+</code></pre>
+
+<pre><code class="Kotlin">interface NewsActionHandler {
+
+    val viewModel: BaseViewModel
+    val newsRepo: NewsRepository
+
+    fun handleAction(action: NewsAction) = when (action) {
+        is NewsAction.Clicked -&gt; handleNewsClick(action.id)
+        is NewsAction.Bookmark -&gt; handleNewsBookmark(action.id)
+    }
+
+    fun handleNewsClick(id: String) {
+      viewModel.navigate(.....)
+    }
+
+    fun handleNewsBookmark(id: String) {
+      newsRepo.bookmark(id)
+      viewModel.showSnackBar("News Bookmarked")
+    }
+}
+</code></pre>
+
+<p>如上所示，我们为每个数据模型创建了一个 Action Handler 接口。</p>
+
+<p>我们在这里所做的就是遵循上一节所示的接口设计。</p>
+
+<ul>
+<li>我们有两个属性，分别是ViewModel和Repository 类。</li>
+<li>我们分别创建了处理每个 Action 的函数。当然，这是可选的。我保留这种方式是为了方便覆写任何特定的行为，并且我们为每个 Action 类型分别调用相应的 Action 处理函数。</li>
+</ul>
+
+
+<h3>创建 ViewModel</h3>
+
+<p>让我们构建一个实现这两个接口的 ViewModel，以继承它们的功能。</p>
+
+<pre><code class="Kotlin">class HomeViewModel : BaseViewModel(), PostActionHandler, NewsActionHandler {
+
+    override val viewModel = this
+    override val postRepo = PostRepository()
+    override val newsRepo = NewsRepository()
+
+    /**
+      ViewModel其余代码
+    **/
+
+}
+</code></pre>
+
+<p>然后，我们在ViewModel中定义必要的属性（ viewModel 、 postRepo 和 newsRepo ），这些属性会被两个接口使用。</p>
+
+<p>这种设计消除了冗余，并保持了代码的简洁性，因为我们只需设置一次属性，只要属性名称相同，两个接口就可以无缝地与其交互。
+这种方法保持了ViewModel的中心地位，同时又可以轻松处理不同组件的UI交互和业务逻辑。</p>
+
+<h2>🪝连接一切：将操作连接到 UI</h2>
+
+<pre><code class="Kotlin">@Composable
+fun HomeScreen(viewModel: HomeViewModel) {
+    LazyColumn {
+        items(viewModel.items) {
+            when(it) {
+                is News -&gt; NewsCard(it, onAction = viewModel::handleAction)
+                is Post -&gt; PostCard(it, onAction = viewModel::handleAction)
+            }
+        }
+    }
+}
+
+@Composable
+private fun NewsCard(
+  news: News,
+  onAction: (NewsAction) -&gt; Unit
+) {
+
+}
+
+@Composable
+private fun PostCard(
+  post: Post,
+  onAction: (PostAction) -&gt; Unit
+) {
+
+}
+</code></pre>
+
+<p>在我们的UI组件中，我们可以直接将这些函数用作ViewModel本身的函数，这样就完成了在 Screen 中添加交互处理的功能。</p>
+
+<ul>
+<li>现在，假设我们有另一个只显示新闻的页面（Screen）。我们需要做的就是在ViewModel中实现 NewsActionHandler 接口——就这样，一切就绪。</li>
+<li>我们可以无缝地从 BaseViewModel 或ViewModel调用任何函数，从而能够在一个单一的、集中的位置实现完整的端到端功能。如果我们在多个位置显示相同的数据模型，这将非常有利。</li>
+</ul>
+
+
+<h2>📦 整合所有功能</h2>
+
+<p>在这篇博文中，我们探讨了在扩展Android UI（基本上是任何 UI）时最容易被忽视的问题之一，即跨ViewModel的重复UI交互逻辑。我们探索了三种不同的方法来解决这个问题：</p>
+
+<ol>
+<li>辅助类 - 一种快速解决方案，但存在严格的限制。</li>
+<li>使用委托进行组合——一种更现代的继承驱动解决方案，
+但它难以从外部访问功能。</li>
+<li>使用默认函数的接口（我的解决方案）——一种实用、优雅且灵活的方法，克服了前两种方法的所有限制。</li>
+</ol>
+
+
+<p>通过利用 Kotlin 的接口默认方法并将ViewModel作为接口内部的属性，我们解锁了完整的可扩展性，并能够从其他继承的类/接口访问扩展功能。</p>
+
+<p>现在，让我们以表格的形式比较一下每个解决方案：</p>
+
+<table>
+<thead>
+<tr>
+<th> 好处                           </th>
+<th> 通过辅助类                                       </th>
+<th> 使用委托进行组合                             </th>
+<th> 带有默认函数的接口 (✅ 最好)         </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> 🔁 可重用性                                 </td>
+<td>  ✅ Yes        </td>
+<td>  ✅ Yes         </td>
+<td>  ✅ Yes </td>
+</tr>
+<tr>
+<td> 🧠 覆写行为                        </td>
+<td> ❌ 不可能          </td>
+<td> ✅ 可以，由于继承        </td>
+<td> ✅  可以，由于继承           </td>
+</tr>
+<tr>
+<td> 🔗 访问从其他来源继承的功能                 </td>
+<td> ❌ 不可以，因为它是一个封装类      </td>
+<td> ❌  不可以，因为我们无法传递当前引用       </td>
+<td> ✅  可以，因为我们可以将继承类保留为接口属性    </td>
+</tr>
+<tr>
+<td> 🏗️ 跨页面可扩展性                  </td>
+<td> ⚠️ 差——当逻辑还涉及视图模型特定功能时会变得困难               </td>
+<td> ✅ 更好——可重复使用的逻辑                    </td>
+<td> ✅ 最佳——跨页面即插即用            </td>
+</tr>
+<tr>
+<td> ✅ 最佳用例                               </td>
+<td> 对于非UI交互封装功能                   </td>
+<td> 业务逻辑重用，非UI上下文            </td>
+<td> 多个ViewModel中需要的UI交互 </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>你可以在<a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample">专用的 GitHub 代码库</a>（链接：<a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E6%8E%A2%E7%B4%A2%E6%9C%AC%E5%8D%9A%E5%AE%A2%E4%B8%AD%E6%8F%90%E5%88%B0%E7%9A%84%E6%89%80%E6%9C%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E3%80%82%E6%AC%A2%E8%BF%8E%E9%9A%8F%E6%84%8Fclone%E3%80%81fork%E6%88%96%E8%AF%95%E7%94%A8%E3%80%82">https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E6%8E%A2%E7%B4%A2%E6%9C%AC%E5%8D%9A%E5%AE%A2%E4%B8%AD%E6%8F%90%E5%88%B0%E7%9A%84%E6%89%80%E6%9C%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E3%80%82%E6%AC%A2%E8%BF%8E%E9%9A%8F%E6%84%8Fclone%E3%80%81fork%E6%88%96%E8%AF%95%E7%94%A8%E3%80%82</a></p>
+
+<h2>✌️ 告别</h2>
+
+<p>总而言之，希望这篇博客能帮助你解锁一些强大的技巧，提升你的Kotlin 和UI处理知识。有了Kotlin 的界面默认函数，你的构建将更加简洁、快速，并兼顾长期可扩展性。</p>
+
+<p>如果你喜欢这篇文章并想随时了解最新动态：</p>
+
+<ul>
+<li>查看我的 LinkedIn、GitHub 和 X 个人资料，了解我正在做的事情。</li>
+<li>想要更多 Kotlin 的魔法？阅读我之前的博客，了解另一种可以让你的代码库更精简、更智能的技术。</li>
+</ul>
+
+
+<p>感谢你的阅读，希望你喜欢！🚀</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[MVI架构：Compose中的响应式状态管理]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/06/25/reactive-state-in-compose/"/>
+    <updated>2025-06-25T22:32:21+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/06/25/reactive-state-in-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Reactive State Management in Compose — MVI Architecture」，原文链接<a href="https://proandroiddev.com/reactive-state-management-in-compose-mvi-architecture-71546c9f1b52">https://proandroiddev.com/reactive-state-management-in-compose-mvi-architecture-71546c9f1b52</a>，由Davies Adedayo AbdulGafar发布于2025年4月22日。</p></blockquote>
+
+<p>译注：原文作者虽然是基于Jetpack Compose来写的，但重点讨论的是应用的MVI架构方式，涉及的都是纯Kotlin语言层面的，以及Compose层面的，并不涉及平台特性，因此完全适用于跨平台的Compose Multiplatform。</p>
+
+<p><a href=""><img src="/Users/alexhilton/Downloads/banner_reactive.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>MVI是什么鬼</h2>
+
+<h3>MVI架构的基本概念</h3>
+
+<p>MVI（模型-视图-意图）架构为 Android 应用程序中可扩展、稳健且可测试的 UI 状态管理提供了一种结构良好的方法。它强调代码简洁和关注点分离（Separation of Concerns），将应用程序划分为三个主要组件——模型(Model)、视图(View)和意图(Intent)——它们共同构成一个循环：意图 -> 视图模型 -> 模型 -> 视图，从而定义单向数据流（<strong>译注：</strong>这里的意图Intent是架构中的一个逻辑概念，与Android系统中的Intent没有关系）。此架构模式提供的不同角色有助于更轻松地理解和维护 UI 状态。从本质上讲，MVI 不仅仅是一种架构模式，而是一个旨在流畅响应变化的响应式系统。这种响应性是其定义特征之一，也是其最大的优势。</p>
+
+<ul>
+<li>单向数据流：指数据以单向流动——从模型流向视图，并以意图的形式返回。这确保了架构的清晰度、可预测性和易维护性。</li>
+<li>关注点分离：指模型、视图和意图组件具有不同的角色。模型管理状态，视图处理 UI 渲染，意图捕获并传达用户操作。</li>
+<li>不可变性（Immutability）：确保模型的状态一旦设置便保持不变。这保证了可预测性，消除了意外的副作用，并促进了稳定可靠的应用状态。</li>
+<li>响应式：当状态发生变化时，UI 会自动更新。</li>
+</ul>
+
+
+<p>该架构分解为三个和谐的组件，它们以响应式流程协同工作：</p>
+
+<ul>
+<li>模型 (Model) 是单一事实来源，它是应用程序在任何特定时刻的状态快照。当此状态发生变化时，它会触发整个系统的级联响应式更新。UI 会在状态变化时自动更新，这凸显了这一核心的响应式原则。</li>
+<li>视图 (View) 根据当前模型状态以响应式方式渲染用户所见内容。它订阅状态变化并自动进行转换以反映这些变化，而无需任何命令式更新调用。这种响应式渲染正是 MVI 如此强大的原因——视图始终与状态同步。</li>
+<li>意图 (Intent) 完善了响应式电路，捕获用户交互并将其反馈回系统以创建新状态。这形成了一个持续的反馈循环：用户操作触发意图，意图产生新状态，新状态触发 UI 更新。</li>
+</ul>
+
+
+<p>当我们说 MVI 具有响应式特性时，我们指的是整个系统都是围绕自动响应变化而构建的。数据发生变化时，UI 无需手动更新，而是会自动反映当前状态。这种响应式特性能够创建一个动态、响应迅速的应用程序，让用户感觉生动活泼。</p>
+
+<h3>MVI架构的典型实现方式</h3>
+
+<p>在原生 Android 开发中，MVI 的大部分实现都放在 ViewModel 类中。以下是实现 MVI 模式的一种简单方法：</p>
+
+<ol>
+<li>我们打算建模的 UI 状态将实现为一个不可变的 Kotlin 数据类（data class），其字段保存着我们想要在视图中显示的状态。</li>
+<li>StateFlow 是将整个架构绑定在一起的响应式粘合剂。这个观察者对象包装了模型，并将变化通知给视图，以便它反映新的状态。这个响应式管道确保任何状态变化都会自动传播到 UI。</li>
+<li>目前，我们的意图可以实现为 ViewModel 中的公共函数。这些函数应该没有返回值，以确保视图只接收来自观察者的状态更新。类似于对象作为编程语言中的一等公民，可以通过引用传递，同样，函数也依赖于方法引用。我们利用这一点将意图传递给使用它的 UI 节点。我们无需编写复杂的类来建模意图，因为那样需要额外实现意图处理程序。</li>
+</ol>
+
+
+<p>以下是在 ViewModel 中实现 MVI 模式的模板。</p>
+
+<pre><code class="Kotlin">class ScreenViewModel() : ViewModel() {
+  private val _uiState: MutableStateFlow&lt;MyModel&gt; = MutableStateFlow(MyModel(...)) // private observer object
+
+  val uiState: StateFlow&lt;MyModel&gt; = _uiState // observer object exposed as an immutable instance
+
+  fun doUpdateOnState(...) { ... } // public function serves as an intent
+  fun doAnotherUpdate(...) { ... }
+}
+
+data class MyModel(...)
+</code></pre>
+
+<p>新状态在 ViewModel 中生成，然后由观察 uiState 的视图使用。请注意，Intent 是如何作为触发状态更改的回调传递到可组合项页面的。</p>
+
+<pre><code class="Kotlin">@Composable
+ fun MyScreen(viewModel: ScreenViewModel) {
+   val uiState: MyModel = viewModel.uiState.collectAsStateWithLifeCycle() // consumes the state produced in the viewModel
+
+   MyScreenContent(
+     uiState = uiState,
+     doUpdate = viewModel::doUpdateOnState, // intent to do update
+     doAnotherUpdate = viewModel::doAnotherUpdate // intent to do another update
+   )
+ }
+</code></pre>
+
+<p>这种反应模式通过 Kotlin 的 StateFlow 实现：</p>
+
+<pre><code class="Kotlin">private val _uiState: MutableStateFlow&lt;MyModel&gt; = MutableStateFlow(MyModel(...))
+val uiState: StateFlow&lt;MyModel&gt; = _uiState
+</code></pre>
+
+<p>在 UI 方面，这种反应性通过收集操作来表达，该操作消耗从 viewModel 生成的新状态。</p>
+
+<pre><code class="Kotlin">val uiState = viewModel.uiState.collectAsStateWithLifeCycle()
+</code></pre>
+
+<p>这行代码建立了一个响应式连接，每当状态发生变化时都会自动刷新 UI。无需手动刷新调用或复杂的更新逻辑——系统本身就是响应式的。</p>
+
+<h2>案例研究</h2>
+
+<p>让我们采用更实用的方法，实现 MVI 模式来管理页面 状态。下图是一个页面，用户可以从给定的选项中选择所显示问题的答案。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:838/format:webp/0*uwa_-6EYNOhyNuNJ" alt="Case study" /></p>
+
+<p>图片来源 — <a href="https://github.com/android/compose-samples/tree/v2024.01.00/Jetsurvey">Compose 示例 Jetsurvey</a>（译注：链接是<a href="https://github.com/android/compose-samples/tree/v2024.01.00/Jetsurvey%EF%BC%89%E3%80%82%E7%82%B9">https://github.com/android/compose-samples/tree/v2024.01.00/Jetsurvey%EF%BC%89%E3%80%82%E7%82%B9</a><a href="https://github.com/SahDavies/mvi-architecture-sample/">击此</a>（译注：链接是<a href="https://github.com/SahDavies/mvi-architecture-sample/%EF%BC%89%E5%A4%84%E6%9F%A5%E7%9C%8B%E5%AE%8C%E6%95%B4%E5%AE%9E%E7%8E%B0%E3%80%82">https://github.com/SahDavies/mvi-architecture-sample/%EF%BC%89%E5%A4%84%E6%9F%A5%E7%9C%8B%E5%AE%8C%E6%95%B4%E5%AE%9E%E7%8E%B0%E3%80%82</a></p>
+
+<p>页面包含以下状态：</p>
+
+<ol>
+<li>问题</li>
+<li>选项列表</li>
+<li>问题计数</li>
+<li>选择指示器</li>
+<li>启用/禁用按钮</li>
+</ol>
+
+
+<p>此外，页面还提供以下用户操作的输入：</p>
+
+<ol>
+<li>获取下一个问题</li>
+<li>获取上一个问题</li>
+<li>选择一个选项</li>
+<li>关闭/结束操作。这些操作用于将用户的意图传达给应用程序。</li>
+</ol>
+
+
+<p>保存页面状态的模型可以这样实现：</p>
+
+<pre><code class="Kotlin">data class UiState(
+  val questionCount: Int,
+  val totalQuestion: Int,
+  val question: Question,
+  val userSelection: Option?
+) {
+  val hasNext: Boolean = questionCount &lt; totalQuestion
+  val hasPrevious: Boolean = questionCount &gt; 1
+}
+</code></pre>
+
+<p>如前所述，为了简单起见，我们使用公共函数来描述意图，这些函数没有返回值。我们在下面列举了将在 ViewModel 中实现的函数。</p>
+
+<pre><code class="Kotlin">fun next() // 加载下一个问题
+fun previous() // 加载上一个问题
+fun onOptionSelected(selection: Option) // 激活选中选项的标识
+</code></pre>
+
+<p>在视图中调用的每个函数都会触发一个新的状态以供视图使用，这样我们的页面就是可预测和可测试的，因为每个用户交互都会产生一个新的不可变状态，可以在测试期间进行比较。</p>
+
+<pre><code class="Kotlin">@Composable
+fun QuestionScreen(
+    modifier: Modifier = Modifier,
+    onDone: () -&gt; Unit
+) {
+    BackHandler { /* Do nothing */ }
+    val viewModel = QuestionViewModel(getQuestions())
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    QuestionScreenContent(
+        uiState = uiState,
+        onClickNext = viewModel::next,
+        onClickPrevious = viewModel::previous,
+        onOptionSelected = viewModel::onOptionSelected,
+        onDone = onDone
+    )
+}
+</code></pre>
+
+<p>注意：并非所有带有状态的页面组件都能用 MVI 管理。有些组件由单独的状态持有类管理，有些则由可组合组件本身的内部状态管理——例如上图中的进度指示器。不真正处理业务逻辑的状态不应该使用 MVI 管理。</p>
+
+<h2>超越基本响应式</h2>
+
+<p>上述案例研究基于我们的页面需求，使用了一个模型的简单实现。编写 MVI 模式的模型实现有很多方法——根据页面需求进行实现——例如，一个包含加载和错误状态的页面。通常，最简单的方法是使用密封的类层次结构来实现——尽管如此，你也可以选择以不同的方式实现你自己的模型。</p>
+
+<pre><code class="Kotlin">// 考虑加载和错误状态的模型
+internal sealed class UiState {
+    object Loading : UiState()
+    @Immutable
+    class Content(val myModel: UiModel) : UiState()    
+    @Immutable
+    class Error(val error: ErrorUiModel): UiState()
+}
+</code></pre>
+
+<p>视图使用这种新类型的方式略有不同，如下所示：</p>
+
+<pre><code class="Kotlin"> @Composable
+ fun MyScreenContent(uiState: UiState) {
+    when(uiState) {
+        is Loading -&gt; LoadingScreen() 
+        is Error -&gt; ErrorScreen(uiState.error)
+        is Content -&gt; ContentScreen(uiState.myModel)
+    }
+ }
+
+fun LoadingScreen() { /* implementation block */ }
+fun ErrorScreen(error: ErrorUiModel) { /* implementation block */ }
+fun ContentScreen(content: UiModel) { /* implementation block */ }
+</code></pre>
+
+<p>需要注意的是，这种模型是互斥的——它保证三个状态不会同时发生，而是一次发生一个，这有助于防止 UI 状态渲染中常见的错误。</p>
+
+<h3>重写 Intent 实现</h3>
+
+<p>Intent 实现也可以通过添加 Reducer/Handler 来修改，Reducer/Handler 是 ViewModel 中的一个公共函数，它会调用私有实现（辅助函数）来执行操作，并使用 when 表达式分支到相应的操作。</p>
+
+<pre><code class="Kotlin">Class HomeScreenViewModel() : ViewModel() {
+    /*
+    * Some class properties
+    */
+
+    // our reducer/handler
+    fun onHomeAction(action: HomeAction) {
+        when (action) {
+            is HomeAction.CategorySelected -&gt; onCategorySelected(action.category)
+            is HomeAction.TopicFollowed -&gt; onTopicFollowed(action.topic)
+            is HomeAction.HomeCategorySelected -&gt; onHomeCategorySelected(action.category)
+            is HomeAction.ToggleTopicFollowed -&gt; onToggleTopicFollowed(action.topic)
+        }
+    }
+
+    private fun onCategorySelected(category: CategoryInfo) { ... }
+
+    private fun onTopicFollowed(topic: TopicInfo) { ... }
+
+    private fun onToggleTopicFollowed(topic: TopicInfo) { ... }
+
+    private fun onHomeCategorySelected(category: HomeCategory) { ... }
+}
+</code></pre>
+
+<p>为了使此设置正常工作，我们定义了一个密封的接口层次结构，对应于每个操作，其子类属性用于保存参数，然后这些参数将通过视图中的 reducer/handler 传递给这些操作。</p>
+
+<pre><code class="Kotlin">@Immutable
+sealed interface HomeAction {
+    data class CategorySelected(val category: CategoryInfo) : HomeAction
+    data class HomeCategorySelected(val category: HomeCategory) : HomeAction
+    data class TopicFollowed(val topic: TopicInfo) : HomeAction
+    data class ToggleTopicFollowed(val topic: TopicInfo) : HomeAction
+}
+</code></pre>
+
+<p>与我们第一次实现 Intent 时需要在视图中使用方法引用传递所有操作不同，这里我们只需要传递 Reducer/Handler。然后，决定需要调用哪个操作的责任就落在了调用者身上。</p>
+
+<p>这是视图中的样子</p>
+
+<pre><code class="Kotlin">@Composable
+fun HomeScreen(viewModel: HomeScreenViewModel, onNavigate: (String) -&gt; Unit) {
+
+    HomeContent(
+        modifier = Modifier.padding(contentPadding),
+        onHomeAction = viewModel::onHomeAction,
+        onNavigate = onNavigate,
+    )
+
+}
+</code></pre>
+
+<p>HomeContent 可组合函数现在负责决定调用哪个操作，方法是实例化以下任意对象，然后使用实例化的对象调用 onHomeAction</p>
+
+<pre><code class="Kotlin">    HomeAction.CategorySelected(category = CategoryInfo())
+    HomeAction.HomeCategorySelected(category = HomeCategory())
+    HomeAction.TopicFollowed(topic = TopicInfo())
+    HomeAction.ToggleTopicFollowed(topic = TopicInfo())
+</code></pre>
+
+<p>请参阅下面的实际操作！</p>
+
+<pre><code class="Kotlin">@Composable
+private fun HomeContent(
+    modifier: Modifier = Modifier,
+    onHomeAction: (HomeAction) -&gt; Unit, // HomeAction是一个密封类型层次
+    onNavigate: (String) -&gt; Unit,
+) {
+    val homeCategory = HomeAction.HomeCategorySelected(CategoryInfo())
+    onHomeAction(homeCategory) // triggers a state change
+}
+</code></pre>
+
+<p>即使增加了复杂度，核心的响应式原则依然保持不变。Reducer 只是提供了一种更有条理的方式来处理意图并生成新的状态，而从状态到 UI 的响应式流程保持不变。</p>
+
+<p>这种实现方式使得迭代构建变得简单——无论我们需要对意图进行什么更改（无论是添加新的意图还是删除现有的意图），都不需要像我们最初的实现那样在很多地方进行重写；我们只需在处理程序中注册新的操作，然后在调用处理程序时根据具体情况实例化不同的对象即可。</p>
+
+<p>总结一下这篇文章，MVI 最优雅的方面在于它如何创建一个完整的响应式链路：</p>
+
+<ol>
+<li>模型发出状态</li>
+<li>视图使用状态并渲染 UI</li>
+<li>用户与视图的交互生成意图</li>
+<li>意图被处理以创建新的模型</li>
+<li>这个循环以响应式的方式持续进行</li>
+</ol>
+
+
+<p>这种不间断的响应式循环确保你的应用程序始终与用户操作和后端数据保持同步。这不仅仅是响应变化——而是创建一个系统，让变化自然地通过预定义的响应式路径进行。</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[使用用例（Use Case）以让Android代码更简洁]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/06/16/making-android-code-cleaner-with-use-cases/"/>
+    <updated>2025-06-16T22:20:33+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/06/16/making-android-code-cleaner-with-use-cases</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Making Android Code Cleaner with Use Cases: A Practical Approach Using Kotlin Coroutines」，原文链接<a href="https://proandroiddev.com/making-android-code-cleaner-with-use-cases-a-practical-approach-using-kotlin-coroutines-2700e724c4fd">https://proandroiddev.com/making-android-code-cleaner-with-use-cases-a-practical-approach-using-kotlin-coroutines-2700e724c4fd</a>，由Siarhei Krupenich发布于2025年4月11日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*eVj9Vuqq31RUWd2y" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>介绍</h2>
+
+<p>之前，我们开发了一个 Android 应用，重点关注了整洁架构 (Clean Architecture)、输入/输出 MVVM 拆分和 Repository 模式。这种方法遵循了 Google Android 团队推荐的最佳实践，使代码库具有可扩展性、可维护性和可测试性。</p>
+
+<p>在本文中，我们将深入探讨另一个重要概念——用例 (Use Case)，并向你介绍它的用法及其背后的背景。采用这种模式将使你的代码更具可读性和可测试性——这是一个巨大的优势。</p>
+
+<h3>使用Interactors带来的问题</h3>
+
+<p>过去，我们经常使用 Interactors 作为层与层之间的中间件组件——例如，Presenter 可以使用 Interactors 与领域层（Domain layer）进行通信。这使我们能够将一些逻辑从 Presenter 中移出，并放入单独的可复用组件中。在当时，这是一种可靠的逻辑拆分解决方案，能够保持代码简洁。</p>
+
+<p>我们来看一个简单的例子：</p>
+
+<pre><code class="Kotlin">// Interactor
+class UserInteractor {
+    private var username: String = "Guest"
+
+    fun getUsername(): String {
+        return username
+    }
+
+    fun saveUsername(name: String) {
+        username = name
+    }
+}
+
+// Presenter
+class UserPresenter(
+    private val view: UserView,
+    private val interactor: UserInteractor
+) {
+    fun loadUsername() {
+        val name = interactor.getUsername()
+        view.showUsername(name)
+    }
+
+    fun updateUsername(name: String) {
+        interactor.saveUsername(name)
+        view.showSavedMessage()
+    }
+}
+</code></pre>
+
+<p>随着 Presenter 的增长，逻辑的复杂性也会随之增加——这通常会导致 Interactor 中方法数量的增加。Presenter 越大，Interactor 也就越庞大。最终，我们会得到一坨塞满状态、方法和变量的屎堆，它们都堆挤在一个地方。</p>
+
+<p>显然，这样的代码库维护起来很困难，测试起来也很困难，甚至更难用合适的单元测试来覆盖。最重要的是，这种架构会陷入反模式的境地，违反 <strong>SOLID（尤其是单一职责原则）</strong> 和 <strong>KISS</strong> 等核心原则。</p>
+
+<p>这就是为什么我要强调使用 Interactor 方法时容易遇到的以下坑：</p>
+
+<ul>
+<li>一处塞太多东西</li>
+</ul>
+
+
+<p>当一个类处理所有操作——读取、写入、删除——它最终会做太多事情。这会导致测试更加困难，并且很难在不破坏其他功能的情况下进行更改。</p>
+
+<ul>
+<li>功能不明确</li>
+</ul>
+
+
+<p>像 LoginUser() 这样的用例会清楚地告诉你发生了什么。但是，如果交互器（interactor）很大，就很难区分它的作用——它是关于用户的、设置的还是其他什么的？</p>
+
+<ul>
+<li>无法复用</li>
+</ul>
+
+
+<p>只完成一项工作的用例很容易插入到任何需要的地方。交互器会随着时间的推移而增长，变得过于混乱，无法复用。</p>
+
+<ul>
+<li>扩展性差</li>
+</ul>
+
+
+<p>想象一下，有 10 个功能，每个功能都有自己的交互器，并且包含 5 个以上的方法。这需要记住很多东西，也需要管理很多代码。</p>
+
+<ul>
+<li>逻辑混乱</li>
+</ul>
+
+
+<p>当所有内容都放在一个文件中时，很容易意外地将不该放在一起的内容放在一起——例如，登录逻辑与个人资料更新逻辑就会混杂在一起。</p>
+
+<h2>用例（Use Case）：从 UML 到 Android</h2>
+
+<p>我们刚才讨论的所有问题都可以通过使用用例（Use Case）方法完全解决或至少部分解决。但在深入探讨在Android上的实现之前，让我们先快速了解一下用例在 UML 术语中的含义。在 UML 中，用例是关于一个明确的意图——它代表一个特定的业务逻辑或功能。</p>
+
+<p>查看下面的示例，了解它通常是如何可视化的：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*CK9zG_B9spS8JQ8-" alt="Use Case" /></p>
+
+<p>基本上，我们即将实现的用例遵循与 UML 相同的理念：一个意图，一个用例（One Intent, one Use Case）。这个简单的规则帮助我们解决了之前的所有问题——测试变得更简单，代码更具可扩展性，整体也更易于维护。</p>
+
+<p>现在，让我们使用用例方法改进上面的代码片段：</p>
+
+<pre><code class="Kotlin">// Use-Case 1
+class GetUserNameUseCase(
+    val repository: UserRepository,
+) {
+    operator fun invoke(): String {
+        return repository.getUserName()
+    }
+}
+
+// Use-Case 2
+class SaveUsernameUseCase(
+    val repository: UserRepository,
+) {
+    operator fun invoke(name: String) {
+        repository.save(name)
+    }
+}
+</code></pre>
+
+<p>因此，我们刚刚将 Interactor 拆分成了两个用例。我建议使用 Invoke 操作函数，这样我们就可以将它们的用例名称视为函数。此外，这种方式测试起来也更加容易。</p>
+
+<p>以下 ViewModel 演示了用例的用法：</p>
+
+<pre><code class="Kotlin">// ViewModel
+class ViewModel(
+    private val getUsername: GetUserNameUseCase,
+    private val saveUsername: SaveUsernameUseCase
+) {
+    val userName: StateFlow&lt;String&gt;
+
+    fun loadUsername() {
+        userName.update(getUsername())
+    }
+
+    fun updateUsername(name: String) {
+        saveUsername(name)
+    }
+}
+</code></pre>
+
+<p>简单的测试可以写如下：</p>
+
+<pre><code class="Kotlin">@Before
+fun setup() {
+    useCase = GetUserNameUseCase(repository)
+}
+
+@Test
+fun `should return username from repository`() {
+     `when`(repository.getUserName()).thenReturn("JohnDoe")
+     val result = useCase()
+
+     assertEquals("JohnDoe", result)
+     verify(repository).getUserName()
+}
+
+@Test
+fun `should save username to repository`() {
+    val testName = "JaneDoe"
+    useCase(testName)
+
+    verify(repository).save(testName)
+}
+</code></pre>
+
+<h2>如何将其纳入真正的 Repos 应用程序</h2>
+
+<p>我的建议是始终从抽象开始。鉴于用例的性质（通常只有一个公共方法），我建议使用运算符函数（例如，invoke 在这里就很有效）。可以实现以下抽象：</p>
+
+<pre><code class="Kotlin">// 模板接口作为所有用例的抽象
+interface SuspendUseCase&lt;in T, out O&gt; {
+    suspend operator fun invoke(param: T): O
+}
+</code></pre>
+
+<p>它的名称带有前缀Suspend（译注：这里应该是前缀，原文有错误），表示它处理暂停的结果。这种通用方法允许我们为参数和返回类型定义特定的类型。例如，以下特定的用例接口可以进一步使用：</p>
+
+<pre><code class="Kotlin">// 特定的用例接口
+interface GetReposUseCase: SuspendUseCase&lt;Boolean, ResultWithFallback&lt;List&lt;DomainRepoEntity&gt;&gt;&gt;
+</code></pre>
+
+<p>根据其名称，它可以用于获取 Repos，并抛出其 Result 包装器。客户端可以以函数式的方式使用它（例如，val repos = getRepos(&hellip;)）。它的实现如下：</p>
+
+<pre><code class="Kotlin">// GetReposUseCase 的简单实现
+internal class GetReposUseCaseImpl(
+    private val mapper: Mapper,
+    private val repository: ReposRepository
+) : GetReposUseCase {
+  override suspend operator fun invoke(param: Boolean):
+      ResultWithFallback&lt;List&lt;DomainRepoEntity&gt;&gt; =
+          repository.getRepos(param).map(mapper::map)
+}
+</code></pre>
+
+<p>现在，让我们让任务更具挑战性，并在用例结构中添加一个额外的抽象层。我想要实现仅与存储库交互的用例。这些用例将包含存储库的实例作为泛型中的附加参数类型。让我们看一下以下代码片段：</p>
+
+<pre><code class="Kotlin">// 模板接口作为所有用例的抽象
+interface SuspendUseCase&lt;in T, out O&gt; {
+    suspend fun execute(param: T): O
+}
+</code></pre>
+
+<p>我修改了execute方法，使其能够从另一个抽象子类中调用。以下是更新后的代码片段：</p>
+
+<pre><code class="Kotlin">// 扩展 SuspendUseCase 接口
+interface RepositoryUseCase&lt;in I, out O, R : Repository&gt; :
+    SuspendUseCase&lt;I, O&gt; {
+
+    var repository: R
+}
+</code></pre>
+
+<p>每个实现类型R的存储库的子类都将遵守该接口（Contract）。最合适的方法是使用抽象类。让我们实现一个抽象类来实现这一点：</p>
+
+<pre><code class="Kotlin">// 确保遵守接口的抽象类
+abstract class BaseRepositoryUseCase&lt;in I, out O, R : Repository&gt;(override var repository: R) :
+    RepositoryUseCase&lt;I, O, R&gt; {
+
+    suspend operator fun invoke(params: I? = null): O {
+        // 这是对 SuspendUseCase 接口的调用
+        return execute(params)
+    }
+}
+</code></pre>
+
+<p>我们需要做的就是扩展 BaseRepositoryUseCase ，遵循其泛型接口，提供一个输入类、一个输出类以及一个被覆写的Repo实例。以下实现已经足够：</p>
+
+<pre><code class="Kotlin">// 用例的实现
+class GetReposUseCase(repository: RepoRepository):
+    BaseRepositoryUseCase&lt;Boolean,ResultWithFallback&lt;List&lt;DomainRepoEntity&gt;&gt;, RepoRepository&gt;(repository) {
+    override suspend fun execute(param: Boolean): ResultWithFallback&lt;List&lt;DomainRepoEntity&gt;&gt; =
+        // 使用存储库获取并返回结果，如 repository.getData()
+    }
+}
+</code></pre>
+
+<h2>结论</h2>
+
+<p>因此，我们探索了从零开始使用用例（Use Case）、捕捉客户意图（Client Intent）的最佳方法。我演示了如何以功能性的方式实现和使用它们，使其易于测试和集成。</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[在Android应用中实战Repository模式]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/06/13/incoporating-the-repository/"/>
+    <updated>2025-06-13T22:57:11+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/06/13/incoporating-the-repository</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Incorporating the Repository Pattern into a Real-World Android」，原文链接<a href="https://medium.com/@siarhei.krupenich/incorporating-the-repository-pattern-into-a-real-world-android-app-739f2fee1460">https://medium.com/@siarhei.krupenich/incorporating-the-repository-pattern-into-a-real-world-android-app-739f2fee1460</a>，由Siarhei Krupenich发布于2025年4月4日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*qkmRcr1xl7uFYPUfNyk2rw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>引言</h2>
+
+<p>之前，我们探讨了整洁架构 (Clean Architecture) 中可能存在的问题，这些问题可能会损害 SOLID 原则、增加紧密耦合或使可测试性复杂化。我介绍了一种解决这些问题的解决方案，帮助我们维护更可扩展的代码库并更高效地添加新功能。在上一篇文章中，我还演示了如何将 ViewModel 拆分为两个主要部分——输入流和输出流——以减少紧密耦合并提高 ViewModel 的灵活性。</p>
+
+<p>本文延续了这一思路，通过构建一个示例应用来展示 Android 开发的最佳实践，该应用通过 API 请求获取并显示 Git 仓库列表。我们的目标是将离线模式融入到项目中。实现这一目标最合适的方法是实现 Repository 模式。Repository 模式充当 Facade（如 GoF 设计模式中所述），在网络 API 和本地存储之间进行协调，确保高效的数据访问。</p>
+
+<p>为了充分理解本文中的概念，建议你熟悉协程或 RxJava，尽管这些主题超出了本文的讨论范围。</p>
+
+<h2>存储库方法：离线模式的最佳解决方案</h2>
+
+<p>我们的目标是在应用中实现离线模式，确保即使在没有互联网连接的情况下也能访问数据。应用首次运行时，它会从网络获取数据，将其存储在缓存中，然后使用缓存的数据来最大限度地减少网络使用量并降低流量。</p>
+
+<p>另一个关键方面是提供在需要时手动刷新网络数据的功能。最后，为了帮助用户在连接问题后识别应用何时恢复互联网连接，我们会在缓存数据旁边显示一条错误消息，直到连接恢复。</p>
+
+<p>现在任务已经明确，让我们深入探讨即用型解决方案背后的理论。其核心是，我们需要解决经典的数据同步问题——从网络获取数据，将其存储在本地，并确保访问最新信息。</p>
+
+<p>这意味着我们的应用至少需要两个数据源：一个用于网络 API 通信，另一个用于本地存储访问。根据应用的需求，可能会用到其他数据源，例如 Firebase（内置同步功能）、BLE 数据等等。</p>
+
+<p>为了协调这些数据源（在我们的例子中是网络 API 和本地存储），最直观的设计模式是四人帮 (GoF) 的 Facade 模式。</p>
+
+<p>Facade 模式是一种通过提供统一接口来简化与复杂系统交互的设计模式。在我们的例子中，这意味着我们可以将网络 API 和本地存储封装在一个抽象层之后。</p>
+
+<p>我们新创建的 Facade 将同时保存 API 网络接口和本地存储接口的实例。另一方面，它将公开单一的访问方法，处理诸如强制从网络更新数据、本地存储数据以及管理错误等任务，同时隐藏内部复杂性。</p>
+
+<p>我们来看看下面的图表：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1070/format:webp/0*FF1TQeYdw1F60rOZ" alt="图 1：外观模式" /></p>
+
+<p>该图呈现了一种简单的逻辑：客户端仅与Facade 实例交互以访问数据，而所有底层复杂性都隐藏在其背后。这种方法完全符合我们的需求。</p>
+
+<p>现在，让我们看一下代表该图的以下伪代码：</p>
+
+<pre><code class="Kotlin">// API Network
+interface Network {
+    suspend fun obtainData(): Data
+}
+
+// Local Storage
+interface Storage {
+    suspend fun save(data: Data) 
+    suspend fun getData(): Data
+}
+
+// Facade
+class DataFacade(
+    private val network: Network,
+    private val storage: Storage,
+) {
+    suspend fun obtainData(): Data {
+        val data = network.obtainData()
+        storage.save(data)
+        return storage.getData()
+    }
+}
+
+// Client
+class Client() {
+    fun main(){
+        testScope.launch {
+            val data = facade.obtainData()
+        }
+    }
+}
+</code></pre>
+
+<p>这个简单的例子演示了这种方法：客户端持有一个 DataFacade 实例，并调用其obtainData() 方法。当然，在实际场景中，obtainData() 方法会包含更复杂的逻辑——处理错误、映射数据、将结果包装到 Result 类中，以及决定是获取新数据还是使用缓存版本。</p>
+
+<p>现在，让我们更进一步，将这个 Facade 转换为 Repository 类。
+Repository 模式旨在通过清晰的接口管理数据访问，同时隐藏底层的复杂性。从客户端的角度来看，
+没有任何变化——用法保持不变——但在内部，逻辑结构良好且封装完整。</p>
+
+<p>现在，让我们通过下图来查看 Repository 模式的结构：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1070/format:webp/0*_A5f_Tv_9UhUuFqz" alt="图 2：存储库模式" /></p>
+
+<p>上图表明，Repository 模式有效地捕捉了 Facade 模式；然而，“Repository”一词更能体现访问数据的逻辑，
+因此我们将使用“Repository”版本。</p>
+
+<p>现在，让我们实现该模式的增强版本：</p>
+
+<pre><code class="Kotlin">// Repository Interface
+interface DataRepository {
+    suspend fun obtainData(): Data
+}
+
+// Repository
+class DataRepositoryImpl(
+    private val network: Network,
+    private val storage: Storage,
+) : DataRepository {
+    override suspend fun obtainData(): Data {
+        val data = network.obtainData()
+        storage.save(data)
+        return storage.getData()
+    }
+}
+
+// Client
+class Client() {
+    fun main() {
+        testScope.launch {
+            val data = repository.obtainData()
+        }
+    }
+}
+</code></pre>
+
+<h2>存储库模式：优势与劣势</h2>
+
+<h3>存储库的优势</h3>
+
+<ol>
+<li>保持井然有序——你的业务逻辑无需处理数据库查询。</li>
+<li>易于测试——你可以将真实数据库与模拟数据库交换以进行测试。</li>
+<li>面向未来——如果你从 SQLite 切换到 Firebase，只需更新存储库即可。</li>
+<li>可重用——应用程序的不同部分可以使用相同的存储库，而无需编写重复的代码。</li>
+<li>代码更简洁——它隐藏了复杂的查询，因此其余代码保持简洁。</li>
+</ol>
+
+
+<h3>为什么它可能很繁琐</h3>
+
+<ol>
+<li>增加额外代码——如果你的应用程序很小，使用存储库可能会有些过度。</li>
+<li>可能会降低速度——更多的层级意味着更多的对象和方法调用。</li>
+<li>缓存不是自动的——如果你想避免不必要的数据库调用，则需要付出额外的努力。</li>
+<li>可能过于依赖数据模型——如果设计不当，更改数据库结构可能会很麻烦。</li>
+<li>并非总是必要——有时，仅使用 DAO 就足够了。</li>
+</ol>
+
+
+<p>Repository 模式非常适合保持简洁性和可扩展性，但它并非总是最简单的选择。如果你的应用规模较小，跳过它可能会更轻松。然而，我们的重点是为快速增长且可扩展的应用提供解决方案，因此我们选择了它。</p>
+
+<p>现在，是时候编写代码并增强 Repo 应用了。</p>
+
+<p>首先，让我们改进 Repository 结构并使其适应应用。由于没有太多细节需要整合，因此最终的图表与之前的版本非常相似：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1144/format:webp/0*aH3Jd9RK9EI0AA9I" alt="图3：获取Repos的Repository实现" /></p>
+
+<h2>开撸</h2>
+
+<p>接下来，让我们实现 Repository 并将其集成到应用程序中。</p>
+
+<pre><code class="Kotlin">// The Repository pattern implementation
+internal class ReposRepositoryImpl @Inject constructor(
+    private val reposNetworkApi: ReposNetworkApi,
+    private val reposDao: ReposDao,
+    // mappers may be placed here
+) : ReposRepository {
+    override suspend fun getRepos(i
+        sRefreshing: Boolean
+    ): ResultWithFallback&lt;List&lt;Repo&gt;&gt; {
+         return runCatching {
+             val dbRepos = reposDao.getReposWithRelations()
+             if (isRefreshing) {
+                 reposNetworkApi.getRepos().fold({ result -&gt;
+                     reposDao.insertReposWithRelations(result)
+                     ResultWithFallback.Success(
+                         reposDao.getReposWithRelations()
+                     )
+                  }, { error -&gt;
+                     error.errorToResultWithFallback(dbRepos)
+                  })
+              } else {
+                  ResultWithFallback.Success(dbRepos)
+              }
+          }.getOrElse { error -&gt;
+              error.exceptionToResultWithFallback(
+                  reposDao.getReposWithRelations()
+              )
+          }
+    }
+
+    override suspend fun clearRepos() {
+        reposDao.clearRepos()
+    }
+}
+</code></pre>
+
+<p>该代码片段演示了如何将 Repository 模式集成到应用中。它包含两个方法：一个用于清除数据，另一个用于获取数据。getRepos(isRefreshing: Boolean) 方法包含一个标志，用于强制从网络刷新数据。同时，它也可能从缓存中返回数据（例如，Room DB 用作缓存）。如果发生错误，即使数据已缓存，该方法也会返回一个包含失败信息的响应。</p>
+
+<p>由于我们主要关注的是协程，因此让我们使用 RxJava 重写 getRepos(isRefreshing: Boolean) 方法：</p>
+
+<pre><code class="Kotlin">override fun getRepos(
+    isRefreshing: Boolean
+): Single&lt;ResultWithFallback&lt;List&lt;Repo&gt;&gt;&gt; {
+    return if (isRefreshing) {
+        reposNetworkApi.getRepos()
+            .flatMap { result -&gt;
+                reposDao.insertReposWithRelations(networkReposToDbReposMapper.map(result))
+                reposDao.getReposWithRelations()
+                    .map { dbReposToReposMapper.map(it) }
+                    .map { ResultWithFallback.Success(it) }
+            }
+            .onErrorResumeNext { error -&gt;
+                reposDao.getReposWithRelations()
+                    .map { error.errorToResultWithFallback(it) }
+            }
+    } else {
+        reposDao.getReposWithRelations()
+            .map { dbReposToReposMapper.map(it) }
+            .map { ResultWithFallback.Success(it) }
+            .onErrorReturn { error -&gt;
+                error.exceptionToResultWithFallback(emptyList())
+            }
+    }
+}
+</code></pre>
+
+<p>异常处理的扩展可能如下所示：</p>
+
+<pre><code class="Kotlin">fun Throwable.exceptionToResultWithFallback(
+        data: List&lt;RepoWithRelations&gt;,
+    ): ResultWithFallback.Failure&lt;List&lt;Repo&gt;&gt; = if (data.isNotEmpty()) {
+        ResultWithFallback.Failure(
+            dbReposToReposMapper.map(data), RepoError.Unknown(this)
+        )
+    } else {
+        ResultWithFallback.Failure&lt;List&lt;Repo&gt;&gt;(
+            data = null,
+            RepoError.Unknown(this)
+        )
+    }
+</code></pre>
+
+<p>结果错误处理扩展可以写成如下形式：</p>
+
+<pre><code class="Kotlin">fun Throwable.errorToResultWithFallback(
+        localData: List&lt;RepoWithRelations&gt;
+    ): ResultWithFallback.Failure&lt;List&lt;Repo&gt;&gt; {
+        val repoError = when (this) {
+            is IOException -&gt; RepoError.NetworkLost
+            is HttpException -&gt;
+                if (code() == 401)
+                    RepoError.Unauthorized
+                else RepoError.Unknown(this)
+            else -&gt; RepoError.Unknown(this)
+        }
+        return ResultWithFallback.Failure(
+            dbReposToReposMapper.map(localData),
+            repoError
+        )
+    }
+</code></pre>
+
+<p>包装的故障数据类：</p>
+
+<pre><code class="Kotlin">sealed class ResultWithFallback&lt;out T&gt; {
+    data class Success&lt;T&gt;(val data: T) : ResultWithFallback&lt;T&gt;()
+    data class Failure&lt;T&gt;(val data: T?, val error: RepoError) : ResultWithFallback&lt;T&gt;()
+}
+</code></pre>
+
+<p>并且转换映射扩展如下：</p>
+
+<pre><code class="Kotlin">inline fun &lt;T, R&gt; ResultWithFallback&lt;T&gt;.map(transform: (T) -&gt; R): ResultWithFallback&lt;R&gt; {
+    return when (this) {
+        is ResultWithFallback.Success -&gt; ResultWithFallback.Success(transform(data))
+        is ResultWithFallback.Failure -&gt; ResultWithFallback.Failure(
+            data?.let { transform(it) },
+            error
+        )
+    }
+}
+</code></pre>
+
+<h2>结论</h2>
+
+<p>我们已成功将存储库模式(Repository pattern)集成到应用中，事实证明，这是一种维护离线模式的绝佳方法。此模式不仅简化了数据管理，还确保了可扩展性。它是实现数据检索和存储功能的最有效方法之一，随着项目规模的增长，你可以更轻松地管理本地和远程数据源。</p>
+
+<p>你可以通过以下链接探索与本文主题相关的 GitHub 代码库：<a href="https://github.com/sergeykrupenich/TestRepo/tree/repository">https://github.com/sergeykrupenich/TestRepo/tree/repository</a></p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack Compose 中ViewModel的最佳实践]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/06/11/mvvm-inputs-outputs-jetpack-compose/"/>
+    <updated>2025-06-11T22:20:55+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/06/11/mvvm-inputs-outputs-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「MVVM Inputs/Outputs: Best Practices and Implementation in Jetpack Compose」，原文链接<a href="https://medium.com/@siarhei.krupenich/mvvm-inputs-outputs-best-practices-and-implementation-in-jetpack-compose-18966d4d914e">https://medium.com/@siarhei.krupenich/mvvm-inputs-outputs-best-practices-and-implementation-in-jetpack-compose-18966d4d914e</a>， 由Siarhei Krupenich发布于2025年3月16日。</p></blockquote>
+
+<p><strong>译注：</strong> 因为文章重点讨论的是ViewModel的实现方式，并不涉及平台特性，所以完全适用于跨平台的Compose Multiplatform。</p>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*vIJH8waAV-986AZatyXxwA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>简介</h2>
+
+<p>在我<a href="https://juejin.cn/post/7509376843951554596">之前的文章</a>中，我探讨了“整洁架构”（Clean Architecture）作为一种实用的 Android 开发方法。这种架构解决方案侧重于将逻辑组件划分为不同的层，每一层负责各自的任务。</p>
+
+<p>本文以此为基础，通过一个真实的应用示例介绍另一种最佳实践。我们将重点介绍使用 ViewModel 时的一个常见问题，概述一个结构化的解决方案，并深入探讨其背后的理论。此外，我将演示如何使用 Jetpack Compose 有效地实现这种方法，并提供各种示例。所有代码片段都假设读者理解使用 Hilt 的依赖注入 (DI - Dependency Injection)。</p>
+
+<h2>ViewModel概述</h2>
+
+<p>MVVM 的核心思想是通过将 UI 逻辑移入状态来将其与视图分离。这确保了视图在保持逻辑井然有序的同时保持简洁。首先，这种方法符合单一职责原则，从而增强了可测试性和可扩展性。此外，它还解决了一个典型的 Android 挑战——在生命周期事件（例如配置更改）期间处理 UI 状态。</p>
+
+<p>为了实现这一点，我们使用 ViewModel 来管理并保留其状态，即使关联的 Activity 被重新创建。我们来看下面的例子：</p>
+
+<pre><code class="Kotlin">// ViewModel 例子
+@HiltViewModel
+internal class ScreenViewModel @Inject constructor(
+    private val getData: GetUiDataUseCase,
+) : ViewModel() {
+    private val _state = MutableStateFlow&lt;State&gt;(State.Loading)
+    val state: StateFlow&lt;State&gt; = _state.asStateFlow()
+
+    fun loadData(isRefreshing: Boolean) {
+        updateState(isRefreshing)
+    }
+    private fun updateState(isRefreshing: Boolean) = viewModelScope.launch {
+        _state.value = State.Loading
+        _state.value = getData(isRefreshing)
+    }
+}
+</code></pre>
+
+<p>上面的代码片段演示了一个简单的 ViewModel，它只有一个状态和一个由 init 触发的方法。loadData() 方法启动状态更新过程，该过程由协程 StateFlow 管理。</p>
+
+<p>一个好的做法是将所有可能的页面状态合并到一个密封类中。这种方法能够以结构化的单方法风格处理 UI 状态变化，从而使你的代码更具可读性和可维护性。</p>
+
+<p>以下示例说明了这一概念：</p>
+
+<pre><code class="Kotlin">// State
+internal sealed interface State {
+    data class Success(val repos: List&lt;DataUi&gt;): State
+    data object Empty: State
+    data object Loading: State
+    data class Error(val message: String?): State
+}
+</code></pre>
+
+<p>现在，让我们看一下以下代码：</p>
+
+<pre><code class="Kotlin">// Composable View that uses the ViewModel:
+@Composable
+fun Screen() {
+    val viewModel: ScreenViewModel = hiltViewModel()
+    val state by viewModel.state.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.loadRepos(true)
+    }
+    RepoState(repoState, viewModel)
+}
+
+@Composable
+private fun RepoState(state: State, viewModel: ScreenViewModel) {
+    when (state) {
+        is State.Success -&gt; LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(state.data.count()) { index -&gt;
+                Item(state.data[index])
+            }
+        }
+        State.Empty -&gt; EmptyState(
+            stateMessage = “Empty message”,
+
+            emptyButtonAction = {
+                viewModel.loadData(true)
+            }
+        )
+        is State.Error -&gt; RepoEmptyState(
+            stateMessage = state.message,
+            emptyButtonAction = {
+                viewModel.loadData(true)
+            }
+        )
+        State.Loading -&gt; LoadingState()
+    }
+}
+</code></pre>
+
+<p>Screen() 可组合函数从 StateFlow 中观察状态，并在状态发生变化时进行更新。根据具体状态（Data、Empty、Error 或 Loading），将使用单函数方法触发相应的可组合函数进行处理。</p>
+
+<p>总体而言，一切看起来都很稳定——状态在 ViewModel 中管理，并且视图（Activity 的一部分）可以安全地重新创建而不会丢失数据。此外，这种方法还可以更轻松地编写状态处理、ViewModel 函数调用和 UI 外观的单元测试。</p>
+
+<h2>常规ViewModel的不足之处</h2>
+
+<p>纵观当前的实现，首先突出的问题是 ViewModel 可能会不堪重负。随着应用的增长，我们将多个状态和逻辑打包在一个 ViewModel 中处理，这可能会违反单一职责原则。</p>
+
+<p>另一个关键问题是 UI 和逻辑之间的紧密耦合。直接操作 ViewModel 的实例会使 UI 更加依赖于其具体实现，从而降低灵活性和可复用性。</p>
+
+<h2>为什么常规 ViewModel 会成为问题</h2>
+
+<p>使用常规 ViewModel（不分离输入和输出）乍一看似乎没什么问题。但随着应用规模的增长，情况可能会变得混乱。原因如下：</p>
+
+<ol>
+<li>UI 和逻辑过于混杂</li>
+<li>ViewModel 同时处理业务逻辑和 UI 更新，使它们紧密相连。</li>
+<li>如果需要更改 UI，通常也需要修改 ViewModel，这不应该发生。</li>
+<li><p>💡 例如：你的 UI 可能在一个地方处理验证、数据转换和加载状态。</p></li>
+<li><p>测试难度加大</p></li>
+<li>功能过多的 ViewModel 会使测试编写变得复杂。</li>
+<li>不同时处理数据和状态，就无法轻松测试 UI 行为。</li>
+<li><p>💡 例如：即使是简单的 UI 测试也会变得棘手，因为 ViewModel 控制着一切。</p></li>
+<li><p>更改 UI 变得令人头疼</p></li>
+<li>如果你的 ViewModel 没有正确分离，更改一个 UI 元素就会影响所有 UI 元素。</li>
+<li><p>💡 示例：将 TextView 替换为 RecyclerView 会迫使你修改 ViewModel，即使它不应该关心 UI 细节。</p></li>
+<li><p>ViewModel 变得过大</p></li>
+<li>随着时间的推移，ViewModel 会变得庞大且难以管理。</li>
+<li><p>它们会同时处理用户输入、API 调用和状态更新。💡 💡 示例：包含数百行代码的 ViewModel 难以阅读、调试或更新。</p></li>
+<li><p>逻辑难以复用</p></li>
+<li>如果 ViewModel 混合了输入处理（按钮点击）和输出逻辑（数据格式化），那么复用其中的部分内容会变得非常麻烦。</li>
+<li><p>💡 示例：你想在另一个页面上复用某些业务逻辑，但它与特定于 UI 的代码纠缠在一起。</p></li>
+<li><p>UI 状态管理变得混乱</p></li>
+<li>在 ViewModel 内部处理加载、成功和错误状态会让事情变得混乱。</li>
+<li><p>💡 示例：处理失败的网络请求并显示错误消息不应与其他逻辑混淆。</p></li>
+<li><p>大型应用中难以扩展</p></li>
+<li>如果多个页面共享一个 ViewModel，它就会超载。</li>
+<li>在一个 ViewModel 中管理许多不同的 UI 状态会导致混乱。</li>
+<li>💡 示例：管理 10 个以上页面的 ViewModel 很快就会成为维护的噩梦。</li>
+</ol>
+
+
+<h2>灵丹妙药：输入/输出式ViewModel</h2>
+
+<p>我们讨论的许多问题都可以通过使用输入/输出 ViewModel 方法得到最小化，甚至完全解决。此方法将 ViewModel 中的“输入”流和“输出”流分离。</p>
+
+<ul>
+<li>输出处理 UI 的更新（例如，公开状态）。</li>
+<li>输入接收来自 UI 的消息（例如，用户交互）。</li>
+</ul>
+
+
+<p>例如，在典型的 ViewModel 中，StateFlow 代表“输出”流，因为它向 UI 提供状态更新。相反，像 reloadData(refreshing: Boolean) 这样的方法充当“输入”流，处理 UI 触发的操作。</p>
+
+<p>此模式不是直接与 ViewModel 交互，而是通过输入和输出接口强制进行结构化访问，从而明确依赖关系并减少紧密耦合。</p>
+
+<p>使用此模式的示例：</p>
+
+<pre><code class="Kotlin">// 取代viewModel.reloadData(refreshing = true)
+input.reloadData(refreshing = true) 
+
+// 取代val dataState by viewModel.data.collectAsState()
+val dataState by output.data.collectAsState() 
+</code></pre>
+
+<p>这种结构化方法提高了代码的清晰度、可测试性和可维护性，使 ViewModel 更加模块化和可扩展。</p>
+
+<p>我们来画个图，直观地了解一下它的工作原理：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1082/format:webp/0*aOEwjnoh4uw8_C9y" alt="ViewModel" /></p>
+
+<p>该图展示了该模式。ViewModel 实现了 ScreenViewModel 接口，该接口进一步细分为两个独立的接口——一个用于处理输入（操作），另一个用于提供输出（数据）。这种设置如同契约，确保了清晰的结构和分离。ViewModel 本身仍然是一个实例，避免在其层面直接操作。所有操作都通过输入和输出接口进行，从而强化了单一职责原则。最后，View 仅与 ScreenViewModel 接口交互，在抽象层进行操作。此外，View 还可以进一步细分为输入和输出接口，从而允许以简洁、模块化的方式访问方法和数据。</p>
+
+<h2>开撸吧！</h2>
+
+<p>首先，应该重构 ViewModel，将其封装在一个接口中，并将其功能分离到专用的输入和输出接口中。</p>
+
+<pre><code class="Kotlin">// ViewModel
+internal interface ScreenViewModel {
+
+    interface Input {
+        fun loadData(isRefreshing: Boolean = false)
+    }
+
+    interface Output {
+        val state: StateFlow&lt;State&gt;
+    }
+
+    @HiltViewModel
+    class ViewModel @Inject constructor(
+        private val getData: GetUiDataUseCase,
+    ) : BaseViewModel(), Input, Output {
+        val input: Input = this
+        val output: Output = this
+
+        private val _state = MutableStateFlow&lt;State&gt;(State.Loading)
+        override val state: StateFlow&lt;State&gt; = _state.asStateFlow()
+
+        override fun loadData(isRefreshing: Boolean) {
+            updateState(isRefreshing)
+        }
+
+        private fun updateState(isRefreshing: Boolean) = viewModelScope.launch {
+            _state.value = State.Loading
+            _state.value = getData(isRefreshing)
+        }
+    }
+}
+</code></pre>
+
+<p>接下来，我们实现与 ViewModel 交互的视图。以下代码片段提供了一个使用 Jetpack Compose 的示例：</p>
+
+<pre><code class="Kotlin">@Composable
+fun Screen() {
+    val viewModel: ReposScreenViewModel.ViewModel = hiltViewModel()
+    val state by viewModel.output.repoState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.input.loadData(true)
+    }
+    UIState(state, viewModel)
+}
+
+// UiState使用接口 ScreenViewModel.Input来操作ViewModel的输入
+@Composable
+private fun UIState(state: State, input: ScreenViewModel.Input) {
+    when (state) {
+        is State.Success -&gt; LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(state.data.count()) { index -&gt;
+                UIItem(state.data[index])
+            }
+        }
+        State.Empty -&gt; EmptyState(
+          emptyButtonAction = {
+            // 取代 viewModel.loadData(true)
+            input.loadData(true)
+          }
+        )
+        is RepoState.Error -&gt; EmptyState(isError = true)
+        RepoState.Loading -&gt; LoadingState()
+    }
+}
+</code></pre>
+
+<h2>使用输入/输出式ViewModel 的优势</h2>
+
+<p>通过将 ViewModel 构建为输入和输出接口，你可以创建更简洁、更高效的架构。其优势如下：</p>
+
+<h3>✅ 清晰的关注点分离（SoC - Separation of Concerns）</h3>
+
+<p>输入处理用户操作（例如，按钮点击、文本输入），而输出管理 UI 状态和数据。这使得你的代码库更加结构化，更易于导航。</p>
+
+<h3>✅ 更轻松的测试</h3>
+
+<p>通过清晰的分离，你可以分别测试输入（用户交互）和输出（状态更新），从而使单元测试更加专注和可靠。</p>
+
+<h3>✅ 更好的可重用性和可扩展性</h3>
+
+<p>输入和输出可以在多个页面或功能之间重复使用，而无需重复逻辑，从而帮助你的应用在扩展过程中避免不必要的复杂性。</p>
+
+<h3>✅ 简化的状态管理</h3>
+
+<p>将 UI 状态（加载、成功、错误）保留在输出中，可以防止 ViewModel 被无关的逻辑淹没，从而使状态处理更加直观。</p>
+
+<h2>结论</h2>
+
+<p>我们探索了另一个可以无缝集成到你项目中的强大工具。通过采用这种方法，你可以增强应用的可扩展性，保持代码库简洁，并提高测试效率。这是一种简单而有效的方法，可以提高可维护性，并让你的开发流程面向未来。</p>
+
+<p>欢迎查看包含现成解决方案的代码库：<a href="https://github.com/sergeykrupenich/TestRepo/tree/inputs-outputs">https://github.com/sergeykrupenich/TestRepo/tree/inputs-outputs</a>。</p>
+
+<p>文章更新：有人指出，最好避免在 ViewModel 的 init 块中加载数据。相反，一种更灵活的方法是使用 Composable 中的 LaunchedEffect() 延迟触发数据加载。这可以确保 ViewModel 不会过早获取数据，并更好地与 Compose 的生命周期保持一致。（译注：关于副作用函数可参考之前的文章<a href="https://juejin.cn/post/7405158681078104127">降Compose十八掌之『龙战于野』| Side Effects</a>）</p>
+]]></content>
+  </entry>
+  
+</feed>
