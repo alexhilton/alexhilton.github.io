@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-07-01T22:55:55+08:00</updated>
+  <updated>2025-07-17T23:15:53+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,763 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[SnapshotFlow还是collectAsState？对于Jetpack Compose来说哪个更香？]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/07/16/snapshotflow-or-collectasstate/"/>
+    <updated>2025-07-16T22:31:22+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/07/16/snapshotflow-or-collectasstate</id>
+    <content type="html"><![CDATA[<p>本文译自「SnapshotFlow or collectAsState? How to pick the right tool for Jetpack Compose」，原文链接<a href="https://proandroiddev.com/snapshotflow-or-collectasstate-how-to-pick-the-right-tool-for-jetpack-compose-d6f1cc9d2123">https://proandroiddev.com/snapshotflow-or-collectasstate-how-to-pick-the-right-tool-for-jetpack-compose-d6f1cc9d2123</a>，由Dmitry Glazunov发布于2025年7月7日。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2025/07/16/snapshotflow-or-collectasstate/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*P0darOG2IeBIDWdY" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>构建 UI 可能感觉很简单，直到需要订阅状态变化并有效处理副作用时之前。许多开发者过度使用 collectAsState，导致延迟和意外的重组（reComposition）。还有一些人听说过 snapshotFlow，但却不太明白既然 StateFlow 和 collectAsState 已经存在，为什么还需要它？</p>
+
+<p>在这篇文章中，我将通过探索实际项目中简短且实用的示例，分享我对何时使用 snapshotFlow 以及何时更适合使用 collectAsState 的看法，帮助你避免项目中隐藏的 bug 和性能问题。</p>
+
+<p>让我们来详细分析一下。</p>
+
+<h2>collectAsState 的作用</h2>
+
+<p>collectAsState 在 Compose 中订阅 Flow，并自动将其公开为State，以便在 UI 中轻松显示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">uiState</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">uiStateFlow</span><span class="p">.</span><span class="n">collectAsState</span><span class="p">()</span>
+</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="n">uiState</span><span class="p">.</span><span class="n">text</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>要点：</p>
+
+<ul>
+<li>非常易于使用。</li>
+<li>重组时自动取消并重新开始收集。</li>
+<li>非常适合 ViewModel → UI 数据绑定。</li>
+</ul>
+
+
+<p>但是：</p>
+
+<ul>
+<li>每次发出新数据时都会触发重组，哪怕只是发生了微小的变化。</li>
+<li>可组合项进入重组状态后立即开始收集。</li>
+<li>不适用于观察 Compose 特有的状态，例如滚动或手势。</li>
+</ul>
+
+
+<h2>快照流 (snapshotFlow) 的作用</h2>
+
+<p>快照流 (snapshotFlow) 将 Compose 状态（例如 LazyListState 、 derivedStateOf ）转换为冷流 (cold Flow)，让你无需进行不必要的重组即可对状态变化做出反应：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">listState</span> <span class="p">=</span> <span class="n">rememberLazyListState</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">snapshotFlow</span> <span class="p">{</span> <span class="n">listState</span><span class="p">.</span><span class="n">firstVisibleItemIndex</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">distinctUntilChanged</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">index</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">analytics</span><span class="p">.</span><span class="n">logScrollPosition</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>要点：</p>
+
+<ul>
+<li>非常适合 Compose 状态变化的副作用。</li>
+<li>不会触发重组。</li>
+<li>可在 LaunchedEffect 或协程中使用。</li>
+</ul>
+
+
+<p>但是：</p>
+
+<ul>
+<li>不会公开状态以进行直接 UI 渲染。</li>
+<li>不会替代 CollectAsState 来实现 ViewModel → UI 更新。</li>
+</ul>
+
+
+<h2>何时使用 collectAsState</h2>
+
+<ul>
+<li>从 ViewModel 订阅 UI 的 Flow 或 StateFlow。</li>
+<li>在 UI 中显示数据（文本、加载状态、获取的数据）。</li>
+<li>用户需要看到的低频更新。</li>
+</ul>
+
+
+<p>避免使用：</p>
+
+<ul>
+<li>高频更新（滚动偏移、传感器数据）。</li>
+<li>触发不需要 UI 更新的副作用。</li>
+</ul>
+
+
+<h2>何时使用 snaphotFlow</h2>
+
+<ul>
+<li>响应 Compose 状态（滚动、手势、动画）。</li>
+<li>触发副作用但不会导致重组。</li>
+<li>从 Compose 状态构建 Flow 管道（分析、延迟加载触发器）。</li>
+</ul>
+
+
+<p>避免使用：</p>
+
+<ul>
+<li>直接 UI 数据渲染。</li>
+<li>用 viewModel → UI 流替换 collectAsState。</li>
+</ul>
+
+
+<h2>snapshotFlow 的实用示例</h2>
+
+<p>错误体位：使用 snaphotFlow.collectAsState 进行动画进度</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">progress</span> <span class="k">by</span> <span class="n">snapshotFlow</span> <span class="p">{</span> <span class="n">animationState</span><span class="p">.</span><span class="n">progress</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">collectAsState</span><span class="p">(</span><span class="n">initial</span> <span class="p">=</span> <span class="m">0f</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="s">&quot;Progress: ${(progress * 100).toInt()}%&quot;</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用 snaphotFlow 和 collectAsState 来驱动动画进度的 UI 更新会导致每一帧都重新合成，从而导致卡顿，违背了 snaphotFlow 的初衷。</p>
+
+<p>正确姿式：使用 snaphotFlow 在动画过程中进行分析</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">snapshotFlow</span> <span class="p">{</span> <span class="n">animationState</span><span class="p">.</span><span class="n">progress</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">distinctUntilChanged</span> <span class="p">{</span> <span class="n">old</span><span class="p">,</span> <span class="n">new</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="p">(</span><span class="n">old</span> <span class="p">*</span> <span class="m">100</span><span class="p">).</span><span class="n">toInt</span><span class="p">()</span> <span class="p">==</span> <span class="p">(</span><span class="n">new</span> <span class="p">*</span> <span class="m">100</span><span class="p">).</span><span class="n">toInt</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">progress</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">analytics</span><span class="p">.</span><span class="n">logAnimationProgress</span><span class="p">(</span><span class="n">progress</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这会跟踪动画进度，以便进行分析或记录，而不会触发 UI 重构。</p>
+
+<h2>collectAsState 的实用示例</h2>
+
+<p>错误体位：将 collectAsState 用于高频滚动数据</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">scrollOffset</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">scrollOffsetFlow</span><span class="p">.</span><span class="n">collectAsState</span><span class="p">()</span>
+</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="s">&quot;Offset: $scrollOffset&quot;</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这会在滚动的每个像素上触发重新合成，导致 CPU 过载。</p>
+
+<p>正确姿式：使用 collectAsState 获取有意义的 UI 数据</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">userName</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">userNameFlow</span><span class="p">.</span><span class="n">collectAsState</span><span class="p">()</span>
+</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="s">&quot;Hello, $userName!&quot;</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这适用于显示用户需要查看且不经常更改的数据。</p>
+
+<h2>结论</h2>
+
+<p>collectAsState 和 snapshotFlow 相辅相成：</p>
+
+<ul>
+<li>使用 collectAsState 在 UI 中显示 ViewModel 数据。</li>
+<li>使用 snapshotFlow 响应 Compose 状态变化的副作用，而无需触发重组。</li>
+</ul>
+
+
+<p>正确使用它们将帮助你避免不必要的重组，提升应用的响应速度，并保持 Compose 代码简洁、可扩展且可预测。</p>
+
+<p>如果你觉得本文分析有用，请随时关注我以获取更多见解。</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[为什么你的App总是忘记所有事情]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/07/11/app-keep-forgetting/"/>
+    <updated>2025-07-11T23:20:20+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/07/11/app-keep-forgetting</id>
+    <content type="html"><![CDATA[<p>本文译自「Why Your App Keeps Forgetting Everything」，原文链接<a href="https://medium.com/mobile-app-development-publication/why-your-app-keeps-forgetting-everything-aa9ad8dd8f6b">https://medium.com/mobile-app-development-publication/why-your-app-keeps-forgetting-everything-aa9ad8dd8f6b</a>，由Android Dev Nexus发布于2025年6月13日。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2025/07/11/app-keep-forgetting/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OqqSvUytY9D0D4EIX_Cn0A.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>不知你有没有发现了一个让许多 Android 开发者困惑的关键问题：ViewModel 和 savedInstanceState 解决的是不同的问题，并且拥有不同的生命周期。</p>
+
+<p>让我来解释一下你的测试中究竟发生了什么，以及为什么这两种机制都存在。</p>
+
+<h2>Android 中的两种“死亡”类型</h2>
+
+<p>Android 应用可以通过两种截然不同的方式“死亡”：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*1-DtrKgBiEVyWj0RgbaNoQ.png" alt="" /></p>
+
+<h3>1. 配置变更（屏幕旋转等）</h3>
+
+<ul>
+<li>Activity/Fragment：死亡并重建</li>
+<li>ViewModel：幸存！🎉</li>
+<li>savedInstanceState：也幸存，但此时你并不需要它</li>
+</ul>
+
+
+<h3>2. 进程死亡（应用最小化、内存不足等）</h3>
+
+<ul>
+<li>Activity/Fragment：死亡</li>
+<li>ViewModel：也死亡！💀</li>
+<li>savedInstanceState：幸存并成为你的生命线</li>
+</ul>
+
+
+<h2>测试结果不撒谎</h2>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 进程死亡时会发生什么:</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// 最小化应用程序之前:</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">userData</span> <span class="p">=</span> <span class="s">&quot;Important data&quot;</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">counter</span> <span class="p">=</span> <span class="m">42</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">// 重新打开应用程序后:</span>
+</span><span class='line'><span class="c1">// - 新的 ViewModel 实例已创建（旧数据已消失）</span>
+</span><span class='line'><span class="c1">// - 但是 onCreate() 接收了已保存数据的 savedInstanceState 包</span>
+</span><span class='line'><span class="c1">// - 你需要手动从 savedInstanceState 恢复 ViewModel</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>你猜测的完全正确：ViewModel 需要额外的步骤来存储/恢复数据，即使进程终止。</p>
+
+<h2>完整的解决方案：两者结合</h2>
+
+<p>以下是现代 Android 开发处理这个双层系统的方法：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MainActivity</span> <span class="p">:</span> <span class="n">AppCompatActivity</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="n">lateinit</span> <span class="k">var</span> <span class="py">viewModel</span><span class="p">:</span> <span class="n">MyViewModel</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">viewModel</span> <span class="p">=</span> <span class="n">ViewModelProvider</span><span class="p">(</span><span class="k">this</span><span class="p">)[</span><span class="n">MyViewModel</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">]</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// 检查我们是否正在从进程死亡中恢复</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">savedInstanceState</span> <span class="p">!=</span> <span class="k">null</span> <span class="p">&amp;&amp;</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// 从 savedInstanceState 恢复 ViewModel</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">userData</span> <span class="p">=</span> <span class="n">savedInstanceState</span><span class="p">.</span><span class="n">getString</span><span class="p">(</span><span class="s">&quot;user_data&quot;</span><span class="p">,</span> <span class="s">&quot;&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">counter</span> <span class="p">=</span> <span class="n">savedInstanceState</span><span class="p">.</span><span class="n">getInt</span><span class="p">(</span><span class="s">&quot;counter&quot;</span><span class="p">,</span> <span class="m">0</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">viewModel</span><span class="p">.</span><span class="n">restoreFromSavedState</span><span class="p">(</span><span class="n">userData</span><span class="p">,</span> <span class="n">counter</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onSaveInstanceState</span><span class="p">(</span><span class="n">outState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onSaveInstanceState</span><span class="p">(</span><span class="n">outState</span><span class="p">)</span>
+</span><span class='line'>        <span class="c1">// 保存关键的 ViewModel 数据以避免进程死亡</span>
+</span><span class='line'>        <span class="n">outState</span><span class="p">.</span><span class="n">putString</span><span class="p">(</span><span class="s">&quot;user_data&quot;</span><span class="p">,</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">userData</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">outState</span><span class="p">.</span><span class="n">putInt</span><span class="p">(</span><span class="s">&quot;counter&quot;</span><span class="p">,</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">counter</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">userData</span><span class="p">:</span> <span class="n">String</span> <span class="p">=</span> <span class="s">&quot;&quot;</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">counter</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">isEmpty</span><span class="p">():</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="n">userData</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">()</span> <span class="p">&amp;&amp;</span> <span class="n">counter</span> <span class="p">==</span> <span class="m">0</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">restoreFromSavedState</span><span class="p">(</span><span class="n">userData</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">counter</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">this</span><span class="p">.</span><span class="n">userData</span> <span class="p">=</span> <span class="n">userData</span>
+</span><span class='line'>        <span class="k">this</span><span class="p">.</span><span class="n">counter</span> <span class="p">=</span> <span class="n">counter</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>当每个机制生效时</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*dmQnYfNrJik_bbpuNT7bzQ.png" alt="" /></p>
+
+<p>让我来向你展示一下不同场景下的具体情况：</p>
+
+<h3>场景 1：屏幕旋转</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'>Before rotation:
+</span><span class='line'>- ViewModel: Alive with data ✅
+</span><span class='line'>- savedInstanceState: Gets saved but not really needed
+</span><span class='line'>
+</span><span class='line'>After rotation:
+</span><span class='line'>- ViewModel: Same instance, data intact ✅
+</span><span class='line'>- savedInstanceState: Available but redundant
+</span><span class='line'>- Result: ViewModel data is immediately available
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>场景2：应用程序最小化→重新打开（进程死亡）</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'>Before minimizing:
+</span><span class='line'>- ViewModel: Alive with data ✅
+</span><span class='line'>- onSaveInstanceState<span class="o">()</span>: Saves critical data to Bundle
+</span><span class='line'>After reopening:
+</span><span class='line'>- ViewModel: NEW instance, no data ❌
+</span><span class='line'>- savedInstanceState: Contains saved data ✅
+</span><span class='line'>- Result: Must restore ViewModel from savedInstanceState
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>场景 3：应用程序最小化 → 重新打开（进程存活）</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'>Before minimizing:
+</span><span class='line'>- ViewModel: Alive with data ✅
+</span><span class='line'>After reopening:
+</span><span class='line'>- ViewModel: Same instance, data intact ✅
+</span><span class='line'>- savedInstanceState: null <span class="o">(</span>no recreation happened<span class="o">)</span>
+</span><span class='line'>- Result: ViewModel data is immediately available
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>那么，为什么存在这个双层系统？</h2>
+
+<p>ViewModel 处理常见情况：</p>
+
+<ul>
+<li>复杂的 UI 状态，你不希望在频繁旋转屏幕时丢失。</li>
+<li>任何需要耗费大量资源重新创建的内容。</li>
+</ul>
+
+
+<p>savedInstanceState 处理特殊情况：</p>
+
+<ul>
+<li>进程死亡难以预测。但当它发生时，用户希望其状态能够持久保存。</li>
+<li>小而关键的数据片段（例如用户输入、滚动位置）。</li>
+<li>简单的 UI 状态，对用户体验至关重要。</li>
+</ul>
+
+
+<h2>Bundle 大小的现实检验</h2>
+
+<p>以下是一些可以帮你免去调试麻烦的事情：Bundle 并非无限大的存储空间。你大约有 1MB 的空间可用，超过这个限制会导致
+崩溃，让你质疑自己的人生选择。</p>
+
+<p>保持 onSavedInstanceState 数据精简。保存用户写到一半的电子邮件草稿，而不是整个联系人列表。</p>
+
+<h2>现代方法：SavedStateHandle</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*ThuE7YpnrtfFQe2fwDlbDg.png" alt="" /></p>
+
+<p>Google 意识到这种手动操作非常繁琐，因此他们创建了 SavedStateHandle ：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">savedStateHandle</span><span class="p">:</span> <span class="n">SavedStateHandle</span><span class="p">)</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 这将自动保留配置更改和进程终止！</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">userData</span><span class="p">:</span> <span class="n">String</span>
+</span><span class='line'>        <span class="k">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">savedStateHandle</span><span class="p">.</span><span class="k">get</span><span class="p">&lt;</span><span class="n">String</span><span class="p">&gt;(</span><span class="s">&quot;user_data&quot;</span><span class="p">)</span> <span class="o">?:</span> <span class="s">&quot;&quot;</span>
+</span><span class='line'>        <span class="k">set</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="p">=</span> <span class="n">savedStateHandle</span><span class="p">.</span><span class="k">set</span><span class="p">(</span><span class="s">&quot;user_data&quot;</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">var</span> <span class="py">counter</span><span class="p">:</span> <span class="n">Int</span>
+</span><span class='line'>        <span class="k">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">savedStateHandle</span><span class="p">.</span><span class="k">get</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;(</span><span class="s">&quot;counter&quot;</span><span class="p">)</span> <span class="o">?:</span> <span class="m">0</span>
+</span><span class='line'>        <span class="k">set</span><span class="p">(</span><span class="n">value</span><span class="p">)</span> <span class="p">=</span> <span class="n">savedStateHandle</span><span class="p">.</span><span class="k">set</span><span class="p">(</span><span class="s">&quot;counter&quot;</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// 无需手动恢复！</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>对于以下情况，为什么仍然需要手动 onSaveInstanceState？</h2>
+
+<h3>1. 不属于 ViewModel 的 UI 特定状态</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onSaveInstanceState</span><span class="p">(</span><span class="n">outState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">super</span><span class="p">.</span><span class="n">onSaveInstanceState</span><span class="p">(</span><span class="n">outState</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">// 这些不属于你的业务逻辑层</span>
+</span><span class='line'>    <span class="n">outState</span><span class="p">.</span><span class="n">putInt</span><span class="p">(</span><span class="s">&quot;scroll_position&quot;</span><span class="p">,</span> <span class="n">recyclerView</span><span class="p">.</span><span class="n">computeVerticalScrollOffset</span><span class="p">())</span>
+</span><span class='line'>    <span class="n">outState</span><span class="p">.</span><span class="n">putBoolean</span><span class="p">(</span><span class="s">&quot;is_toolbar_expanded&quot;</span><span class="p">,</span> <span class="n">collapsingToolbar</span><span class="p">.</span><span class="n">isExpanded</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">outState</span><span class="p">.</span><span class="n">putParcelable</span><span class="p">(</span><span class="s">&quot;dialog_state&quot;</span><span class="p">,</span> <span class="n">currentDialog</span><span class="o">?.</span><span class="n">onSaveInstanceState</span><span class="p">())</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. Fragment 参数和 Activity Extras</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 这些需要在进程终止后继续存在，但不是 ViewModel 状态</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">DetailFragment</span> <span class="p">:</span> <span class="n">Fragment</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">companion</span> <span class="k">object</span> <span class="err">{</span>
+</span><span class='line'>        <span class="k">fun</span> <span class="nf">newInstance</span><span class="p">(</span><span class="n">itemId</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">=</span> <span class="n">DetailFragment</span><span class="p">().</span><span class="n">apply</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">arguments</span> <span class="p">=</span> <span class="n">Bundle</span><span class="p">().</span><span class="n">apply</span> <span class="p">{</span>  <span class="c1">// 这在内部使用 savedInstanceState</span>
+</span><span class='line'>                <span class="n">putString</span><span class="p">(</span><span class="s">&quot;item_id&quot;</span><span class="p">,</span> <span class="n">itemId</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3. 视图状态过于特定于 UI</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// 诸如 EditText 光标位置、焦点状态等。</span>
+</span><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onSaveInstanceState</span><span class="p">(</span><span class="n">outState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">super</span><span class="p">.</span><span class="n">onSaveInstanceState</span><span class="p">(</span><span class="n">outState</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">outState</span><span class="p">.</span><span class="n">putInt</span><span class="p">(</span><span class="s">&quot;edit_text_selection_start&quot;</span><span class="p">,</span> <span class="n">editText</span><span class="p">.</span><span class="n">selectionStart</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">outState</span><span class="p">.</span><span class="n">putInt</span><span class="p">(</span><span class="s">&quot;edit_text_selection_end&quot;</span><span class="p">,</span> <span class="n">editText</span><span class="p">.</span><span class="n">selectionEnd</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>把手弄脏（动手试一试）</h2>
+
+<p>你可以强制终止进程进行测试：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># Kill your app process </span>
+</span><span class='line'>adb shell am <span class="nb">kill </span>com.yourpackage.name
+</span><span class='line'><span class="c"># Or use &quot;Don&#39;t keep activities&quot; in Developer Options</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这将帮助你验证状态恢复是否正确进行。</p>
+
+<h2>关键洞察</h2>
+
+<p>ViewModel 非常适合配置更改，但需要帮助应对进程死亡。</p>
+
+<p>现代方法是在 ViewModel 中使用 SavedStateHandle，它可以自动处理这两种情况。如果你尚未使用它，则需要手动执行 savedInstanceState → ViewModel 的恢复过程。</p>
+
+<p>这个双层系统看似复杂，但实际上非常优雅：常见情况（配置更改）的快速恢复，以及罕见情况（进程死亡）的可靠恢复。</p>
+
+<p>祝你编码愉快，愿你的状态始终持久！🚀</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[用优雅的姿式应对Kotlin Flow的回压]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/07/03/handling-flow-backpress/"/>
+    <updated>2025-07-03T22:09:26+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/07/03/handling-flow-backpress</id>
+    <content type="html"><![CDATA[<p>本文译自「How to Manage Backpressure in Kotlin Flow: collect • buffer • conflate • collectLatest」，原文链接<a href="https://proandroiddev.com/how-to-manage-backpressure-in-kotlin-flow-collect-buffer-conflate-collectlatest-b8102284d968">https://proandroiddev.com/how-to-manage-backpressure-in-kotlin-flow-collect-buffer-conflate-collectlatest-b8102284d968</a>，由Shbazhenov发布于2025年6月13日。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2025/07/03/handling-flow-backpress/"><img src="https://blog.mindorks.com/images/kotlin-flow-banner-image.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>你是否曾遇到过快速数据源发送的数据量超出应用处理能力的情况，导致应用速度变慢甚至崩溃？Kotlin Flow 内置了一些方法，可让你的生产者和消费者保持同步。本文将介绍：</p>
+
+<ol>
+<li>回压的含义</li>
+<li>Flow 默认的“互相等待”模式如何工作</li>
+<li>何时使用 buffer() 添加小型队列</li>
+<li>conflate() 如何跳过旧数据项</li>
+<li>为什么 collectLatest { } 会停止旧数据处理</li>
+<li>如何根据你的情况选择合适的选项</li>
+</ol>
+
+
+<h2>回压的含义</h2>
+
+<p>回压的作用是确保快速的数据发送方不会压垮较慢的接收方。如果没有回压，你可能会在内存中存储过多的数据，或者浪费时间处理过时的信息。</p>
+
+<p>回压可以帮助你：</p>
+
+<ul>
+<li>控制内存使用量</li>
+<li>避免不必要的工作</li>
+<li>使应用性能更可预测</li>
+</ul>
+
+
+<h2>1. 默认“互相等待”模式</h2>
+
+<p>默认情况下，当你执行以下操作时：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">flow</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">repeat</span><span class="p">(</span><span class="m">3</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">emit</span><span class="p">(</span><span class="n">it</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;Sent $it&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>            <span class="c1">// 快速的发送者</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">value</span> <span class="p">-&gt;</span>
+</span><span class='line'>  <span class="n">println</span><span class="p">(</span><span class="s">&quot;Handling $value&quot;</span><span class="p">)</span>
+</span><span class='line'>  <span class="n">delay</span><span class="p">(</span><span class="m">300</span><span class="p">)</span>             <span class="c1">// 慢速的处理者</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>发送方 ( emit ) 将暂停，直到处理方 ( collect ) 处理完最后一个值。没有队列，每个值都是一次发送和处理一个。</p>
+
+<h2>2. 使用 buffer() 添加一个小队列</h2>
+
+<p>如果你希望发送方提前一点，请使用：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">flow</span> <span class="p">{</span> <span class="err">…</span> <span class="p">}</span>
+</span><span class='line'>  <span class="p">.</span><span class="n">buffer</span><span class="p">(</span><span class="n">capacity</span> <span class="p">=</span> <span class="m">2</span><span class="p">)</span>
+</span><span class='line'>  <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">value</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="c1">// slow work here</span>
+</span><span class='line'>  <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ul>
+<li>现在，发送者最多可以将 2 个项目放入一个小队列中。</li>
+<li>一旦队列满了，它就会再次暂停。</li>
+</ul>
+
+
+<p>这给了你一个有限的队列：你仍然可以处理每个项目，但可以平滑速度峰值。</p>
+
+<h2>3. 使用 conflate() 跳过旧项目</h2>
+
+<p>当你只关心最新数据（例如更新进度条）时，你可以这样写：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">flow</span> <span class="p">{</span> <span class="err">…</span> <span class="p">}</span>
+</span><span class='line'>  <span class="p">.</span><span class="n">conflate</span><span class="p">()</span>
+</span><span class='line'>  <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">value</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;Update to $value&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">delay</span><span class="p">(</span><span class="m">300</span><span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ul>
+<li>如果处理程序繁忙，则仅保留最新未处理的项目。</li>
+<li>较旧的项目将被丢弃，因此你无需处理过时的更新。</li>
+</ul>
+
+
+<p>注意：conflate() 不会停止当前工作；它只是在下次读取时跳过旧值。</p>
+
+<h2>4. 使用 collectLatest { } 停止旧工作</h2>
+
+<p>要进一步操作并在新数据进入时取消任何正在进行的工作，请使用：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">flow</span> <span class="p">{</span> <span class="err">…</span> <span class="p">}</span>
+</span><span class='line'>  <span class="p">.</span><span class="n">collectLatest</span> <span class="p">{</span> <span class="n">value</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;Start $value&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">delay</span><span class="p">(</span><span class="m">300</span><span class="p">)</span>    <span class="c1">// 可能会被切断</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;Done $value&quot;</span><span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ul>
+<li>每次发出（emit）新的数据时，处理前一个值的块都会立即被丢弃。</li>
+<li>只有当发送方的发送速度持续超出你的处理能力时，你才需要完成最后一个值的工作。</li>
+</ul>
+
+
+<p>这非常适合边输入边搜索的情况，在这种情况下，你希望在用户再次输入时立即丢弃旧请求。</p>
+
+<h2>5. 选择合适的工具</h2>
+
+<h3>普通 collect</h3>
+
+<ul>
+<li>功能：发送方和处理方互相等待，一个接一个</li>
+<li>何时选择它：你必须按顺序处理每个项目
+
+<h3>.buffer(n)</h3></li>
+<li>功能：大小为 n 的小队列；不丢弃任何项目</li>
+<li>何时选择它：你需要少量缓冲，但仍要处理所有项目
+
+<h3>.conflate()</h3></li>
+<li>功能：如果处理方繁忙，则仅保留最新项目</li>
+<li>何时选择它：你需要最新数据，但仍要完成当前工作
+
+<h3>collectLatest { }</h3></li>
+<li>功能：新数据到达后立即取消所有正在进行的工作</li>
+<li>何时选择它：只考虑最新的结果；立即放下其他一切
+
+<h2>6. 总结</h2></li>
+<li>回压机制可防止快速数据流过载慢速处理器。</li>
+<li>默认模式没有队列：安全但速度可能较慢。</li>
+<li>buffer() 函数添加了一个小队列：更灵活，不会丢包。</li>
+<li>conflate() 函数跳过旧值：始终保持最新，但让当前工作完成。</li>
+<li>collectLatest { } 函数停止旧工作：仅完成最新项。</li>
+</ul>
+
+
+<p>下次你的 Flow 感觉太快或太慢时，请问自己：</p>
+
+<ol>
+<li>我需要处理每个值吗？</li>
+<li>小型队列有帮助吗？</li>
+<li>只有最新数据才重要吗？</li>
+<li>当新数据到达时，我应该取消旧工作吗？</li>
+</ol>
+
+
+<p>选择最合适的简单选项，Kotlin Flow 会处理余下的事情。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[在Kotlin ViewModel中正确处理相同的UI组件交互]]></title>
@@ -8929,1507 +9686,6 @@ Practical Approach」，原文链接<a href="https://medium.com/@siarhei.krupeni
 <p>可以在 GitHub 上查看我的repo：<a href="https://github.com/vitoksmile/ComposeHints">https://github.com/vitoksmile/ComposeHints</a>。</p>
 
 <p>感谢你的阅读，期待在 GitHub 上获得你的Star :)。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[实战：在Compose中绘制睡眠时间线]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose/"/>
-    <updated>2025-03-26T21:41:40+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/sleep-timeline-graph-in-compose-15c99f9a4af0">Draw sleep timeline graph in Compose</a>，原文由<a href="https://medium.com/@vitoksmile">Viktor Mykhailiv</a>发布于2025年1月31日。</p></blockquote>
-
-<p><strong>译者按：</strong> 我们在前面的<a href="https://juejin.cn/column/7367555191338467337">降Compose十八掌</a>系列中讲解过在Compose自定义绘制的方法，可以先温习一下<a href="https://juejin.cn/post/7381826917086920742">上一篇文章</a>。这篇文章是提升自定义绘制技巧的一个非常好的实战例子。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2025/03/26/draw-sleep-timeline-graph-in-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OUAsgvNoNx9VpSk9Eyqgzg.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>当内置组件不能完全满足我们的应用需求时，自定义绘图非常有用。本文提供了创建自定义睡眠时间线图表的指南，类似于你在<a href="https://play.google.com/store/apps/details?id=com.fitbit.FitbitMobile">Fitbit 应用</a>中找到的图表。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*cA9uPgAG29Gu2AhajArq9w.jpeg" alt="Screenshots from Fitbit Android app" /></p>
-
-<h2>在 Compose 中如何绘图？</h2>
-
-<p>要开始在 Compose 中绘图，我们可以使用绘图Modifier或 Canvas可组合函数，这为我们提供了 DrawScope — 一种声明式、无状态的API，用于绘制形状和路径，而无需消费者维护底层状态。DrawScope实现还提供了尺寸信息，并且变幻是相对于本地平移完成的。</p>
-
-<blockquote><p><strong>注意：</strong> Jetpack Compose（仅限 Android）和 Compose Multiplatform（桌面、Android、iOS、Web）具有类似的绘图 API。下面的屏幕截图是在桌面（macOS）上制作的，但所有平台上的结果都是相同的（查看最后一张屏幕截图）。</p></blockquote>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Canvas</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">rotate</span><span class="p">(</span><span class="n">degrees</span> <span class="p">=</span> <span class="m">45F</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">drawRect</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Gray</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">/</span> <span class="m">3F</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">3F</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">size</span> <span class="p">=</span> <span class="n">size</span> <span class="p">/</span> <span class="m">3F</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*_qkChFEn25kC_cfgiRXgKg.png" alt="Compose中的自定义绘制" /></p>
-
-<h2>啥是睡眠时间表？</h2>
-
-<p>我们可以在 Health Connect 中读取或写入睡眠数据。睡眠数据显示为会话，可分为以下睡眠阶段：</p>
-
-<ul>
-<li>清醒：用户在睡眠周期内清醒。</li>
-<li>浅睡眠：用户处于浅睡眠周期。</li>
-<li>深睡眠：用户处于深睡眠周期。</li>
-<li>REM：用户处于 REM 睡眠周期。</li>
-</ul>
-
-
-<p>这些值表示用户在一定时间范围内经历的睡眠类型。SleepSessionRecord 数据类型包含两部分：</p>
-
-<ol>
-<li>整个睡眠过程，涵盖整个睡眠时间。</li>
-<li>睡眠过程中的各个阶段，例如浅睡眠或深睡眠。</li>
-</ol>
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-<span class='line-number'>52</span>
-<span class='line-number'>53</span>
-<span class='line-number'>54</span>
-<span class='line-number'>55</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">record</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">SleepSessionRecord</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T21:10:10Z&quot;</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T07:32:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">startZoneOffset</span> <span class="p">=</span> <span class="n">UtcOffset</span><span class="p">(</span><span class="n">hours</span> <span class="p">=</span> <span class="m">2</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">endZoneOffset</span> <span class="p">=</span> <span class="n">UtcOffset</span><span class="p">(</span><span class="n">hours</span> <span class="p">=</span> <span class="m">2</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">stages</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T21:10:10Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T23:15:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T23:15:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T01:56:32Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T01:56:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T03:16:22Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T03:16:22Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:32:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">REM</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:32:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T05:12:56Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T05:12:56Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T07:32:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:11:56Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:17:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:39:56Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-28T22:51:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">startTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:47:56Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">endTime</span> <span class="p">=</span> <span class="n">Instant</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="s">&quot;2025-01-29T04:54:13Z&quot;</span><span class="p">),</span>
-</span><span class='line'>                <span class="k">type</span> <span class="p">=</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>        <span class="p">),</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>需要一点数学计算</h2>
-
-<p>在睡眠期间，我们可以在不同时刻多次处于同一阶段。我们需要计算相对于睡眠的起点和终点。</p>
-
-<p>要在 Compose 中绘制矩形，我们需要 topOffset 和 size。</p>
-
-<p><img src="" alt="Math" /></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">calculate</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">canvasSize</span><span class="p">:</span> <span class="n">Size</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">recordStartTime</span><span class="p">:</span> <span class="n">Instant</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">recordEndTime</span><span class="p">:</span> <span class="n">Instant</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">stages</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">SleepSessionRecord</span><span class="p">.</span><span class="n">Stage</span><span class="p">&gt;,</span>
-</span><span class='line'><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">SleepStageDrawPoint</span><span class="p">&gt;</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">totalDuration</span> <span class="p">=</span> <span class="p">(</span><span class="n">recordEndTime</span> <span class="p">-</span> <span class="n">recordStartTime</span><span class="p">).</span><span class="n">inWholeSeconds</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">coerceAtLeast</span><span class="p">(</span><span class="m">1f</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">return</span> <span class="n">stages</span><span class="p">.</span><span class="n">map</span> <span class="p">{</span> <span class="n">stage</span> <span class="p">-&gt;</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">stageOffset</span> <span class="p">=</span>
-</span><span class='line'>            <span class="p">(</span><span class="n">stage</span><span class="p">.</span><span class="n">startTime</span> <span class="p">-</span> <span class="n">recordStartTime</span><span class="p">).</span><span class="n">inWholeSeconds</span> <span class="p">/</span> <span class="n">totalDuration</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">stageDuration</span> <span class="p">=</span>
-</span><span class='line'>            <span class="p">(</span><span class="n">stage</span><span class="p">.</span><span class="n">endTime</span> <span class="p">-</span> <span class="n">stage</span><span class="p">.</span><span class="n">startTime</span><span class="p">).</span><span class="n">inWholeSeconds</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">/</span> <span class="n">totalDuration</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">SleepStageDrawPoint</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="n">canvasSize</span><span class="p">.</span><span class="n">width</span> <span class="p">*</span> <span class="n">stageOffset</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="m">0f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">size</span> <span class="p">=</span> <span class="n">canvasSize</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">width</span> <span class="p">=</span> <span class="n">canvasSize</span><span class="p">.</span><span class="n">width</span> <span class="p">*</span> <span class="n">stageDuration</span><span class="p">),</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>绘制</h2>
-
-<p>让我们构建自定义 Canvas 来绘制睡眠过程的一个阶段，例如深度睡眠。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">SleepSessionCanvas</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">record</span><span class="p">:</span> <span class="n">SleepSessionRecord</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Spacer</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">drawWithCache</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">val</span> <span class="py">points</span> <span class="p">=</span> <span class="n">calculate</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">canvasSize</span> <span class="p">=</span> <span class="n">size</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">recordStartTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">startTime</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">recordEndTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">endTime</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">stages</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">stages</span><span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="k">type</span> <span class="p">==</span> <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span> <span class="p">},</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>            <span class="n">onDrawWithContent</span> <span class="p">{</span>
-</span><span class='line'>                <span class="c1">// 画背景</span>
-</span><span class='line'>                <span class="n">drawRoundRect</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">LightGray</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">4f</span><span class="p">),</span>
-</span><span class='line'>                    <span class="n">size</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">height</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">),</span>
-</span><span class='line'>                    <span class="n">cornerRadius</span> <span class="p">=</span> <span class="n">CornerRadius</span><span class="p">(</span><span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">),</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>                <span class="c1">// 绘制阶段点</span>
-</span><span class='line'>                <span class="n">points</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">point</span> <span class="p">-&gt;</span>
-</span><span class='line'>                    <span class="n">drawRect</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">topLeft</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">topLeft</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">size</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">size</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF673AB7</span><span class="p">),</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果我们使用之前定义的睡眠会话运行项目，我们将看到 3 个矩形：1 个灰色矩形表示背景，2 个紫色矩形表示深度睡眠阶段。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">SleepSessionCanvas</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">320.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>    <span class="n">record</span> <span class="p">=</span> <span class="n">record</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*ANITvvaUEuuwwcACzY21qA.png" alt="深度睡眠阶段" /></p>
-
-<p>为了绘制睡眠过程的所有阶段（清醒、快速眼动、浅睡眠和深睡眠），我们需要进行一些调整，将每个阶段类型垂直绘制为列组件，办法是逐行绘制并对下一行应用一些偏移量（offset）。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-<span class='line-number'>52</span>
-<span class='line-number'>53</span>
-<span class='line-number'>54</span>
-<span class='line-number'>55</span>
-<span class='line-number'>56</span>
-<span class='line-number'>57</span>
-<span class='line-number'>58</span>
-<span class='line-number'>59</span>
-<span class='line-number'>60</span>
-<span class='line-number'>61</span>
-<span class='line-number'>62</span>
-<span class='line-number'>63</span>
-<span class='line-number'>64</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">SleepSessionCanvas</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">record</span><span class="p">:</span> <span class="n">SleepSessionRecord</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">stageHeight</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">48.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">stagesSpacing</span><span class="p">:</span> <span class="n">Dp</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">colors</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mapOf</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFFF9800</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF2196F3</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF673AB7</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">REM</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF795548</span><span class="p">),</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">val</span> <span class="py">stageHeightPx</span> <span class="p">=</span> <span class="n">with</span><span class="p">(</span><span class="n">LocalDensity</span><span class="p">.</span><span class="n">current</span><span class="p">)</span> <span class="p">{</span> <span class="n">stageHeight</span><span class="p">.</span><span class="n">toPx</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">stagesSpacingPx</span> <span class="p">=</span> <span class="n">with</span><span class="p">(</span><span class="n">LocalDensity</span><span class="p">.</span><span class="n">current</span><span class="p">)</span> <span class="p">{</span> <span class="n">stagesSpacing</span><span class="p">.</span><span class="n">toPx</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">Spacer</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">requiredHeight</span><span class="p">(</span><span class="n">stageHeight</span> <span class="p">*</span> <span class="n">colors</span><span class="p">.</span><span class="n">size</span> <span class="p">+</span> <span class="n">stagesSpacing</span> <span class="p">*</span> <span class="p">(</span><span class="n">colors</span><span class="p">.</span><span class="n">size</span> <span class="p">-</span> <span class="m">1</span><span class="p">))</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">drawWithCache</span> <span class="p">{</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">stages</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Awake</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">REM</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Light</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">SleepSessionStageType</span><span class="p">.</span><span class="n">Deep</span><span class="p">,</span>
-</span><span class='line'>                <span class="p">).</span><span class="n">map</span> <span class="p">{</span> <span class="k">type</span> <span class="p">-&gt;</span>
-</span><span class='line'>                    <span class="k">type</span> <span class="n">to</span> <span class="n">calculate</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">canvasSize</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">height</span> <span class="p">=</span> <span class="n">stageHeightPx</span><span class="p">),</span>
-</span><span class='line'>                        <span class="n">recordStartTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">startTime</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">recordEndTime</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">endTime</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">stages</span> <span class="p">=</span> <span class="n">record</span><span class="p">.</span><span class="n">stages</span><span class="p">.</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="k">type</span> <span class="p">==</span> <span class="k">type</span> <span class="p">},</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>                <span class="n">onDrawWithContent</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="k">var</span> <span class="py">offset</span> <span class="p">=</span> <span class="m">0f</span>
-</span><span class='line'>                    <span class="n">stages</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="p">(</span><span class="k">type</span><span class="p">,</span> <span class="n">points</span><span class="p">)</span> <span class="p">-&gt;</span>
-</span><span class='line'>                        <span class="n">translate</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="n">offset</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                            <span class="c1">// 画背景</span>
-</span><span class='line'>                            <span class="n">drawRoundRect</span><span class="p">(</span>
-</span><span class='line'>                                <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">LightGray</span><span class="p">,</span>
-</span><span class='line'>                                <span class="n">topLeft</span> <span class="p">=</span> <span class="n">Offset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span> <span class="n">y</span> <span class="p">=</span> <span class="n">stageHeightPx</span> <span class="p">/</span> <span class="m">4</span><span class="p">),</span>
-</span><span class='line'>                                <span class="n">size</span> <span class="p">=</span> <span class="n">size</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">height</span> <span class="p">=</span> <span class="n">stageHeightPx</span> <span class="p">/</span> <span class="m">2</span><span class="p">),</span>
-</span><span class='line'>                                <span class="n">cornerRadius</span> <span class="p">=</span> <span class="n">CornerRadius</span><span class="p">(</span><span class="n">stageHeightPx</span> <span class="p">/</span> <span class="m">2</span><span class="p">),</span>
-</span><span class='line'>                            <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>                            <span class="c1">// 绘制阶段点</span>
-</span><span class='line'>                            <span class="n">points</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">point</span> <span class="p">-&gt;</span>
-</span><span class='line'>                                <span class="n">drawRect</span><span class="p">(</span>
-</span><span class='line'>                                    <span class="n">topLeft</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">topLeft</span><span class="p">,</span>
-</span><span class='line'>                                    <span class="n">size</span> <span class="p">=</span> <span class="n">point</span><span class="p">.</span><span class="n">size</span><span class="p">,</span>
-</span><span class='line'>                                    <span class="n">color</span> <span class="p">=</span> <span class="n">colors</span><span class="p">.</span><span class="n">getValue</span><span class="p">(</span><span class="k">type</span><span class="p">),</span>
-</span><span class='line'>                                <span class="p">)</span>
-</span><span class='line'>                            <span class="p">}</span>
-</span><span class='line'>                        <span class="p">}</span>
-</span><span class='line'>                        <span class="n">offset</span> <span class="p">+=</span> <span class="n">stageHeightPx</span> <span class="p">+</span> <span class="n">stagesSpacingPx</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*iXIS4tbsvx5AhTtRqlWi7A.png" alt="最终的图形" /></p>
-
-<h3>添加文本</h3>
-
-<p>要在 Compose 中绘制文本，我们通常可以使用 Text 可组合项。但是，在我们的示例中，我们处于 DrawScope 中，我们可以使用 DrawScope.drawText()方法。</p>
-
-<p>绘制文本与其他绘制命令略有不同。通常，我们为绘制命令提供绘制形状/图像的大小（宽度和高度）。对于文本，有几个参数可以控制渲染文本的大小，例如字体大小、字体、连字符和字母间距。我们需要使用 TextMeasurer 来获取文本的测量大小，具体取决于上述因素。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*QB1QvINWUWMlpRoPSzrcUQ.png" alt="Desktop效果" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*U_LBREiTciw2F3ghYiHqCw.jpeg" alt="Android和iOS效果" /></p>
-
-<p>请到我的Github repo中查找完整示例代码：<a href="https://github.com/vitoksmile/Sleep-timeline-graph">https://github.com/vitoksmile/Sleep-timeline-graph</a>。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[高效地在Jetpack Compose中设计UI组件]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/03/16/effective-compose-components/"/>
-    <updated>2025-03-16T20:37:18+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/03/16/effective-compose-components</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/designing-effective-ui-components-in-jetpack-compose-cb8d18f7f888">Designing Effective UI Components in Jetpack Compose</a>，原文作者是Jaewoong Eum，原文发布于2025年2月7日。</p></blockquote>
-
-<p><strong>译者按：</strong> 本文适合有一定Jetpack Compose经验的开发者阅读，假定读者熟悉Jetpack Compose的基本使用方法，以及熟悉常见 的Slot设计模式。否则理解上可能会有一些困难。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2025/03/16/effective-compose-components/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*PwVzAjyhIPGIgrT0" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>自<a href="https://android-developers.googleblog.com/2021/07/jetpack-compose-announcement.html"> Google 宣布 Jetpack Compose 1.0 稳定版</a>以来，许多公司都已采用 Jetpack Compose 来利用其众多优势。随着 Compose 在 Android 生态系统中的广泛采用，库和 SDK 也开始集成对 Compose 的支持。</p>
-
-<p>传统上，在基于 XML 的项目中，UI 组件以自定义视图的形式提供，并通过属性（attributes）提供可自定义的选项。虽然这种方法可以轻松地将组件集成到 XML 布局中，但它带来了一些挑战，例如在多个组件之间应用主题样式时不一致，以及由于底层 View 类公开的方法而导致的 API 滥用。</p>
-
-<p>与传统的自定义视图相比，Jetpack Compose 提供了一种完全不同的组件设计策略。其声明式结构允许更直观、更灵活的 API 设计。这种转变不仅有利于库和 SDK 开发人员，也有利于构建共享 UI 组件的大型团队，使他们能够实施更好的做法、减少误用并增强整体开发人员体验。</p>
-
-<p>在本文中，你将发现在 Jetpack Compose 中设计 UI 组件的有效策略，借鉴<a href="https://getstream.io/video/sdk/android/"> Stream Video SDK </a>的最佳实践。</p>
-
-<h2>Modifier的最佳实践</h2>
-
-<p><a href="https://developer.android.com/develop/ui/compose/modifiers">Modifier </a>是 Jetpack Compose 中一个功能强大的 API，可让你以链式和可组合的方式装饰和增强 UI 元素。但是，应谨慎使用它，因为它的属性可以传播到其他可组合函数，如果管理不当，可能会导致意想不到的效果。</p>
-
-<p>Modifier函数的顺序尤其重要，因为每个函数都会修改前一个函数返回的Modifier或从可组合项外部传递的Modifier。此顺序直接影响最终输出。在本节中，我们将探讨三个关键原则和最佳实践，它们可以指导你在 Jetpack Compose 中设计有效且可预测的 UI 组件 API。</p>
-
-<h3>1. 将Modifier应用到组件最顶层的布局</h3>
-
-<p>Jetpack Compose 中的Modifier会通过布局层次结构向下传递，但理想情况下，它们应仅应用于可组合函数中最顶层的布局节点。在层次结构中的任意级别应用Modifier可能会导致意外行为，并增加用户误用的可能性，从而使组件更难以预测且更难以有效使用。</p>
-
-<p>例如，假设你想要创建一个代表圆形按钮的组件，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
-</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
-</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>      <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>但是，你不应将 Modifier 应用于 Text ，而应应用于 Button ，后者是布局层次结构中最顶层的可组合函数，如下所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
-</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
-</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span> <span class="c1">// 别这么干</span>
-</span><span class='line'>      <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>自定义可组合函数 RoundedButton 的主要用途是表示 Button ，而不是 Text 。因此，你应避免转移所创建主要组件的焦点或用途。</p>
-
-<p>此外，如果布局层次结构变得复杂，并且你在可组合函数的中间级别应用Modifier，则用户可能很难预测提供的Modifier参数最终会影响哪个组件。这种不明确性可能会导致混淆和误用。</p>
-
-<p>如果你想让用户灵活地修改按钮的内部内容，你可以使用插槽来实现，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">RowScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
-</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
-</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">content</span><span class="p">()</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>2. 对Modifier使用单个参数</h3>
-
-<p>你可能想知道是否可以接受多个 Modifier 参数以应用于布局层次结构中的特定组件，同时限制组件的结构，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">textModifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
-</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
-</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">textModifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>      <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>但是，Modifier 本质上被设计为一个单一的、可链接的参数，使用户能够定义 Composable 函数的外部行为和外观。在 Composable 中引入多个 Modifier 参数会增加不必要的复杂性，增加误用的风险，并且偏离了 Jetpack Compose 保持 API 直观和可预测的原则。</p>
-
-<p>最好使用基于插槽的方法，让用户能够灵活地自定义内部内容。例如，你可以定义一个插槽（slot），让用户提供自定义内容，同时仍保留单个Modifier以进行外部自定义，而不是添加多个Modifier参数。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">RoundedButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">RowScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">)),</span>
-</span><span class='line'>    <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
-</span><span class='line'>  <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">content</span><span class="p">()</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>3. 避免跨组件重复使用Modifier</h3>
-
-<p>设计组件时的另一个重要考虑因素是避免重复使用提供的 Modifier 实例。一些开发人员可能会担心为每个组件创建新的 Modifier 实例可能会导致内存使用量增加或对性能产生负面影响，尤其是在具有大量Modifier的复杂布局层次结构中。</p>
-
-<p>然而，由于 Jetpack Compose 中Modifier实现的优化性质，这种担忧通常是没有根据的。Modifier旨在应用于可组合函数中的单个布局节点，以确保行为清晰且可预测。如果在布局层次结构中不同级别的多个可组合项中使用相同的Modifier，则可能导致意外的副作用和不可预测的行为，从而损害组件的一致性和可用性。</p>
-
-<p>例如，考虑这样一种情况，其中相同的 Modifier 参数在整个布局层次结构中重复使用，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">MyButtons</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
-</span><span class='line'>      <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Rounded&quot;</span>
-</span><span class='line'>      <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">Button</span><span class="p">(</span>
-</span><span class='line'>      <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
-</span><span class='line'>      <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Not Rounded&quot;</span>
-</span><span class='line'>      <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>乍一看，代码似乎运行正常。但是，当你在调用点修改Modifier时，你会注意到意外的行为，可能会以意想不到的方式改变整个布局。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">MyButtons</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">)</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>为了确保行为正确并避免意外问题，你应避免在多个组件中重复使用Modifier。在本节中，你了解了在设计 Compose 组件时管理Modifier的最佳实践。接下来，让我们通过实现主题来深入了解如何提供一致的 UI 样式。</p>
-
-<h2>主题确保 UI 一致性</h2>
-
-<p>现在，假设你需要提供多种 Compose 组件，这些组件应共享一致的样式。如果这些组件是独立提供的，那么维护这些组件之间一致样式的责任就完全落在用户身上。这可能非常具有挑战性，因为每个组件可能会公开不同的 API 来自定义其样式，从而使同步变得繁琐且容易出错。</p>
-
-<p>在这种情况下，你可以从 Compose Material 库提供的<a href="https://developer.android.com/develop/ui/compose/designsystems/material3#material-theming"> MaterialTheme API </a>中汲取灵感。关键在于确保组件样式一致，同时允许用户无缝自定义并在各个组件之间保持一致的样式。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*AyJL0G8NsCGWX9_Q" alt="Theming Consistency" /></p>
-
-<p>Compose 的<a href="https://getstream.io/video/sdk/"> Stream Video SDK </a>通过提供名为<a href="https://getstream.io/video/docs/android/ui-components/video-theme/"> VideoTheme </a>的专用主题 API 展示了最佳实践。此 VideoTheme API 可确保 SDK 提供的所有 Compose 组件的样式一致，包括颜色、尺寸、排版、形状、涟漪效果等。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">VideoTheme</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">colors</span> <span class="p">=</span> <span class="n">StreamColors</span><span class="p">.</span><span class="n">defaultColors</span><span class="p">().</span><span class="n">copy</span><span class="p">(</span><span class="n">appBackground</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">dimens</span> <span class="p">=</span> <span class="n">StreamDimens</span><span class="p">.</span><span class="n">defaultDimens</span><span class="p">().</span><span class="n">copy</span><span class="p">(</span><span class="n">callAvatarSize</span> <span class="p">=</span> <span class="m">72.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">shapes</span> <span class="p">=</span> <span class="n">StreamShapes</span><span class="p">.</span><span class="n">defaultShapes</span><span class="p">().</span><span class="n">copy</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">avatar</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">callButton</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">callControls</span> <span class="p">=</span> <span class="n">RectangleShape</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">callControlsButton</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">CallContent</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
-</span><span class='line'>            <span class="n">call</span> <span class="p">=</span> <span class="n">call</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">onBackPressed</span> <span class="p">=</span> <span class="p">{</span> <span class="n">finish</span><span class="p">()</span> <span class="p">},</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>通过将 Stream SDK 提供的组件与 VideoTheme 包装在一起（如上例所示），自定义样式将自动一致地应用于所有组件。这种方法使用户能够轻松保持其 UI 的一致性，同时调整主题以满足其应用程序的设计要求。</p>
-
-<h3>实现自定义主题</h3>
-
-<p>让我们深入研究如何实现自定义主题。第一步是定义设计规范，这些规范将在你的组件之间共享或为用户提供自定义功能。考虑包括颜色、形状和尺寸等方面，因为这些通常是确保设计系统一致性的最重要因素。</p>
-
-<p>例如，在 Stream SDK 中，组件所需的所有颜色集均在<a href="https://github.com/GetStream/stream-video-android/blob/c12db8cb6367e10682be3ab323d50dfcc59032f3/stream-video-android-ui-compose/src/main/kotlin/io/getstream/video/android/compose/theme/StreamColors.kt#L24"> StreamColors </a>类中预定义，为用户提供了一种无缝的方式来保持其整个 UI 的一致性。以下是 Stream SDK 如何通过结构良好的颜色集确保一致性的示例：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">public</span> <span class="n">data</span> <span class="k">class</span> <span class="nc">StreamColors</span><span class="p">(</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandPrimary</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandPrimaryLt</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandPrimaryDk</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandSecondary</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandSecondaryTransparent</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandCyan</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandGreen</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">brandYellow</span><span class="p">:</span> <span class="n">Color</span><span class="p">,</span>
-</span><span class='line'>    <span class="p">..</span>
-</span><span class='line'>  <span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>接下来，你应该创建一个<a href="https://developer.android.com/develop/ui/compose/compositionlocal"> CompositionLocal </a>来保存设计规范。这将允许你的组件和用户通过使用 StreamTheme.colors 调用在自定义主题的上下文中无缝访问这些规范。</p>
-
-<p><strong>译注：</strong> CompositionLocal是Compose中用于在上下文函数调用中，隐式的传递常量性质参数的方法，可以参考这篇文章<a href="https://juejin.cn/post/7434543407636267071">用Compose中的CompositionLocal来暗渡陈仓</a>，以了解CompositionLocal的详细用法。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="cm">/**</span>
-</span><span class='line'><span class="cm"> * Local providers for various properties we connect to our components, for styling.</span>
-</span><span class='line'><span class="cm"> */</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">LocalColors</span> <span class="p">=</span> <span class="n">compositionLocalOf</span><span class="p">&lt;</span><span class="n">StreamColors</span><span class="p">&gt;</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">error</span><span class="p">(</span><span class="s">&quot;No colors provided! Make sure to wrap all usages of Stream components in a VideoTheme.&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">public</span> <span class="n">interface</span> <span class="n">StreamTheme</span> <span class="p">{</span>
-</span><span class='line'>    <span class="cm">/**</span>
-</span><span class='line'><span class="cm">     * Retrieves the current [StreamColors] at the call site&#39;s position in the hierarchy.</span>
-</span><span class='line'><span class="cm">     */</span>
-</span><span class='line'>    <span class="k">public</span> <span class="k">val</span> <span class="py">colors</span><span class="p">:</span> <span class="n">StreamColors</span>
-</span><span class='line'>        <span class="n">@Composable</span> <span class="n">@ReadOnlyComposable</span>
-</span><span class='line'>        <span class="k">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">LocalColors</span><span class="p">.</span><span class="n">current</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后，你需要利用<a href="https://developer.android.com/develop/ui/compose/compositionlocal"> CompositionLocal </a>将这些设计规范封装在自定义主题中。这种方法允许你在整个可组合层次结构中高效地提供和传播你的设计规范。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">VideoTheme</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">isInDarkMode</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="n">isSystemInDarkTheme</span><span class="p">(),</span>
-</span><span class='line'>    <span class="n">colors</span><span class="p">:</span> <span class="n">StreamColors</span> <span class="p">=</span> <span class="n">StreamColors</span><span class="p">.</span><span class="n">defaultColors</span><span class="p">(),</span>
-</span><span class='line'>    <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">CompositionLocalProvider</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">LocalColors</span> <span class="n">provides</span> <span class="n">colors</span><span class="p">,</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">content</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>现在，你的所有组件都应假设它们都包含在自定义主题（例如本例中的 VideoTheme）中，并使用提供的设计规范来确保整个组件集的样式一致。这种方法不仅使你的组件 API 能够采用统一的样式，还允许用户利用这些设计规范进行自定义，从而同时提高灵活性和一致性。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">VideoRendererCallContent</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">video</span><span class="p">:</span> <span class="n">ParticipantState</span><span class="p">.</span><span class="n">Video</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">onRendered</span><span class="p">:</span> <span class="p">(</span><span class="n">View</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{},</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">VideoRenderer</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">VideoTheme</span><span class="p">.</span><span class="n">colors</span><span class="p">.</span><span class="n">baseSheetTertiary</span><span class="p">),</span> <span class="c1">// use pre-defined color styles</span>
-</span><span class='line'>        <span class="n">call</span> <span class="p">=</span> <span class="n">call</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">video</span> <span class="p">=</span> <span class="n">video</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">onRendered</span> <span class="p">=</span> <span class="n">onRendered</span><span class="p">,</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">MyScreen</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>  <span class="n">VideoRendererCallContent</span><span class="p">(..)</span>
-</span><span class='line'>
-</span><span class='line'>  <span class="c1">// some complicated components</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">class</span> <span class="nc">MainActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>         <span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">VideoTheme</span> <span class="p">{</span>
-</span><span class='line'>               <span class="n">MyScreen</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>         <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这种方法不仅对于实现 API（库或 SDK）有效，对于构建应用程序也同样有效，因为它能够使用结构良好、预定义的设计规范轻松维护设计一致性。对于实际示例和实际用例，你可以在<a href="https://github.com/GetStream/stream-video-android/blob/c12db8cb6367e10682be3ab323d50dfcc59032f3/stream-video-android-ui-compose/src/main/kotlin/io/getstream/video/android/compose/theme/VideoTheme.kt"> GitHub </a>上探索实际最佳实践。</p>
-
-<h2>可定制性</h2>
-
-<p>在实现 UI 组件时，尤其是对于库或 SDK，为 UI 和 UX 行为提供强大的自定义和灵活性至关重要。这可确保用户可以轻松重复使用组件并根据其特定要求进行调整。你可以采用各种策略在 Jetpack Compose 中有效地实现这种级别的可定制性。</p>
-
-<h3>1. 利用样式类</h3>
-
-<p>如果你希望为特定组件提供更具针对性的定制，请考虑提供专用的样式类。此类可以定义并允许用户轻松修改组件的 UI 和 UX 行为以满足他们的特定需求。</p>
-
-<p>一个很好的例子是 TextStyle ，它是 Compose UI 库提供的默认类：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Immutable</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">TextStyle</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">(</span>
-</span><span class='line'>  <span class="p">..</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">constructor</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">color</span><span class="p">:</span> <span class="n">Color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Unspecified</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">fontSize</span><span class="p">:</span> <span class="n">TextUnit</span> <span class="p">=</span> <span class="n">TextUnit</span><span class="p">.</span><span class="n">Unspecified</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">fontWeight</span><span class="p">:</span> <span class="n">FontWeight</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">fontStyle</span><span class="p">:</span> <span class="n">FontStyle</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">fontSynthesis</span><span class="p">:</span> <span class="n">FontSynthesis</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">fontFamily</span><span class="p">:</span> <span class="n">FontFamily</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>        <span class="p">..</span>
-</span><span class='line'>     <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如上面的代码所示，TextStyle 类封装了 Text 可组合项的所有样式属性。只需将 TextStyle 实例传递给 Text 可组合项，你就可以轻松自定义其设计，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Stats&quot;</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">style</span> <span class="p">=</span> <span class="n">TextStyle</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">fontSize</span> <span class="p">=</span> <span class="m">16.</span><span class="n">sp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">lineHeight</span> <span class="p">=</span> <span class="m">24.</span><span class="n">sp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">(</span><span class="m">600</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">textAlign</span> <span class="p">=</span> <span class="n">TextAlign</span><span class="p">.</span><span class="n">Center</span><span class="p">,</span>
-</span><span class='line'>    <span class="p">),</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>使用样式类的优点是，它们允许组件开发人员将所有设计规范整合到一个集中的类中。这种方法可以防止设计元素分散在多个布局中，从而使代码库更简洁、更易于管理。</p>
-
-<p>对于用户来说，样式类提供了一种直接且直观的修改设计的方法。此外，用户可以在多个布局中重复使用相同的样式实例，从而更方便地在不同布局中应用一致的自定义。</p>
-
-<p>一个潜在的缺点是，由于<a href="https://getstream.io/blog/jetpack-compose-stability/#jetpack-compose-phases">重组机制（Recomposition）</a>，每当输入发生变化时，Compose 运行时都会比较样式类的所有属性，以确定是否需要重组。与直接在可组合函数中定义单个参数相比，这使其成本略高。然而，从 API 设计的角度来看，改进的用户体验和简化的 API 管理通常超过了这一成本，因此在许多情况下，这是一种值得的权衡。</p>
-
-<h3>2. 借助插槽（Slots）的灵活性</h3>
-
-<p>增强自定义灵活性的另一种有效策略是提供接受可组合函数的插槽，让用户根据自己的需求定义特定的实现。通过提供默认实现，你可以确保用户无需付出额外努力即可利用所提供的功能，同时仍然可以根据需要进行自定义。</p>
-
-<p>例如，Stream Video SDK 提供的 CallContent 组件是一个高级 API，它集成了多个子组件，包括顶部应用栏、视频渲染器、布局结构、网格参与者等。虽然 CallContent API 包含默认实现以方便使用，但它还通过允许通过插槽参数进行自定义来确保灵活性，如以下代码所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">fun</span> <span class="nf">CallContent</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">style</span><span class="p">:</span> <span class="n">VideoRendererStyle</span> <span class="p">=</span> <span class="n">RegularVideoRendererStyle</span><span class="p">(),</span>
-</span><span class='line'>    <span class="n">appBarContent</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">(</span><span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">CallAppBar</span><span class="p">(..)</span>
-</span><span class='line'>    <span class="p">},</span>
-</span><span class='line'>    <span class="n">videoRenderer</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">(..)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">ParticipantVideo</span><span class="p">(..)</span>
-</span><span class='line'>    <span class="p">},</span>
-</span><span class='line'>    <span class="n">videoContent</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">RowScope</span><span class="p">.(</span><span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">ParticipantsLayout</span><span class="p">(..)</span>
-</span><span class='line'>    <span class="p">},</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="p">..</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这种方法允许用户实现自己的顶部应用栏、视频渲染器、布局结构、网格参与者等自定义版本。此外，另一种有效的策略是将相似类型的组件分组，并通过插槽使它们可自定义，这通常称为复合组件模式。</p>
-
-<p>复合组件模式涉及创建一个父组件来管理子组件集合，通过为每个子组件公开插槽来提供自定义。此模式允许用户替换或自定义单个子组件，同时保持整体结构和功能的一致性。</p>
-
-<p>想象一下视频通话屏幕上的控制面板包含多个操作按钮，如下图所示：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:886/format:webp/0*mNh-EWJlyCobHHed" alt="Control Panel" /></p>
-
-<p>有些用户可能喜欢不同的操作按钮顺序，例如将麦克风按钮放在第一位，而其他用户可能希望根据其特定用例添加、删除或自定义按钮。在这种情况下，复合组件模式被证明在满足这些不同的要求方面非常有效，例如下面的代码：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">ControlActions</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">actions</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;(</span><span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)&gt;</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">LazyRow</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">verticalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterVertically</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">VideoTheme</span><span class="p">.</span><span class="n">dimens</span><span class="p">.</span><span class="n">spacingM</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterHorizontally</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">),</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">items</span><span class="p">(</span><span class="n">actions</span><span class="p">)</span> <span class="p">{</span> <span class="n">action</span> <span class="p">-&gt;</span>
-</span><span class='line'>                <span class="n">action</span><span class="p">.</span><span class="n">invoke</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>上面的代码演示了一个接受 Composable 函数列表的单个插槽，然后使用 Row 或 LazyRow 进行渲染。这种方法允许你提供高度灵活的组件 API，同时保持对组件布局预期结构的控制。</p>
-
-<p>之后，你还可以提供默认实现，如下所示，以增加便利性。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">buildDefaultCallControlActions</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">onCallAction</span><span class="p">:</span> <span class="p">(</span><span class="n">CallAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">&gt;</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">return</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>        <span class="p">{</span>
-</span><span class='line'>            <span class="n">ToggleCameraAction</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">onCallAction</span> <span class="p">=</span> <span class="n">onCallAction</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">},</span>
-</span><span class='line'>        <span class="p">{</span>
-</span><span class='line'>            <span class="n">ToggleMicrophoneAction</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">onCallAction</span> <span class="p">=</span> <span class="n">onCallAction</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">},</span>
-</span><span class='line'>        <span class="p">{</span>
-</span><span class='line'>            <span class="n">FlipCameraAction</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">onCallAction</span> <span class="p">=</span> <span class="n">onCallAction</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">},</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">ControlActions</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">call</span><span class="p">:</span> <span class="n">Call</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">onCallAction</span><span class="p">:</span> <span class="p">(</span><span class="n">CallAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span> <span class="p">=</span> <span class="p">{</span> <span class="n">DefaultOnCallActionHandler</span><span class="p">.</span><span class="n">onCallAction</span><span class="p">(</span><span class="n">call</span><span class="p">,</span> <span class="n">it</span><span class="p">)</span> <span class="p">},</span>
-</span><span class='line'>    <span class="n">actions</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;(</span><span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)&gt;</span> <span class="p">=</span> <span class="n">buildDefaultCallControlActions</span><span class="p">(</span><span class="n">onCallAction</span><span class="p">)</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如需了解更多<a href="https://getstream.io/video/docs/android/ui-components/call/call-controls/"> ControlActions </a>的真实示例，你可以探索<a href="https://github.com/GetStream/stream-video-android/blob/c12db8cb6367e10682be3ab323d50dfcc59032f3/stream-video-android-ui-compose/src/main/kotlin/io/getstream/video/android/compose/ui/components/call/controls/ControlActions.kt#L48"> GitHub </a>上的实现。</p>
-
-<h3>3. 使用主题进行定制</h3>
-
-<p>设计 Compose 组件时的另一个常见挑战是，随着组件层次结构的变大，提供清晰、直接的可定制性变得更加困难。例如，假设你想为组件多个部分使用的视频渲染器提供可定制性，但 UI 层次结构嵌套很深且很复杂，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">CallContent</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">ParticipantsLayout</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">ParticipantsRegularGrid</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">OrientationVideoRenderer</span> <span class="p">{</span>
-</span><span class='line'>          <span class="n">LazyVerticalGrid</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">VideoRenderer</span><span class="p">()</span> <span class="c1">// &lt;-- users want to customize this renderer style</span>
-</span><span class='line'>          <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>      <span class="n">FloatingVideoRenderer</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">VideoRenderer</span><span class="p">()</span> <span class="c1">// &lt;-- users want to customize this renderer style</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>在这种情况下，将插槽或样式参数从最顶层的组件一直传递到 VideoRenderer 组件并不理想。随着你在不同组件之间添加更多可定制性，最顶层的组件 (CallContent) 可能会因大量插槽和样式参数而变得过载。这不仅使你的 API 更难维护，而且还增加了用户混淆或误用的可能性，因为不清楚哪个参数用于什么用途。</p>
-
-<p>为了解决这个问题，你可以利用自定义主题和<a href="https://developer.android.com/develop/ui/compose/compositionlocal"> CompositionLocal</a>来实现可定制性，同时保持 API 更清晰、更易于管理，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Immutable</span>
-</span><span class='line'><span class="k">public</span> <span class="n">data</span> <span class="k">class</span> <span class="nc">VideoRendererStyle</span><span class="p">(</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">backgroundColor</span><span class="p">:</span> <span class="n">Color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">,</span>
-</span><span class='line'>    <span class="p">..</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">LocalVideoRendererStyle</span> <span class="p">=</span> <span class="n">compositionLocalOf</span><span class="p">&lt;</span><span class="n">VideoRendererStyle</span><span class="p">&gt;</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">error</span><span class="p">(</span><span class="s">&quot;No VideoRendererStyle provided! Make sure to wrap all usages of Stream components in a VideoTheme.&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">VideoTheme</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">videoRendererStyle</span><span class="p">:</span> <span class="n">VideoRendererStyle</span> <span class="p">=</span> <span class="n">VideoRendererStyle</span><span class="p">(),</span>
-</span><span class='line'>    <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">CompositionLocalProvider</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">LocalVideoRendererStyle</span> <span class="n">provides</span> <span class="n">videoRendererStyle</span><span class="p">,</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">content</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>现在，你可以通过在不同的组件中使用提供的样式来确保组件样式的一致性，而无需将它们作为参数反复传递。此外，用户可以通过创建自己的自定义主题轻松自定义样式，如下例所示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">VideoTheme</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">videoRendererStyle</span> <span class="p">=</span> <span class="n">VideoRendererStyle</span><span class="p">(</span><span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="p">..</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果你希望更广泛地应用此策略并高效地管理更多样式，则可以将它们合并为一个类，例如 StreamStyles ，并提供统一的样式类，而不是 CompositionLocal 中的多个单独样式。有些同学可能会担心 CompositionLocal 带来的性能影响，因为它会在值更改时触发布局层次结构的重组，但主题通常不会在应用程序中频繁更新。它们通常是静态的，以确保设计一致性，因此在这种情况下使用 CompositionLocal 是一种合适且有效的选择。</p>
-
-<h2>预览（Preview）的兼容性</h2>
-
-<p>提供预览非常重要，尤其是在构建组件 API 时，因为它们允许开发人员直接在 Android Studio 中可视化和验证他们的 UI 设计。
-一些同学依靠<a href="https://developer.android.com/develop/ui/compose/tooling#live-edit-literals"> Live Literals </a>来动态展示预览中的变化，而其他同学则使用屏幕截图测试来确保其组件的视觉一致性。因此，在实现 Compose 组件时，必须确保它们与 Android Studio 中的预览功能完全兼容，如下面的屏幕截图所示：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*R74xLmTnWswi86ww" alt="Preview" /></p>
-
-<p>有时，你的组件可能会产生副作用，例如在发出网络请求或处理动态状态后渲染图像，这可能会导致预览出现故障。在这种情况下，你可以利用<a href="https://developer.android.com/develop/ui/compose/tooling/previews#localinspectionmode"> LocalInspectionMode</a>。</p>
-
-<p>LocalInspectionMode 允许你确定可组合项是否在预览模式下呈现，从而使你可以呈现专门用于预览目的的专用布局。这种方法可确保预览保持功能，即使你的组件依赖于复杂的逻辑或外部资源。你可以从<a href="https://github.com/skydoves/landscapist"> Landscapist </a>中找到一个用于网络图像加载的 Jetpack Compose 库的真实示例，它演示了处理预览的最佳实践。</p>
-
-<p>下面的可组合函数会检查它是否处于预览模式。如果是，它会渲染静态图像，而不是执行诸如获取网络数据之类的副作用。这种方法允许用户为 GlideImage 可组合函数构建自己的预览，而不会在预览渲染期间遇到运行时错误。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">GlideImage</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">imageModel</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Any</span><span class="p">?,</span>
-</span><span class='line'>  <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">previewPlaceholder</span><span class="p">:</span> <span class="n">Painter</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>  <span class="p">..</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">LocalInspectionMode</span><span class="p">.</span><span class="n">current</span> <span class="p">&amp;&amp;</span> <span class="n">previewPlaceholder</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">Image</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">painter</span> <span class="p">=</span> <span class="n">previewPlaceholder</span><span class="p">,</span>
-</span><span class='line'>        <span class="p">..</span>
-</span><span class='line'>      <span class="p">)</span>
-</span><span class='line'>      <span class="k">return</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>  <span class="c1">// complex logic about requesting network data and render it</span>
-</span><span class='line'>  <span class="p">..</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>为了增强项目中的整体预览策略，请考虑探索<a href="https://getstream.io/blog/effective-compose-preview/">设计有效的 UI 以增强 Compose 预览</a>。此资源提供了有价值的见解和技术，可有效优化你的 Compose 预览。</p>
-
-<h2>结论</h2>
-
-<p>在本文中，我们探讨了在 Jetpack Compose 中制作有效 UI 组件的策略，重点关注最佳实践，例如高效处理Modifier、确保设计与主题一致、实施可定制性策略以及增强预览兼容性。设计直观且强大的 API 始终是一项挑战，但努力终将获得回报，因为用户体验和开发者满意度显著提升。</p>
-
-<p>如果你对本文有任何疑问或反馈，可以在 Twitter<a href="https://twitter.com/github_skydoves"> @github_skydoves </a>或<a href="https://github.com/skydoves"> GitHub </a>上找到作者。如果你想随时了解 Stream 的最新动态，请在 Twitter 上关注我们<a href="https://twitter.com/getstream_io"> @getstream_io</a>，获取更多精彩的技术内容。</p>
-
-<p>老规矩，祝你编码愉快！ &ndash; <a href="https://github.com/skydoves">Jaewoong</a></p>
-
-<p>最初<a href="https://getstream.io/blog/designing-effective-compose/">发布于 GetStream.io</a>。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Understanding Algorithm Tarjan]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/03/07/understanding-algorithm-tarjan/"/>
-    <updated>2025-03-07T20:45:57+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/03/07/understanding-algorithm-tarjan</id>
-    <content type="html"><![CDATA[<h2>Introduction</h2>
-
-<p><a href="https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm">Tarjan算法</a>是用于寻找图中强连通组件的高效算法。通常叫做「割点」或者「割边」，也叫做桥，也就是说如果去掉了某个节点，或者某条边，图中的连通分量数量会增加，那么这样的节点就是割点，这样的边就是桥。</p>
-
-<p>比如说，下面这个图中的节点2就是一个「割点」：</p>
-
-<p><a href="https://alexhilton.github.io/blog/2025/03/07/understanding-algorithm-tarjan/"><img src="https://oi-wiki.org/graph/images/cut1.svg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>而下面这个图中的红色的边就是「桥」：</p>
-
-<p><img src="https://oi-wiki.org/graph/images/bridge1.svg" alt="Cut edge/Bridge" /></p>
-
-<h2>Tarjan&rsquo;s Algorithm</h2>
-
-<p>寻找「割点」和「桥」的朴素方法是，遍历每一个节点，或者边，尝试去掉它，然后查看连通分量的数量有没有增加，显然这样复杂度很高至少是O(n<sup>2</sup>)的，所以要介绍一个常用的算法：Tarjan。</p>
-
-<p>为了简单，假定图的节点为0~n-1，需要两个辅助数组disc[n]用以表示每个节点被访问到的次序，或者说被访问到的时间戳，需要注意，这个对于图中节点来说是唯一的，且与每个节点是一一对应的，代表着遍历过程中访问到每个节点的次序。目的是用于唯一标识每个节点，以及节点在遍历中的次序。</p>
-
-<p>另一个辅助数组是low[n]，它记录的是当前节点所在的子树中被访问到的最早的节点，也就是强连通分量子树的根。也就是说low[u]的值是包含u在内的子树的根，它一定是最早被访问的。原理在于，强连通分量一定有环，那么从当前节点u再往回返回到的u之前的节点时，就形成了环，也即是连通分量，low[u]就记录着这个连通分量的根，也即最早被访问到的节点。显然，当low[u] = u时，就找到了这个根节点，当然也找到了一个强连通分量，如果在遍历过程中记录顶点，那么当low[u] = u时，记录过的顶点就都在一个强连通分量里面。</p>
-
-<p>需要注意的是，这里遍历的方法要用DFS，因为DFS肯定能以最快的方式找到环，回到已遍历过的节点。</p>
-
-<h2>典型题目</h2>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:left;"> 题目 </th>
-<th style="text-align:left;"> 题解 </th>
-<th style="text-align:left;"> 说明 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/critical-connections-in-a-network/description/">1192. 查找集群内的关键连接</a></td>
-<td style="text-align:left;"> <a href="https://leetcode.cn/problems/critical-connections-in-a-network/solutions/3599268/xi-you-yuan-su-1192-cha-zhao-ji-qun-nei-8wm0m/">题解</a> </td>
-<td style="text-align:left;"> 板子题 </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href=""></a></td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-<tr>
-<td style="text-align:left;"> <a href=""></a></td>
-<td style="text-align:left;"> <a href="">题解</a> </td>
-<td style="text-align:left;"> </td>
-</tr>
-</tbody>
-</table>
-
-
-<h2>关联知识</h2>
-
-<p><a href="https://en.wikipedia.org/wiki/Strongly_connected_component">强连通分量</a>，强连通分量是指图中的一组相互均可达的节点组成的子集。注意，强连通分量里面的节点，只需要相互均可达，并不要求直接有边连接。</p>
-
-<p>不同的强连通分量之间的连接（即边或者顶点）即是「割点」和「桥」。</p>
-
-<p>寻找强连通分量的算法，除了Tarjan以外，还有<a href="https://en.wikipedia.org/wiki/Kosaraju%27s_algorithm">Kosaraju算法</a>。</p>
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://www.geeksforgeeks.org/tarjan-algorithm-find-strongly-connected-components/">Tarjan’s Algorithm to find Strongly Connected Components</a></li>
-<li><a href="https://www.baeldung.com/cs/scc-tarjans-algorithm">Finding Strongly Connected Components: Tarjan’s Algorithm</a></li>
-<li><a href="https://oi-wiki.org/graph/cut/">割点和桥</a></li>
-<li><a href="https://leetcode.cn/problems/critical-connections-in-a-network/solutions/2078647/mobanjibie-by-lao-song-2f-1r0d/?envType=study-plan-v2&amp;envId=graph-theory">Tarjan 算法的模板题（Java 版本）</a></li>
-<li><a href="https://www.geeksforgeeks.org/strongly-connected-components/">Strongly Connected Components</a></li>
-<li><a href="https://www.geeksforgeeks.org/kosarajus-algorithm-in-c/">Kosaraju’s Algorithm in C</a></li>
-<li><a href="https://www.baeldung.com/cs/kosaraju-algorithm-scc">Finding Strongly Connected Components: Kosaraju’s Algorithm</a></li>
-</ul>
-
 ]]></content>
   </entry>
   

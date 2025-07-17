@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-07-01T22:55:55+08:00</updated>
+  <updated>2025-07-17T23:15:53+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,164 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[用优雅的姿式应对Kotlin Flow的回压]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/07/03/handling-flow-backpress/"/>
+    <updated>2025-07-03T22:09:26+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/07/03/handling-flow-backpress</id>
+    <content type="html"><![CDATA[<p>本文译自「How to Manage Backpressure in Kotlin Flow: collect • buffer • conflate • collectLatest」，原文链接<a href="https://proandroiddev.com/how-to-manage-backpressure-in-kotlin-flow-collect-buffer-conflate-collectlatest-b8102284d968">https://proandroiddev.com/how-to-manage-backpressure-in-kotlin-flow-collect-buffer-conflate-collectlatest-b8102284d968</a>，由Shbazhenov发布于2025年6月13日。</p>
+
+<p><a href=""><img src="https://blog.mindorks.com/images/kotlin-flow-banner-image.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>你是否曾遇到过快速数据源发送的数据量超出应用处理能力的情况，导致应用速度变慢甚至崩溃？Kotlin Flow 内置了一些方法，可让你的生产者和消费者保持同步。本文将介绍：</p>
+
+<ol>
+<li>回压的含义</li>
+<li>Flow 默认的“互相等待”模式如何工作</li>
+<li>何时使用 buffer() 添加小型队列</li>
+<li>conflate() 如何跳过旧数据项</li>
+<li>为什么 collectLatest { } 会停止旧数据处理</li>
+<li>如何根据你的情况选择合适的选项</li>
+</ol>
+
+
+<h2>回压的含义</h2>
+
+<p>回压的作用是确保快速的数据发送方不会压垮较慢的接收方。如果没有回压，你可能会在内存中存储过多的数据，或者浪费时间处理过时的信息。</p>
+
+<p>回压可以帮助你：</p>
+
+<ul>
+<li>控制内存使用量</li>
+<li>避免不必要的工作</li>
+<li>使应用性能更可预测</li>
+</ul>
+
+
+<h2>1. 默认“互相等待”模式</h2>
+
+<p>默认情况下，当你执行以下操作时：</p>
+
+<pre><code class="Kotlin">flow {
+  repeat(3) {
+    emit(it)
+    println("Sent $it")
+    delay(100)            // 快速的发送者
+  }
+}
+.collect { value -&gt;
+  println("Handling $value")
+  delay(300)             // 慢速的处理者
+}
+</code></pre>
+
+<p>发送方 ( emit ) 将暂停，直到处理方 ( collect ) 处理完最后一个值。没有队列，每个值都是一次发送和处理一个。</p>
+
+<h2>2. 使用 buffer() 添加一个小队列</h2>
+
+<p>如果你希望发送方提前一点，请使用：</p>
+
+<pre><code class="Kotlin">flow { … }
+  .buffer(capacity = 2)
+  .collect { value -&gt;
+    // slow work here
+  }
+</code></pre>
+
+<ul>
+<li>现在，发送者最多可以将 2 个项目放入一个小队列中。</li>
+<li>一旦队列满了，它就会再次暂停。</li>
+</ul>
+
+
+<p>这给了你一个有限的队列：你仍然可以处理每个项目，但可以平滑速度峰值。</p>
+
+<h2>3. 使用 conflate() 跳过旧项目</h2>
+
+<p>当你只关心最新数据（例如更新进度条）时，你可以这样写：</p>
+
+<pre><code class="Kotlin">flow { … }
+  .conflate()
+  .collect { value -&gt;
+    println("Update to $value")
+    delay(300)
+  }
+</code></pre>
+
+<ul>
+<li>如果处理程序繁忙，则仅保留最新未处理的项目。</li>
+<li>较旧的项目将被丢弃，因此你无需处理过时的更新。</li>
+</ul>
+
+
+<p>注意：conflate() 不会停止当前工作；它只是在下次读取时跳过旧值。</p>
+
+<h2>4. 使用 collectLatest { } 停止旧工作</h2>
+
+<p>要进一步操作并在新数据进入时取消任何正在进行的工作，请使用：</p>
+
+<pre><code class="Kotlin">flow { … }
+  .collectLatest { value -&gt;
+    println("Start $value")
+    delay(300)    // 可能会被切断
+    println("Done $value")
+  }
+</code></pre>
+
+<ul>
+<li>每次发出（emit）新的数据时，处理前一个值的块都会立即被丢弃。</li>
+<li>只有当发送方的发送速度持续超出你的处理能力时，你才需要完成最后一个值的工作。</li>
+</ul>
+
+
+<p>这非常适合边输入边搜索的情况，在这种情况下，你希望在用户再次输入时立即丢弃旧请求。</p>
+
+<h2>5. 选择合适的工具</h2>
+
+<h3>普通 collect</h3>
+
+<ul>
+<li>功能：发送方和处理方互相等待，一个接一个</li>
+<li>何时选择它：你必须按顺序处理每个项目
+
+<h3>.buffer(n)</h3></li>
+<li>功能：大小为 n 的小队列；不丢弃任何项目</li>
+<li>何时选择它：你需要少量缓冲，但仍要处理所有项目
+
+<h3>.conflate()</h3></li>
+<li>功能：如果处理方繁忙，则仅保留最新项目</li>
+<li>何时选择它：你需要最新数据，但仍要完成当前工作
+
+<h3>collectLatest { }</h3></li>
+<li>功能：新数据到达后立即取消所有正在进行的工作</li>
+<li>何时选择它：只考虑最新的结果；立即放下其他一切
+
+<h2>6. 总结</h2></li>
+<li>回压机制可防止快速数据流过载慢速处理器。</li>
+<li>默认模式没有队列：安全但速度可能较慢。</li>
+<li>buffer() 函数添加了一个小队列：更灵活，不会丢包。</li>
+<li>conflate() 函数跳过旧值：始终保持最新，但让当前工作完成。</li>
+<li>collectLatest { } 函数停止旧工作：仅完成最新项。</li>
+</ul>
+
+
+<p>下次你的 Flow 感觉太快或太慢时，请问自己：</p>
+
+<ol>
+<li>我需要处理每个值吗？</li>
+<li>小型队列有帮助吗？</li>
+<li>只有最新数据才重要吗？</li>
+<li>当新数据到达时，我应该取消旧工作吗？</li>
+</ol>
+
+
+<p>选择最合适的简单选项，Kotlin Flow 会处理余下的事情。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[一文搞懂Kotlin符号处理接口KSP]]></title>
@@ -788,227 +946,6 @@ fun main() {
 <li><a href="https://sebhastian.com/kotlin-generics/#google_vignette">Kotlin generics explained with code examples</a></li>
 <li><a href="https://zhuanlan.zhihu.com/p/143380842">深入解析Kotlin 泛型</a></li>
 <li><a href="https://juejin.cn/post/6959859571242303495">Kotlin（六）深入理解Kotlin泛型</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[这回就好好聊聊Kotlin的泛型]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/03/04/kotlin-generics-made-easy/"/>
-    <updated>2024-03-04T22:51:58+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/03/04/kotlin-generics-made-easy</id>
-    <content type="html"><![CDATA[<p>泛型(Generics)是静态强类型编程语言中非常强大的特性，可以极大的加强代码的复用，并增强类型安全，减少运行时的类型转换错误。在这篇文章就来详细的学习一下Kotlin中对泛型的支持情况，并学会写出类型安全的可复用代码。</p>
-
-<p><a href=""><img src="https://tse1-mm.cn.bing.net/th/id/OIP-C.bl_F0aycuia6QRYMt4AOfQHaFc?rs=1&amp;pid=ImgDetMain" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>泛型基础</h2>
-
-<p>泛型的本质就是能够创建参数化的对象和函数，以实现复用。比如说，我们最熟悉的集合List，它是<strong>与具体类型无关</strong>的数据结构，或者叫做对象容器。列表List的重点在于可扩展长度，但里面具体的对象类型并不是重点，只要是一个对象就可以了。假如没有泛型，可能就要写很多重复的代码，比如字符串列表StringList，数字列表NumberList，等等。用泛型，只<strong>用一个参数化</strong>的List就可以了，用尖括号<strong>&lt;&gt;</strong>来表示参数化。</p>
-
-<pre><code class="Kotlin">val names: List&lt;String&gt; = listOf("James", "Kevin", "Harden")
-val rebounds: List&lt;Int&gt; = listOf(2, 14, 7)
-</code></pre>
-
-<p>泛型有两种形式，一种是对类进行参数化如List<String>，一种是对函数进行参数化，如max<Int>()。</p>
-
-<h3>参数化的类</h3>
-
-<p>声明方式就是在声明类的时候在类的名字后面用尖括号<strong>&lt;&gt;</strong>来带上一个类型参数，然后在内部就可以当成一个类型来使用：</p>
-
-<pre><code class="Kotlin">class Box&lt;T&gt;(t: T) {
-    var value = t
-}
-</code></pre>
-
-<p>这就创建了一个参数化的容器，它可以持有任何指定类型的对象：</p>
-
-<pre><code class="Kotlin">val box: Box&lt;Int&gt; = Box&lt;Int&gt;(1)
-val case: Box&lt;String&gt; = Box&lt;String&gt;("Coat")
-</code></pre>
-
-<h3>参数化的函数</h3>
-
-<p>除了参数化的类以外，还可以创建参数化的函数，在函数名字的前面用尖括号<strong>&lt;&gt;</strong>来声明泛型，然后在参数列表以及函数体内就可以当作类型来使用：</p>
-
-<pre><code class="Kotlin">fun &lt;T&gt; singleTonList(item: T): List&lt;T&gt; {
-    ...
-}
-</code></pre>
-
-<p>调用的时候指定一下具体的类型就可以了：</p>
-
-<pre><code class="Kotlin">val l = singletonList&lt;Int&gt;(3)
-</code></pre>
-
-<p><strong>注意：</strong>Kotlin语言有强大的类型推断能力，但凡编译器能够推断出类型时，类型的声明都可以省略掉。对于泛型更是如此，比如说，这样写都是合法的：</p>
-
-<pre><code class="Kotlin">val names = listOf("James", "Kevin", "Harden")
-val rebounds = listOf(2, 14, 7)
-val l = singletonList(3)
-</code></pre>
-
-<p>通常情况下，<strong>声明</strong>，<strong>定义</strong>和<strong>赋值</strong>三个地方，只要有一个地方能够让编译器知道具体的类型就够了，其他地方都可以把类型的声明省略掉。</p>
-
-<h2>泛型的本质与优点</h2>
-
-<p>假如不使用泛型，又想写出比较通用的类和函数，唯一可行的方法就是使用通用基类Any当作参数，在Kotlin中Any是所有对象的基类，比如，说想实现一个列表：</p>
-
-<pre><code class="Kotlin">class AnyList {
-    fun add(item: Any)
-    fun get(idx: Int): Any
-}
-</code></pre>
-
-<p>这样写可以，但它有很大的问题，就是不能保证类型安全：</p>
-
-<pre><code class="Kotlin">val list = AnyList()
-list.add("James")
-list.add(13)
-val e = (Int) list.get(1)
-</code></pre>
-
-<p>一方面我们需要自己进行强行类型转换，但也无法保证你取出来的对象类型与期望的是一致的，更无法保证调用者往里面添加什么对象，因为任何Any的子类都可以让代码通过编译，但在运行时极容易发生类型转换异常ClassCastException。</p>
-
-<p>但用泛型就能很好的解决这个问题，可以得出泛型的优点：</p>
-
-<ol>
-<li>不需要做类型转换，编译器会根据指定的具体类型自动做类型转换</li>
-<li>类型安全，编译器会帮助做检查，传给泛型的对象必须具有一致的类型，且是指定的类型</li>
-<li>保障了运行时的类型安全，因为编译器在编译时做好了检查，所以不会发生运行时的类型错误</li>
-</ol>
-
-
-<p>因此，凡是有需要针对 类型复用的地方，都应该用泛型来实现类型参数化。</p>
-
-<h2>关键字out和关键字in</h2>
-
-<p>大部分情况下，只要给类型和函数加上参数化的类型就够了，但有时候有些复杂情况需要处理。</p>
-
-<h3>协变与逆变</h3>
-
-<p><a href="https://zh.wikipedia.org/wiki/%E5%8D%8F%E5%8F%98%E4%B8%8E%E9%80%86%E5%8F%98">协变与逆变Covariance and Contravariance</a>是用来描述具有父子继承关系的简单类型，在通过参数化的方法构造出来的更复杂的类型之间是否能保持父子关系的术语。</p>
-
-<p>比如Dog是Animal的子类，根据继承和多态，Dog可以用在任何声明为Animal的语句和表达式中。<strong>变型Variance</strong>指的就是根据已知的父子关系Dog和Animal，如何来确定由它们构成的更复杂类型如List&lt;Dog&gt;和List&lt;Animal&gt;之间的关系？</p>
-
-<p>常规泛型是<strong>不可变的Invariant</strong>，也就是说复杂类型之间的关系与它们具体的参数化类型之间是没有关系的，如List&lt;Dog&gt;并不是List&lt;Animal&gt;，它们之间没有任何关系，不能把List&lt;Dog&gt;当成是List&lt;Animal&gt;，虽然Dog可以被当作Animal。</p>
-
-<p>不可变Invariant有时候会带来不方便，比如说，集合通常都有addAll方法来批量的把对象加入到集合中：</p>
-
-<pre><code class="Kotlin">class List&lt;T&gt; {
-    fun addAll(from: List&lt;T&gt;) {
-        for (x in from) {
-            add(x)
-        }
-    }
-}
-val objs: List&lt;Any&gt; = emptyList()
-val names: List&lt;String&gt; = listOf("James", "Kevin", "Harden")
-objs.addAll(names) // No go, compile error
-</code></pre>
-
-<p>这是参数化列表集合，先创建一个具体类型为Any的列表，然后尝试把一个String列表添加到Any列表中，其实这么做是完全安全的，因为String对象是完全可以当作其基类Any来使用的，但泛型的不可变性阻止了我们这么做。</p>
-
-<p>这时就需要<strong>协变</strong>与<strong>逆变</strong>了，也就是通过一定的方法让复杂类型的行为与其参数化类型之间进行协同。</p>
-
-<p><img src="https://phpstan.org/covariance-contravariance.4483af19.png" alt="" /></p>
-
-<h3>关键字out进行协变</h3>
-
-<p>使用out关键能够让泛型进行协变。比如上面例子理想的情况应该是，只要能当作T的类型，都应该能用在addAll中，换句话说把T的子类的列表也应该能够支持，即objs.addAll(names)应该能正常编译并正常运行。使用关键out即可达到这样的效果：</p>
-
-<pre><code class="Kotlin">class List&lt;out T&gt; {
-    fun addAll(from: List&lt;T&gt;) {
-        for (x in from) {
-            add(x)
-        }
-    }
-}
-val objs: List&lt;Any&gt; = emptyList()
-val names: List&lt;String&gt; = listOf("James", "Kevin", "Harden")
-objs.addAll(names) // Okay
-</code></pre>
-
-<p>这里的泛型参数from: List<out T>其实是一个生产者，它生产类型为T的对象，所以这里用out来修饰，产出的对象是T或者是T的子类都是会是合法的。或者说当我们想把一个子类的泛型赋给父类的泛型时，就需要对泛型声明为out，以进行协变。</p>
-
-<p><strong>注意：</strong>关键字out与Java泛型中的extend通配符的作用是一样的，指定参数的上限，生产者产生的对象都会向上转型(upcast)为基类，所以需要指定一个上限。</p>
-
-<p>与之相对的，还有in逆变。</p>
-
-<h3>关键字in进行逆变</h3>
-
-<p>有时候情况是相反的，也就是说我们持有的是父类的泛型，但 我们想把它赋给其子类的泛型，这时就可以用in进行逆变。而且必须注意in只能用在消费者中，也就是说是在真实消费对象，为什么呢？其实这里真实发生的是向下转型(downcast)&ndash;把父类的对象赋给子类的引用上面，而向下转型不一定保证是安全的。所以，必须是在真实消费这个对象的地方，只有是期望的真实对象才能被消费。</p>
-
-<pre><code class="Kotlin">class ParameterizedConsumer&lt;in T&gt; {
-    fun toString(value: T): String {
-        return value.toString()
-    }
-}
-
-val parameterizedConsumer = ParameterizedConsumer&lt;Number&gt;()
-
-val ref: ParameterizedConsumer&lt;Double&gt; = parameterizedConsumer
-</code></pre>
-
-<p><strong>注意：</strong>关键字in与Java泛型中的super是一样的，指定一个下限，因为在消费对象时会转成T，用T来限制成为下限，那么向下转型(downcast)就是安全的。</p>
-
-<h2>任意类型的泛型</h2>
-
-<p>有些比较简单粗暴的场景，就是单纯的想让任意类型的泛型都可以使用，这时关键字out和关键字in可能都不太合适，因为它们只能用于生产者和消费者场景，用以指定类型上限和类型下限。这时可以用<strong>星号&#42;</strong>来当用泛型参数，以表示任意具体类型的泛型都可以使用。</p>
-
-<pre><code class="Kotlin">fun printArray(array: Array&lt;*&gt;) { 
-    array.forEach { println(it) }
-}
-
-val array = arrayOf(1,2,3) 
-printArray(array)
-</code></pre>
-
-<h2>关键字reified</h2>
-
-<h3>运行时泛型擦除</h3>
-
-<p>需要注意的是泛型类型在运行时会被擦除(erased)，也就是说在运行时任何对象都是不带有其泛型类型的，具体点的，就是List&lt;String&gt;和List&lt;Int&gt;在运行时，它们的对象实例是一样的，无法知道它们的具体的泛型参数类型。前面讲的各种规则都是发生在编译时间，编译器帮助检查传入的泛型对象是否符合规划，并进行类型转换。到了运行时，泛型类型会被擦除。(为啥会被擦除呢？因为JVM要保持向后兼容，早期的Java没有泛型，只有原始的类型对象(raw type)，所以后来1.5版本后加入的泛型只有擦除掉变成raw type才能保持兼容。)</p>
-
-<h3>关键字reified</h3>
-
-<p>泛型类型擦除会带来一个问题，就是对于泛型类型对象，无法做类型检查(is T)，无法做类型转换(as T)，因为运行时的对象根本不知道它的泛型类型是什么，这会带来极大的不方便，特别是工厂方法就无法使用泛型了，因为无法做类型检查 和转换。</p>
-
-<p>这时inline再加上关键字reified就能完美的解决问题，它们两个配合起来运行时就能保留泛型类型了：</p>
-
-<pre><code class="Kotlin">inline fun &lt;reified T&gt; Iterable&lt;*&gt;.filterIsInstance() = filter { it is T }
-
-&gt;&gt; val set = setOf("1984", 2, 3, "Brave new world", 11)
-&gt;&gt; println(set.filterIsInstance&lt;Int&gt;())
-[2, 3, 11]
-</code></pre>
-
-<p>可以看到类型判断起来作用了。再看一个泛型工厂方法的例子：</p>
-
-<pre><code class="Kotlin">inline fun &lt;reified T&gt; logger(): Logger = LoggerFactory.getLogger(T::class.java)
-
-class User {
-    private val log = logger&lt;User&gt;()
-    // ...
-}
-</code></pre>
-
-<h2>练习</h2>
-
-<p>这里强烈推荐谷歌官方给出的关于Kotlin语言中的<a href="https://developer.android.com/codelabs/basic-android-kotlin-compose-generics#0">类型相关的小练习</a>，可以用来巩固加强一下所学的知识。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/generics.html">Generics: in, out, where</a></li>
-<li><a href="https://www.geeksforgeeks.org/kotlin-generics/">Kotlin generics</a></li>
-<li><a href="https://www.baeldung.com/kotlin/generics">Generics in Kotlin</a></li>
-<li><a href="https://zhuanlan.zhihu.com/p/32583310">Kotlin 泛型中的 in 和 out</a></li>
-<li><a href="https://blog.csdn.net/u011897062/article/details/130832411">Kotlin泛型＜in, out, where＞概念及示例</a></li>
-<li><a href="https://rengwuxian.com/kotlin-generics/">Kotlin 的泛型</a></li>
 </ul>
 
 ]]></content>
