@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-07-17T23:15:53+08:00</updated>
+  <updated>2025-08-01T21:29:31+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,849 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[学会用最优雅的姿式在Compose中显示富文本]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/07/30/styledstring-in-jetpack-compose/"/>
+    <updated>2025-07-30T22:50:40+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/07/30/styledstring-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「StyledString: A Better Pattern for Rich Text in Jetpack Compose」，原文链接<a href="https://proandroiddev.com/styledstring-a-better-pattern-for-rich-text-in-jetpack-compose-5930bde981b1">https://proandroiddev.com/styledstring-a-better-pattern-for-rich-text-in-jetpack-compose-5930bde981b1</a>，由Eury Pérez Beltré发布于2025年7月14日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*NS_T-i72tS5eOs5F0f_Tnw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在 Jetpack Compose 中设置文本样式看似简单……但其实不然。在本文中，我们将探讨 AnnotatedString 的局限性，以及 StyledString 如何让富文本更易于管理。让我们来详细分析一下。👇</p>
+
+<h2>📚 目录</h2>
+
+<ol>
+<li>引言：一个粗体字、一个链接，以及一大堆麻烦</li>
+<li>AnnotatedString：样式过多，简洁性不足</li>
+<li>StyledString 简介：一个 API 即可设置所有样式</li>
+<li>StyledString 底层原理：API 背后的引擎</li>
+<li>结语</li>
+</ol>
+
+
+<h2>引言：一个加粗的单词、一个链接，以及一大堆麻烦</h2>
+
+<p>一开始，你拥有了 AnnotatedString 和一个 SpanStyle ，一切看起来都很顺畅。你想加粗一个单词？很简单✅。给某个东西加下划线？没问题。这甚至感觉有点有趣，尤其是在你像<a href="https://developer.android.com/develop/ui/compose/text/style-text#multiple-styles">官方文档</a>中那样手动构建整个字符串的时候。</p>
+
+<p>但问题是：🧠</p>
+
+<p>当你完全控制字符串时，这种方法非常有效。但当你处理实际内容：动态副本、本地化文本、从其他地方传入的段落，而你只需要设置其中一部分的样式时？</p>
+
+<p>事情很快就变得很糟糕。</p>
+
+<p>突然间，你需要跟踪子字符串、计算索引、应用样式，并连接点击监听器。只需对文本进行一次更改，你的逻辑就会像纸牌屋一样崩溃。🃏</p>
+
+<p>你原本想要的只是加粗一个单词并让链接可点击。现在你深陷于样板代码中，祈祷一切都不会改变。</p>
+
+<p>在这篇文章中，我将解释为什么 AnnotatedString 在实际 UI 中无法很好地扩展，并介绍一个我为了解决这个问题而构建的微型抽象。它叫做 StyledString，它的功能非常强大：💡 它确实做到了：</p>
+
+<p><strong>让Compose 中的文本样式再次变得简单。</strong></p>
+
+<h2>AnnotatedString：样式太多，简洁性不足</h2>
+
+<p>首先，让我们称赞一下 AnnotatedString。它是一款强大的工具💪.</p>
+
+<p>你可以使用一个 Text 可组合项来创建带样式、可点击、可交互的文本。想要让一个单词加粗，另一个单词像链接一样显示？完全可以。该 API 灵活、底层，并且由 Compose 本身的富文本引擎支持。</p>
+
+<p>问题是，它只有<strong>在手动</strong>构建整个字符串时才能发挥最佳效果。</p>
+
+<p>文档中的大多数示例如下所示：</p>
+
+<pre><code class="Kotlin">buildAnnotatedString {
+    append("Hello ")
+    withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+        append("world")
+    }
+}
+</code></pre>
+
+<p>看起来不错，对吧？但棘手的地方就在这里。👀</p>
+
+<p>如果你有一整段动态文本，比如一段本地化的字符串或一个从其他地方拉取的句子，而你只想为其中的部分内容添加样式，该怎么办？</p>
+
+<p>现在你需要处理：</p>
+
+<ul>
+<li>查找要添加样式的子字符串</li>
+<li>计算起始和结束索引</li>
+<li>手动添加样式或注释</li>
+<li>希望文本永远不变，否则一切都会崩溃。</li>
+</ul>
+
+
+<p>如果你需要多种样式，比如粗体单词、可点击的电子邮件和带下划线的 URL，动态地，事情很快就会变得混乱。🔥
+这时，buildAnnotatedString 就会变成一堆脆弱的索引数学运算、重复的逻辑和样板代码，难以阅读，更难以维护。</p>
+
+<p>当然，AnnotatedString 功能强大。但当你的文本是动态的，而你只想为其中的部分内容添加样式时？它很快就会变得索然无味。</p>
+
+<h2>StyledString 隆重出场：一个 API 即可实现所有样式</h2>
+
+<p>在与 AnnotatedString 纠结了无数次之后，我决定构建一个更好的东西。它并非一个庞大的库，也不是一个完整的样式框架。而是一个简单、兼容 Compose 的抽象，用于解决一个非常具体的问题。</p>
+
+<p><strong>StyledString 来啦！👋</strong></p>
+
+<p>它的目标很简单：让你定义字符串的哪些部分应该被设置样式或可点击，而无需担心 indexOf 、 addStyle 或 AnnotatedString.Builder 。你只需编写文本，告诉它需要设置哪些单词的样式，以及点击后该执行的操作。</p>
+
+<p>它的实际效果如下：</p>
+
+<pre><code class="Kotlin">// This list can be built in the ViewModel
+val styledStrings = persistentListOf(
+    StyledString.ClickableEmail(
+        highlightedText = "support@example.com",
+        email = "support@example.com",
+        style = SpanStyle(
+            color = Color.Blue,
+            textDecoration = TextDecoration.Underline
+        )
+    ),
+    StyledString.ClickableUrl(
+        highlightedText = "website",
+        url = "https://euryperez.dev",
+        style = SpanStyle(
+            color = Color.Blue,
+            textDecoration = TextDecoration.Underline
+        )
+    )
+)
+
+// In your Compose Screen
+StyledText(
+    fullText = "Contact us at support@example.com or visit our website",
+    styledStrings = styledStrings,
+    style = MaterialTheme.typography.label,
+    onClick = { styled -&gt;
+        when (styled) {
+            is ClickableEmail -&gt; openEmailClient(styled.email)
+            is ClickableUrl -&gt; openUrl(styled.url)
+        }
+    }
+)
+</code></pre>
+
+<p>就是这样。无需手动构建文本，无需索引计算，无需样板代码。只需简洁、易读、声明式的样式，即可与真实文本兼容。</p>
+
+<p>由于 StyledString 支持 Simple 、 ClickableEmail 和 ClickableUrl 等类型，因此它易于在你的应用中扩展和复用。你可以获得可点击的、带样式的文本，而无需牺牲其合理性和可维护性。🙏</p>
+
+<h2>StyledString 的底层：API 背后的引擎</h2>
+
+<p>让我们揭开它的面纱，逐步了解 StyledString 的工作原理。🪄</p>
+
+<p>当你在 UI 中使用 StyledText 时，🧠它可能感觉像魔法一样神奇，但在幕后，它只是一个简洁、易于组合的架构，旨在减少样式设计的痛苦，而不会增加不必要的复杂性。</p>
+
+<p>本节涵盖了 StyledString 系统的每个部分，从样式的描述方式，到样式的查找、应用和在屏幕上渲染。</p>
+
+<h3>🧱 1. 数据模型：StyledString 和 ClickableStyleString</h3>
+
+<p>整个实用程序的核心是一个名为 StyledString 的密封接口。我们通过它来对需要以某种方式设置样式的文本片段进行建模。</p>
+
+<pre><code class="Kotlin">@Immutable
+sealed interface StyledString {
+    val highlightedText: String
+    val style: SpanStyle
+
+    // Add `Simple` type
+
+    // Add `ClickableEmail` type
+
+    // Add `ClickableUrl` type
+}
+</code></pre>
+
+<p>每个 StyledString 都需要两条信息：</p>
+
+<ul>
+<li>highlightedText：需要设置样式的文本的确切部分</li>
+<li>style：定义其外观的 SpanStyle（颜色、下划线、字体粗细等）。</li>
+</ul>
+
+
+<p>然后，我们定义一些实现此接口的特定类型：</p>
+
+<pre><code class="Kotlin">@Immutable
+data class Simple(
+    override val highlightedText: String,
+    override val style: SpanStyle,
+) : StyledString
+</code></pre>
+
+<p>这个是纯视觉效果的，它会改变文本的外观，但不响应点击。</p>
+
+<p>然后我们介绍交互类型：</p>
+
+<pre><code class="Kotlin">@Immutable
+data class ClickableEmail(
+    override val highlightedText: String,
+    val email: String,
+    override val style: SpanStyle,
+) : StyledString, ClickableStyleString
+
+@Immutable
+data class ClickableUrl(
+    override val highlightedText: String,
+    val url: String,
+    override val style: SpanStyle
+) : StyledString, ClickableStyleString
+</code></pre>
+
+<p>它们执行相同的样式设置工作，但还携带额外的数据（例如点击时应打开的 URL 或电子邮件）。更重要的是，它们实现了第二个接口：ClickableStyleString。</p>
+
+<pre><code class="Kotlin">sealed interface ClickableStyleString
+</code></pre>
+
+<p>这个小接口意义重大，它让我们能够区分纯视觉样式和应该响应点击的样式。这使得我们的点击处理逻辑简洁且类型安全。💡</p>
+
+<p>你可以轻松添加更多变体，例如 @mentions、#hashtags 或电话号码，只需创建另一个数据类并选择性地实现ClickableStyleString 即可。</p>
+
+<h3>🎯 2. 样式和链接：applyStyle</h3>
+
+<p>一旦我们知道了哪些文本需要样式，我们就需要一种将这些样式应用于实际的 AnnotatedString 的方法。这就是 applyStyle() 的作用，它是一个简单的扩展函数，它根据 StyledString 的类型应用样式（和点击监听器）。</p>
+
+<pre><code class="Kotlin">private fun AnnotatedString.Builder.applyStyle(
+    styledString: StyledString,
+    startIndex: Int,
+    endIndex: Int,
+    onClick: (ClickableStyleString) -&gt; Unit
+) {
+    when (styledString) {
+        is StyledString.ClickableUrl -&gt; TODO()
+
+        is StyledString.ClickableEmail -&gt; TODO()
+
+        is StyledString.Simple -&gt; TODO()
+    }
+}
+</code></pre>
+
+<p>每次匹配每个 StyledString 时，都会调用一次此函数。现在让我们看看它做了什么：</p>
+
+<pre><code class="Kotlin">is StyledString.ClickableUrl -&gt; {
+    val linkAnnotation = LinkAnnotation.Url(
+        url = styledString.url,
+        styles = TextLinkStyles(style = styledString.style),
+        linkInteractionListener = { onClick(styledString) }
+    )
+    addLink(linkAnnotation, startIndex, endIndex)
+}
+</code></pre>
+
+<p>如果是 URL，我们会创建一个 LinkAnnotation.Url 对象，附加样式，并为其添加一个点击监听器。addLink 负责将其附加到正确的文本范围。</p>
+
+<p>我们执行的操作类似，但针对电子邮件使用的是 LinkAnnotation.Clickable ：</p>
+
+<pre><code class="Kotlin">is StyledString.ClickableEmail -&gt; {
+    val linkAnnotation = LinkAnnotation.Clickable(
+        tag = styledString.highlightedText,
+        styles = TextLinkStyles(style = styledString.style),
+        linkInteractionListener = { onClick(styledString) }
+    )
+    addLink(linkAnnotation, startIndex, endIndex)
+}
+</code></pre>
+
+<p>如果样式只是视觉上的（不可点击），我们会应用常规跨度：</p>
+
+<pre><code class="Kotlin">is StyledString.Simple -&gt; {
+    addStyle(
+        style = styledString.style, 
+        start = startIndex, 
+        end = endIndex
+    )
+}
+</code></pre>
+
+<p>这种分离将所有样式应用逻辑集中在一处。如果你想要支持新的链接类型或行为，只需更新此函数即可。</p>
+
+<h3>🔍 3. 匹配文本：findAllOccurrences</h3>
+
+<p>在应用样式之前，我们需要找到文本中所有出现指定highlightedText 的位置。这就是此函数的用途。</p>
+
+<pre><code class="Kotlin">/**
+ * Find all occurrences of a substring in a string, optionally ignoring case.
+ *
+ * @param substring The substring to search for.
+ * @param ignoreCase Whether to perform a case-insensitive search.
+ * @return A list of indices where the substring was found.
+ */
+private fun String.findAllOccurrences(
+    substring: String,
+    ignoreCase: Boolean = false
+): List&lt;Int&gt;
+</code></pre>
+
+<p>这将获取全文，并返回给定子字符串的每个匹配项的起始索引列表。</p>
+
+<p>工作原理如下：</p>
+
+<pre><code class="Kotlin">if (substring.isEmpty()) return emptyList()
+</code></pre>
+
+<p>对于空子字符串，快速提前退出。避免奇怪的边缘情况。然后，我们准备进行不区分大小写的搜索（如果需要）：</p>
+
+<pre><code class="Kotlin">val indices = mutableListOf&lt;Int&gt;()
+val searchString = if (ignoreCase) this.lowercase() else this
+val searchSubstring = if (ignoreCase) substring.lowercase() else substring
+</code></pre>
+
+<p>现在我们遍历字符串，找到所有匹配项：</p>
+
+<pre><code class="Kotlin">var startIndex = 0
+val maxStartIndex = length - substring.length
+
+while (startIndex &lt;= maxStartIndex) {
+    val index = searchString.indexOf(searchSubstring, startIndex)
+    if (index == -1) break
+    indices.add(index)
+    startIndex = index + 1
+}
+</code></pre>
+
+<p>我们最终返回结果：</p>
+
+<pre><code class="Kotlin">return indices.toList()
+</code></pre>
+
+<p>这使得我们的样式逻辑保持灵活性和弹性，无论我们设计的单词出现一次还是十几次。</p>
+
+<h3>🧠 4. 构建 AnnotatedString：rememberStyledAnnotationString</h3>
+
+<p>以下函数将所有内容整合在一起。它接收完整文本和你的StyledString 列表，并返回一个应用了所有样式的 AnnotatedString。</p>
+
+<pre><code class="Kotlin">@Composable
+fun rememberStyledAnnotationString(
+    fullText: String,
+    styledStrings: ImmutableList&lt;StyledString&gt;,
+    ignoreCase: Boolean = false,
+    onClick: (ClickableStyleString) -&gt; Unit
+): AnnotatedString
+</code></pre>
+
+<p>我们确保使用 rememberUpdatedState() 来保持点击监听器的最新状态：</p>
+
+<pre><code class="Kotlin">val currentOnClick by rememberUpdatedState(onClick)
+</code></pre>
+
+<p>然后我们使用记住来缓存工作，除非输入发生变化：</p>
+
+<pre><code class="Kotlin">return remember(fullText, styledStrings, ignoreCase) {
+  // TODO: build annotated string
+}
+</code></pre>
+
+<p>我们首先附加完整的未样式化的文本。然后，对于每个 StyledString ，我们找到所有匹配的位置并应用样式：</p>
+
+<pre><code class="Kotlin">buildAnnotatedString {
+    append(fullText)
+
+    styledStrings.fastForEach { styledStringInfo -&gt;
+        val indices =
+            fullText.findAllOccurrences(styledStringInfo.highlightedText, ignoreCase)
+
+        indices.fastForEach { startIndex -&gt;
+            val endIndex = startIndex + styledStringInfo.highlightedText.length
+            applyStyle(styledStringInfo, startIndex, endIndex, currentOnClick)
+        }
+    }
+}
+</code></pre>
+
+<p>这个循环使得样式设置能够动态且多目标化。你可以将任何本地化或运行时生成的字符串作为 fullText 传递，它仍然能够正确应用样式。</p>
+
+<h3>🧩 5. 可组合项：StyledText</h3>
+
+<p>最后，StyledText 可组合项将所有内容连接在一起。</p>
+
+<pre><code class="Kotlin">@Composable
+fun StyledText(
+    fullText: String,
+    styledStrings: ImmutableList&lt;StyledString&gt;,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    onClick: (ClickableStyleString) -&gt; Unit = {},
+    ignoreCase: Boolean = false,
+) {
+    // TODO: Implementation
+}
+</code></pre>
+
+<p>你传入全文、样式以及可选的点击处理程序。它的内部功能如下：</p>
+
+<pre><code class="Kotlin">val annotatedString = rememberStyledAnnotationString(
+    fullText = fullText,
+    styledStrings = styledStrings,
+    ignoreCase = ignoreCase,
+    onClick = onClick
+)
+</code></pre>
+
+<p>这调用了我们刚刚讲过的逻辑。它返回一个带样式的 AnnotatedString 。然后我们渲染它：</p>
+
+<pre><code class="Kotlin">Text(
+    modifier = modifier,
+    text = annotatedString,
+    style = style
+)
+</code></pre>
+
+<p>它只是一个普通的 Compose Text 。但所有样式逻辑都已预先烘焙。现在，你的 UI 代码保持简洁且声明式。🌚</p>
+
+<h3>⚡️ 6. StyledText 实践</h3>
+
+<p>现在，让我们来看看 StyledText 的实践，为此，我整理了一个预览，你可以自己测试一下：</p>
+
+<pre><code class="Kotlin">@PreviewLightDark
+@Composable
+private fun StyledTextPreview() {
+    MyTheme {
+        Box(
+            modifier = Modifier
+                .background(color = MaterialTheme.colors.background)
+                .padding(16.dp)
+        ) {
+            // This list can be built in the ViewModel
+            val styledStrings = persistentListOf(
+                StyledString.ClickableEmail(
+                    highlightedText = "support@example.com",
+                    email = "support@example.com",
+                    style = SpanStyle(
+                        color = Color.Gray,
+                        textDecoration = TextDecoration.Underline
+                    )
+                ),
+                StyledString.ClickableUrl(
+                    highlightedText = "website",
+                    url = "https://euryperez.dev",
+                    style = SpanStyle(
+                        color = Color.Gray,
+                        textDecoration = TextDecoration.Underline
+                    )
+                )
+            )
+
+            // In your Compose Screen
+            StyledText(
+                fullText = "Contact us at support@example.com or visit our website",
+                styledStrings = styledStrings,
+                style = MaterialTheme.typography.body2,
+                color = MaterialTheme.colors.onBackground,
+                onClick = { styled -&gt;
+                    when (styled) {
+                        is StyledString.ClickableEmail -&gt; TODO()
+                        is StyledString.ClickableUrl -&gt; TODO()
+                    }
+                }
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>你将在预览中看到以下内容：
+<img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*9Tc22BNoUfij54fBGQ7YCg.png" alt="StyledTextPreview" /></p>
+
+<h3>✅ 总结：一个输出简洁的简单引擎</h3>
+
+<p>总而言之，我们构建了一个完全可复用的 Compose 实用程序，它：</p>
+
+<ul>
+<li>使用 StyledString 以声明式方式描述样式</li>
+<li>安全地区分可视样式和可点击样式</li>
+<li>使用 applyStyle 应用 span 和 link</li>
+<li>使用 findAllOccurrences 查找多个匹配项</li>
+<li>以 Compose 稳定的方式组装所有内容</li>
+<li>封装在一个简洁的 API 中：StyledText</li>
+</ul>
+
+
+<p>无需 indexOf ，无需复杂的范围逻辑，也无需复制粘贴 buildAnnotatedString样板代码。</p>
+
+<p><a href="https://gist.github.com/euri16/614a460fe6a690ce57cd23cc41164b5a">点击此处</a>（链接：<a href="https://gist.github.com/euri16/614a460fe6a690ce57cd23cc41164b5a%EF%BC%89%E8%8E%B7%E5%8F%96%E5%AE%8C%E6%95%B4%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E3%80%82">https://gist.github.com/euri16/614a460fe6a690ce57cd23cc41164b5a%EF%BC%89%E8%8E%B7%E5%8F%96%E5%AE%8C%E6%95%B4%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E3%80%82</a></p>
+
+<h2>结语🎯</h2>
+
+<p>Jetpack Compose 赋予我们强大的功能，但并非总是最符合人体工程学的开箱即用工具。AnnotatedString 对于一次性需求来说非常棒，但一旦你的 UI 需要多种样式、复用模式或动态点击处理，它就会很快变得冗长。</p>
+
+<p>这就是 StyledString 的用武之地。</p>
+
+<p>它并非取代 AnnotatedString，而是对其进行包装，为你提供一种更安全、更清晰的方式来描述意图：</p>
+
+<ul>
+<li>→ “将此单词加粗”</li>
+<li>→ “将此短语设为链接”</li>
+<li>→ “为该字符串的每个实例设置样式”</li>
+</ul>
+
+
+<p>你无需再考虑文本偏移量和跨度范围，而是开始思考含义。结果：代码更简洁、样板更少，开发者体验更佳💆</p>
+
+<h3>🧩 易于采用</h3>
+
+<p>你无需重构整个应用即可使用 StyledString 。</p>
+
+<p>只需将一两个 Text() 元素替换为 StyledText() 即可。将内联的 buildAnnotatedString { &hellip; } 块替换为 StyledString.Simple 或 ClickableUrl 的简单列表即可。</p>
+
+<p>就这样，你就成功了。✨</p>
+
+<h3>🛠️ 易于扩展</h3>
+
+<p>还有其他用例吗？</p>
+
+<ul>
+<li>为 #hashtags 设置样式？</li>
+<li>处理 @mentions？</li>
+<li>自动检测电话号码？</li>
+<li>添加图标或背景高亮？</li>
+</ul>
+
+
+<p>只需创建一个实现 StyledString 的新数据类，并在 applyStyle() 中处理它即可。系统的其余部分保持不变。</p>
+
+<p>这种分离使你的文本逻辑模块化、可测试，并能够适应未来的设计或业务需求。</p>
+
+<p>如果你有什么有趣的想法，别忘了在评论区分享。😉</p>
+
+<h3>🫱 轮到你了</h3>
+
+<p>现在你已经了解了它的工作原理（以及它实际需要的代码量有多小），那就在下一个 Compose 屏幕中尝试一下吧。不再需要繁琐的 AnnotatedString.Builder 代码。不再需要重复的 span 逻辑。只需描述你想要的内容，剩下的交给 StyledText 处理。</p>
+
+<p><strong>让 Compose 中的文本样式再次变得简单。😎</strong></p>
+
+<h3>🤝 感谢阅读</h3>
+
+<p>如果你最终在项目中使用了 StyledString，请告诉我！看到这些微型模式在现实世界中落地总是很酷。👀</p>
+
+<p>感谢阅读！如果你觉得这篇文章有用，请考虑分享给其他开发者，点赞或留言。这很有帮助。✌️</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[揭密Jetpack Compose中的PausableComposition]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/07/24/exploring-pausablecomposition/"/>
+    <updated>2025-07-24T19:55:51+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/07/24/exploring-pausablecomposition</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Exploring PausableComposition internals in Jetpack Compose」，原文链接<a href="https://blog.shreyaspatil.dev/exploring-pausablecomposition-internals-in-jetpack-compose">https://blog.shreyaspatil.dev/exploring-pausablecomposition-internals-in-jetpack-compose</a>，由Shreyas Patil发布于2025年7月14日。</p></blockquote>
+
+<p><a href=""><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751791091096/4e5b36e3-485c-4079-88be-987082e7d67e.png?w=1600&amp;h=840&amp;fit=crop&amp;crop=entropy&amp;auto=compress,format&amp;format=webp" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>嗨，Composers 们👋，在最近的 Compose 1.9.X 版本中，Compose-runtime 引入了一个名为 PausableComposition 的新内部 API，据称它可以解决性能问题。它听起来像魔法，但在底层，这一切都归功于一些非常巧妙的工程设计。在深入研究 Compose 运行时以更好地理解这一点时，我偶然发现了一个强大的内部工具，它使这一切成为可能。</p>
+
+<p>这篇文章将深入分析这一机制：PausableComposition。这是 Compose 的内部 API，开发者无需了解它。但了解它的底层工作原理总是有益的。对于想要深入了解 Compose 如何实现其惊人性能的 Jetpack Compose 开发者来说，这篇探索文章将为你提供更清晰的视角。我们将深入运行时源代码，了解它的工作原理、它对性能如此重要的原因，以及如何协调所有组件以使我们的 UI 感觉如此流畅。让我们开始吧！</p>
+
+<h2>缘起</h2>
+
+<p>为了实现流畅的 60 帧/秒 (fps)，我们的应用需要在 16.7 毫秒内绘制每一帧。当用户滚动浏览 LazyColumn 时，必须在这个微小的窗口内创建、测量和绘制新的项目。</p>
+
+<p>如果一个项目很复杂，包含嵌套布局、图片和大量逻辑，那么组合它所需的工作很容易超过 16 毫秒。当这种情况发生时，主线程会被阻塞，帧会丢失，用户会在滚动过程中看到“卡顿”或卡顿。😩</p>
+
+<p>这正是 PausableComposition 的初衷。</p>
+
+<h2>“做什么”：更智能的 Compose 方式</h2>
+
+<p>想象一下，你是一位厨师，正在为一场活动准备一顿大餐。👨‍🍳 与其在第一位客人到来时慌乱地从头开始烹饪所有食材，不如提前几个小时做好准备工作。切菜、调酱、烤甜点。等到上桌时，最后的烹饪和组装速度会快得令人难以置信。</p>
+
+<p>PausableComposition 将这种“准备工作”的理念带到了 Compose 中。它允许运行时：</p>
+
+<ol>
+<li>增量式 Compose：将大型 UI 元素的合成分解成更小、更易于管理的部分。</li>
+<li>异步准备：在 UI 真正需要显示在屏幕上之前进行合成工作，通常利用帧间的空闲时间。</li>
+</ol>
+
+
+<p>这种可组合项的预热意味着，当某个项目最终滚动到视图中时，大部分繁重的工作已经完成，使其几乎可以立即显示。</p>
+
+<p>为了直观地理解这一概念，请观看以下动画：</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751997214840/f9f7308a-7b83-4a3d-9d38-e3ce6aa8d9a9.gif?auto=format,compress&amp;gif-q=60&amp;format=webm" alt="滚动帧时间线" /></p>
+
+<p>滚动发生时，假设项目 A、B、C、D 和 E 已在屏幕上可见，下一个项目是 F。如果项目 F 的布局或结构复杂，需要更多时间进行布局计算或其他预处理才能在 UI 上渲染，则此预处理将在帧时间轴内分块进行（例如 16 毫秒）。因此，如果它需要 2 帧，则 F 所需的预处理会在 2 帧的空闲时间内完成，不会造成任何帧卡顿。最后，当需要显示时，它会被绘制到 UI 上。项目 G 和 H 也采用相同的流程。</p>
+
+<h2>工作原理：核心组件</h2>
+
+<p>通过查看运行时源代码，我们可以看到它是如何通过一些关键接口和类来处理的。虽然你不会直接使用这些 API，但理解它们可以揭示 LazyColumn 的性能提升。🕵️‍♂️</p>
+
+<h3>生命周期：PausableComposition 及其控制器</h3>
+
+<p>旅程从 PausableComposition 接口开始，该接口扩展了 ReusableComposition 并添加了暂停功能。</p>
+
+<blockquote><p>关于 ReusableComposition 的简要说明：</p>
+
+<p>在讨论暂停之前，我们先来了解一下什么是 ReusableComposition？它是一种特殊的组合，专为需要高效回收 UI 内容的高性能场景而设计。想象一下 LazyColumn 中的项目。ReusableComposition 不会销毁滚动到屏幕外的项目的整个组合，而是允许运行时停用它。这会保留底层 UI 节点，但会清除已记住的状态。然后，这个停用的组合可以快速地用新内容“重新填充”，从而节省了从头创建节点的成本。PausableComposition 直接构建于这个强大的回收基础之上。</p></blockquote>
+
+<p>PausableComposition 的外观如下：</p>
+
+<pre><code class="Kotlin">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/PausableComposition.kt;l=66
+sealed interface PausableComposition : ReusableComposition {
+    fun setPausableContent(content: @Composable () -&gt; Unit): PausedComposition
+    fun setPausableContentWithReuse(content: @Composable () -&gt; Unit): PausedComposition
+}
+</code></pre>
+
+<p>（注意：该接口是密封的，因为它仅在 Compose 运行时内部具有一组封闭且有限的实现。这为编译器提供了更多信息来进行优化。）</p>
+
+<p>调用 setPausableContent 不会立即组合界面。相反，它会返回一个 PausedComposition 对象，该对象充当逐步过程的控制器。</p>
+
+<pre><code class="Kotlin">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/PausableComposition.kt;l=112
+sealed interface PausedComposition {
+    val isComplete: Boolean
+    fun resume(shouldPause: ShouldPauseCallback): Boolean
+    fun apply()
+    fun cancel()
+}
+</code></pre>
+
+<p>这个生命周期最好以状态机的形式来表示：</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751864148018/27512893-f186-47e7-9bdc-26036460aed7.png?auto=compress,format&amp;format=webp" alt="PausableComposition生命周期流程图" /></p>
+
+<ul>
+<li>resume(shouldPause: ShouldPauseCallback)：这是引擎。预取系统（此处指 LazyColumn 上下文）会反复调用 resume() 来执行大量的组合工作。神奇之处在于 shouldPause 回调。Compose 运行时会在组合过程中频繁调用此 lambda。如果它返回 true（例如，由于帧截止时间已近），则组合过程将停止，并将主线程交还给更重要的工作，例如绘制当前帧。</li>
+<li>apply()：一旦 resume() 返回 true，即表示操作完成，就会调用 apply()。这会获取所有计算出的界面更改，并将其提交到实际的界面树中。</li>
+<li>cancel()：如果用户滚动离开，并且不再需要预先组合的项目，则会调用 cancellation() 来丢弃工作并释放资源。</li>
+</ul>
+
+
+<h3>内部结构概览：PausedCompositionImpl</h3>
+
+<p>上述状态机由内部的 PausedCompositionImpl 类管理。该类保存状态并连接所有部分。</p>
+
+<pre><code class="Kotlin">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/PausableComposition.kt;l=202
+internal class PausedCompositionImpl(...) : PausedComposition {
+    private var state = PausedCompositionState.InitialPending
+    internal val pausableApplier = RecordingApplier(applier.current)
+    // ...
+
+    override fun resume(shouldPause: ShouldPauseCallback): Boolean {
+        when (state) {
+            PausedCompositionState.InitialPending -&gt; {
+                // This is the first time resume() is called.
+                // It starts the initial composition of the content.
+                invalidScopes =
+                    context.composeInitialPaused(composition, shouldPause, content)
+                state = PausedCompositionState.RecomposePending
+                if (invalidScopes.isEmpty()) markComplete()
+            }
+            PausedCompositionState.RecomposePending -&gt; {
+                // This is for subsequent calls to resume().
+                state = PausedCompositionState.Recomposing
+                // It tells the Composer to continue where it left off,
+                // processing any pending invalidations.
+                invalidScopes =
+                    context.recomposePaused(composition, shouldPause, invalidScopes)
+                state = PausedCompositionState.RecomposePending
+                if (invalidScopes.isEmpty()) markComplete()
+            }
+            // ... other states like Recomposing, Applied, Cancelled are handled here ...
+        }
+        return isComplete
+    }
+
+    override fun apply() {
+        // ... other state checks ...
+        if (state == PausedCompositionState.ApplyPending) {
+            applyChanges() // The call site
+            state = PausedCompositionState.Applied
+        }
+        // ...
+    }
+
+    private fun applyChanges() {
+        // ...
+        pausableApplier.playTo(applier, rememberManager)
+        rememberManager.dispatchRememberObservers()
+        rememberManager.dispatchSideEffects()
+        // ...
+    }
+}
+</code></pre>
+
+<p>调用 resume() 时，它会检查其内部状态并采取相应的措施：</p>
+
+<ul>
+<li>InitialPending：首次调用时，它会通过调用 context.composeInitialPaused 启动合成过程。这会告知核心 ComposerImpl 开始执行 @Composable 内容，并执行 shouldPause 回调。</li>
+<li>RecomposePending：后续调用时，它会通过调用 context.recomposePaused 继续工作。此方法用于处理合成中任何因状态变化而失效的部分，或继续之前暂停的工作。</li>
+<li>Applier：在此过程中，ComposerImpl 将所有 UI 更改操作转发给 pausableApplier（即 RecordingApplier），该操作会进行缓冲，而不是立即应用。</li>
+<li>此过程持续进行，直到工作完成或 shouldPause 回调返回 true。</li>
+</ul>
+
+
+<h3>RecordingApplier：推迟最后的润色</h3>
+
+<p>一个关键的性能技巧是 RecordingApplier。调用 resume() 时，Composer 不会直接更改实时 UI 树。如果分小步执行，可能会很慢，并导致 UI 更新不完整，显得怪异。</p>
+
+<p>PausableComposition 使用的是 RecordingApplier。这个特殊的 Applier 会将其应该执行的所有 UI 操作（例如“创建 Text 节点”、“设置其文本属性”或“添加子图像”）记录到一个内部列表中。</p>
+
+<p>只有调用 PausedComposition.apply() 时，RecordingApplier 才会将其记录的操作列表“回放”到实际的 Applier 上，从而高效地单步更新 UI 树。PausedComposition 的公共 apply() 方法是一个简单的状态机守卫。真正的工作发生在内部的 applyChanges() 方法中（如上面的代码片段所示）。</p>
+
+<p>当调用 applyChanges 时，它会按顺序执行三项关键操作：</p>
+
+<ul>
+<li>它会告诉 RecordingApplier 将其所有缓冲的命令播放到实际的 applier 上。这才是 UI 真正出现在屏幕上的关键。</li>
+<li>它会为所有已创建的 RememberObservers（例如 DisposableEffect）调度所有 onRemembered 生命周期回调。</li>
+<li>最后，它会运行在合成过程中排队的所有 SideEffect。</li>
+</ul>
+
+
+<p>这种有序的批处理过程确保 UI 高效更新，并且所有生命周期事件都在正确的时间发生。</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751794209046/49f5c1c7-b424-4c7d-a017-8ba65bb7b2d3.png?auto=compress,format&amp;format=webp" alt="PausableComposition时序图" /></p>
+
+<h2>使用了 PausableComposition 的 LazyList</h2>
+
+<p>LazyList 已经开始使用 PausableComposition API了。在 LazyList 中，PausableComposition 并非独立工作，而是协同工作的系统的一部分。</p>
+
+<ul>
+<li>指挥器 (Recomposer)：主 Recomposer 负责控制节奏，驱动可见 UI 的逐帧更新。</li>
+<li>规划器 (LazyLayoutPrefetchState)：当用户滚动时，此组件会预测哪些项目即将显示。</li>
+<li>舞台管理器 (SubcomposeLayout)：这个强大的 SubcomposeLayout 是 LazyList 的基础。它的 SubcomposeLayoutState 可以在需要时为各个项目创建和管理合成。最重要的是，它提供了 createPausedPrecomposition() API。</li>
+<li>舞台调度器 (PrefetchScheduler)：此调度器会在帧之间寻找空闲时间来执行规划器请求的预合成工作。</li>
+</ul>
+
+
+<p>了解此功能的开发过程也很有趣。在 LazyLayoutPrefetchState 文件中，你可以找到控制它的功能标志：</p>
+
+<pre><code class="Kotlin">// A simplified look inside LazyLayoutPrefetchState.kt: https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPrefetchState.kt;l=647
+if (ComposeFoundationFlags.isPausableCompositionInPrefetchEnabled) {
+    // This is the future, modern path.
+    performPausableComposition(key, contentType, average)
+} else {
+    // This is the older, non-pausable fallback.
+    performFullComposition(key, contentType)
+}
+</code></pre>
+
+<p>isPausableCompositionInPrefetchEnabled 这个标志充当了终止开关的作用。虽然它在源代码中的默认值为 false。如果你想在惰性布局（LazyColumn、LazyRow 等）中启用可暂停组合行为，我们可以简单地按如下方式启用它：</p>
+
+<pre><code class="Kotlin">class MyApplication : Application() {
+    fun onCreate() {
+        ComposeFoundationFlags.isPausableCompositionInPrefetchEnabled = true
+        super.onCreate()
+    }
+}
+</code></pre>
+
+<h3>规划器：LazyLayoutPrefetchState 详解</h3>
+
+<p>LazyLayoutPrefetchState 是预取操作的核心。它的作用是获取来自 LazyLayout 的预测（例如，“第 25 项即将上线”），并将其转换为实际的预组合任务。</p>
+
+<p>它通过 PrefetchHandleProvider 实现此操作，该提供者会创建一个 PrefetchRequest。此请求是 PrefetchScheduler 可以执行的工作单元。在这个请求中，我们找到了暂停逻辑的核心。</p>
+
+<p>当 PrefetchScheduler 执行请求时，它会进入一个循环，在 PausableComposition 上调用 resume()。传递给 resume 的 lambda 表达式决定是否暂停。</p>
+
+<p>因此，如果启用了上述功能标记，它将通过 Pausable Composition API 执行请求，如下所示：</p>
+
+<pre><code class="Kotlin">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPrefetchState.kt;l=754
+// Simplified from HandleAndRequestImpl inside LazyLayoutPrefetchState
+private fun PrefetchRequestScope.performPausableComposition(...) {
+    val composition = // get the composition for the item of the LazyLayout 
+    pauseRequested = false
+
+    while (!composition.isComplete &amp;&amp; !pauseRequested) {
+        composition.resume {
+            if (!pauseRequested) {
+                // 1. Update how much time is left in this frame's idle window.
+                updateElapsedAndAvailableTime()
+
+                // 2. Save how long this work chunk took, to improve future estimates.
+                averages.saveResumeTimeNanos(elapsedTimeNanos)
+
+                // 3. The Core Decision: Is there enough time left to do another
+                //    chunk of work without risking a frame drop?
+                pauseRequested = !shouldExecute(
+                    availableTimeNanos,
+                    averages.resumeTimeNanos + averages.pauseTimeNanos,
+                )
+            }
+            // 4. Return the decision to the composition engine.
+            pauseRequested
+        }
+    }
+
+    updateElapsedAndAvailableTime()
+    if (pauseRequested) {
+        // If we decided to pause, record how long the final pause check took.
+        averages.savePauseTimeNanos(elapsedTimeNanos)
+    } else {
+        // If we finished without pausing, record the time for the final resume chunk.
+        averages.saveResumeTimeNanos(elapsedTimeNanos)
+    }
+}
+</code></pre>
+
+<p>让我们分解一下这个逻辑：</p>
+
+<ol>
+<li>updateElapsedAndAvailableTime()：在恢复 lambda 函数内部，系统会不断检查距离下一帧需要绘制还剩多少时间。</li>
+<li>averages.saveResumeTimeNanos(&hellip;)：它会记录每个小块合成工作所需的时间。这有助于它构建一个平均值 (averages) 来预测未来工作的成本。</li>
+<li>!shouldExecute(&hellip;)：这是核心决策。它会将 availableTimeNanos 与预算进行比较。这个预算是一个智能估算：完成另一块工作所需的平均时间加上暂停所需的平均时间。如果时间不足，pauseRequested 会变为 true。</li>
+<li>最终计时：在本次循环退出后（因为工作完成或请求暂停），会调用最后一次 updateElapsedAndAvailableTime()。这会捕获最后一个操作的时间。</li>
+<li>保存平均值：然后系统会保存这个最终计时。如果请求了暂停，则它会影响 pauseTimeNanos。如果循环自然完成，则它会影响 resumeTimeNanos。这确保了用于未来预测的历史数据始终准确。</li>
+</ol>
+
+
+<p>这种自我调节的反馈循环允许预取器在系统空闲时保持积极主动，但在需要渲染 UI 时又能保持礼貌，尊重主线程。</p>
+
+<h3>最后一步：应用预组合 UI</h3>
+
+<p>那么，当屏幕上真正需要预组合的项目时会发生什么呢？这时 SubcomposeLayout 就占据了中心位置。在正常的测量过程中，它会为现在可见的项目调用其 subcompose 函数。在内部，这会触发最后一步。</p>
+
+<pre><code class="Kotlin">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/layout/SubcomposeLayout.kt;l=1186
+// Simplified from LayoutNodeSubcompositionsState inside SubcomposeLayout.kt
+private fun NodeState.applyPausedPrecomposition(shouldComplete: Boolean) {
+    val pausedComposition = this.pausedComposition
+    if (pausedComposition != null) {
+        // 1. If the work must be completed now...
+        if (shouldComplete) {
+            // ...force the composition to finish by looping `resume`
+            // and always passing `false` to the `shouldPause` callback.
+            while (!pausedComposition.isComplete) {
+                pausedComposition.resume { false }
+            }
+        }
+        // 2. Apply the changes to the real UI tree.
+        pausedComposition.apply()
+        this.pausedComposition = null // Clear the handle.
+    }
+}
+</code></pre>
+
+<p>当某个项目可见时，其组合不再是低优先级的后台任务，而是高优先级的同步任务。shouldComplete = true 参数确保所有剩余的组合工作立即完成，无需暂停。然后，apply() 被调用，完整的 UI 会立即显示在屏幕上。</p>
+
+<p>它们如何协同工作：</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751799217100/82837ef0-e97e-49c7-bee6-cd68ab1804ba.png?auto=compress,format&amp;format=webp" alt="LazyList滚动时序图" /></p>
+
+<h2>结论</h2>
+
+<p>深入研究 Compose 运行时后，PausableComposition 的设计堪称性能工程的杰作。</p>
+
+<ul>
+<li>它并非魔法，而是延迟：其核心理念是在紧急任务之前完成。通过在空闲时间合成项目，快速滚动时主线程所需的工作量会大大减少。</li>
+<li>协作式和非阻塞式：shouldPause 回调是处理多任务的绝佳方式。它可以让长时间运行的合成任务优雅地让位于更紧急的当前帧渲染任务，从而直接防止卡顿。</li>
+<li>通过批处理提高效率：RecordingApplier 通过将 UI 树中的许多小的独立更改分组为单个高效的更新，避免了这些更改带来的开销。</li>
+</ul>
+
+
+<p>虽然 PausableComposition 是一个你可能永远不会直接使用的内部功能，但了解它的存在和运作方式，可以让你真正体会到 Jetpack Compose 如此高性能的明智决策。下次你轻松流畅地滚动浏览复杂的 LazyColumn 时，你就会体会到这巧妙且精心编排的“舞蹈”是如何在表面之下进行的。✅ 这种架构不仅解决了当前的性能挑战，还为 Compose 未来更先进的渲染策略铺平了道路。</p>
+
+<p>希望你已经了解了这个新 API 在 Jetpack Compose 中的工作原理。</p>
+
+<p>太棒了！希望你从中获得了一些宝贵的见解。如果你喜欢这篇文章，请分享 😉，因为……</p>
+
+<p>“分享即关爱”</p>
+
+<p>谢谢！😄</p>
+
+<p>让我们一起回顾 X （链接：<a href="https://twitter.com/imShreyasPatil%EF%BC%89%E7%9A%84%E6%9C%80%E6%96%B0%E5%8A%A8%E6%80%81%EF%BC%8C%E6%88%96%E8%80%85%E8%AE%BF%E9%97%AE%E6%88%91%E7%9A%84%E7%BD%91%E7%AB%99%EF%BC%88%E9%93%BE%E6%8E%A5%EF%BC%9Ahttps://shreyaspatil.dev/%EF%BC%89%E4%BA%86%E8%A7%A3%E6%9B%B4%E5%A4%9A%E5%85%B3%E4%BA%8E%E6%88%91%E7%9A%84%E4%BF%A1%E6%81%AF">https://twitter.com/imShreyasPatil%EF%BC%89%E7%9A%84%E6%9C%80%E6%96%B0%E5%8A%A8%E6%80%81%EF%BC%8C%E6%88%96%E8%80%85%E8%AE%BF%E9%97%AE%E6%88%91%E7%9A%84%E7%BD%91%E7%AB%99%EF%BC%88%E9%93%BE%E6%8E%A5%EF%BC%9Ahttps://shreyaspatil.dev/%EF%BC%89%E4%BA%86%E8%A7%A3%E6%9B%B4%E5%A4%9A%E5%85%B3%E4%BA%8E%E6%88%91%E7%9A%84%E4%BF%A1%E6%81%AF</a> 😎。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[SnapshotFlow还是collectAsState？对于Jetpack Compose来说哪个更香？]]></title>
@@ -718,965 +1561,6 @@ fun ContentExample() {
 <li><a href="https://stackoverflow.com/questions/59995970/using-custom-views-with-jetpack-compose">Using Custom Views with Jetpack Compose</a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[使用Jetpack Compose构建创意动画]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/05/31/animations-in-jetpack-compose/"/>
-    <updated>2025-05-31T23:19:03+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/05/31/animations-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Animating Inside and Outside the Box with Jetpack Compose」，原文链接<a href="https://medium.com/proandroiddev/animating-inside-and-outside-the-box-with-jetpack-compose-a56eba1b6af6">https://medium.com/proandroiddev/animating-inside-and-outside-the-box-with-jetpack-compose-a56eba1b6af6</a>，由Nirbhay Pherwani发布于2023年12月13日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*YDhqS2nzvjXmvlC58vcDNQ.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>缘起</h2>
-
-<p>动画能够让用户界面充满活力、引人入胜。在Android中，Jetpack Compose提供高级工具，让你轻松掌握这项强大功能，打造真正的动态UI。本文将深入探讨 Jetpack Compose 中动画的深层技术。</p>
-
-<p><strong>译注：</strong> 虽然原文是以Jetpack Compose为基础来写的，但其实动画这块并不涉及平台特性，也适用于Compose Multiplatform。</p>
-
-<p>我们将涵盖一系列技巧，从创建流畅的、基于物理的动效（增添真实感）到创建复杂的编排序列（为界面增添叙事质感）。无论你是想提升技能，还是仅仅想探索无限可能，本教程都将提供实用的见解，帮助你的应用不仅运行流畅，还能让用户在每次交互中都感到愉悦。</p>
-
-<p>让我们深入探索这些动画如何改变你的 UI设计方法，使其更加直观、响应迅速，并为用户带来愉悦的体验。</p>
-
-<h2>第 1 部分 — Jetpack Compose中的自定义动画</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*C1_mzDHNHOfSZkIiULgRzw.gif" alt="游戏角色的移动" /></p>
-
-<h3>利用自定义动画实现动态交互</h3>
-
-<p>在本节中，我们将探索如何在 Jetpack Compose中使用高级自定义动画来创建动态且可交互的 UI 元素。我们将重点介绍一个真实示例，该示例演示了用户交互如何以有意义的方式影响动画。</p>
-
-<h3>案例 - 交互式游戏角色移动</h3>
-
-<p>我们将通过一个示例来说明这一概念，其中游戏角色（由面部图标表示）沿着由用户可拖动控制点确定的路径移动。</p>
-
-<pre><code class="Kotlin">@Composable
-fun GameCharacterMovement() {
-    val startPosition = Offset(100f, 100f)
-    val endPosition = Offset(250f, 400f)
-    val controlPoint = remember { mutableStateOf(Offset(200f, 300f)) }
-    val position = remember { Animatable(startPosition, Offset.VectorConverter) }
-
-    LaunchedEffect(controlPoint.value) {
-        position.animateTo(
-            targetValue = endPosition,
-            animationSpec = keyframes {
-                durationMillis = 5000
-                controlPoint.value at 2500 // 可拖动控制点控制的中间点
-            }
-        )
-    }
-
-    val onControlPointChange: (offset: Offset) -&gt; Unit = {
-        controlPoint.value = it
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-
-        Icon(
-            Icons.Filled.Face, contentDescription = "Localized description", modifier = Modifier
-                .size(50.dp)
-                .offset(x = position.value.x.dp, y = position.value.y.dp)
-        )
-
-        DraggableControlPoint(controlPoint.value, onControlPointChange)
-    }
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>GameCharacterMovement 为代表游戏角色的图标设置动画。动画路径由 controlPoint 控制，该控制点通过用户交互设置和更新。</li>
-<li>Animatable 用于将图标的位置从 startPosition 平滑过渡到 endPosition。</li>
-<li>LaunchedEffect 监听 controlPoint 值的变化，并在控制点移动时重新触发动画。</li>
-<li>animationSpec — 这是一种配置项，用于定义动画的持续时间、延迟和缓动。它决定了动画值如何随时间变化。</li>
-<li>keyframes — 允许你在动画的特定时间点指定值，从而控制动画的中间点。这对于创建复杂的、精心设计的动画特别有用。</li>
-<li>keyframes 块将动画定义为一系列关键帧。在 2500 毫秒（中间点）时，角色到达控制点，然后继续移动到结束位置。</li>
-</ul>
-
-
-<pre><code class="Kotlin">@Composable
-fun DraggableControlPoint(controlPoint: Offset, onControlPointChange: (Offset) -&gt; Unit) {
-    var localPosition by remember { mutableStateOf(controlPoint) }
-    Box(
-        modifier = Modifier
-            .offset {
-                IntOffset(
-                    x = localPosition.x.roundToInt() - 15,
-                    y = localPosition.y.roundToInt() - 15
-                )
-            }
-            .size(30.dp)
-            .background(Color.Red, shape = CircleShape)
-            .pointerInput(Unit) {
-                detectDragGestures(onDragEnd = {
-                    onControlPointChange(localPosition)
-                }) { _, dragAmount -&gt;
-                    // adjust based on screen bounds
-                    val newX = (localPosition.x + dragAmount.x).coerceIn(0f, 600f)
-                    val newY = (localPosition.y + dragAmount.y).coerceIn(0f, 600f)
-                    localPosition = Offset(newX, newY)
-                }
-            }
-    )
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>DraggableControlPoint 是一个可组合项，允许用户以交互方式更改控制点的位置。</li>
-<li>拖动控制点会更新 localPosition，并在拖动手势完成（onDragEnd）后将其反馈回 GameCharacterMovement。此交互会改变动画图标的路径。</li>
-</ul>
-
-
-<h3>实际用例</h3>
-
-<ol>
-<li>交互式教育应用：在教育应用中，动画可用于提升学习的吸引力。例如，在天文学应用中，拖动行星沿其轨道运行即可查看不同的星座。</li>
-<li>交互式故事叙述和游戏：在数字故事叙述或游戏应用中，允许用户通过可拖动元素来影响故事或游戏环境，可以创造更具沉浸感的体验。</li>
-</ol>
-
-
-<h2>第 2 部分 — 在 Jetpack Compose中编排复杂动画</h2>
-
-<h3>同步多个元素以实现和谐效果</h3>
-
-<p>在本部分中，我们将深入探讨在 Jetpack Compose 中编排（Choreographing）复杂动画的艺术。我们专注于创建同步动画，使多个元素能够无缝交互，从而提升整体用户体验。</p>
-
-<h3>A) 连锁反应动画 — 多米诺骨牌效应</h3>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*iNeJJU3ixcdcZnQFHHSWYw.gif" alt="多米诺骨牌效应" /></p>
-
-<p>通过设置一系列动画可以在 UI 中创建多米诺骨牌效应，其中一个动画的完成会触发下一个动画的开始。</p>
-
-<pre><code class="Kotlin">@Composable
-fun DominoEffect() {
-    val animatedValues = List(6) { remember { Animatable(0f) } }
-
-    LaunchedEffect(Unit) {
-        animatedValues.forEachIndexed { index, animate -&gt;
-            animate.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = 1000, delayMillis = index * 100)
-            )
-        }
-    }
-
-    Box (modifier = Modifier.fillMaxSize()){
-      animatedValues.forEachIndexed { index, value -&gt;
-        Box(
-            modifier = Modifier
-                .size(50.dp)
-                .offset(x = ((index+1) * 50).dp, y = ((index+1) * 30).dp)
-                .background(getRandomColor(index).copy(alpha = value.value))
-        )
-      }
-    }
-}
-
-fun getRandomColor(seed: Int): Color {
-    val random = Random(seed = seed).nextInt(256)
-    return Color(random, random, random)
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>animatedValues 是一个Animatable对象的列表，每个值控制一个框的 Alpha（不透明度）。</li>
-<li>LaunchedEffect 会触发这些值的一系列动画，从而创建一种交错效果，即每个框在前一个框之后淡入，类似于多米诺骨牌倒下。</li>
-<li>getRandomColor 函数会为每个框生成随机的灰色阴影，为序列中的每个组件添加独特的视觉元素。</li>
-<li>这些框沿屏幕对角线放置，增强了多米诺骨牌效应。</li>
-</ul>
-
-
-<h3>B) 交互式滚动时间轴</h3>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Kk-V0g5pEqy83NajRy_6lA.gif" alt="交互式滚动时间轴" /></p>
-
-<p>在这个时间轴中，每个元素都会随着用户滚动而淡入并移动到位。我们将使用 LazyColumn来呈现可滚动列表，并使用Animatable来呈现动画。</p>
-
-<pre><code class="Kotlin">@Composable
-fun InteractiveTimeline(timelineItems: List&lt;String&gt;) {
-    val scrollState = rememberLazyListState()
-
-    LazyColumn(state = scrollState) {
-        itemsIndexed(timelineItems) { index, item -&gt;
-            val animatableAlpha = remember { Animatable(0f) }
-            val isVisible = remember {
-                derivedStateOf {
-                    scrollState.firstVisibleItemIndex &lt;= index
-                }
-            }
-
-            LaunchedEffect(isVisible.value) {
-                if (isVisible.value) {
-                    animatableAlpha.animateTo(
-                        1f, animationSpec = tween(durationMillis = 1000)
-                    )
-
-                }
-            }
-
-            TimelineItem(
-                text = item,
-                alpha = animatableAlpha.value,
-            )
-        }
-    }
-}
-
-@Composable
-fun TimelineItem(text: String, alpha: Float) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color.DarkGray.copy(alpha = alpha))
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = text,
-            color = Color.White,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>animatableAlpha 控制每个时间轴项目的 Alpha（不透明度），初始设置为 0（完全透明）。</li>
-<li>isVisible 状态源自当前滚动位置，用于确定项目是否可见。</li>
-<li>当用户滚动时，LaunchedEffect会触发进入视口的项目的淡入动画。</li>
-</ul>
-
-
-<h4>用例</h4>
-
-<p>此交互式时间轴非常适合那些希望以视觉吸引力十足的方式呈现一系列事件或步骤的应用。动画通过在项目进入视野时吸引用户的注意力来增强用户的参与度。</p>
-
-<p><strong>此类动画不仅引人入胜，还可以用来引导用户关注应用中的一系列事件或操作。</strong></p>
-
-<h2>第 3 部分 — Jetpack Compose中基于物理的真实动画</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*lZ_rpGorcFzewpUJN6WPAQ.gif" alt="弹性拖拽动画" /></p>
-
-<h3>利用物理原理增强UI动态效果</h3>
-
-<p>在本节中，我们将探索如何使用 Jetpack Compose将物理原理融入动画，为 UI 增添一层真实感和交互性。我们将重点介绍一个弹性拖拽交互示例。</p>
-
-<h3>拖拽时的弹性效果</h3>
-
-<p>此示例演示了图标上的弹性拖拽交互。垂直拖动时，图标会拉伸并回弹，产生弹性效果，模拟弹簧或橡皮筋​​的行为。</p>
-
-<pre><code class="Kotlin">@Composable
-fun ElasticDraggableBox() {
-    var animatableOffset by remember { mutableStateOf(Animatable(0f)) }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFFA732)), contentAlignment = Alignment.Center) {
-        Box(
-            modifier = Modifier
-                .offset(y = animatableOffset.value.dp)
-                .draggable(
-                    orientation = Orientation.Vertical,
-                    state = rememberDraggableState { delta -&gt;
-                        animatableOffset = Animatable(animatableOffset.value + delta)
-                    },
-                    onDragStopped = {
-                        animatableOffset.animateTo(0f, animationSpec = spring())
-                    }
-                )
-                .size(350.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Filled.Favorite,
-                contentDescription = "heart",
-                modifier = Modifier.size(animatableOffset.value.dp + 150.dp),
-                tint = Color.Red
-            )
-        }
-    }
-}
-</code></pre>
-
-<h4>说明</h4>
-
-<ul>
-<li>使用 draggable 修饰符将包含图标的 Box 可组合项设置为可拖动。</li>
-<li>animatableOffset 跟踪图标因拖动而产生的垂直偏移。</li>
-<li>在拖动过程中，图标的大小会根据拖动量而变化，从而产生拉伸效果。</li>
-<li>当拖动停止（onDragStopped）时，animatableOffset 会使用弹簧动画返回到 0f，从而使图标弹回其原始大小和位置。</li>
-</ul>
-
-
-<h2>第 4 节 — Jetpack Compose 中的手势动画</h2>
-
-<h3>通过响应式手势提升用户体验</h3>
-
-<p>在本部分中，我们将探索如何使用 Jetpack Compose 创建由用户手势控制的动画。我们将重点介绍两个示例——一个支持多点触控的可变形图像和一个由手势控制的音频波形。</p>
-
-<h3>A) 多点触控可变形图像</h3>
-
-<p>在本示例中，我们将创建一个图像视图，用户可以使用捏合、缩放和旋转等多点触控（Multi-touch）手势进行交互。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*34WxcBivTWhiCY6KVSVelQ.gif" alt="多点触控可变形图像" /></p>
-
-<pre><code class="Kotlin">@Composable
-fun TransformableImage(imageId: Int = R.drawable.android) {
-    var scale by remember { mutableStateOf(1f) }
-    var rotation by remember { mutableStateOf(0f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.DarkGray), contentAlignment = Alignment.Center) {
-        Image(
-            painter = painterResource(id = imageId),
-            contentDescription = "Transformable image",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(300.dp)
-                .graphicsLayer(
-                    scaleX = scale,
-                    scaleY = scale,
-                    rotationZ = rotation,
-                    translationX = offset.x,
-                    translationY = offset.y
-                )
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, rotate -&gt;
-                        scale *= zoom
-                        rotation += rotate
-                        offset += pan
-                    }
-                }
-        )
-    }
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>Image 可组合项通过 graphicsLayer 进行修改，以应用缩放、旋转和平移等变换。</li>
-<li>pointerInput 带有 detectTransformGestures 接口，用于处理多点触控手势，并相应地更新缩放、旋转和偏移。</li>
-</ul>
-
-
-<h3>B) 手势控制波形</h3>
-
-<p>这是一个波形可视化效果，它根据用户手势（例如滑动和捏合）改变外观，以控制幅度和频率等方面。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*qKzb1XpUrSGKdCL-OxhtLw.gif" alt="手势控制波形" /></p>
-
-<pre><code class="Kotlin">@Composable
-fun GestureControlledWaveform() {
-    var amplitude by remember { mutableStateOf(100f) }
-    var frequency by remember { mutableStateOf(1f) }
-
-    Canvas(modifier = Modifier
-        .fillMaxSize()
-        .pointerInput(Unit) {
-            detectDragGestures { _, dragAmount -&gt;
-                amplitude += dragAmount.y
-                frequency += dragAmount.x / 500f 
-                // 根据拖拽调整频率
-            }
-        }
-        .background(
-            Brush.verticalGradient(
-                colors = listOf(Color(0xFF003366), Color.White, Color(0xFF66B2FF))
-            )
-        )) {
-        val width = size.width
-        val height = size.height
-        val path = Path()
-
-        val halfHeight = height / 2
-        val waveLength = width / frequency
-
-        path.moveTo(0f, halfHeight)
-
-        for (x in 0 until width.toInt()) {
-            val theta = (2.0 * Math.PI * x / waveLength).toFloat()
-            val y = halfHeight + amplitude * sin(theta.toDouble()).toFloat()
-            path.lineTo(x.toFloat(), y)
-        }
-
-        val gradient = Brush.horizontalGradient(
-            colors = listOf(Color.Blue, Color.Cyan, Color.Magenta)
-        )
-
-        drawPath(
-            path = path,
-            brush = gradient
-        )
-    }
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>amplitude 和 frequency 是状态变量，分别控制波形的幅度和频率。</li>
-<li>Canvas 可组合项用于绘制波形。Canvas 内部的绘制逻辑根据正弦函数计算每个 X 位置的 Y 位置，从而创建波浪效果。</li>
-<li>detectDragGestures 修饰符用于根据用户拖动手势更新幅度和频率。水平拖动调整频率，垂直拖动调整幅度。</li>
-<li>当用户在屏幕上拖动时，波形的形状会相应变化，从而营造出互动体验。</li>
-</ul>
-
-
-<h4>注意事项</h4>
-
-<ul>
-<li>这是一个基本的实现。为了获得更逼真的音频波形，你需要集成实际的音频数据。</li>
-<li>可以通过调整拖动过程中幅度和频率的修改方式来微调波形对手势的响应能力。</li>
-</ul>
-
-
-<p>此示例演示了如何在 Compose 中创建基本的交互式波形，并且可以对其进行扩展或修改，以用于更复杂的用例或处理更复杂的手势。</p>
-
-<h2>第 5 节 — Jetpack Compose 中的状态驱动动画模式</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*nkfhmC6JjQnshL3y_izhKg.gif" alt="带动画线图" /></p>
-
-<h3>基于数据和状态变化的UI动画</h3>
-
-<p>本部分重点介绍如何创建由数据或UI 状态变化驱动的动画，从而增强应用的交互性和响应能力。我们将探讨两个具体示例——数据图动画和在多状态 UI 中实现状态转换。</p>
-
-<h3>A) 数据驱动的图形动画</h3>
-
-<p>本示例演示了一个动画线图，其中图形的路径（Path）会随着数据集的变化而变化。</p>
-
-<pre><code class="Kotlin">@Composable
-fun AnimatedGraphExample() {
-    var dataPoints by remember { mutableStateOf(generateRandomDataPoints(5)) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.DarkGray)
-    ) {
-        AnimatedLineGraph(dataPoints = dataPoints)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(
-            onClick = {
-                dataPoints = generateRandomDataPoints(5)
-            },
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-            colors = ButtonDefaults.buttonColors(containerColor = Color.Green)
-        ) {
-            Text(
-                "Update Data",
-                fontWeight = FontWeight.Bold,
-                color = Color.DarkGray,
-                fontSize = 18.sp
-            )
-        }
-    }
-}
-
-@Composable
-fun AnimatedLineGraph(dataPoints: List&lt;Float&gt;) {
-    val animatableDataPoints = remember { dataPoints.map { Animatable(it) } }
-    val path = remember { Path() }
-
-    LaunchedEffect(dataPoints) {
-        animatableDataPoints.forEachIndexed { index, animatable -&gt;
-            animatable.animateTo(dataPoints[index], animationSpec = TweenSpec(durationMillis = 500))
-        }
-    }
-
-    Canvas(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(400.dp)
-    ) {
-        path.reset()
-        animatableDataPoints.forEachIndexed { index, animatable -&gt;
-            val x = (size.width / (dataPoints.size - 1)) * index
-            val y = size.height - (animatable.value * size.height)
-            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        drawPath(path, Color.Green, style = Stroke(5f))
-    }
-}
-
-fun generateRandomDataPoints(size: Int): List&lt;Float&gt; {
-    return List(size) { Random.nextFloat() }
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>AnimatedGraphExample 可组合项创建了一个可以更新折线图数据点的环境。</li>
-<li>该图表绘制在 Canvas 中，其中 drawPath 方法使用来自 animatableDataPoints 的动画值。</li>
-<li>对于图表中的每个数据点，我们需要计算其在画布上对应的 x（水平）和 y（垂直）位置。</li>
-<li>x 计算 - x 位置是根据数据点的索引和画布的总宽度计算得出的。我们将数据点沿画布的宽度均匀分布。
-<code>Kotlin
-val x = (size.width / (dataPoints.size - 1)) * index
-</code></li>
-<li>y 计算——y 位置是根据数据点（animatable.value）的值和画布的高度计算的。
-<code>Kotlin
-val y = size.height - (animatable.value * size.height)
-</code></li>
-<li>路径从第一个数据点开始，然后使用 lineTo 绘制一条线到每个后续点，从而创建图形线。</li>
-<li>路径基于数据点的动画值绘制，从而在数据发生变化时创建动画效果。</li>
-</ul>
-
-
-<h3>B) 多状态 UI 中的状态转换</h3>
-
-<p>可以使用 Animatable 在多状态 UI 中实现状态转换，从而在不同 UI 状态之间进行动画处理。</p>
-
-<pre><code class="Kotlin">enum class UIState { StateA, StateB, StateC }
-
-@Composable
-fun StateTransitionUI() {
-    var currentState by remember { mutableStateOf(UIState.StateA) }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(getBackgroundColorForState(currentState)),
-        contentAlignment = Alignment.Center
-    ) {
-        AnimatedContent(currentState = currentState)
-
-        Button(
-            onClick = { currentState = getNextState(currentState) },
-            modifier = Modifier.align(Alignment.BottomCenter)
-        ) {
-            Text("Next State")
-        }
-    }
-}
-
-@Composable
-fun AnimatedContent(currentState: UIState) {
-    AnimatedVisibility(
-        visible = currentState == UIState.StateA,
-        enter = fadeIn(animationSpec = tween(durationMillis = 2000)) + expandVertically(),
-        exit = fadeOut(animationSpec = tween(durationMillis = 2000)) + shrinkVertically()
-    ) {
-        Text("This is ${currentState.name}", fontSize = 32.sp)
-    }
-
-    // 与B 和 C 的类似的代码块
-}
-
-fun getBackgroundColorForState(state: UIState): Color {
-    return when (state) {
-        UIState.StateA -&gt; Color.Red
-        UIState.StateB -&gt; Color.Green
-        UIState.StateC -&gt; Color.Blue
-    }
-}
-
-fun getNextState(currentState: UIState): UIState {
-    return when (currentState) {
-        UIState.StateA -&gt; UIState.StateB
-        UIState.StateB -&gt; UIState.StateC
-        UIState.StateC -&gt; UIState.StateA
-    }
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>在此示例中，AnimatedVisibility 用于为每个状态下内容的出现和消失添加动画效果。这会在状态变化时添加平滑的过渡效果。</li>
-<li>对于每个状态（StateA、StateB、StateC），都有一个 AnimatedVisibility 块，用于通过淡入淡出和展开/收缩动画控制其内容的可见性。</li>
-<li>AnimatedVisibility 的进入和退出参数分别定义了内容可见或隐藏时的动画。</li>
-</ul>
-
-
-<h2>第 6 节 — 在 Compose中改变（Morphing）形状</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*q82EIocVzR8XBMuG_14mdg.gif" alt="形状变形" /></p>
-
-<p>动画形状之间的变换涉及这些形状的属性的插值。</p>
-
-<pre><code class="Kotlin">@Composable
-fun ShapeMorphingAnimation() {
-    val animationProgress = remember { Animatable(0f) }
-
-    LaunchedEffect(Unit) {
-        animationProgress.animateTo(
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(2000, easing = LinearOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            )
-        )
-    }
-
-    Canvas(modifier = Modifier.padding(40.dp).fillMaxSize()) {
-        val sizeValue = size.width.coerceAtMost(size.height) / 2
-        val squareRect = Rect(center = center, sizeValue)
-
-        val morphedPath = interpolateShapes(progress = animationProgress.value, squareRect = squareRect)
-        drawPath(morphedPath, color = Color.Blue, style = Fill)
-    }
-}
-
-fun interpolateShapes(progress: Float, squareRect: Rect): Path {
-    val path = Path()
-
-    val cornerRadius = CornerRadius(
-        x = lerp(start = squareRect.width / 2, stop = 0f, fraction = progress),
-        y = lerp(start = squareRect.height / 2, stop = 0f, fraction = progress)
-    )
-
-    path.addRoundRect(
-        roundRect = RoundRect(rect = squareRect, cornerRadius = cornerRadius)
-    )
-
-    return path
-}
-
-fun lerp(start: Float, stop: Float, fraction: Float): Float {
-    return (1 - fraction) * start + fraction * stop
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>ShapeMorphingAnimation 设置了一个无限动画，将 animationProgress 的值在 0 和 1 之间切换。</li>
-<li>Canvas 可组合项用于绘制形状。在这里，我们根据画布大小定义正方形 (squareRect) 的尺寸。</li>
-<li>interpolateShapes 接收当前动画进度和正方形的矩形，在圆形和正方形之间进行插值。它使用 lerp（线性插值）逐步调整圆角矩形的 cornerRadius，该矩形代表我们的变形形状。</li>
-<li>当 progress 为 0 时，cornerRadius 是矩形大小的一半，使形状变为圆形。当 progress 为 1 时，cornerRadius 为 0，使形状变为正方形。</li>
-</ul>
-
-
-<h4>实际用例</h4>
-
-<ul>
-<li>加载和进度指示器——变形形状可用于创建更具吸引力的加载或进度指示器，以视觉上引人入胜的方式指示进度或加载状态。</li>
-<li>UI 中的图标过渡——变形图标可用于根据用户操作提供视觉反馈。例如，点击播放按钮时会变形为暂停按钮，汉堡菜单图标会变形为后退箭头。</li>
-<li>数据可视化——在复杂的数据可视化中，变形可以帮助在不同视图或数据状态之间过渡，使用户更容易跟踪和理解随时间或类别变化的变化。</li>
-</ul>
-
-
-<h2>想看雪花特效吗？</h2>
-
-<p>我们将演示一个简单的粒子系统（Particle system）来创建雪花效果。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*E26GhhxDZLGTpE8gMvJoHw.gif" alt="雪花特效" /></p>
-
-<pre><code class="Kotlin">data class Snowflake(
-    var x: Float,
-    var y: Float,
-    var radius: Float,
-    var speed: Float
-)
-
-@Composable
-fun SnowfallEffect() {
-    val snowflakes = remember { List(100) { generateRandomSnowflake() } }
-    val infiniteTransition = rememberInfiniteTransition(label = "")
-
-    val offsetY by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1000f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 5000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ), label = ""
-    )
-
-    Canvas(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        snowflakes.forEach { snowflake -&gt;
-            drawSnowflake(snowflake, offsetY % size.height)
-        }
-    }
-}
-
-fun generateRandomSnowflake(): Snowflake {
-    return Snowflake(
-        x = Random.nextFloat(),
-        y = Random.nextFloat() * 1000f,
-        radius = Random.nextFloat() * 2f + 2f, // Snowflake size
-        speed = Random.nextFloat() * 1.2f + 1f  // Falling speed
-    )
-}
-
-fun DrawScope.drawSnowflake(snowflake: Snowflake, offsetY: Float) {
-    val newY = (snowflake.y + offsetY * snowflake.speed) % size.height
-    drawCircle(Color.White, radius = snowflake.radius, center = Offset(snowflake.x * size.width, newY))
-}
-</code></pre>
-
-<h4>代码说明</h4>
-
-<ul>
-<li>SnowfallEffect 设置了一个包含多个雪花（Snowflake 对象）的粒子系统。</li>
-<li>每个雪花都具有位置 (x, y)、半径（大小）和速度等属性。</li>
-<li>rememberInfiniteTransition 和 animateFloat 用于创建连续的垂直运动效果，模拟降雪。</li>
-<li>Canvas 可组合函数用于绘制每片雪花。drawSnowflake 函数根据每片雪花的速度和动画的 offsetY 计算其新的位置。</li>
-<li>雪花从底部落下后会重新出现在顶部，从而产生循环降雪效果。</li>
-</ul>
-
-
-<h2>总结</h2>
-
-<p>随着我们对 Jetpack Compose 动画的探索逐渐深入，我们清楚地认识到，动画不仅仅是视觉上的点缀。它们是打造引人入胜、直观且赏心悦目的用户体验的关键工具。</p>
-
-<h3>拥抱互动性</h3>
-
-<p>从动态游戏角色运动到交互式时间轴，我们见证了动画如何让用户交互更具吸引力和信息量。</p>
-
-<h3>打造逼真的体验</h3>
-
-<p>雪花飘落效果和变形形状展现了该工具包将真实感和流畅性带入数字世界的能力。这些动画有助于打造与用户产生共鸣的沉浸式体验。</p>
-
-<h3>简化复杂性</h3>
-
-<p>无论是编排多个元素还是制作状态转换动画，其简单易用性都令人瞩目。</p>
-
-<h2>结束语</h2>
-
-<p>如果你喜欢本文，请随时留下宝贵的反馈或赞赏。我一直期待与其他开发者一起学习、合作、共同成长。</p>
-
-<p>如有任何疑问，请随时给我留言！</p>
-
-<p>在 Medium 上关注我，获取更多文章 — <a href="https://medium.com/@pherwani37">Medium 个人资料</a>（链接：<a href="https://medium.com/@pherwani37%EF%BC%89">https://medium.com/@pherwani37%EF%BC%89</a></p>
-
-<p>在<a href="https://linkedin.com/in/nirbhaypherwani">LinkedIn</a>（链接：<a href="https://linkedin.com/in/nirbhaypherwani%EF%BC%89%E5%92%8C">https://linkedin.com/in/nirbhaypherwani%EF%BC%89%E5%92%8C</a><a href="https://twitter.com/nirbhayph">Twitter</a>（链接：<a href="https://twitter.com/nirbhayph%EF%BC%89%E4%B8%8A%E4%B8%8E%E6%88%91%E8%81%94%E7%B3%BB%EF%BC%8C%E4%BB%A5%E4%BE%BF%E6%88%91%E4%BB%AC%E8%BF%9B%E8%A1%8C%E5%90%88%E4%BD%9C%E3%80%82">https://twitter.com/nirbhayph%EF%BC%89%E4%B8%8A%E4%B8%8E%E6%88%91%E8%81%94%E7%B3%BB%EF%BC%8C%E4%BB%A5%E4%BE%BF%E6%88%91%E4%BB%AC%E8%BF%9B%E8%A1%8C%E5%90%88%E4%BD%9C%E3%80%82</a></p>
-
-<p>祝你动画制作愉快！</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[理解Jetpack Compose中副作用函数的内部原理]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/05/01/understanding-side-effect-handlers/"/>
-    <updated>2025-05-01T11:05:24+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/05/01/understanding-side-effect-handlers</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Understanding the Internals of Side-Effect Handlers in Jetpack Compose」，原文链接<a href="https://proandroiddev.com/understanding-the-internals-of-side-effect-handlers-in-jetpack-compose-d55fbf914fde">https://proandroiddev.com/understanding-the-internals-of-side-effect-handlers-in-jetpack-compose-d55fbf914fde</a>，由Jaewoong Eum发布于2025年4月10日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*GNgL_XzYpw16hn6BxocOww.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>近年来，Jetpack Compose生态呈指数级增长，现已被广泛用于构建 Android 应用的产品级UI。现在，我们可以说 Jetpack Compose 代表了 Android UI 开发的未来。</p>
-
-<p>Compose 最大的优势之一是其声明式（declarative）方法——它允许开发者描述 UI 应该显示的内容，而框架则负责处理 UI 在底层状态发生变化时应如何更新。这种模型将焦点从命令式（imperative）UI 转移到更直观、更具响应式的思维方式。</p>
-
-<p>然而，尽管声明式 UI有很多优势，但妥善管理副作用也至关重要。可组合函数可能会因各种原因（例如状态或参数的变化）而被重组，如果副作用处理不当，应用的行为可能会变得不可预测。</p>
-
-<p>在本文中，你将探索 Jetpack Compose 默认提供的副作用处理 API。你还将研究它们的内部工作流程，以更好地了解 Compose 如何在底层管理这些操作。</p>
-
-<h2>副作用（Side Effect）是啥？</h2>
-
-<p>副作用（Side Effect）是指发生在可组合函数作用域之外的应用状态变化。在 Jetpack Compose 中，由于状态变化、参数更新或其他事件触发的重组，可组合函数可能会频繁且不可预测地重新执行（译注：也就是说Compose的重组是不受开发者控制的）。因此，你不能假设一个可组合函数只会被调用一次。</p>
-
-<p>换句话说，在可组合函数内部直接调用业务逻辑（例如从网络获取数据或查询数据库）是有风险的。由于潜在的重组，这些操作可能会无意中运行多次，从而导致错误或性能问题。</p>
-
-<p>为了解决这个问题，Jetpack Compose 提供了一组专门用于以安全可控的方式管理副作用的API。这些 API包括 LaunchedEffect 、 DisposableEffect 、 SideEffect 、 rememberCoroutineScope 等等。在本文中，你将重点介绍三个最常用的处理程序—— LaunchedEffect 、 DisposableEffect 和 SideEffect ——并仔细研究它们的内部实现，以便更好地理解它们的底层工作原理。</p>
-
-<h2>LaunchedEffect</h2>
-
-<p>LaunchedEffect是Jetpack Compose中最常用的副作用处理 API之一。它允许你以可组合生命周期感知的方式（而非 Android 生命周期）启动协程，并确保除非指定的关键参数（keys）之一发生变化，否则不会重新执行提供的代码块。这种行为使得 LaunchedEffect 特别适合执行与特定状态相关的一次性事件，例如显示 Toast或Snackbar、记录事件或触发业务逻辑，正如你在 Now in Android 项目中的示例代码中所见：</p>
-
-<pre><code class="Kotlin">val snackbarHostState = remember { SnackbarHostState() }
-val isOffline by appState.isOffline.collectAsStateWithLifecycle()
-
-// 如果用户未连接到互联网，则显示一个Snackbar来通知他们。
-val notConnectedMessage = stringResource(R.string.not_connected)
-LaunchedEffect(isOffline) {
-    if (isOffline) {
-        snackbarHostState.showSnackbar(
-            message = notConnectedMessage,
-            duration = Indefinite,
-        )
-    }
-  }
-</code></pre>
-
-<p>需要注意的是，LaunchedEffect 会在底层创建一个新的协程作用域。这意味着它主要用于在可组合函数作用域内执行基于协程的任务，并在可组合函数离开组合时自动取消其协程。因此，LaunchedEffect 最适合用于与协程相关的操作，例如数据获取、延迟效果或事件处理，而不是简单地执行非暂停函数。现在，让我们深入探究一下，以更好地理解 LaunchedEffect 的内部工作原理。</p>
-
-<pre><code class="Kotlin">@Composable
-fun LaunchedEffect(
-    key1: Any?,
-    block: suspend CoroutineScope.() -&gt; Unit
-) {
-    val applyContext = currentComposer.applyCoroutineContext
-    remember(key1) { LaunchedEffectImpl(applyContext, block) }
-}
-
-internal class LaunchedEffectImpl(
-    parentCoroutineContext: CoroutineContext,
-    private val task: suspend CoroutineScope.() -&gt; Unit
-) : RememberObserver {
-    private val scope = CoroutineScope(parentCoroutineContext)
-    private var job: Job? = null
-
-    override fun onRemembered() {
-        // 这不应该发生，但为了安全起见留在这里
-        job?.cancel("Old job was still running!")
-        job = scope.launch(block = task)
-    }
-
-    override fun onForgotten() {
-        job?.cancel(LeftCompositionCancellationException())
-        job = null
-    }
-
-    override fun onAbandoned() {
-        job?.cancel(LeftCompositionCancellationException())
-        job = null
-    }
-}
-</code></pre>
-
-<p>正如你在LaunchedEffect的内部实现中所看到的，它会创建LaunchedEffectImpl并将其存储在内存中，并将给定的键值作为参数，以便在键发生变化时重新创建 LaunchedEffectImpl 实例。</p>
-
-<p>如果你查看内部 LaunchedEffectImpl 类，你会发现它实现了RememberObserver接口，并首先创建一个新的 CoroutineScope。然后，当可组合项进入组合阶段时，提供的 lambda 会在此范围内启动。当可组合项离开组合阶段时，协程范围会自动取消，从而确保资源得到正确清理，并避免潜在的内存泄漏或性能问题。</p>
-
-<p>话虽如此，如果你的任务不涉及任何与协程相关的操作，而只是需要在键发生变化时重新执行，那么使用 LaunchedEffect 可能略显多余。虽然创建协程作用域的开销通常很小，但在实际不使用协程的情况下，它仍然是不必要的。在这种情况下，你可以考虑使用更轻量级的副作用处理library (<a href="https://github.com/skydoves/compose-effects?tab=readme-ov-file#rememberedeffect">RememberedEffect</a>)，它更适合非挂起（non-suspending）任务。</p>
-
-<p>另一个常见的误解是LaunchedEffect能够感知 Android生命周期——但事实并非如此。从内部实现可以看出，LaunchedEffect的作用域完全限定于Jetpack Compose组合生命周期，与 Android组件（Activity和Fragment）的生命周期没有直接关联。</p>
-
-<p>换句话说，它本身并不了解任何有关 Activity、Fragment 或 onStop()或 onDestroy()等生命周期事件的信息。这意味着，如果你在 LaunchedEffect 中启动一个协程，并且 Android 组件（例如 Activity）在可组合项未离开组合的情况下被停止或销毁，则该协程可能会继续运行，除非它明确与Android组件生命周期绑定。</p>
-
-<h2>DisposableEffect</h2>
-
-<p>DisposableEffect是Jetpack Compose 运行时提供的另一个副作用处理API。它允许你与可组合项的生命周期同步执行设置和清理逻辑。与LaunchedEffect不同，它提供了一个 DisposableEffectScope 作为接收器（receiver），使你能够定义一个清理代码块（clean-up code block），该代码块在可组合项离开组合时自动运行。这使得它非常适合管理需要显式卸载的外部资源，例如监听器、回调或广播接收器。</p>
-
-<pre><code class="Kotlin">val lifecycleOwner = LocalLifecycleOwner.current
-
-// 如果 `lifecycleOwner` 发生变化，则释放并重置效果
-DisposableEffect(lifecycleOwner) {
-  // 创建一个观察者，触发我们记住的回调以发送分析事件
-  val observer = LifecycleEventObserver { _, event -&gt;
-    if (event == Lifecycle.Event.ON_RESUME) {
-      // do something
-    } else if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
-      // do something
-    }
-  }
-
-  // Add the observer to the lifecycle
-  lifecycleOwner.lifecycle.addObserver(observer)
-
-  // 当效果离开 Composition 时，移除观察者
-  onDispose {
-    lifecycleOwner.lifecycle.removeObserver(observer)
-  }
-</code></pre>
-
-<p>上面的示例使用 DisposableEffect 将 LifecycleEventObserver注册到lifecycleOwner，使其能够观察生命周期变化并根据当前状态执行特定逻辑。观察者会在onDispose块内被安全地移除，确保在可组合项离开组合时进行适当的清理。现在，让我们深入了解DisposableEffect的内部工作原理。</p>
-
-<pre><code class="Kotlin">@Composable
-fun DisposableEffect(
-    key1: Any?,
-    effect: DisposableEffectScope.() -&gt; DisposableEffectResult
-) {
-    remember(key1) { DisposableEffectImpl(effect) }
-}
-
-private class DisposableEffectImpl(
-    private val effect: DisposableEffectScope.() -&gt; DisposableEffectResult
-) : RememberObserver {
-    private var onDispose: DisposableEffectResult? = null
-
-    override fun onRemembered() {
-        onDispose = InternalDisposableEffectScope.effect()
-    }
-
-    override fun onForgotten() {
-        onDispose?.dispose()
-        onDispose = null
-    }
-
-    override fun onAbandoned() {
-        // 由于未调用 [onRemembered]，因此无需执行任何操作。
-    }
-}
-
-class DisposableEffectScope {
-    inline fun onDispose(
-        crossinline onDisposeEffect: () -&gt; Unit
-    ): DisposableEffectResult = object : DisposableEffectResult {
-        override fun dispose() {
-            onDisposeEffect()
-        }
-    }
-}
-</code></pre>
-
-<p>如 DisposableEffect 的内部实现所示，它会创建一个 DisposableEffectImpl 实例，并使用提供的键将其存储在内存中。
-每当键发生变化时，都会创建一个新的DisposableEffectImpl 实例，以便相应地重新执行该效果。</p>
-
-<p>DisposableEffectImpl类实现了 RememberObserver 接口，并初始创建一个 DisposableEffectResult。当可组合项进入组合阶段时，效果 lambda 会在 DisposableEffectScope 中启动。退出组合时，会自动调用 DisposableEffectResult的onDispose 函数，以确保在可组合项完全从组合中移除之前正确清理资源并防止内存泄漏或性能问题。</p>
-
-<h2>SideEffect</h2>
-
-<p>Jetpack Compose中的SideEffect API 用于安全地将可组合项内发生的状态变化通知给外部非 Compose 管理的对象。它确保效果在重组成功后运行，使其成为触发依赖于界面最终稳定状态的副作用的理想选择。</p>
-
-<p>使用 SideEffect可以避免在重组阶段执行的操作可能会被丢弃的风险，如果你在未采取此保护措施的情况下直接在可组合项中编写效果，则可能会发生这种情况。因此，当你需要将 Compose 状态与外部系统（例如日志记录工具、分析工具或命令式界面组件）同步时，SideEffect 至关重要，如下例所示：</p>
-
-<pre><code class="Kotlin">@Composable
-fun rememberFirebaseAnalytics(user: User): FirebaseAnalytics {
-    val analytics: FirebaseAnalytics = remember {
-        FirebaseAnalytics()
-    }
-
-    // 每次成功组合后，使用当前用户的用户类型更新 FirebaseAnalytics，
-    // 确保将来的分析事件已附加此元数据
-    SideEffect {
-        analytics.setUserProperty("userType", user.userType)
-    }
-    return analytics
-}
-</code></pre>
-
-<p>现在，让我们探索一下 SideEffect API 的底层工作原理。</p>
-
-<pre><code class="Kotlin">@Composable
-fun SideEffect(
-    effect: () -&gt; Unit
-) {
-    currentComposer.recordSideEffect(effect)
-}
-
-/** 当我们应用组合变化时安排运行副作用。 */
-override fun recordSideEffect(effect: () -&gt; Unit) {
-    changeListWriter.sideEffect(effect)
-}
-</code></pre>
-
-<p>乍一看，上面的代码可能看似简单，但实际上却难以完全理解，这很正常。这是因为 SideEffect API与 Compose运行时底层内部机制紧密相关，尤其是 ChangeList，它用于跟踪和管理用于更新渲染UI的状态驱动变更列表。</p>
-
-<p>根据 Compose源代码中的内部注释，SideEffect API的表示如下：</p>
-
-<blockquote><p>安排效果在当前合成成功完成并应用更改时运行。SideEffect 可用于将副作用应用于合成管理的、未受快照支持的对象，以便在当前合成操作失败时避免这些对象处于不一致的状态。</p>
-
-<p>副作用将始终在合成的应用调度程序上运行，并且应用器永远不会与自身、彼此并发运行，也不会将更改应用于合成树或运行 RememberObserver 事件回调。SideEffect 始终在 RememberObserver 事件回调之后运行。</p></blockquote>
-
-<p>因此，SideEffect API 会在每次成功重组后运行。</p>
-
-<h2>结论</h2>
-
-<p>在本文中，你探索了 Jetpack Compose 中常用的三个主要副作用处理API。由于声明式UI（declarative UI）的特性，状态会影响运行时行为的诸多方面，因此正确地使用副作用函数对于确保任务执行的正确性和可预测性至关重要。</p>
-
-<p>本主题最初在<a href="https://github.com/doveletter/">Dove Letter</a>（译注：链接是<a href="https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3">https://github.com/doveletter/%EF%BC%89%E4%B8%AD%E4%BB%8B%E7%BB%8D%EF%BC%8C%E8%BF%99%E6%98%AF%E4%B8%80%E4%B8%AA%E7%A7%81%E4%BA%BA%E4%BB%A3%E7%A0%81%E5%BA%93%EF%BC%8C%E6%8F%90%E4%BE%9B%E6%9C%89%E5%85%B3</a> Android 和 Kotlin 的每日见解，涵盖 Compose、架构、行业面试问题和实用代码技巧等主题。自上线以来的短短 37 周内，Dove Letter 已拥有超过 700 名个人订阅者和 20 名企业/终身订阅者。如果你渴望深入了解 Android、Kotlin 和 Compose，请务必查看<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903">“通过 Dove Letter 学习 Kotlin 和 Android”</a>（译注：链接是<a href="https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82">https://medium.com/@skydoves/learn-kotlin-and-android-with-dove-letter-26265da11903%EF%BC%89%E3%80%82</a></p>
 ]]></content>
   </entry>
   

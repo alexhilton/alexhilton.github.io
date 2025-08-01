@@ -1,0 +1,793 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>揭密Jetpack Compose中的PausableComposition - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="这篇文章将深入浅出地带你分析Compose Runtime引入的性能提升利器PausableComposition，并理解它是如何提升无限列表的性能。">
+  <meta name="keywords" content="Compose, Jetpack Compose, Composable, Android">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2025/07/24/exploring-pausablecomposition">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">揭密Jetpack Compose中的PausableComposition</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2025-07-24T19:55:51+08:00'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>24</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>7:55 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Exploring PausableComposition internals in Jetpack Compose」，原文链接<a href="https://blog.shreyaspatil.dev/exploring-pausablecomposition-internals-in-jetpack-compose">https://blog.shreyaspatil.dev/exploring-pausablecomposition-internals-in-jetpack-compose</a>，由Shreyas Patil发布于2025年7月14日。</p></blockquote>
+
+<p><a href="/blog/2025/07/24/exploring-pausablecomposition/"><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751791091096/4e5b36e3-485c-4079-88be-987082e7d67e.png?w=1600&h=840&fit=crop&crop=entropy&auto=compress,format&format=webp" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>嗨，Composers 们👋，在最近的 Compose 1.9.X 版本中，Compose-runtime 引入了一个名为 PausableComposition 的新内部 API，据称它可以解决性能问题。它听起来像魔法，但在底层，这一切都归功于一些非常巧妙的工程设计。在深入研究 Compose 运行时以更好地理解这一点时，我偶然发现了一个强大的内部工具，它使这一切成为可能。</p>
+
+<p>这篇文章将深入分析这一机制：PausableComposition。这是 Compose 的内部 API，开发者无需了解它。但了解它的底层工作原理总是有益的。对于想要深入了解 Compose 如何实现其惊人性能的 Jetpack Compose 开发者来说，这篇探索文章将为你提供更清晰的视角。我们将深入运行时源代码，了解它的工作原理、它对性能如此重要的原因，以及如何协调所有组件以使我们的 UI 感觉如此流畅。让我们开始吧！</p>
+
+<h2>缘起</h2>
+
+<p>为了实现流畅的 60 帧/秒 (fps)，我们的应用需要在 16.7 毫秒内绘制每一帧。当用户滚动浏览 LazyColumn 时，必须在这个微小的窗口内创建、测量和绘制新的项目。</p>
+
+<p>如果一个项目很复杂，包含嵌套布局、图片和大量逻辑，那么组合它所需的工作很容易超过 16 毫秒。当这种情况发生时，主线程会被阻塞，帧会丢失，用户会在滚动过程中看到“卡顿”或卡顿。😩</p>
+
+<p>这正是 PausableComposition 的初衷。</p>
+
+<h2>“做什么”：更智能的 Compose 方式</h2>
+
+<p>想象一下，你是一位厨师，正在为一场活动准备一顿大餐。👨‍🍳 与其在第一位客人到来时慌乱地从头开始烹饪所有食材，不如提前几个小时做好准备工作。切菜、调酱、烤甜点。等到上桌时，最后的烹饪和组装速度会快得令人难以置信。</p>
+
+<p>PausableComposition 将这种“准备工作”的理念带到了 Compose 中。它允许运行时：</p>
+
+<ol>
+<li>增量式 Compose：将大型 UI 元素的合成分解成更小、更易于管理的部分。</li>
+<li>异步准备：在 UI 真正需要显示在屏幕上之前进行合成工作，通常利用帧间的空闲时间。</li>
+</ol>
+
+
+<p>这种可组合项的预热意味着，当某个项目最终滚动到视图中时，大部分繁重的工作已经完成，使其几乎可以立即显示。</p>
+
+<p>为了直观地理解这一概念，请观看以下动画：</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751997214840/f9f7308a-7b83-4a3d-9d38-e3ce6aa8d9a9.gif?auto=format,compress&amp;gif-q=60&amp;format=webm" alt="滚动帧时间线" /></p>
+
+<p>滚动发生时，假设项目 A、B、C、D 和 E 已在屏幕上可见，下一个项目是 F。如果项目 F 的布局或结构复杂，需要更多时间进行布局计算或其他预处理才能在 UI 上渲染，则此预处理将在帧时间轴内分块进行（例如 16 毫秒）。因此，如果它需要 2 帧，则 F 所需的预处理会在 2 帧的空闲时间内完成，不会造成任何帧卡顿。最后，当需要显示时，它会被绘制到 UI 上。项目 G 和 H 也采用相同的流程。</p>
+
+<h2>工作原理：核心组件</h2>
+
+<p>通过查看运行时源代码，我们可以看到它是如何通过一些关键接口和类来处理的。虽然你不会直接使用这些 API，但理解它们可以揭示 LazyColumn 的性能提升。🕵️‍♂️</p>
+
+<h3>生命周期：PausableComposition 及其控制器</h3>
+
+<p>旅程从 PausableComposition 接口开始，该接口扩展了 ReusableComposition 并添加了暂停功能。</p>
+
+<blockquote><p>关于 ReusableComposition 的简要说明：</p>
+
+<p>在讨论暂停之前，我们先来了解一下什么是 ReusableComposition？它是一种特殊的组合，专为需要高效回收 UI 内容的高性能场景而设计。想象一下 LazyColumn 中的项目。ReusableComposition 不会销毁滚动到屏幕外的项目的整个组合，而是允许运行时停用它。这会保留底层 UI 节点，但会清除已记住的状态。然后，这个停用的组合可以快速地用新内容“重新填充”，从而节省了从头创建节点的成本。PausableComposition 直接构建于这个强大的回收基础之上。</p></blockquote>
+
+<p>PausableComposition 的外观如下：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/PausableComposition.kt;l=66</span>
+</span><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">PausableComposition</span> <span class="p">:</span> <span class="n">ReusableComposition</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">setPausableContent</span><span class="p">(</span><span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">):</span> <span class="n">PausedComposition</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">setPausableContentWithReuse</span><span class="p">(</span><span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">):</span> <span class="n">PausedComposition</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>（注意：该接口是密封的，因为它仅在 Compose 运行时内部具有一组封闭且有限的实现。这为编译器提供了更多信息来进行优化。）</p>
+
+<p>调用 setPausableContent 不会立即组合界面。相反，它会返回一个 PausedComposition 对象，该对象充当逐步过程的控制器。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/PausableComposition.kt;l=112</span>
+</span><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">PausedComposition</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">isComplete</span><span class="p">:</span> <span class="n">Boolean</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">resume</span><span class="p">(</span><span class="n">shouldPause</span><span class="p">:</span> <span class="n">ShouldPauseCallback</span><span class="p">):</span> <span class="n">Boolean</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">apply</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">cancel</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个生命周期最好以状态机的形式来表示：</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751864148018/27512893-f186-47e7-9bdc-26036460aed7.png?auto=compress,format&amp;format=webp" alt="PausableComposition生命周期流程图" /></p>
+
+<ul>
+<li>resume(shouldPause: ShouldPauseCallback)：这是引擎。预取系统（此处指 LazyColumn 上下文）会反复调用 resume() 来执行大量的组合工作。神奇之处在于 shouldPause 回调。Compose 运行时会在组合过程中频繁调用此 lambda。如果它返回 true（例如，由于帧截止时间已近），则组合过程将停止，并将主线程交还给更重要的工作，例如绘制当前帧。</li>
+<li>apply()：一旦 resume() 返回 true，即表示操作完成，就会调用 apply()。这会获取所有计算出的界面更改，并将其提交到实际的界面树中。</li>
+<li>cancel()：如果用户滚动离开，并且不再需要预先组合的项目，则会调用 cancellation() 来丢弃工作并释放资源。</li>
+</ul>
+
+
+<h3>内部结构概览：PausedCompositionImpl</h3>
+
+<p>上述状态机由内部的 PausedCompositionImpl 类管理。该类保存状态并连接所有部分。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/runtime/runtime/src/commonMain/kotlin/androidx/compose/runtime/PausableComposition.kt;l=202</span>
+</span><span class='line'><span class="k">internal</span> <span class="k">class</span> <span class="nc">PausedCompositionImpl</span><span class="p">(...)</span> <span class="p">:</span> <span class="n">PausedComposition</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">state</span> <span class="p">=</span> <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">InitialPending</span>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">val</span> <span class="py">pausableApplier</span> <span class="p">=</span> <span class="n">RecordingApplier</span><span class="p">(</span><span class="n">applier</span><span class="p">.</span><span class="n">current</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">resume</span><span class="p">(</span><span class="n">shouldPause</span><span class="p">:</span> <span class="n">ShouldPauseCallback</span><span class="p">):</span> <span class="n">Boolean</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">when</span> <span class="p">(</span><span class="n">state</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">InitialPending</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                <span class="c1">// This is the first time resume() is called.</span>
+</span><span class='line'>                <span class="c1">// It starts the initial composition of the content.</span>
+</span><span class='line'>                <span class="n">invalidScopes</span> <span class="p">=</span>
+</span><span class='line'>                    <span class="n">context</span><span class="p">.</span><span class="n">composeInitialPaused</span><span class="p">(</span><span class="n">composition</span><span class="p">,</span> <span class="n">shouldPause</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span>
+</span><span class='line'>                <span class="n">state</span> <span class="p">=</span> <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">RecomposePending</span>
+</span><span class='line'>                <span class="k">if</span> <span class="p">(</span><span class="n">invalidScopes</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">())</span> <span class="n">markComplete</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">RecomposePending</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                <span class="c1">// This is for subsequent calls to resume().</span>
+</span><span class='line'>                <span class="n">state</span> <span class="p">=</span> <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">Recomposing</span>
+</span><span class='line'>                <span class="c1">// It tells the Composer to continue where it left off,</span>
+</span><span class='line'>                <span class="c1">// processing any pending invalidations.</span>
+</span><span class='line'>                <span class="n">invalidScopes</span> <span class="p">=</span>
+</span><span class='line'>                    <span class="n">context</span><span class="p">.</span><span class="n">recomposePaused</span><span class="p">(</span><span class="n">composition</span><span class="p">,</span> <span class="n">shouldPause</span><span class="p">,</span> <span class="n">invalidScopes</span><span class="p">)</span>
+</span><span class='line'>                <span class="n">state</span> <span class="p">=</span> <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">RecomposePending</span>
+</span><span class='line'>                <span class="k">if</span> <span class="p">(</span><span class="n">invalidScopes</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">())</span> <span class="n">markComplete</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="c1">// ... other states like Recomposing, Applied, Cancelled are handled here ...</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">isComplete</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">apply</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// ... other state checks ...</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">state</span> <span class="p">==</span> <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">ApplyPending</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">applyChanges</span><span class="p">()</span> <span class="c1">// The call site</span>
+</span><span class='line'>            <span class="n">state</span> <span class="p">=</span> <span class="n">PausedCompositionState</span><span class="p">.</span><span class="n">Applied</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">applyChanges</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>        <span class="n">pausableApplier</span><span class="p">.</span><span class="n">playTo</span><span class="p">(</span><span class="n">applier</span><span class="p">,</span> <span class="n">rememberManager</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">rememberManager</span><span class="p">.</span><span class="n">dispatchRememberObservers</span><span class="p">()</span>
+</span><span class='line'>        <span class="n">rememberManager</span><span class="p">.</span><span class="n">dispatchSideEffects</span><span class="p">()</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>调用 resume() 时，它会检查其内部状态并采取相应的措施：</p>
+
+<ul>
+<li>InitialPending：首次调用时，它会通过调用 context.composeInitialPaused 启动合成过程。这会告知核心 ComposerImpl 开始执行 @Composable 内容，并执行 shouldPause 回调。</li>
+<li>RecomposePending：后续调用时，它会通过调用 context.recomposePaused 继续工作。此方法用于处理合成中任何因状态变化而失效的部分，或继续之前暂停的工作。</li>
+<li>Applier：在此过程中，ComposerImpl 将所有 UI 更改操作转发给 pausableApplier（即 RecordingApplier），该操作会进行缓冲，而不是立即应用。</li>
+<li>此过程持续进行，直到工作完成或 shouldPause 回调返回 true。</li>
+</ul>
+
+
+<h3>RecordingApplier：推迟最后的润色</h3>
+
+<p>一个关键的性能技巧是 RecordingApplier。调用 resume() 时，Composer 不会直接更改实时 UI 树。如果分小步执行，可能会很慢，并导致 UI 更新不完整，显得怪异。</p>
+
+<p>PausableComposition 使用的是 RecordingApplier。这个特殊的 Applier 会将其应该执行的所有 UI 操作（例如“创建 Text 节点”、“设置其文本属性”或“添加子图像”）记录到一个内部列表中。</p>
+
+<p>只有调用 PausedComposition.apply() 时，RecordingApplier 才会将其记录的操作列表“回放”到实际的 Applier 上，从而高效地单步更新 UI 树。PausedComposition 的公共 apply() 方法是一个简单的状态机守卫。真正的工作发生在内部的 applyChanges() 方法中（如上面的代码片段所示）。</p>
+
+<p>当调用 applyChanges 时，它会按顺序执行三项关键操作：</p>
+
+<ul>
+<li>它会告诉 RecordingApplier 将其所有缓冲的命令播放到实际的 applier 上。这才是 UI 真正出现在屏幕上的关键。</li>
+<li>它会为所有已创建的 RememberObservers（例如 DisposableEffect）调度所有 onRemembered 生命周期回调。</li>
+<li>最后，它会运行在合成过程中排队的所有 SideEffect。</li>
+</ul>
+
+
+<p>这种有序的批处理过程确保 UI 高效更新，并且所有生命周期事件都在正确的时间发生。</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751794209046/49f5c1c7-b424-4c7d-a017-8ba65bb7b2d3.png?auto=compress,format&amp;format=webp" alt="PausableComposition时序图" /></p>
+
+<h2>使用了 PausableComposition 的 LazyList</h2>
+
+<p>LazyList 已经开始使用 PausableComposition API了。在 LazyList 中，PausableComposition 并非独立工作，而是协同工作的系统的一部分。</p>
+
+<ul>
+<li>指挥器 (Recomposer)：主 Recomposer 负责控制节奏，驱动可见 UI 的逐帧更新。</li>
+<li>规划器 (LazyLayoutPrefetchState)：当用户滚动时，此组件会预测哪些项目即将显示。</li>
+<li>舞台管理器 (SubcomposeLayout)：这个强大的 SubcomposeLayout 是 LazyList 的基础。它的 SubcomposeLayoutState 可以在需要时为各个项目创建和管理合成。最重要的是，它提供了 createPausedPrecomposition() API。</li>
+<li>舞台调度器 (PrefetchScheduler)：此调度器会在帧之间寻找空闲时间来执行规划器请求的预合成工作。</li>
+</ul>
+
+
+<p>了解此功能的开发过程也很有趣。在 LazyLayoutPrefetchState 文件中，你可以找到控制它的功能标志：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// A simplified look inside LazyLayoutPrefetchState.kt: https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPrefetchState.kt;l=647</span>
+</span><span class='line'><span class="k">if</span> <span class="p">(</span><span class="n">ComposeFoundationFlags</span><span class="p">.</span><span class="n">isPausableCompositionInPrefetchEnabled</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// This is the future, modern path.</span>
+</span><span class='line'>    <span class="n">performPausableComposition</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">contentType</span><span class="p">,</span> <span class="n">average</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// This is the older, non-pausable fallback.</span>
+</span><span class='line'>    <span class="n">performFullComposition</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">contentType</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>isPausableCompositionInPrefetchEnabled 这个标志充当了终止开关的作用。虽然它在源代码中的默认值为 false。如果你想在惰性布局（LazyColumn、LazyRow 等）中启用可暂停组合行为，我们可以简单地按如下方式启用它：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyApplication</span> <span class="p">:</span> <span class="n">Application</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">ComposeFoundationFlags</span><span class="p">.</span><span class="n">isPausableCompositionInPrefetchEnabled</span> <span class="p">=</span> <span class="k">true</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>规划器：LazyLayoutPrefetchState 详解</h3>
+
+<p>LazyLayoutPrefetchState 是预取操作的核心。它的作用是获取来自 LazyLayout 的预测（例如，“第 25 项即将上线”），并将其转换为实际的预组合任务。</p>
+
+<p>它通过 PrefetchHandleProvider 实现此操作，该提供者会创建一个 PrefetchRequest。此请求是 PrefetchScheduler 可以执行的工作单元。在这个请求中，我们找到了暂停逻辑的核心。</p>
+
+<p>当 PrefetchScheduler 执行请求时，它会进入一个循环，在 PausableComposition 上调用 resume()。传递给 resume 的 lambda 表达式决定是否暂停。</p>
+
+<p>因此，如果启用了上述功能标记，它将通过 Pausable Composition API 执行请求，如下所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/lazy/layout/LazyLayoutPrefetchState.kt;l=754</span>
+</span><span class='line'><span class="c1">// Simplified from HandleAndRequestImpl inside LazyLayoutPrefetchState</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">PrefetchRequestScope</span><span class="p">.</span><span class="n">performPausableComposition</span><span class="p">(...)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">composition</span> <span class="p">=</span> <span class="c1">// get the composition for the item of the LazyLayout </span>
+</span><span class='line'>    <span class="n">pauseRequested</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">while</span> <span class="p">(!</span><span class="n">composition</span><span class="p">.</span><span class="n">isComplete</span> <span class="p">&amp;&amp;</span> <span class="p">!</span><span class="n">pauseRequested</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">composition</span><span class="p">.</span><span class="n">resume</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(!</span><span class="n">pauseRequested</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="c1">// 1. Update how much time is left in this frame&#39;s idle window.</span>
+</span><span class='line'>                <span class="n">updateElapsedAndAvailableTime</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="c1">// 2. Save how long this work chunk took, to improve future estimates.</span>
+</span><span class='line'>                <span class="n">averages</span><span class="p">.</span><span class="n">saveResumeTimeNanos</span><span class="p">(</span><span class="n">elapsedTimeNanos</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>                <span class="c1">// 3. The Core Decision: Is there enough time left to do another</span>
+</span><span class='line'>                <span class="c1">//    chunk of work without risking a frame drop?</span>
+</span><span class='line'>                <span class="n">pauseRequested</span> <span class="p">=</span> <span class="p">!</span><span class="n">shouldExecute</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">availableTimeNanos</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">averages</span><span class="p">.</span><span class="n">resumeTimeNanos</span> <span class="p">+</span> <span class="n">averages</span><span class="p">.</span><span class="n">pauseTimeNanos</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="c1">// 4. Return the decision to the composition engine.</span>
+</span><span class='line'>            <span class="n">pauseRequested</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">updateElapsedAndAvailableTime</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">pauseRequested</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// If we decided to pause, record how long the final pause check took.</span>
+</span><span class='line'>        <span class="n">averages</span><span class="p">.</span><span class="n">savePauseTimeNanos</span><span class="p">(</span><span class="n">elapsedTimeNanos</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// If we finished without pausing, record the time for the final resume chunk.</span>
+</span><span class='line'>        <span class="n">averages</span><span class="p">.</span><span class="n">saveResumeTimeNanos</span><span class="p">(</span><span class="n">elapsedTimeNanos</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>让我们分解一下这个逻辑：</p>
+
+<ol>
+<li>updateElapsedAndAvailableTime()：在恢复 lambda 函数内部，系统会不断检查距离下一帧需要绘制还剩多少时间。</li>
+<li>averages.saveResumeTimeNanos(&hellip;)：它会记录每个小块合成工作所需的时间。这有助于它构建一个平均值 (averages) 来预测未来工作的成本。</li>
+<li>!shouldExecute(&hellip;)：这是核心决策。它会将 availableTimeNanos 与预算进行比较。这个预算是一个智能估算：完成另一块工作所需的平均时间加上暂停所需的平均时间。如果时间不足，pauseRequested 会变为 true。</li>
+<li>最终计时：在本次循环退出后（因为工作完成或请求暂停），会调用最后一次 updateElapsedAndAvailableTime()。这会捕获最后一个操作的时间。</li>
+<li>保存平均值：然后系统会保存这个最终计时。如果请求了暂停，则它会影响 pauseTimeNanos。如果循环自然完成，则它会影响 resumeTimeNanos。这确保了用于未来预测的历史数据始终准确。</li>
+</ol>
+
+
+<p>这种自我调节的反馈循环允许预取器在系统空闲时保持积极主动，但在需要渲染 UI 时又能保持礼貌，尊重主线程。</p>
+
+<h3>最后一步：应用预组合 UI</h3>
+
+<p>那么，当屏幕上真正需要预组合的项目时会发生什么呢？这时 SubcomposeLayout 就占据了中心位置。在正常的测量过程中，它会为现在可见的项目调用其 subcompose 函数。在内部，这会触发最后一步。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="c1">// https://cs.android.com/androidx/platform/frameworks/support/+/8d08d42d60f7cc7ec0034d0b7ff6fd953516d96a:compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/layout/SubcomposeLayout.kt;l=1186</span>
+</span><span class='line'><span class="c1">// Simplified from LayoutNodeSubcompositionsState inside SubcomposeLayout.kt</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">NodeState</span><span class="p">.</span><span class="n">applyPausedPrecomposition</span><span class="p">(</span><span class="n">shouldComplete</span><span class="p">:</span> <span class="n">Boolean</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">pausedComposition</span> <span class="p">=</span> <span class="k">this</span><span class="p">.</span><span class="n">pausedComposition</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">pausedComposition</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// 1. If the work must be completed now...</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">shouldComplete</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// ...force the composition to finish by looping `resume`</span>
+</span><span class='line'>            <span class="c1">// and always passing `false` to the `shouldPause` callback.</span>
+</span><span class='line'>            <span class="k">while</span> <span class="p">(!</span><span class="n">pausedComposition</span><span class="p">.</span><span class="n">isComplete</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">pausedComposition</span><span class="p">.</span><span class="n">resume</span> <span class="p">{</span> <span class="k">false</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="c1">// 2. Apply the changes to the real UI tree.</span>
+</span><span class='line'>        <span class="n">pausedComposition</span><span class="p">.</span><span class="n">apply</span><span class="p">()</span>
+</span><span class='line'>        <span class="k">this</span><span class="p">.</span><span class="n">pausedComposition</span> <span class="p">=</span> <span class="k">null</span> <span class="c1">// Clear the handle.</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>当某个项目可见时，其组合不再是低优先级的后台任务，而是高优先级的同步任务。shouldComplete = true 参数确保所有剩余的组合工作立即完成，无需暂停。然后，apply() 被调用，完整的 UI 会立即显示在屏幕上。</p>
+
+<p>它们如何协同工作：</p>
+
+<p><img src="https://cdn.hashnode.com/res/hashnode/image/upload/v1751799217100/82837ef0-e97e-49c7-bee6-cd68ab1804ba.png?auto=compress,format&amp;format=webp" alt="LazyList滚动时序图" /></p>
+
+<h2>结论</h2>
+
+<p>深入研究 Compose 运行时后，PausableComposition 的设计堪称性能工程的杰作。</p>
+
+<ul>
+<li>它并非魔法，而是延迟：其核心理念是在紧急任务之前完成。通过在空闲时间合成项目，快速滚动时主线程所需的工作量会大大减少。</li>
+<li>协作式和非阻塞式：shouldPause 回调是处理多任务的绝佳方式。它可以让长时间运行的合成任务优雅地让位于更紧急的当前帧渲染任务，从而直接防止卡顿。</li>
+<li>通过批处理提高效率：RecordingApplier 通过将 UI 树中的许多小的独立更改分组为单个高效的更新，避免了这些更改带来的开销。</li>
+</ul>
+
+
+<p>虽然 PausableComposition 是一个你可能永远不会直接使用的内部功能，但了解它的存在和运作方式，可以让你真正体会到 Jetpack Compose 如此高性能的明智决策。下次你轻松流畅地滚动浏览复杂的 LazyColumn 时，你就会体会到这巧妙且精心编排的“舞蹈”是如何在表面之下进行的。✅ 这种架构不仅解决了当前的性能挑战，还为 Compose 未来更先进的渲染策略铺平了道路。</p>
+
+<p>希望你已经了解了这个新 API 在 Jetpack Compose 中的工作原理。</p>
+
+<p>太棒了！希望你从中获得了一些宝贵的见解。如果你喜欢这篇文章，请分享 😉，因为……</p>
+
+<p>“分享即关爱”</p>
+
+<p>谢谢！😄</p>
+
+<p>让我们一起回顾 X （链接：<a href="https://twitter.com/imShreyasPatil%EF%BC%89%E7%9A%84%E6%9C%80%E6%96%B0%E5%8A%A8%E6%80%81%EF%BC%8C%E6%88%96%E8%80%85%E8%AE%BF%E9%97%AE%E6%88%91%E7%9A%84%E7%BD%91%E7%AB%99%EF%BC%88%E9%93%BE%E6%8E%A5%EF%BC%9Ahttps://shreyaspatil.dev/%EF%BC%89%E4%BA%86%E8%A7%A3%E6%9B%B4%E5%A4%9A%E5%85%B3%E4%BA%8E%E6%88%91%E7%9A%84%E4%BF%A1%E6%81%AF">https://twitter.com/imShreyasPatil%EF%BC%89%E7%9A%84%E6%9C%80%E6%96%B0%E5%8A%A8%E6%80%81%EF%BC%8C%E6%88%96%E8%80%85%E8%AE%BF%E9%97%AE%E6%88%91%E7%9A%84%E7%BD%91%E7%AB%99%EF%BC%88%E9%93%BE%E6%8E%A5%EF%BC%9Ahttps://shreyaspatil.dev/%EF%BC%89%E4%BA%86%E8%A7%A3%E6%9B%B4%E5%A4%9A%E5%85%B3%E4%BA%8E%E6%88%91%E7%9A%84%E4%BF%A1%E6%81%AF</a> 😎。</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2025-07-24T19:55:51+08:00'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>24</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>7:55 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2025/07/16/snapshotflow-or-collectasstate/" title="Previous Post: SnapshotFlow还是collectAsState？对于Jetpack Compose来说哪个更香？">&laquo; SnapshotFlow还是collectAsState？对于Jetpack Compose来说哪个更香？</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2025/07/30/styledstring-in-jetpack-compose/" title="Next Post: 学会用最优雅的姿式在Compose中显示富文本">学会用最优雅的姿式在Compose中显示富文本 &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2025 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
