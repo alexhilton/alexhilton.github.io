@@ -1,0 +1,566 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>初探Compose中的着色器RuntimeShader - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="Shader（着色器）是用于使用GPU进行高性能渲染的语言，本文将带你学会如何在Compose中使用Shader。">
+  <meta name="keywords" content="Compose, Jetpack Compose, Android, GLSL, Shader">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2025/08/15/first-look-at-runtimeshader">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">初探Compose中的着色器RuntimeShader</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2025-08-15T22:21:24+08:00'><span class='date'><span class='date-month'>Aug</span> <span class='date-day'>15</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>10:21 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「First look at RuntimeShaders in Compose」，原文链接<a href="https://medium.com/@off.mind.by/first-look-at-runtimeshaders-in-compose-b0b431083644">https://medium.com/@off.mind.by/first-look-at-runtimeshaders-in-compose-b0b431083644</a>，由Alex Volkov发布于2024年4月12日。</p></blockquote>
+
+<p><a href="/blog/2025/08/15/first-look-at-runtimeshader/"><img src="https://miro.medium.com/v2/resize:fit:1302/1*QXaDvaYryDIZ1GItjM1uqQ.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>自从我们有机会在 Compose 中使用 RuntimeShaders 自定义Shader（着色器）以来，已经过去了一年多的时间。说实话，我原本以为会有大量关于这个主题的文章。我以为现在 Android 上应该已经充斥着无数令人惊叹的示例、意想不到的效果，以及听到“着色器”这个词时脑海中浮现的其他令人着迷的东西。但事实并非如此。在 RuntimeShaders 可用之后，几乎立刻就出现了几篇文章，之后就再也没有了。一片寂静。</p>
+
+<p>我想答案很简单：Android 开发者并不熟悉着色器，而着色器程序员通常不会直接为 Android 编写代码；他们通常会使用某种游戏引擎。事实上，如果我的假设正确，我希望用这篇文章来弥合这两个世界之间的差距。我真心希望着色器编写能够渗透到 Android 开发领域。因此，在本文的剩余部分，我将介绍一些必要的基础知识，以便你可以坐下来编写着色器并享受其成果。</p>
+
+<p>因此，我假设你已经对 Compose 有了一定的了解。本文不会过多讨论着色器。我的主要重点是连接这两个世界。我们将在未来讨论具体的技术。假设我们有两个项目：一个带有背景图像，顶部有一个框，我们暂时将其设置为黑色。以下是代码的简化版本：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">VerySimpleShaderTheme</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
+</span><span class='line'>        <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Image</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(),</span>
+</span><span class='line'>            <span class="n">contentScale</span> <span class="p">=</span> <span class="n">androidx</span><span class="p">.</span><span class="n">compose</span><span class="p">.</span><span class="n">ui</span><span class="p">.</span><span class="n">layout</span><span class="p">.</span><span class="n">ContentScale</span><span class="p">.</span><span class="n">Crop</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">painter</span> <span class="p">=</span> <span class="n">painterResource</span><span class="p">(</span><span class="n">id</span> <span class="p">=</span> <span class="n">R</span><span class="p">.</span><span class="n">drawable</span><span class="p">.</span><span class="n">background_pattern</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">contentDescription</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">200.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">clipToBounds</span><span class="p">()</span>
+</span><span class='line'>          <span class="p">){</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在，要将着色器添加到框中，你需要获取着色器文本本身，该文本以常规字符串形式传递。使用此文本创建一个 <code>RuntimeShader</code> 对象。然后，将其传递给 <code>graphicsLayer</code> 方法。这是一个简单的例子：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">runtimeShader</span> <span class="p">=</span> <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'><span class="n">uniform</span> <span class="n">shader</span> <span class="n">image</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">half4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="k">return</span> <span class="n">half4</span><span class="p">(</span><span class="m">0.</span><span class="p">,</span> <span class="m">0.0</span><span class="p">,</span> <span class="m">0.0</span><span class="p">,</span> <span class="p">.</span><span class="m">5</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="s">&quot;&quot;&quot;.trimIndent()</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">shader</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">RuntimeShader</span><span class="p">(</span><span class="n">runtimeShader</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">200.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">clipToBounds</span><span class="p">()</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">graphicsLayer</span> <span class="p">{</span>
+</span><span class='line'>                            <span class="k">this</span><span class="p">.</span><span class="n">renderEffect</span> <span class="p">=</span> <span class="n">RenderEffect</span>
+</span><span class='line'>                                <span class="p">.</span><span class="n">createRuntimeShaderEffect</span><span class="p">(</span>
+</span><span class='line'>                                    <span class="n">shader</span><span class="p">,</span> <span class="s">&quot;image&quot;</span>
+</span><span class='line'>                                <span class="p">)</span>
+</span><span class='line'>                                <span class="p">.</span><span class="n">asComposeRenderEffect</span><span class="p">()</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">)</span>
+</span><span class='line'>                       <span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这是一个非常基础的着色器示例，它输出黑色，透明度为 50%。它看起来像下面的屏幕截图所示（背景只是来自资源库的图片）。它可能还不够令人印象深刻，但我想在这里强调两个重要的细节。首先，我们如何将着色器应用到盒子上。在我们的着色器代码中，我们需要一个着色器对象，以便在创建 renderEffect 时传递它。第二个重要的细节是，我们需要为盒子添加一个背景，并且背景不能完全透明；只有这样，我们的着色器才能应用到盒子上，否则它将不可见。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*DWbBFHchSRHzeVv_9FuxvQ.png" alt="" /></p>
+
+<p>在使用着色器时，通常需要对坐标进行归一化，使其从 0 变为 1。理想情况下，从 -0.5 到 0.5，这样坐标中心就位于画布的正中央。这有助于使用各种数学公式。然而，要做到这一点，不仅需要知道当前像素坐标，还需要知道画布的总尺寸。为了演示如何做到这一点，我将向你展示下一个重点：将参数从代码传递给着色器。我们将传递盒子的尺寸并修改着色器，使其绘制一个圆圈：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">runtimeShader</span> <span class="p">=</span> <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'><span class="n">uniform</span> <span class="n">shader</span> <span class="n">image</span><span class="p">;</span>
+</span><span class='line'><span class="n">uniform</span> <span class="n">float2</span> <span class="n">resolution</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">half4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">vec2</span> <span class="n">uv</span> <span class="p">=</span> <span class="n">fragCoord</span><span class="p">/</span><span class="n">resolution</span><span class="p">.</span><span class="n">xy</span> <span class="p">-</span> <span class="p">.</span><span class="m">5</span><span class="p">;</span>
+</span><span class='line'>    <span class="n">uv</span><span class="p">.</span><span class="n">x</span> <span class="p">*=</span> <span class="n">resolution</span><span class="p">.</span><span class="n">x</span><span class="p">/</span><span class="n">resolution</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">half4</span><span class="p">(</span><span class="n">step</span><span class="p">(</span><span class="n">length</span><span class="p">(</span><span class="n">uv</span><span class="p">),</span><span class="m">0.5</span><span class="p">));</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="s">&quot;&quot;&quot;.trimIndent()</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">200.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">clipToBounds</span><span class="p">()</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">onSizeChanged</span> <span class="p">{</span> <span class="n">size</span> <span class="p">-&gt;</span>
+</span><span class='line'>                            <span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span>
+</span><span class='line'>                                <span class="s">&quot;resolution&quot;</span><span class="p">,</span> <span class="n">size</span><span class="p">.</span><span class="n">width</span><span class="p">.</span><span class="n">toFloat</span><span class="p">(),</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span>
+</span><span class='line'>                            <span class="p">)</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">graphicsLayer</span> <span class="p">{</span>
+</span><span class='line'>                            <span class="k">this</span><span class="p">.</span><span class="n">renderEffect</span> <span class="p">=</span> <span class="n">RenderEffect</span>
+</span><span class='line'>                                <span class="p">.</span><span class="n">createRuntimeShaderEffect</span><span class="p">(</span>
+</span><span class='line'>                                    <span class="n">shader</span><span class="p">,</span> <span class="s">&quot;image&quot;</span>
+</span><span class='line'>                                <span class="p">)</span>
+</span><span class='line'>                                <span class="p">.</span><span class="n">asComposeRenderEffect</span><span class="p">()</span>
+</span><span class='line'>                        <span class="p">}</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">)</span>
+</span><span class='line'>                       <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*nBzr_W24ekFtGgf3xdz8QA.png" alt="" /></p>
+
+<p>现在我们已经学习了如何创建自己的着色器并为其传递参数，重要的是要理解你可以传递任何你需要的参数，无论是时间、颜色还是着色器所需的其他参数。为了巩固这些知识，我将向你展示一个我为 Android 制作的第一个着色器的示例——一个用于加载的发光圆圈。我们将传递当前时间来为其添加动画效果；下面是一个此类效果的简单示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">runtimeShader</span> <span class="p">=</span> <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'><span class="n">uniform</span> <span class="n">shader</span> <span class="n">image</span><span class="p">;</span>
+</span><span class='line'><span class="n">uniform</span> <span class="n">float2</span> <span class="n">resolution</span><span class="p">;</span>
+</span><span class='line'><span class="n">uniform</span> <span class="n">float</span> <span class="n">radius</span><span class="p">;</span>
+</span><span class='line'><span class="n">uniform</span> <span class="n">float</span> <span class="n">time</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">half4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">vec2</span> <span class="n">uv</span> <span class="p">=</span> <span class="n">fragCoord</span><span class="p">/</span><span class="n">resolution</span><span class="p">.</span><span class="n">xy</span> <span class="p">-</span> <span class="p">.</span><span class="m">5</span><span class="p">;</span>
+</span><span class='line'>    <span class="n">uv</span><span class="p">.</span><span class="n">x</span> <span class="p">*=</span> <span class="n">resolution</span><span class="p">.</span><span class="n">x</span><span class="p">/</span><span class="n">resolution</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
+</span><span class='line'>    <span class="n">float</span> <span class="n">radiusWithTime</span> <span class="p">=</span> <span class="p">(</span><span class="m">1</span><span class="p">+</span><span class="n">sin</span><span class="p">(</span><span class="n">time</span><span class="p">))*</span><span class="m">0.1</span> <span class="p">+</span> <span class="n">radius</span><span class="p">;</span>
+</span><span class='line'>    <span class="n">float</span> <span class="n">glowingCircle</span> <span class="p">=</span> <span class="n">smoothstep</span><span class="p">(</span><span class="n">radiusWithTime</span><span class="p">,</span> <span class="n">radiusWithTime</span><span class="p">-</span><span class="n">radiusWithTime</span><span class="p">*</span><span class="m">0.3</span><span class="p">,</span> <span class="n">length</span><span class="p">(</span><span class="n">uv</span><span class="p">));</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">half4</span><span class="p">(</span><span class="n">glowingCircle</span><span class="p">-</span><span class="n">step</span><span class="p">(</span><span class="n">length</span><span class="p">(</span><span class="n">uv</span><span class="p">),</span><span class="n">radius</span><span class="p">*</span><span class="m">0.7</span><span class="p">));</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="s">&quot;&quot;&quot;.trimIndent()</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">shader</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">RuntimeShader</span><span class="p">(</span><span class="n">runtimeShader</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="k">var</span> <span class="py">time</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span><span class="s">&quot;radius&quot;</span><span class="p">,</span> <span class="m">0.6f</span><span class="p">)</span>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">while</span> <span class="p">(</span><span class="k">true</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">10</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">time</span><span class="p">+=</span><span class="m">0.01f</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span><span class="s">&quot;time&quot;</span><span class="p">,</span> <span class="n">time</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Lr85zuDhk8o0-TUgw993_A.png" alt="它实际上有一个光晕动画" /></p>
+
+<p>我已经演示了最基础的部分。我的目标是提供一个切入点，并展示它是多么的简单。关于着色器，我还有很多想讨论的，但我们留到下次再说。</p>
+
+<p>感谢你的关注，祝你使用 Android、Compose 和Shader（着色器）顺利进入非凡的 UI 世界。期待与你相见！</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2025-08-15T22:21:24+08:00'><span class='date'><span class='date-month'>Aug</span> <span class='date-day'>15</span><span class='date-suffix'>th</span>, <span class='date-year'>2025</span></span> <span class='time'>10:21 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2025/08/08/flow-cancellation/" title="Previous Post: 学会说不！让你彻底学会Kotlin Flow的取消机制">&laquo; 学会说不！让你彻底学会Kotlin Flow的取消机制</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2025/08/17/snow-dialog-shader/" title="Next Post: 用Compose中的Shader实现一个雪花飘飘弹窗效果">用Compose中的Shader实现一个雪花飘飘弹窗效果 &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2025 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

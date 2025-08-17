@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-08-01T21:29:31+08:00</updated>
+  <updated>2025-08-17T22:07:16+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,661 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[用Compose中的Shader实现一个雪花飘飘弹窗效果]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/08/17/snow-dialog-shader/"/>
+    <updated>2025-08-17T22:02:24+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/08/17/snow-dialog-shader</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Snow Dialog Shader Tutorial」，原文链接<a href="https://medium.com/@off.mind.by/snow-dialog-shader-tutorial-dde1b4a61e20">https://medium.com/@off.mind.by/snow-dialog-shader-tutorial-dde1b4a61e20</a>，由Alex Volkov发布于2024年12月27日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:2000/1*oNN6ZtalbQEvYCpTx8gLWg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>大家好！在本教程中，我将向大家展示如何创建雪花覆盖的对话框效果。总的来说，该效果可以分为三个部分。</p>
+
+<ol>
+<li><strong>设置 Compose 代码</strong>：这确保了基础效果的实现。</li>
+<li><strong>创建对话框底部积雪的着色器</strong>：这是我在今天教程中重点讲解的核心效果。</li>
+<li><strong>添加飘落的雪花</strong>：为此，我在 ShaderToy 上找到了一个现成的着色器，并对其进行了一些优化，使其不会对手机性能造成太大负担。第三部分将包含原始着色器的链接以及一些优化说明。</li>
+</ol>
+
+
+<p>本教程主要讲解如何为对话框创建不断增长的雪盖效果。</p>
+
+<p>最终效果如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:804/1*SRa57BglcDzpLzAAw1UAPw.gif" alt="最终效果" /></p>
+
+<blockquote><p>在深入探讨之前，我想提醒你，我并没有为所有效果创建教程。不过，所有效果都可以在我的 <a href="https://github.com/AleksiejVolkov/runtimeshaders">GitHub</a> （链接：<a href="https://github.com/AleksiejVolkov/runtimeshaders%EF%BC%89%E4%B8%8A%E6%89%BE%E5%88%B0%E3%80%82%E4%BD%A0%E8%BF%98%E5%8F%AF%E4%BB%A5%E5%9C%A8%E6%88%91%E7%9A%84">https://github.com/AleksiejVolkov/runtimeshaders%EF%BC%89%E4%B8%8A%E6%89%BE%E5%88%B0%E3%80%82%E4%BD%A0%E8%BF%98%E5%8F%AF%E4%BB%A5%E5%9C%A8%E6%88%91%E7%9A%84</a> <a href="https://t.me/droidshaderworks">Telegram 频道</a> （链接：<a href="https://t.me/droidshaderworks%EF%BC%89%E4%B8%AD%E6%89%BE%E5%88%B0%E8%A7%86%E9%A2%91%E3%80%81%E6%96%B0%E6%95%88%E6%9E%9C%E5%85%AC%E5%91%8A%E4%BB%A5%E5%8F%8A%E9%97%AE%E9%A2%98%E7%9A%84%E8%A7%A3%E7%AD%94%E3%80%82%E6%9C%9F%E5%BE%85%E5%9C%A8%E9%82%A3%E9%87%8C%E8%A7%81%E5%88%B0%E4%BD%A0%EF%BC%81">https://t.me/droidshaderworks%EF%BC%89%E4%B8%AD%E6%89%BE%E5%88%B0%E8%A7%86%E9%A2%91%E3%80%81%E6%96%B0%E6%95%88%E6%9E%9C%E5%85%AC%E5%91%8A%E4%BB%A5%E5%8F%8A%E9%97%AE%E9%A2%98%E7%9A%84%E8%A7%A3%E7%AD%94%E3%80%82%E6%9C%9F%E5%BE%85%E5%9C%A8%E9%82%A3%E9%87%8C%E8%A7%81%E5%88%B0%E4%BD%A0%EF%BC%81</a></p></blockquote>
+
+<p>让我们从 Compose 中为效果设置一个最小页面开始。它包含一张背景图片和一个位于中心的按钮，用于触发对话框。</p>
+
+<p>需要注意的是，对话框不应来自 Material 库，而应使用 Compose 中最基本的“AlertDialog”。</p>
+
+<p>以下是最低配置：</p>
+
+<pre><code class="Kotlin">@Composable
+fun SnowDialogScreen() {
+    var showDialog by remember { mutableStateOf(false) }  
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            painter = painterResource(id = R.drawable.christmas_night),
+            contentDescription = "Sample Image",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )        if (!showDialog) {
+            Button(onClick = { showDialog = true }) {
+                Text("Ho-ho-ho!")
+            }
+        } else {
+            SnowedDialog { showDialog = false }
+        }
+    }
+}
+
+@Composable
+private fun SnowedDialog(onDismiss: () -&gt; Unit) {
+    BasicAlertDialog(
+        onDismissRequest = { onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 16.dp)
+                .background(shape = MaterialTheme.shapes.large, 
+                            color = MaterialTheme.colorScheme.surface)
+                .padding(16.dp),
+        ) {
+            Text("Merry Christmas!", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(10.dp))
+            Text("Happy New Year!")
+            Spacer(modifier = Modifier.height(26.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    modifier = Modifier
+                        .clickable { onDismiss() }
+                        .padding(5.dp),
+                    text = "Close",
+                    style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.primary)
+                )
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>最终，你应该得到类似这样的效果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*fnlF56ZxRxMwa7vHkCOudA.png" alt="颜色可能会有所不同，此外观已针对暗黑模式进行了调整" /></p>
+
+<p>现在我们可以开始编写着色器了！我将简要介绍如何设置着色器并将其附加到对话框中。有关运行时着色器的更详细介绍和初学者指南，你可以查看我的另一个<a href="https://juejin.cn/post/7535292253813981247">教程</a>。</p>
+
+<p>开始使用着色器所需的最低要求如下所示。在对话框中，我们添加一个 <code>runtimeShader</code>，并使用 <code>graphicsLayer</code> 将其分配给 <code>Column</code>：</p>
+
+<pre><code class="kotlin">@Composable
+private fun SnowedDialog(onDismiss: () -&gt; Unit) {
+    // 从字符串编译我们的着色器
+    val snowCapShader = remember { RuntimeShader(snowCapShader) }  
+
+    BasicAlertDialog(
+        onDismissRequest = { onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 16.dp)
+                .background(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface)
+                .onSizeChanged { size -&gt;
+                    // pass resolution
+                    snowCapShader.setFloatUniform(
+                        "resolution",
+                        size.width.toFloat(),
+                        size.height.toFloat()
+                    )
+                }
+                .graphicsLayer {
+                    // apply shader 
+                    this.renderEffect = RenderEffect
+                        .createRuntimeShaderEffect(snowCapShader, "image")
+                        .asComposeRenderEffect()
+                }
+                .padding(16.dp),
+        ) {
+          // 其余代码保持不变
+
+//...
+
+@Language("agsl")
+private val snowCapShader = """
+    uniform shader image;
+    uniform vec2 resolution;    
+    vec4 main(float2 fragCoord) {
+         float2 uv = fragCoord / resolution - 0.5;
+         if(abs(uv.x)&gt;0.5 || abs(uv.y)&gt;0.5) {
+             return vec4(0.0);
+         }          
+         float ratio = resolution.x / resolution.y;    
+         uv.x *= ratio;        
+         vec4 imageColor = image.eval(fragCoord);        
+         return vec4(vec3(1.0), imageColor.a);
+    }
+""".trimIndent()
+</code></pre>
+
+<p>目前，它将显示为一个空白矩形，就像我们的对话框一样：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*C5O1IMHS7MvK0lFnIqHFYA.png" alt="" /></p>
+
+<p>在继续之前，让我先尽可能简单地解释一下实现此效果背后的逻辑。我将算法分为四个概念步骤：</p>
+
+<ol>
+<li><strong>找到一个函数</strong>来定义雪边缘的轮廓。</li>
+<li><strong>在 y 轴上</strong>绘制此函数上方的所有内容**，并将其垂直移向底部边缘。</li>
+<li><strong>定义一个遮罩区域</strong>，这意味着在此区域之外，函数将被完全忽略，我们只需绘制着色器从系统接收的内容即可。</li>
+<li><strong>修改侧面和顶部的遮罩</strong>，使雪的形状更自然，而底部边缘的轮廓则由我们的函数处理。</li>
+</ol>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Vbq5YEL42g1tQsLjWKAokQ.png" alt="" /></p>
+
+<p>现在，让我们在着色器中按顺序实现这些步骤。为简单起见，我选择了一个基本的正弦波作为雪边缘的函数。我添加了一些系数来压缩它并降低其振幅：</p>
+
+<pre><code class="glsl">float snowEdge = (sin(10.*uv.x)*0.5+0.5)*0.2;
+</code></pre>
+
+<p>接下来，我们需要用白色填充此线上方的所有内容，同时忽略其下方的所有内容。</p>
+
+<pre><code class="glsl">vec4 snow = step(uv.y, snowEdge)*vec4(1.0);
+</code></pre>
+
+<blockquote><p>通过向 <code>uv.y</code> 添加一个常量，我们可以垂直移动整个函数。</p></blockquote>
+
+<p>最后，我们需要将该方法移近对话框的底部边缘并添加一个遮罩。现在，我们使用一个简单的矩形区域作为遮罩。我们可以通过分别指定每个边缘来定义它。这种方法可能看起来有点冗长，但它使代码更容易理解：</p>
+
+<pre><code class="glsl"> vec4 main(float2 fragCoord) {
+         float2 uv = fragCoord / resolution - 0.5;        
+         float ratio = resolution.x / resolution.y;    
+         uv.x *= ratio;         
+
+         float snowEdge = (sin(10.*uv.x)*0.5+0.5)*0.2;
+         snowEdge = step(uv.y-0.4, snowEdge);       
+
+         float topBound = 0.3;
+         float leftBound = -.5*ratio;
+         float rightBound = .5*ratio;        
+
+         float snowMask = 0.;       
+         if(uv.x &gt; leftBound &amp;&amp; uv.x &lt; rightBound &amp;&amp; uv.y &gt; topBound) {
+            snowMask = 1.0;
+         }
+         snowMask *= snowEdge;        
+         vec4 imageColor = image.eval(fragCoord);
+         vec3 snowColor = vec3(1.0);       
+         vec3 finalColor = mix(imageColor.rgb, snowColor, snowMask);      
+
+         return vec4(finalColor, snowMask+imageColor.a);
+    }
+</code></pre>
+
+<p>调整后，我们应该得到类似这样的结果。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*GM2d-tsCUOAHnloMiDYAAA.png" alt="" /></p>
+
+<p>现在可能不是提及这一点的最佳时机，也许应该早点提及，但在这里强调这一点至关重要。请记住，我们对坐标进行了归一化，并对其进行了平移，使零点恰好位于画布（即对话框）的中心。具体操作如下：<code>_float2 uv = fragCoord/resolution — 0.5;_</code></p>
+
+<p>理解这一点很重要，因为现在我想减小中心正弦波的振幅，并随着我们向左右两侧远离中心而增大振幅。理解坐标系的设置方式后，我们可以通过将函数乘以沿 x 轴距离中心的距离来实现这一点。这样，函数将在中心处恰好返回零点，并随着向外移动而增大。最终，我们将实现以下效果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*oW8OP3R2VFo0SkJmDhgVSw.png" alt="" /></p>
+
+<p>现在，让我们使用函数而不是常量来定义遮罩的顶部边界。现在，让我们使用另一个正弦波，但间隔等于对话框的宽度。</p>
+
+<pre><code class="glsl">float topBound = (sin(ratio*uv.x*0.8+2.)*0.5+0.5)*.2+0.3;
+</code></pre>
+
+<p>我们将为左右边界添加类似的代码：我希望它们也使用正弦波，但这次是垂直运行的。</p>
+
+<pre><code class="glsl">float leftBound = -.5*ratio+(sin(10.*uv.y)*0.5+0.5)*0.5*length(uv.y-topBound);
+float rightBound = .5*ratio-(sin(10.*uv.y)*0.5+0.5)*0.4*length(uv.y-topBound);
+</code></pre>
+
+<p>最后，我们需要为底部边缘添加一个常量：这是一个时间变量，我们会将它从 Compose 传递给着色器。在着色器中，我们只需添加相应的 <code>uniform</code> 变量，并将底部边缘函数乘以它即可：</p>
+
+<pre><code class="glsl">uniform shader image;
+    uniform vec2 resolution;
+    uniform float time;        vec4 main(float2 fragCoord) {
+         float2 uv = fragCoord / resolution - 0.5;        
+
+         float ratio = resolution.x / resolution.y;    
+         uv.x *= ratio;         
+
+         float adjustedTime = clamp(time * 0.3,0.0,1.0);
+         float snowEdge = (sin(10.*uv.x)*0.5+0.5)*0.2 * length(uv.x)*adjustedTime;
+         snowEdge = step(uv.y-0.5, snowEdge);       
+
+         float topBound = (sin(ratio*uv.x*0.8+2.)*0.5+0.5)*.2+0.3;
+         float leftBound = -.5*ratio+(sin(10.*uv.y)*0.5+0.5)*0.5*length(uv.y-topBound);
+         float rightBound = .5*ratio-(sin(10.*uv.y)*0.5+0.5)*0.4*length(uv.y-topBound);                   
+
+         float snowMask = 0.;         
+         if(uv.x &gt; leftBound &amp;&amp; uv.x &lt; rightBound &amp;&amp; uv.y &gt; topBound) {
+            snowMask = 1.0;
+         }
+
+         snowMask *= snowEdge;         
+
+         vec4 imageColor = image.eval(fragCoord);
+         vec3 snowColor = vec3(1.0);        
+         vec3 finalColor = mix(imageColor.rgb, snowColor, snowMask);       
+
+         return vec4(finalColor, snowMask+imageColor.a);
+    }
+</code></pre>
+
+<p>别忘了从composable中提供时间：</p>
+
+<pre><code class="Kotlin">@Composable
+private fun SnowedDialog(onDismiss: () -&gt; Unit) {
+    val snowCapShader = remember { RuntimeShader(snowCapShader) }
+    var time by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(null)  {
+        while (true) {
+            delay(10)
+            time += 0.01f
+        }
+    }
+
+    BasicAlertDialog(
+        onDismissRequest = { onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Column(
+            Modifier
+                .padding(horizontal = 16.dp)
+                .background(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface)
+                .onSizeChanged { size -&gt;
+                    snowCapShader.setFloatUniform(
+                        "resolution",
+                        size.width.toFloat(),
+                        size.height.toFloat()
+                    )
+                }
+                .graphicsLayer {
+                    // 这里提供时间：
+                    snowCapShader.setFloatUniform("time", time)
+                    this.renderEffect = RenderEffect
+                        .createRuntimeShaderEffect(snowCapShader, "image")
+                        .asComposeRenderEffect()
+                }
+                .padding(16.dp),
+        ) {
+// 其余代码保持不变
+</code></pre>
+
+<p>我们得到如下效果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*5YYiM3lZYp42O8Fa9iS-4A.gif" alt="" /></p>
+
+<p>关于这个效果，我想分享的差不多就是这些了！这是核心思想，从这里开始，你可以尝试不同的设置。例如，我用一个基于 Perlin 噪声的更混乱的版本替换了基本的正弦波。</p>
+
+<p>但这些只是细节，在实现上可以有无限的变化。创建着色器的关键在于掌握其背后的核心思想。</p>
+
+<p>你可以在我的代码库中找到我的实现，其中还包含各种用于不同增强功能的辅助方法。例如，这里有一系列过渡效果（线性、三次、指数等）。</p>
+
+<p>添加雪花是最后一步，但创建雪、雨、星星等效果的方法值得另开一个教程。下次我一定会讲解。今天，我只想提一下，为了实现这个特定的效果，我使用了 <strong>Andrew Baldwin</strong> 于 2013 年在 ShaderToy 上创建的着色器。链接如下：<a href="https://www.shadertoy.com/view/ldsGDn">https://www.shadertoy.com/view/ldsGDn</a></p>
+
+<p>由于原始着色器对于手机来说过于庞大，我做了一些简化。此外，它还需要一些适配 AGSL 的功能。这是我的版本：</p>
+
+<pre><code class="glsl">  uniform shader image;
+   uniform vec2 resolution;
+   uniform float time;
+
+   uniform int uLayers;
+   uniform float uDepth;
+   uniform float uSpeed;
+
+   const int MAX_LAYERS = 50;
+   const float WIDTH = 0.4;
+
+   vec2 NormalizeCoordinates(vec2 o, vec2 r) {
+        float2 uv = o / r - 0.5;
+        if (r.x &gt; r.y) {
+            uv.x *= r.x / r.y;
+        } else {
+            uv.y *= r.y / r.x;
+        } 
+        return uv;
+    }
+
+    vec4 GetImageTexture(vec2 p, vec2 pivot, vec2 r) {
+        if (r.x &gt; r.y) {
+            p.x /= r.x / r.y;
+        } else {
+            p.y /= r.y / r.x;
+        }
+        p += pivot;
+        p *= r;
+        return image.eval(p);
+    }
+
+    vec4 main(float2 fragCoord) {
+       float2 uv = NormalizeCoordinates(fragCoord, resolution);  
+       vec4 image = GetImageTexture(uv, vec2(0.5, 0.5), resolution);
+       const mat3 p = mat3(13.323122, 23.5112, 21.71123, 21.1212, 28.7312, 11.9312, 21.8112, 14.7212, 61.3934);
+
+       float ratio = resolution.y / resolution.x;
+       vec3 acc = vec3(0.0);
+       float alpha = 0.0; // 初始化 alpha
+       float dof = 5.0 * sin(time * 0.1);
+       for (int i = 0; i &lt; MAX_LAYERS; i++) {
+           if (i &gt;= uLayers) break; // 如果 i 超出 uLayers，则跳出循环
+
+           float fi = float(i);
+           vec2 q = uv * (1.0 + fi * uDepth);
+
+           // 通过调制和时间调整雪花位置
+           q -= vec2(q.y * (WIDTH * mod(fi * 7.238917, 1.0) - WIDTH * 0.5), uSpeed * time / (1.0 + fi * uDepth * 0.03));                      vec3 n = vec3(floor(q), 31.189 + fi);
+           vec3 m = floor(n) * 0.00001 + fract(n);
+           vec3 mp = (31415.9 + m) / fract(p * m);
+           vec3 r = fract(mp);
+
+           // 使用圆形mask的圆形雪花形状
+           float2 center = mod(q, 1.0) - 0.5 + 0.5 * r.xy;
+           float distanceToCenter = length(center); // 圆周距离
+           float flakeRadius = 0.015 + 0.01 * r.z; // 每个薄片的半径略有不同
+
+           // 通过扩展的平滑步进实现更平滑的边缘
+           float intensity = smoothstep(flakeRadius + 0.015, flakeRadius, distanceToCenter) * 
+                               smoothstep(flakeRadius, flakeRadius - 0.015, distanceToCenter);
+
+           // Ensure flakes are white or transparent (prevent black color)
+           vec3 flakeColor = vec3(1.0); // 雪花要是白色
+           acc += flakeColor * intensity;
+
+           // 通过平滑过渡积累 alpha
+           alpha += intensity;
+       }
+
+       // 归一化 alpha 以确保其不超过 1.0
+       alpha = clamp(alpha, 0.0, 1.0);
+       vec3 finalColor = mix(image.rgb, acc, alpha);
+
+      if(uv.y &lt; -0.5*ratio || uv.y &gt; .5*ratio) {
+           finalColor = vec3(0.0);
+           alpha = 0.0;
+       }
+       return vec4(finalColor, alpha+image.a);
+   }
+</code></pre>
+
+<p>当然，为了让一些雪花出现在屏幕前方，而另一些雪花飘到屏幕后方，我必须在这个着色器中使用两层。这是对话框可组合函数的最终效果：</p>
+
+<pre><code class="Kotlin">@Composable
+private fun SnowedDialog(onDismiss: () -&gt; Unit) {
+    val snowCapShader = remember { RuntimeShader(snowCapShader) }
+    val flakesShaderForeground = remember { RuntimeShader(snowShader) }
+    val flakesShaderBackground = remember { RuntimeShader(snowShader) }
+
+    var time by remember { mutableStateOf(0f) }
+
+    LaunchedEffect(null)  {
+        while (true) {
+            delay(10)
+            time += 0.01f
+        }
+    }
+
+    flakesShaderForeground.setIntUniform("uLayers", 5)
+    flakesShaderForeground.setFloatUniform("uDepth", 0.15f)
+    flakesShaderForeground.setFloatUniform("uSpeed", 1.0f)
+
+    flakesShaderBackground.setIntUniform("uLayers", 10)
+    flakesShaderBackground.setFloatUniform("uDepth", 1.5f)
+    flakesShaderBackground.setFloatUniform("uSpeed", 0.8f)
+
+    BasicAlertDialog(
+        onDismissRequest = { onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .onSizeChanged { size -&gt;
+                    flakesShaderForeground.setFloatUniform(
+                        "resolution",
+                        size.width.toFloat(),
+                        size.height.toFloat()
+                    )
+                }
+                .graphicsLayer {
+                    flakesShaderForeground.setFloatUniform("time", time)
+                    this.renderEffect = RenderEffect
+                        .createRuntimeShaderEffect(flakesShaderForeground, "image")
+                        .asComposeRenderEffect()
+                }
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onSizeChanged { size -&gt;
+                        flakesShaderBackground.setFloatUniform(
+                            "resolution",
+                            size.width.toFloat(),
+                            size.height.toFloat()
+                        )
+                    }
+                    .graphicsLayer {
+                        flakesShaderBackground.setFloatUniform("time", time)
+                        this.renderEffect = RenderEffect
+                            .createRuntimeShaderEffect(flakesShaderBackground, "image")
+                            .asComposeRenderEffect()
+                    }
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(color = Color.Black.copy(0.1f))
+                )
+            }
+            Column(
+                Modifier
+                    .padding(horizontal = 16.dp)
+                    .background(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface)
+                    .onSizeChanged { size -&gt;
+                        snowCapShader.setFloatUniform(
+                            "resolution",
+                            size.width.toFloat(),
+                            size.height.toFloat()
+                        )
+                    }
+                    .graphicsLayer {
+                        snowCapShader.setFloatUniform("time", time)
+                        this.renderEffect = RenderEffect
+                            .createRuntimeShaderEffect(snowCapShader, "image")
+                            .asComposeRenderEffect()
+                    }
+                    .padding(16.dp),
+            ) {
+                Text("Merry Christmas!", style = MaterialTheme.typography.titleLarge)
+                Spacer(modifier = Modifier.height(10.dp))
+                Text("Happy New Year!")
+                Spacer(modifier = Modifier.height(26.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    Text(
+                        modifier = Modifier
+                            .clickable { onDismiss() }
+                            .padding(5.dp),
+                        text = "Close",
+                        style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.primary)
+                    )
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>最终结果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1000/1*UG3e4b_9AqY1J1kKCNFqAw.png" alt="" /></p>
+
+<p>感谢你的阅读！如果你觉得我的实验有趣且我的解释对你有帮助，欢迎加入我的<a href="https://t.me/droidshaderworks">Telegram频道</a>或在<a href="https://x.com/KrowaNaMostku">Twitter (X)</a>上关注我。你的支持意义重大，并激励着我。祝你撸码愉快！</p>
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[初探Compose中的着色器RuntimeShader]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/08/15/first-look-at-runtimeshader/"/>
+    <updated>2025-08-15T22:21:24+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/08/15/first-look-at-runtimeshader</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「First look at RuntimeShaders in Compose」，原文链接<a href="https://medium.com/@off.mind.by/first-look-at-runtimeshaders-in-compose-b0b431083644">https://medium.com/@off.mind.by/first-look-at-runtimeshaders-in-compose-b0b431083644</a>，由Alex Volkov发布于2024年4月12日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1302/1*QXaDvaYryDIZ1GItjM1uqQ.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>自从我们有机会在 Compose 中使用 RuntimeShaders 自定义Shader（着色器）以来，已经过去了一年多的时间。说实话，我原本以为会有大量关于这个主题的文章。我以为现在 Android 上应该已经充斥着无数令人惊叹的示例、意想不到的效果，以及听到“着色器”这个词时脑海中浮现的其他令人着迷的东西。但事实并非如此。在 RuntimeShaders 可用之后，几乎立刻就出现了几篇文章，之后就再也没有了。一片寂静。</p>
+
+<p>我想答案很简单：Android 开发者并不熟悉着色器，而着色器程序员通常不会直接为 Android 编写代码；他们通常会使用某种游戏引擎。事实上，如果我的假设正确，我希望用这篇文章来弥合这两个世界之间的差距。我真心希望着色器编写能够渗透到 Android 开发领域。因此，在本文的剩余部分，我将介绍一些必要的基础知识，以便你可以坐下来编写着色器并享受其成果。</p>
+
+<p>因此，我假设你已经对 Compose 有了一定的了解。本文不会过多讨论着色器。我的主要重点是连接这两个世界。我们将在未来讨论具体的技术。假设我们有两个项目：一个带有背景图像，顶部有一个框，我们暂时将其设置为黑色。以下是代码的简化版本：</p>
+
+<pre><code class="Kotlin">VerySimpleShaderTheme {
+    Box(Modifier.fillMaxSize(), 
+        contentAlignment = Alignment.Center) {
+        Image(
+            modifier = Modifier.fillMaxSize(),
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            painter = painterResource(id = R.drawable.background_pattern),
+            contentDescription = null
+        )
+        Box(modifier = Modifier
+            .size(200.dp)
+            .clipToBounds()
+          ){
+        }
+    }
+}
+</code></pre>
+
+<p>现在，要将着色器添加到框中，你需要获取着色器文本本身，该文本以常规字符串形式传递。使用此文本创建一个 <code>RuntimeShader</code> 对象。然后，将其传递给 <code>graphicsLayer</code> 方法。这是一个简单的例子：</p>
+
+<pre><code class="Kotlin">val runtimeShader = """
+uniform shader image;
+
+half4 main(float2 fragCoord) {
+   return half4(0., 0.0, 0.0, .5);
+}
+""".trimIndent()
+
+val shader = remember { RuntimeShader(runtimeShader) } 
+Box(modifier = Modifier.size(200.dp)
+                        .clipToBounds()
+                        .graphicsLayer {
+                            this.renderEffect = RenderEffect
+                                .createRuntimeShaderEffect(
+                                    shader, "image"
+                                )
+                                .asComposeRenderEffect()
+                        }
+                        .background(Color.White)
+                       ) 
+</code></pre>
+
+<p>这是一个非常基础的着色器示例，它输出黑色，透明度为 50%。它看起来像下面的屏幕截图所示（背景只是来自资源库的图片）。它可能还不够令人印象深刻，但我想在这里强调两个重要的细节。首先，我们如何将着色器应用到盒子上。在我们的着色器代码中，我们需要一个着色器对象，以便在创建 renderEffect 时传递它。第二个重要的细节是，我们需要为盒子添加一个背景，并且背景不能完全透明；只有这样，我们的着色器才能应用到盒子上，否则它将不可见。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*DWbBFHchSRHzeVv_9FuxvQ.png" alt="" /></p>
+
+<p>在使用着色器时，通常需要对坐标进行归一化，使其从 0 变为 1。理想情况下，从 -0.5 到 0.5，这样坐标中心就位于画布的正中央。这有助于使用各种数学公式。然而，要做到这一点，不仅需要知道当前像素坐标，还需要知道画布的总尺寸。为了演示如何做到这一点，我将向你展示下一个重点：将参数从代码传递给着色器。我们将传递盒子的尺寸并修改着色器，使其绘制一个圆圈：</p>
+
+<pre><code class="Kotlin">val runtimeShader = """
+uniform shader image;
+uniform float2 resolution;
+
+half4 main(float2 fragCoord) {
+    vec2 uv = fragCoord/resolution.xy - .5;
+    uv.x *= resolution.x/resolution.y;    
+    return half4(step(length(uv),0.5));
+}
+""".trimIndent()
+
+Box(modifier = Modifier
+                        .size(200.dp)
+                        .clipToBounds()
+                        .onSizeChanged { size -&gt;
+                            shader.setFloatUniform(
+                                "resolution", size.width.toFloat(), size.height.toFloat()
+                            )
+                        }
+                        .graphicsLayer {
+                            this.renderEffect = RenderEffect
+                                .createRuntimeShaderEffect(
+                                    shader, "image"
+                                )
+                                .asComposeRenderEffect()
+                        }
+                        .background(Color.White)
+                       ) {
+                    }
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*nBzr_W24ekFtGgf3xdz8QA.png" alt="" /></p>
+
+<p>现在我们已经学习了如何创建自己的着色器并为其传递参数，重要的是要理解你可以传递任何你需要的参数，无论是时间、颜色还是着色器所需的其他参数。为了巩固这些知识，我将向你展示一个我为 Android 制作的第一个着色器的示例——一个用于加载的发光圆圈。我们将传递当前时间来为其添加动画效果；下面是一个此类效果的简单示例：</p>
+
+<pre><code class="Kotlin">val runtimeShader = """
+uniform shader image;
+uniform float2 resolution;
+uniform float radius;
+uniform float time;
+
+half4 main(float2 fragCoord) {
+    vec2 uv = fragCoord/resolution.xy - .5;
+    uv.x *= resolution.x/resolution.y;    
+    float radiusWithTime = (1+sin(time))*0.1 + radius;
+    float glowingCircle = smoothstep(radiusWithTime, radiusWithTime-radiusWithTime*0.3, length(uv));    
+    return half4(glowingCircle-step(length(uv),radius*0.7));
+}
+""".trimIndent()
+
+val shader = remember { RuntimeShader(runtimeShader) }
+var time by remember { mutableStateOf(0f) }
+shader.setFloatUniform("radius", 0.6f)
+LaunchedEffect(null) {
+    while (true) {
+        delay(10)
+        time+=0.01f
+    }
+}
+
+shader.setFloatUniform("time", time)
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Lr85zuDhk8o0-TUgw993_A.png" alt="它实际上有一个光晕动画" /></p>
+
+<p>我已经演示了最基础的部分。我的目标是提供一个切入点，并展示它是多么的简单。关于着色器，我还有很多想讨论的，但我们留到下次再说。</p>
+
+<p>感谢你的关注，祝你使用 Android、Compose 和Shader（着色器）顺利进入非凡的 UI 世界。期待与你相见！</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[学会用最优雅的姿式在Compose中显示富文本]]></title>
@@ -1024,543 +1679,6 @@ Text("Hello, $userName!")
 <p>正确使用它们将帮助你避免不必要的重组，提升应用的响应速度，并保持 Compose 代码简洁、可扩展且可预测。</p>
 
 <p>如果你觉得本文分析有用，请随时关注我以获取更多见解。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[在Kotlin Multiplatform项目中使用DataStore]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/06/04/datastore-in-kmp/"/>
-    <updated>2025-06-04T23:05:35+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/06/04/datastore-in-kmp</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Implementing DataStore in Kotlin Multiplatform Projects」，原文链接<a href="https://carrion.dev/en/posts/datastore-in-kmp/">https://carrion.dev/en/posts/datastore-in-kmp/</a>，由 Ignacio Carrión发布于2025年5月9日。</p></blockquote>
-
-<p>DataStore 是 Google 开发的一种现代数据存储解决方案，用于替代 SharedPreferences。它提供了一个一致、类型安全的 API，用于存储键值对和类型化对象，并支持 Kotlin 协程和 Flow。随着 Kotlin Multiplatform (KMP) 的最新进展，我们现在可以将 DataStore 集成到 KMP 项目中，从而实现跨平台共享偏好设置和数据存储代码。这篇博文探讨了如何在 KMP 环境中配置、实现和优化 DataStore。</p>
-
-<p><a href=""><img src="file:///Users/alexhilton/Downloads/datastore.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>理解 Kotlin 多平台环境中的 DataStore</h2>
-
-<p>KMP 中的 DataStore 旨在提供跨平台一致的 API，同时利用平台特定的存储机制。DataStore 有两种类型：</p>
-
-<ol>
-<li>Preferences DataStore：用于存储键值对</li>
-<li>Proto DataStore：用于使用协议缓冲区存储类型化对象</li>
-</ol>
-
-
-<p>在 KMP 上下文中，DataStore：</p>
-
-<ol>
-<li>平台特定的实现提供实际的存储机制</li>
-<li>API 使用协程和 Flow，跨平台保持一致</li>
-</ol>
-
-
-<p>这种方法使我们能够用通用代码定义数据访问模式，而底层存储操作则由平台特定的实现处理。</p>
-
-<pre><code class="Kotlin">// In commonMain - DataStore interface
-interface UserPreferences {
-    val userData: Flow&lt;UserData&gt;
-    suspend fun updateUsername(name: String)
-    suspend fun updateEmail(email: String)
-    suspend fun clearData()
-}
-
-// In commonMain - Data model
-data class UserData(
-    val username: String = "",
-    val email: String = "",
-    val isLoggedIn: Boolean = false
-)
-</code></pre>
-
-<h2>在 KMP 项目中设置数据存储</h2>
-
-<p>要将 DataStore 集成到你的 KMP 项目中，你需要正确配置构建文件。以下是分步指南：</p>
-
-<h3>1. 在共享模块中配置 build.gradle.kts 文件</h3>
-
-<pre><code class="Kotlin">plugins {
-    kotlin("multiplatform")
-    id("com.android.library")
-    id("com.google.devtools.ksp") version "2.1.20-2.0.1" // For Proto DataStore
-}
-
-kotlin {
-    androidTarget()
-    iosX64()
-    iosArm64()
-    iosSimulatorArm64()
-
-    sourceSets {
-        val commonMain by getting {
-            dependencies {
-                // For Preferences DataStore
-                implementation("androidx.datastore:datastore-preferences-core:1.1.0")
-
-                // For coroutines
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-            }
-        }
-    }
-}
-</code></pre>
-
-<h3>2. 从通用代码创建 DataStore 实例</h3>
-
-<pre><code class="Kotlin">/**
- * 获取单例 DataStore 实例，如有必要则创建它。
- */
-fun createDataStore(producePath: () -&gt; String): DataStore&lt;Preferences&gt; =
-   PreferenceDataStoreFactory.createWithPath(
-      produceFile = { producePath().toPath() }
-   )
-
-internal const val dataStoreFileName = "dice.preferences_pb"
-</code></pre>
-
-<h2>特定平台的考虑因素</h2>
-
-<h3>Android 实现</h3>
-
-<pre><code class="Kotlin">// shared/src/androidMain/kotlin/DataStore.kt
-
-fun createDataStoreAndroid(context: Context): DataStore&lt;Preferences&gt; = createDataStore(
-   producePath = { context.filesDir.resolve(dataStoreFileName).absolutePath }
-)
-</code></pre>
-
-<h3>iOS 实现</h3>
-
-<pre><code class="Kotlin">// shared/src/iosMain/kotlin/DataStore.kt
-
-fun createDataStoreIOS(): DataStore&lt;Preferences&gt; = createDataStore(
-   producePath = {
-      val documentDirectory: NSURL? = NSFileManager.defaultManager.URLForDirectory(
-         directory = NSDocumentDirectory,
-         inDomain = NSUserDomainMask,
-         appropriateForURL = null,
-         create = false,
-         error = null,
-      )
-      requireNotNull(documentDirectory).path + "/$dataStoreFileName"
-   }
-)
-</code></pre>
-
-<h2>实际示例：实现用户偏好存储库</h2>
-
-<p>为了演示完整的实现，让我们创建一个使用 DataStore 的存储库：</p>
-
-<pre><code class="Kotlin">// In commonMain
-class UserPreferencesRepository(private val dataStore: PreferencesDataStore) {
-    //定义preferences的键
-    private object PreferenceKeys {
-        val USERNAME = stringPreferencesKey("username")
-        val EMAIL = stringPreferencesKey("email")
-        val IS_LOGGED_IN = booleanPreferencesKey("is_logged_in")
-    }
-
-    // Get user data as a Flow
-    val userData: Flow&lt;UserData&gt; = dataStore.data.map { preferences -&gt;
-        UserData(
-            username = preferences[PreferenceKeys.USERNAME] ?: "",
-            email = preferences[PreferenceKeys.EMAIL] ?: "",
-            isLoggedIn = preferences[PreferenceKeys.IS_LOGGED_IN] ?: false
-        )
-    }
-
-    // Update username
-    suspend fun updateUsername(name: String) {
-        dataStore.updateData { preferences -&gt;
-            preferences.toMutablePreferences().apply {
-                this[PreferenceKeys.USERNAME] = name
-            }
-        }
-    }
-
-    // Update email
-    suspend fun updateEmail(email: String) {
-        dataStore.updateData { preferences -&gt;
-            preferences.toMutablePreferences().apply {
-                this[PreferenceKeys.EMAIL] = email
-            }
-        }
-    }
-
-    // Set login status
-    suspend fun setLoggedIn(isLoggedIn: Boolean) {
-        dataStore.updateData { preferences -&gt;
-            preferences.toMutablePreferences().apply {
-                this[PreferenceKeys.IS_LOGGED_IN] = isLoggedIn
-            }
-        }
-    }
-
-    // Clear all data
-    suspend fun clearData() {
-        dataStore.updateData { preferences -&gt;
-            preferences.toMutablePreferences().apply {
-                remove(PreferenceKeys.USERNAME)
-                remove(PreferenceKeys.EMAIL)
-                remove(PreferenceKeys.IS_LOGGED_IN)
-            }
-        }
-    }
-}
-
-// In commonMain - ViewModel or Presenter
-class UserViewModel(private val userPreferencesRepository: UserPreferencesRepository) {
-    val userData: Flow&lt;UserData&gt; = userPreferencesRepository.userData
-
-    suspend fun updateUserProfile(username: String, email: String) {
-        if (username.isNotBlank()) {
-            userPreferencesRepository.updateUsername(username)
-        }
-
-        if (email.isNotBlank()) {
-            userPreferencesRepository.updateEmail(email)
-        }
-    }
-
-    suspend fun login() {
-        userPreferencesRepository.setLoggedIn(true)
-    }
-
-    suspend fun logout() {
-        userPreferencesRepository.setLoggedIn(false)
-    }
-
-    suspend fun clearUserData() {
-        userPreferencesRepository.clearData()
-    }
-}
-</code></pre>
-
-<h2>KMP 中的高级数据存储功能</h2>
-
-<p>DataStore 提供了几种可在 KMP 环境中利用的高级功能：</p>
-
-<h3>1. 用于类型化对象的 Proto DataStore</h3>
-
-<p>如果你需要存储复杂对象，Proto DataStore 提供了一个类型安全的解决方案：</p>
-
-<pre><code class="proto">// 在 .proto 文件中定义数据结构
-syntax = "proto3";
-
-option java_package = "com.example.app";
-option java_multiple_files = true;
-
-message UserPreferences {
-  string username = 1;
-  string email = 2;
-  bool is_logged_in = 3;
-}
-</code></pre>
-
-<pre><code class="Kotlin">// In commonMain - 创建序列化器
-class UserPreferencesSerializer : Serializer&lt;UserPreferences&gt; {
-    override val defaultValue: UserPreferences = UserPreferences.getDefaultInstance()
-
-    override suspend fun readFrom(input: InputStream): UserPreferences {
-        return UserPreferences.parseFrom(input)
-    }
-
-    override suspend fun writeTo(t: UserPreferences, output: OutputStream) {
-        t.writeTo(output)
-    }
-}
-
-// Proto DataStore 的平台特定实现
-</code></pre>
-
-<h3>2.数据迁移</h3>
-
-<pre><code class="Kotlin">// In androidMain - 从 SharedPreferences 迁移到 DataStore
-val dataStore = context.createDataStore(
-    name = "user_preferences",
-    produceMigrations = { context -&gt;
-        listOf(
-            SharedPreferencesMigration(
-                context = context,
-                sharedPreferencesName = "legacy_preferences"
-            )
-        )
-    }
-)
-</code></pre>
-
-<h3>3.处理异常</h3>
-
-<pre><code class="Kotlin">// In commonMain - 数据操作过程中的异常处理
-val userData = dataStore.data
-    .catch { exception -&gt;
-        // 处理异常（例如数据损坏）
-        if (exception is IOException) {
-            emit(emptyPreferences())
-        } else {
-            throw exception
-        }
-    }
-    .map { preferences -&gt;
-        // Map preferences to your data model
-        UserData(
-            username = preferences[USERNAME] ?: "",
-            email = preferences[EMAIL] ?: ""
-        )
-    }
-</code></pre>
-
-<h2>KMP 中数据存储的最佳实践</h2>
-
-<ol>
-<li>利用协程和 Flow 进行异步操作
-
-<ul>
-<li>DataStore 操作本质上是异步的</li>
-<li>使用 Flow 观察存储数据的变化</li>
-<li>应用 Map、Filter 和 Combine 等 Flow 操作符进行数据转换</li>
-</ul>
-</li>
-<li>创建存储库层
-
-<ul>
-<li>将 DataStore 操作抽象到存储库后面</li>
-<li>这样可以更轻松地根据需要切换实现</li>
-<li>为你的业务逻辑提供简洁的 API</li>
-</ul>
-</li>
-<li>优雅地处理错误
-
-<ul>
-<li>使用 catch 操作符处理 Flow 中的异常</li>
-<li>在无法读取数据时提供回退值</li>
-<li>考虑为关键操作实现重试机制</li>
-</ul>
-</li>
-<li>优化性能
-
-<ul>
-<li>最大限度地减少 DataStore 更新次数</li>
-<li>将相关的更改集中处理</li>
-<li>使用 distinctUntilChanged() 避免不必要的排放</li>
-</ul>
-</li>
-<li>彻底测试你的 DataStore 代码
-
-<ul>
-<li>在 commonTest 中为你的存储库编写测试</li>
-<li>使用测试替身模拟不同的场景</li>
-</ul>
-</li>
-</ol>
-
-
-<h2>结论</h2>
-
-<p>将 DataStore 集成到 Kotlin Multiplatform 项目中，提供了一种现代化、类型安全的跨平台数据存储和访问方法。</p>
-
-<p>本文概述的方法提供了一种实用的方法，可以跨平台共享首选项和数据存储逻辑，并且只需极少的平台特定代码。DataStore 对协程和 Flow 的支持使其与 KMP 项目完美契合，能够通过一致的 API 实现响应式和异步数据操作。</p>
-
-<p>通过遵循本文概述的配置步骤、平台特定注意事项和最佳实践，你可以在 KMP 项目中成功实现 DataStore，并创建稳定、高效的跨平台数据存储解决方案，并且只需极少的平台特定代码。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[揭秘原生View与Jetpack Compose之间的传送门]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/06/02/android-vies-in-compose/"/>
-    <updated>2025-06-02T21:44:19+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/06/02/android-vies-in-compose</id>
-    <content type="html"><![CDATA[<p>芳菲随春去，碧绿入夏来，不知不觉中<a href="https://juejin.cn/column/7367555191338467337">Compose专题</a>已经写了近40篇文章了，从Compose各组件的使用方法，到Compose的编程思想，再到内部原理和最佳实践。通过<a href="https://juejin.cn/column/7367555191338467337">这一系列的文章</a>相信对Compose已经有了足够的理解，能够在项目中进行实战和运用。学无止境，今天将继续学习，重点探讨如何在已有的项目中使用Compose。</p>
-
-<p><a href=""><img src="file:///Users/alexhilton/Downloads/portal_2.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>缘起</h2>
-
-<p>无疑Jetpack Compose是一个优秀的声明式UI框架，它与原生的View方式最大的区别，在于思考问题的方式上并不一样。声明式框架能把开发者从繁杂的命令式的UI细节中解放出来，重点思考一个好的体验应该是什么样子的，而具体的UI细节由框架来处理。尽管如此，毕竟Compose是近几年来发展起来的，现今大量的项目仍是原生View主导的。此外，Compose也还在发展中，有些特定业务领域如Camera，视频，3D渲染，还没有能力支持。因此，整合原生View和Compose是项目中很现实的一个难题，本文将重点讨论两个议题：一个是如何在原生View中嵌入Compose，另一个就是如何在Compose中嵌入原生View。</p>
-
-<p><strong>注意：</strong> 本文中提到的两个组件ComposeView和AndroidView都仅在Jetpack Compose（for Android）生效，并不适用于跨平台的Compose Multiplatform。</p>
-
-<h2>在原生View中嵌入Compose</h2>
-
-<p>第一个传送门是如何进入Compose的世界。相信现在绝大多数项目都是基于原生View的，借助<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/ComposeView">ComposeView</a>就可以进入到Compose的世界。</p>
-
-<pre><code class="Kotlin">    val composeView = ComposeView(context).apply {
-                setContent {
-                    // 这里调用Composables
-                }
-            }
-</code></pre>
-
-<p>ComposeView是View的一个子类，能够作为Compose的容器，在<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/platform/ComposeView#setContent(kotlin.Function0">其setContent方法</a>)中提供一个Composable即可。ComposeView与其他View一样，可以用在View tree中，用在Fragment里和Activity里面。实际上作为平台的入口ComponentActivity用的也是ComposeView。</p>
-
-<h3>在View层级中直接嵌入</h3>
-
-<p>ComposeView就是一个普通的Android View，跟其他View的子类是一样的，所以可以把它放在任何可以使用View的地方，比如一个布局里面，作为一个页面的一部分。</p>
-
-<pre><code class="xml">&lt;?xml version="1.0" encoding="utf-8"?&gt;
-&lt;LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/container"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    tools:context=".MainActivity"&gt;
-
-    &lt;androidx.compose.ui.platform.ComposeView
-        android:id="@+id/compose_view"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content" /&gt;
-
-    &lt;Button
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="WidgetButton"
-        /&gt;
-&lt;/LinearLayout&gt;
-</code></pre>
-
-<p><strong>注意：</strong> 尽管可以把ComposeView当成普通的View，直接嵌入到布局中，作为页面中的一部分，但这并不是一个好的做法，一来是不能发挥Compose的优势，另外Compose本身是有特定的生命周期的（重组），它需要知道平台的生命周期，以管控它自己的生命周期。而常规的View tree之中是没有平台生命周期的，因为常规的View tree并不关心平台的生命周期，view tree主要受窗口影响（attachToWindow，detachFromWindow），这个与平台组件的生命周期没有关系。</p>
-
-<h3>用在Fragment中</h3>
-
-<p>想要在某个Fragment中集成Compose的方式就是把ComposeView作为Fragment的根View即可：</p>
-
-<pre><code class="Kotlin">class ExampleFragmentNoXml : Fragment() {
-
-    override fun onCreateView(
-        inflater: LayoutInflater,
-        container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        return ComposeView(requireContext()).apply {
-            // 当View的宿主destroy时销毁组合
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                MaterialTheme {
-                    // 进入到Compose世界
-                    Text("Hello Compose!")
-                }
-            }
-        }
-    }
-}
-</code></pre>
-
-<h3>用在Activity中</h3>
-
-<p>这其实是最好的方式，在一个新的页面窗口中使用Compose，这就能与其余view独立开来，是最为理想的。</p>
-
-<pre><code class="Kotlin">class ExampleActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        setContent {
-            MaterialTheme {
-                Greeting(name = "compose")
-            }
-        }
-    }
-}
-
-@Composable
-fun Greeting(name: String) {
-    Text(text = "Hello $name!")
-}
-</code></pre>
-
-<h3>使用建议</h3>
-
-<p>虽然ComposeView可以当成一个普通的View来使用，但最为合理的方式就是在一个新的Activity中才使用Compose，也就是说当有一个全新的页面时，考虑使用Compose来开发，这样才能发挥出它的价值。</p>
-
-<p>除非有特别的需求，否则不要把ComposeView作为现有页面的一部分嵌入到View tree中（也就是作为页面的一部分）。</p>
-
-<p>至于在Fragment中使用，如果是一个全新的页面，而非现有布局的一部分，那也可以考虑使用Compose。</p>
-
-<p><strong>注意：</strong> 其根本原因在于，我们使用Jetpack Compose并不是图它能实现什么特别的UI效果，Compose能做的事情View都能做，甚至它不能做的事情View也能做。用Compose是因为它是声明式的UI框架，在开发效率和可扩展性上面有巨大的优势。所以，只应该在想要发挥声明式框架优势的时候，才考虑使用它，并且应该从一个全新的页面开始。</p>
-
-<h2>在Compose中嵌入原生View</h2>
-
-<p>Jetpack Compose提供了足够丰富的组件，足以应对常规的UI，但它毕竟还不是特别的成熟，总会遇到一些场景，发现Compose无法胜任，而且并不是通过自定义组件就能够解决的，比如一些特定领域的UI，如camera，如视频，如3D渲染。或者说，已经有了自定义好的View，并不想重复开发。再或者说对于一些三方的库，它并没有对应的Compose组件。这些场景就需要把原生的View嵌入到Compose之中。</p>
-
-<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/viewinterop/package-summary#AndroidView(kotlin.Function1,androidx.compose.ui.Modifier,kotlin.Function1,kotlin.Function1,kotlin.Function1">AndroidView</a>)就是专门用于把原生View嵌入到Compose中的一个特殊composable。它就像一个传送门一样，能把原生的View，无论是一个现成的自定义View，还是特定领域的View或者三方库的View，带入到Compose中，变成一个composable。</p>
-
-<h3>AndroidView的使用方法</h3>
-
-<p>AndroidView是一个composable，把它放在想要的位置即可。它有三个参数，一个是常规的Modifier用以约束这个composable的；另两个是lambda，一个是用于创建View的，返回一个View的实例，只会被调用一次；另一个就是用于更新View的，会被调用多次：</p>
-
-<pre><code class="Kotlin">@Composable
-fun CustomView() {
-    var selectedItem by remember { mutableStateOf(0) }
-
-    // 添加原生View到Compose
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { context -&gt;
-            // 创建View的实例
-            MyView(context).apply {
-                // 设置View的点击事件，更新状态，这会触发重组
-                setOnClickListener {
-                    selectedItem = 1
-                }
-            }
-        },
-        update = { view -&gt;
-            // 更新View的状态
-            // 这里读了状态，所以重组时update会被再次调用，view能拿到最新的状态
-            view.selectedItem = selectedItem
-        }
-    )
-}
-
-@Composable
-fun ContentExample() {
-    Column(Modifier.fillMaxSize()) {
-        Text("Look at this CustomView!")
-        CustomView()
-    }
-}
-</code></pre>
-
-<p><strong>注意：</strong> factory仅会被调用一次，用于创建View实例，update会被调用多次，用于更新view的状态，包括初次组合时，也就是factory执行之后，就会调用update。AndroidView函数会帮助提供View需要的参数context，以及管理View的实例，所以update中会把view当作参数传给我们，所以我们完全没有必要再用额外的状态（remember）去缓存View的实例了。</p>
-
-<h3>使用建议</h3>
-
-<p>虽然AndroidView是一个传送门，可以连接两个世界，但是能不用还是不要用，非必要不使用。如果能用Compose搞定的事情，还是要用Compose来搞，比如用Canvas去实现自定义组件。</p>
-
-<p>需要使用AndroidView的场景只有三个：一是有现成的自定义View，拿过来就可以用，不想二次开发；二是三方库的View；三就是Compose确实搞不定的特定领域，如WebView，如视频，如SurfaceView或者3D渲染（OpenGL ES）等等。除以之外，不建议使用。</p>
-
-<p>还需要特别注意的是，如果原生的View交互比较复杂，不光是点击，还涉及Touch事件处理，处理事件的同时还要不断更新View的状态，那也不应该使用它。比较理想的情况是，嵌入的这个View是一个比较纯粹的生产者，比如它只产生事件，不需要再往回更新状态；或者是一个比较纯粹的消费者，比如它就负责展示，只需要塞数据就行了。</p>
-
-<h2>总结</h2>
-
-<p>网上的教程或者Demo中的世界是很美好的，往往都是一个新建的项目，一个新的页面，直接就进入了Compose世界，也都在讲Compose能做的事情。但现实的世界往往不是这样子的，极少情况下是全新开始的项目，往往需要与遗留代码打交道，需要实现的需求也是多种多样的。本文中介绍了两个传送门，ComposeView和AndroidView可以方便地连接原生View和Compose两个世界，为现实项目中遇到的问题提供了一个可行的解决方案。</p>
-
-<h3>让Compose支持OpenGL ES</h3>
-
-<ul>
-<li><a href="https://stackoverflow.com/questions/78796021/how-to-render-opengl-alongside-jetpack-compose-ui-without-covering-other-element">How to render OpenGL alongside Jetpack Compose UI without covering other elements</a></li>
-<li><a href="https://www.reddit.com/r/Kotlin/comments/on36sy/experiment_to_make_opengl_work_together_with/?rdt=62185">Experiment to make OpenGL work together with Jetpack Compose</a></li>
-<li><a href="https://composables.com/foundation/androidexternalsurface">AndroidExternalSurface</a></li>
-<li><a href="https://youtrack.jetbrains.com/issue/CMP-3810/Using-Open-GL-with-Compose-Multiplatform">Using Open GL with Compose Multiplatform</a></li>
-</ul>
-
-
-<h2>References</h2>
-
-<ul>
-<li><a href="https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/compose-in-views">Using Compose in Views</a></li>
-<li><a href="https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/views-in-compose">Using Views in Compose</a></li>
-<li><a href="https://medium.com/@seungbae2/jetpack-compose-androidview-seamless-integration-of-android-views-into-compose-ui-644f217437d3">Jetpack Compose AndroidView: Seamless Integration of Android Views into Compose UI</a></li>
-<li><a href="https://stackoverflow.com/questions/59995970/using-custom-views-with-jetpack-compose">Using Custom Views with Jetpack Compose</a></li>
-</ul>
-
 ]]></content>
   </entry>
   
