@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Reactivex | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/reactivex/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-08-18T22:25:11+08:00</updated>
+  <updated>2025-08-19T20:56:26+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -408,11 +408,69 @@ if permission granted:
 
 <p>如果要改变Observable执行的线程就要使用subscribeOn来指定一个不同的Scheduler。因为Observable是在subscribe()被调用 后才开始执行的，因此，离subscribe()方法最近的subscribeOn生效，其余的无作用。</p>
 
-<p>Observable除了自己运行的线程外，还可以改变大量回调运行的线程，典型的就是监听者回调执行的线程，也就是subscribe函数中的第一个参数，它其实是一个函数，作为发射的一个数据的接收处理者（onNext），另外两个参数也是函数一个是onError，最后一个是onComplete。可以用observeOn来指定这些回调执行的线程，它可以调用多次，仅对调用点后面的回调生效。还需要注意的是，这里所指的回调包括操作符map，subscribe中的函数，以及像doOnNext之类的都视为回调，都受其前面的observerOn影响。</p>
+<p>Observable除了自己运行的线程外，还可以改变大量回调运行的线程，典型的就是监听者回调执行的线程，也就是subscribe函数中的第一个参数，它其实是一个函数，作为发射的一个数据的接收处理者（onNext），另外两个参数也是函数一个是onError，最后一个是onComplete。可以用observeOn来指定这些回调执行的线程，它可以调用多次，仅对调用点后面的回调生效。还需要注意的是，这里所指的回调包括操作符map，flatMap和fitler等，subscribe中的函数，以及像doOnNext之类的都视为回调，都受其前面的observerOn影响，其实除了Observable的构造函数以外，都算是回调都受其前面的observeOn影响。</p>
 
-<p>那么，总结一下就是Observable的回调（map，doOnNext，和subscribe的三个函数参数）是受其前面的observeOn影响；而Observable的构造（如just，如from），除map以外的操作符，onSubscribed等属于Observable本身执行的线程，受最后一个（离subscribe()）最近的subscribeOn影响。</p>
+<pre><code class="Java">public class ThreadingModel {
+    private static void logd(String msg) {
+        System.out.println("[" + Thread.currentThread().getName() + "]: " + msg);
+    }
 
-<p>在实际使用中为了避免歧义和理解错误，应该先调用一次subscrieOn，改变Observable的执行线程，然后在最后用observeOn指定回调线程，就像AsyncTask中的doInBackground（这是subscribeOn影响了Observable的执行线程），和onPostExecute（这是observeOn影响了回调线程）。这样线程模型会相当的清晰，减少出错。为什么要把observeOn放在最后呢，因为这货会影响操作符map，而map一般认为是中间过程，而非最后的结果回调，按道理它不应该受observeOn影响，但实际它却受其影响，这会引发一些难以调试的隐藏Bug，特别是对于复杂的项目，map中又会产生对全局变量的副作用时。</p>
+    /*
+     * SubscribeOn affects an Observable's operations including its constructor.
+     * ObserveOn affects all callbacks of an Observable: map, flatMap, filter,
+     * doOnNext and onNext in subscribe() are all callbacks. Which means, all
+     * other operators and observers are callbacks, except an Observable's
+     * constructor.
+     */
+    public static void main(String[] args) throws InterruptedException {
+        var subscription = Observable.fromCallable(() -&gt; {
+                    var stuff = """
+                            The tree of liberty must be refreshed
+                            from time to time
+                            with the blood of patriots and tyrants.
+                            """;
+                    var list = stuff.split("[ \n]");
+                    logd("In the callable '" + stuff + "'");
+                    return String.join(" ", list);
+                })
+                .subscribeOn(Schedulers.io())
+                .observeOn(Schedulers.newThread())
+                .flatMap(s -&gt; {
+                    logd("in flatMap: " + s);
+                    return Observable.fromArray(s.split(" "));
+                })
+                .doOnEach(s -&gt; logd("in doOnEach: " + s.getValue()))
+                .observeOn(Schedulers.single())
+                .doOnNext(s -&gt; logd("in doOnNext: " + s))
+                .filter(s -&gt; {
+                    logd("in filter: " + s);
+                    return s.length() &gt; 5;
+                })
+                .map(s -&gt; {
+                    logd("in map: s");
+                    return s.toUpperCase();
+                })
+                .observeOn(Schedulers.computation())
+                .subscribe(s -&gt; {
+                    logd(" onNext: '" + s + "'");
+                });
+
+        Thread.sleep(2000);
+        subscription.dispose();
+    }
+}
+</code></pre>
+
+<p>结果输出：</p>
+
+<pre><code class="Bash">from time to time
+with the blood of patriots and tyrants.
+'
+</code></pre>
+
+<p>那么，总结一下就是Observable的回调（map等操作符，doOnNext，和subscribe的三个函数参数）是受其前面的observeOn影响；而Observable的构造（如just，如from），onSubscribed等属于Observable本身执行的线程，受最后一个（离subscribe()）最近的subscribeOn影响。</p>
+
+<p>在实际使用中为了避免歧义和理解错误，应该先调用一次subscrieOn，改变Observable的执行线程，然后在最后用observeOn指定回调线程，就像AsyncTask中的doInBackground（这是subscribeOn影响了Observable的执行线程），和onPostExecute（这是observeOn影响了回调线程）。这样线程模型会相当的清晰，减少出错。为什么要把observeOn放在最后呢，因为这货会影响操作符map，而map等操作符一般认为是中间过程，而非最后的结果回调，按道理它不应该受observeOn影响，但实际它却受其影响，这会引发一些难以调试的隐藏Bug，特别是对于复杂的项目，map中又会产生对全局变量的副作用时。</p>
 
 <p>扩展阅读：</p>
 

@@ -159,11 +159,253 @@
 
 <p>如果要改变Observable执行的线程就要使用subscribeOn来指定一个不同的Scheduler。因为Observable是在subscribe()被调用 后才开始执行的，因此，离subscribe()方法最近的subscribeOn生效，其余的无作用。</p>
 
-<p>Observable除了自己运行的线程外，还可以改变大量回调运行的线程，典型的就是监听者回调执行的线程，也就是subscribe函数中的第一个参数，它其实是一个函数，作为发射的一个数据的接收处理者（onNext），另外两个参数也是函数一个是onError，最后一个是onComplete。可以用observeOn来指定这些回调执行的线程，它可以调用多次，仅对调用点后面的回调生效。还需要注意的是，这里所指的回调包括操作符map，subscribe中的函数，以及像doOnNext之类的都视为回调，都受其前面的observerOn影响。</p>
+<p>Observable除了自己运行的线程外，还可以改变大量回调运行的线程，典型的就是监听者回调执行的线程，也就是subscribe函数中的第一个参数，它其实是一个函数，作为发射的一个数据的接收处理者（onNext），另外两个参数也是函数一个是onError，最后一个是onComplete。可以用observeOn来指定这些回调执行的线程，它可以调用多次，仅对调用点后面的回调生效。还需要注意的是，这里所指的回调包括操作符map，flatMap和fitler等，subscribe中的函数，以及像doOnNext之类的都视为回调，都受其前面的observerOn影响，其实除了Observable的构造函数以外，都算是回调都受其前面的observeOn影响。</p>
 
-<p>那么，总结一下就是Observable的回调（map，doOnNext，和subscribe的三个函数参数）是受其前面的observeOn影响；而Observable的构造（如just，如from），除map以外的操作符，onSubscribed等属于Observable本身执行的线程，受最后一个（离subscribe()）最近的subscribeOn影响。</p>
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+</pre></td><td class='code'><pre><code class='Java'><span class='line'><span class="kd">public</span> <span class="kd">class</span> <span class="nc">ThreadingModel</span> <span class="o">{</span>
+</span><span class='line'>    <span class="kd">private</span> <span class="kd">static</span> <span class="kt">void</span> <span class="nf">logd</span><span class="o">(</span><span class="n">String</span> <span class="n">msg</span><span class="o">)</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">System</span><span class="o">.</span><span class="na">out</span><span class="o">.</span><span class="na">println</span><span class="o">(</span><span class="s">&quot;[&quot;</span> <span class="o">+</span> <span class="n">Thread</span><span class="o">.</span><span class="na">currentThread</span><span class="o">().</span><span class="na">getName</span><span class="o">()</span> <span class="o">+</span> <span class="s">&quot;]: &quot;</span> <span class="o">+</span> <span class="n">msg</span><span class="o">);</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="cm">/*</span>
+</span><span class='line'><span class="cm">     * SubscribeOn affects an Observable&#39;s operations including its constructor.</span>
+</span><span class='line'><span class="cm">     * ObserveOn affects all callbacks of an Observable: map, flatMap, filter,</span>
+</span><span class='line'><span class="cm">     * doOnNext and onNext in subscribe() are all callbacks. Which means, all</span>
+</span><span class='line'><span class="cm">     * other operators and observers are callbacks, except an Observable&#39;s</span>
+</span><span class='line'><span class="cm">     * constructor.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="kd">public</span> <span class="kd">static</span> <span class="kt">void</span> <span class="nf">main</span><span class="o">(</span><span class="n">String</span><span class="o">[]</span> <span class="n">args</span><span class="o">)</span> <span class="kd">throws</span> <span class="n">InterruptedException</span> <span class="o">{</span>
+</span><span class='line'>        <span class="n">var</span> <span class="n">subscription</span> <span class="o">=</span> <span class="n">Observable</span><span class="o">.</span><span class="na">fromCallable</span><span class="o">(()</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">var</span> <span class="n">stuff</span> <span class="o">=</span> <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'><span class="s">                            The tree of liberty must be refreshed</span>
+</span><span class='line'><span class="s">                            from time to time</span>
+</span><span class='line'><span class="s">                            with the blood of patriots and tyrants.</span>
+</span><span class='line'><span class="s">                            &quot;&quot;&quot;</span><span class="o">;</span>
+</span><span class='line'>                    <span class="n">var</span> <span class="n">list</span> <span class="o">=</span> <span class="n">stuff</span><span class="o">.</span><span class="na">split</span><span class="o">(</span><span class="s">&quot;[ \n]&quot;</span><span class="o">);</span>
+</span><span class='line'>                    <span class="n">logd</span><span class="o">(</span><span class="s">&quot;In the callable &#39;&quot;</span> <span class="o">+</span> <span class="n">stuff</span> <span class="o">+</span> <span class="s">&quot;&#39;&quot;</span><span class="o">);</span>
+</span><span class='line'>                    <span class="k">return</span> <span class="n">String</span><span class="o">.</span><span class="na">join</span><span class="o">(</span><span class="s">&quot; &quot;</span><span class="o">,</span> <span class="n">list</span><span class="o">);</span>
+</span><span class='line'>                <span class="o">})</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">subscribeOn</span><span class="o">(</span><span class="n">Schedulers</span><span class="o">.</span><span class="na">io</span><span class="o">())</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">observeOn</span><span class="o">(</span><span class="n">Schedulers</span><span class="o">.</span><span class="na">newThread</span><span class="o">())</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">flatMap</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">logd</span><span class="o">(</span><span class="s">&quot;in flatMap: &quot;</span> <span class="o">+</span> <span class="n">s</span><span class="o">);</span>
+</span><span class='line'>                    <span class="k">return</span> <span class="n">Observable</span><span class="o">.</span><span class="na">fromArray</span><span class="o">(</span><span class="n">s</span><span class="o">.</span><span class="na">split</span><span class="o">(</span><span class="s">&quot; &quot;</span><span class="o">));</span>
+</span><span class='line'>                <span class="o">})</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">doOnEach</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="n">logd</span><span class="o">(</span><span class="s">&quot;in doOnEach: &quot;</span> <span class="o">+</span> <span class="n">s</span><span class="o">.</span><span class="na">getValue</span><span class="o">()))</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">observeOn</span><span class="o">(</span><span class="n">Schedulers</span><span class="o">.</span><span class="na">single</span><span class="o">())</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">doOnNext</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="n">logd</span><span class="o">(</span><span class="s">&quot;in doOnNext: &quot;</span> <span class="o">+</span> <span class="n">s</span><span class="o">))</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">filter</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">logd</span><span class="o">(</span><span class="s">&quot;in filter: &quot;</span> <span class="o">+</span> <span class="n">s</span><span class="o">);</span>
+</span><span class='line'>                    <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="na">length</span><span class="o">()</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="o">;</span>
+</span><span class='line'>                <span class="o">})</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">map</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">logd</span><span class="o">(</span><span class="s">&quot;in map: s&quot;</span><span class="o">);</span>
+</span><span class='line'>                    <span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="na">toUpperCase</span><span class="o">();</span>
+</span><span class='line'>                <span class="o">})</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">observeOn</span><span class="o">(</span><span class="n">Schedulers</span><span class="o">.</span><span class="na">computation</span><span class="o">())</span>
+</span><span class='line'>                <span class="o">.</span><span class="na">subscribe</span><span class="o">(</span><span class="n">s</span> <span class="o">-&gt;</span> <span class="o">{</span>
+</span><span class='line'>                    <span class="n">logd</span><span class="o">(</span><span class="s">&quot; onNext: &#39;&quot;</span> <span class="o">+</span> <span class="n">s</span> <span class="o">+</span> <span class="s">&quot;&#39;&quot;</span><span class="o">);</span>
+</span><span class='line'>                <span class="o">});</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">Thread</span><span class="o">.</span><span class="na">sleep</span><span class="o">(</span><span class="mi">2000</span><span class="o">);</span>
+</span><span class='line'>        <span class="n">subscription</span><span class="o">.</span><span class="na">dispose</span><span class="o">();</span>
+</span><span class='line'>    <span class="o">}</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
 
-<p>在实际使用中为了避免歧义和理解错误，应该先调用一次subscrieOn，改变Observable的执行线程，然后在最后用observeOn指定回调线程，就像AsyncTask中的doInBackground（这是subscribeOn影响了Observable的执行线程），和onPostExecute（这是observeOn影响了回调线程）。这样线程模型会相当的清晰，减少出错。为什么要把observeOn放在最后呢，因为这货会影响操作符map，而map一般认为是中间过程，而非最后的结果回调，按道理它不应该受observeOn影响，但实际它却受其影响，这会引发一些难以调试的隐藏Bug，特别是对于复杂的项目，map中又会产生对全局变量的副作用时。</p>
+
+<p>结果输出：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+<span class='line-number'>66</span>
+<span class='line-number'>67</span>
+<span class='line-number'>68</span>
+</pre></td><td class='code'><pre><code class='Bash'><span class='line'><span class="o">[</span>RxCachedThreadScheduler-1<span class="o">]</span>: In the callable <span class="s1">&#39;The tree of liberty must be refreshed</span>
+</span><span class='line'><span class="s1">from time to time</span>
+</span><span class='line'><span class="s1">with the blood of patriots and tyrants.</span>
+</span><span class='line'><span class="s1">&#39;</span>
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in flatMap: The tree of liberty must be refreshed from <span class="nb">time </span>to <span class="nb">time </span>with the blood of patriots and tyrants.
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: The
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: tree
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: of
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: liberty
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: must
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: be
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: The
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: refreshed
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: from
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: The
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: <span class="nb">time</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: tree
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: tree
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: to
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: of
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: <span class="nb">time</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: of
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: with
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: liberty
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: the
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: liberty
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: blood
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in map: s
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: of
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: patriots
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: and
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: tyrants.
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: must
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: must
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: be
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: be
+</span><span class='line'><span class="o">[</span>RxNewThreadScheduler-1<span class="o">]</span>: in doOnEach: null
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: refreshed
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: refreshed
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in map: s
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: from
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: from
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: <span class="nb">time</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: <span class="nb">time</span>
+</span><span class='line'><span class="o">[</span>RxComputationThreadPool-1<span class="o">]</span>:  onNext: <span class="s1">&#39;LIBERTY&#39;</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: to
+</span><span class='line'><span class="o">[</span>RxComputationThreadPool-1<span class="o">]</span>:  onNext: <span class="s1">&#39;REFRESHED&#39;</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: to
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: <span class="nb">time</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: <span class="nb">time</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: with
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: with
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: the
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: the
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: blood
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: blood
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: of
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: of
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: patriots
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: patriots
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in map: s
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: and
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: and
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in doOnNext: tyrants.
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in filter: tyrants.
+</span><span class='line'><span class="o">[</span>RxComputationThreadPool-1<span class="o">]</span>:  onNext: <span class="s1">&#39;PATRIOTS&#39;</span>
+</span><span class='line'><span class="o">[</span>RxSingleScheduler-1<span class="o">]</span>: in map: s
+</span><span class='line'><span class="o">[</span>RxComputationThreadPool-1<span class="o">]</span>:  onNext: <span class="s1">&#39;TYRANTS.&#39;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>那么，总结一下就是Observable的回调（map等操作符，doOnNext，和subscribe的三个函数参数）是受其前面的observeOn影响；而Observable的构造（如just，如from），onSubscribed等属于Observable本身执行的线程，受最后一个（离subscribe()）最近的subscribeOn影响。</p>
+
+<p>在实际使用中为了避免歧义和理解错误，应该先调用一次subscrieOn，改变Observable的执行线程，然后在最后用observeOn指定回调线程，就像AsyncTask中的doInBackground（这是subscribeOn影响了Observable的执行线程），和onPostExecute（这是observeOn影响了回调线程）。这样线程模型会相当的清晰，减少出错。为什么要把observeOn放在最后呢，因为这货会影响操作符map，而map等操作符一般认为是中间过程，而非最后的结果回调，按道理它不应该受observeOn影响，但实际它却受其影响，这会引发一些难以调试的隐藏Bug，特别是对于复杂的项目，map中又会产生对全局变量的副作用时。</p>
 
 <p>扩展阅读：</p>
 
