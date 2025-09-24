@@ -1,0 +1,821 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>runBlocking实践：哪里该使用，哪里不该用 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="Kotlin大神为你详细地讲解函数runBlocking的工作原理，并给出了应该使用它的场景，以及不应该用它的场景。">
+  <meta name="keywords" content="Kotlin, Coroutine, Flow, runBlocking">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2025/09/23/runblocking-in-practice">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">runBlocking实践：哪里该使用，哪里不该用</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2025-09-23T22:34:01+08:00'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>23</span><span class='date-suffix'>rd</span>, <span class='date-year'>2025</span></span> <span class='time'>10:34 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「runBlocking in practice: Where it should be used and where not」，原文链接<a href="https://kt.academy/article/run_blocking">https://kt.academy/article/run_blocking</a>，由Marcin Moskała发布于2025年9月1日。</p></blockquote>
+
+<p><a href="/blog/2025/09/23/runblocking-in-practice/"><img src="https://kt.academy/_next/image?url=https%3A%2F%2Fmarcinmoskala.com%2Fkt-academy-articles%2Fpromotion%2Frun_blocking.png&w=3840&q=75" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>传统意义上讲，Java 和 Kotlin 项目都基于阻塞调用(blocking)。我所说的阻塞调用是指函数在等待某些操作（例如，等待网络响应）时会阻塞调用者的线程。Kotlin 协程最重要的规则之一是，我们不应该在挂起函数(suspending function)上进行阻塞调用（除非我们使用允许阻塞调用的调度程序，例如 <code>Dispatchers.IO</code>）。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Incorrect: blocking call in a suspending function</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getUser</span><span class="p">():</span> <span class="n">User</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">response</span> <span class="p">=</span> <span class="n">api</span><span class="p">.</span><span class="n">getUser</span><span class="p">()</span> <span class="c1">// blocking call</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">response</span><span class="p">.</span><span class="n">toDomainUser</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Correct: Using withContext(Dispatchers.IO) to make a blocking call in a suspending function</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getUser</span><span class="p">():</span> <span class="n">User</span> <span class="p">=</span> <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">response</span> <span class="p">=</span> <span class="n">api</span><span class="p">.</span><span class="n">getUser</span><span class="p">()</span> <span class="c1">// blocking call</span>
+</span><span class='line'>    <span class="n">response</span><span class="p">.</span><span class="n">toDomainUser</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但是如何反其道而行之呢？如何将挂起调用转换为阻塞调用？为此，我们使用 <code>runBlocking</code>！</p>
+
+<h2><a href="#how-runblocking-works"><code>runBlocking</code> 的工作原理</a></h2>
+
+<p><code>runBlocking</code> 在调用它的线程上启动一个协程，并阻塞该线程直到协程完成。因此，runBlocking 本质上是同步的，因为如果我们多次调用它，第二个调用要等到第一个调用完成后才会启动。作为一个同步协程构建器，<code>runBlocking</code> 返回它启动的协程的结果。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;Starting main&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">log</span><span class="p">(</span><span class="s">&quot;Starting first runBlocking&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">log</span><span class="p">(</span><span class="s">&quot;Finishing first runBlocking&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">result</span><span class="p">:</span> <span class="n">String</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">log</span><span class="p">(</span><span class="s">&quot;Starting second runBlocking&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span>
+</span><span class='line'>        <span class="s">&quot;ABCD&quot;</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">log</span><span class="p">(</span><span class="s">&quot;Second runBlocking finished with result: $result&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">fun</span> <span class="nf">log</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;[${Thread.currentThread().name}] $message&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">// [main] Starting main</span>
+</span><span class='line'><span class="c1">// [main] Starting first runBlocking</span>
+</span><span class='line'><span class="c1">// (1 sec)</span>
+</span><span class='line'><span class="c1">// [main] Finishing first runBlocking</span>
+</span><span class='line'><span class="c1">// [main] Starting second runBlocking</span>
+</span><span class='line'><span class="c1">// (1 sec)</span>
+</span><span class='line'><span class="c1">// [main] Second runBlocking finished with result: ABCD</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>由于 <code>runBlocking</code> 启动了一个作用域，它会等待其中启动的所有协程完成。这意味着它会等待所有子协程完成。这就是为什么下面的程序要等到所有三个异步协程都完成才会完成。为了展示如何使用 <code>runBlocking</code> 定义结果，我还让这个程序从 <code>main</code> 函数返回 <code>0</code>。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.*</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">():</span> <span class="n">Int</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">launch</span> <span class="p">{</span> <span class="n">delayAndPrintHello</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">launch</span> <span class="p">{</span> <span class="n">delayAndPrintHello</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">launch</span> <span class="p">{</span> <span class="n">delayAndPrintHello</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="m">0</span> <span class="c1">// result from main</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">delayAndPrintHello</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">delay</span><span class="p">(</span><span class="m">1000L</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;World!&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">// Hello</span>
+</span><span class='line'><span class="c1">// (1 sec)</span>
+</span><span class='line'><span class="c1">// World!</span>
+</span><span class='line'><span class="c1">// World!</span>
+</span><span class='line'><span class="c1">// World!</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>runBlocking</code> 的行为可能会让你想起 <code>coroutineScope</code>，这并非巧合，因为它们都启动同步协程，但 <code>runBlocking</code> 是阻塞的，而 <code>coroutineScope</code> 是暂停的。这意味着完全不同的用法，我们只在暂停函数中使用 <code>coroutineScope</code>，而我们永远不应该在暂停函数中使用 <code>runBlocking</code>。这也意味着 <code>coroutineScope</code> 与其调用者建立关系，并且始终处于协程层次结构的中间，而 <code>runBlocking</code> 则启动一个新的协程层次结构。</p>
+
+<h2><a href="#the-practice-of-using-runblocking">使用 <code>runBlocking</code> 的实践</a></h2>
+
+<p>在正确实现的基于协程的项目中，并使用设计良好的协程友好库，我们几乎不需要使用 <code>runBlocking</code>。如果我们在项目中经常使用它，那就被认为是代码异味。然而，在某些情况下，runBlocking 是有用的，甚至是必要的。也有一些情况下，runBlocking 不应该被使用。我们还会讨论那些曾经需要 runBlocking 但现在有了更好的替代方案的情况。现在，让我们来看看。</p>
+
+<h2><a href="#where-to-use-runblocking">在哪里使用 <code>runBlocking</code></a></h2>
+
+<p><code>runBlocking</code> 应该用于需要启动协程并阻塞当前线程直到其完成的情况。这意味着它可以在以下情况下使用：</p>
+
+<ul>
+<li>我们需要等待协程的结果。</li>
+<li>我们可以阻塞当前线程。</li>
+</ul>
+
+
+<p>一个常见的 Android 示例是在 Retrofit 客户端中设置一个拦截器，将令牌附加到网络调用。获取令牌可能需要发起网络调用，因此我们需要启动一个协程来获取令牌。同时，拦截器需要结果才能继续执行。这个拦截器在 Retrofit 的池中启动，因此可以调用它的调用。这使得它成为使用 <code>runBlocking</code> 的理想场所。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">AddTokenInterceptor</span><span class="p">:</span> <span class="n">Interceptor</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">intercept</span><span class="p">(</span><span class="n">chain</span><span class="p">:</span> <span class="n">Interceptor</span><span class="p">.</span><span class="n">Chain</span><span class="p">):</span> <span class="n">Response</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">token</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span> <span class="n">getToken</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">request</span> <span class="p">=</span> <span class="n">chain</span><span class="p">.</span><span class="n">request</span><span class="p">().</span><span class="n">newBuilder</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">addHeader</span><span class="p">(</span><span class="s">&quot;Authorization&quot;</span><span class="p">,</span> <span class="s">&quot;Bearer $token&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">build</span><span class="p">()</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">chain</span><span class="p">.</span><span class="n">proceed</span><span class="p">(</span><span class="n">request</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在后端系统上，有时我们需要阻塞当前线程以等待协程完成，例如为了让我们的工具正确测量此进程的执行时间，或者当我们需要调用某些阻塞脚本并获取其结果时。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@MeasureExecutionTime</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">runDataMigrationScript</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sourceData</span> <span class="p">=</span> <span class="n">readDataFromSource</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">transformedData</span> <span class="p">=</span> <span class="n">transformData</span><span class="p">(</span><span class="n">sourceData</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">writeDataToTarget</span><span class="p">(</span><span class="n">transformedData</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这些情况很少见，大多数后端项目不需要使用 <code>runBlocking</code>。除非它们有一些基于阻塞调用的遗留代码。考虑以下 <code>UserService</code>，它在我们的应用程序中用于管理用户。我们已经将其迁移到暂停调用，但我们仍然有一些基于阻塞调用的遗留控制器和服务。为了避免重写所有这些，我们可以为暂停函数提供阻塞替代方案。这些替代方案可以通过使用 <code>runBlocking</code> 包装暂停函数来实现（你也可以考虑使用一些调度器）。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">UserService</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">userRepository</span><span class="p">:</span> <span class="n">UserRepository</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">findUserById</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">User</span> <span class="p">=</span> <span class="n">userRepository</span><span class="p">.</span><span class="n">findUserById</span><span class="p">(</span><span class="n">id</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Blocking alternative for legacy parts of our application</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">findUserByIdBlocking</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">User</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">findUserById</span><span class="p">(</span><span class="n">id</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这可能是 <code>runBlocking</code> 最重要的用途，它充当了从阻塞到暂停的桥梁。一些库为 Java 定义了阻塞替代方案。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">readDataFromSource</span><span class="p">():</span> <span class="n">Data</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">fun</span> <span class="nf">readDataFromSourceBlocking</span><span class="p">():</span> <span class="n">Data</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">readDataFromSource</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2><a href="#where-not-to-use-runblocking">哪些情况下不应使用 <code>runBlocking</code></a></h2>
+
+<p>在某些情况下，不应使用 <code>runBlocking</code>。此外，切勿在挂起函数中直接使用 <code>runBlocking</code>。<code>runBlocking</code> 会阻塞当前线程，因此不应在挂起函数中进行阻塞调用（除非使用允许阻塞调用的调度程序，例如 <code>Dispatchers.IO</code>）。在这种情况下，很可能不需要 <code>runBlocking</code>。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Incorrect: runBlocking in a suspending function</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getToken</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// runBlocking is most likely not needed</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getToken</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>不应在不需要等待结果的函数中使用 <code>runBlocking</code>。如果你只需要启动协程，通常最好使用 <code>launch</code> 启动异步协程。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Incorrect: runBlocking used where we do not need to await result</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">startBackgroundProcess</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">doSomething</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Correct: Using launch to start an asynchronous coroutine</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">startBackgroundProcess</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">backgroundScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">doSomething</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我们还应注意，不要在不应被阻塞的线程上使用 <code>runBlocking</code>。这在 Android 上尤其成问题，因为阻塞主线程会导致应用程序卡死。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Incorrect: runBlocking on the main thread</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">onClick</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">userNameView</span><span class="p">.</span><span class="n">test</span> <span class="p">=</span> <span class="n">getUserName</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Correct: Using launch to start an asynchronous coroutine</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">onClick</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">lifecycleScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">userNameView</span><span class="p">.</span><span class="n">test</span> <span class="p">=</span> <span class="n">getUserName</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在后端，如果我们在 <code>synchronized</code> 块中使用它，可能会出现问题。一个技巧是使用 <code>launch</code> 实现回调函数。但是，通常情况下，最好重新设计代码，使用暂停而不是阻塞调用，并使用协程友好的工具（我们将在<em>同步协程</em>课程中讨论）。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Possibly incorrect: runBlocking inside synchronized block</span>
+</span><span class='line'><span class="n">synchronized</span><span class="p">(</span><span class="n">lock</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span> <span class="n">getUser</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// One solution: use launch to implement a callback</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">getUser</span><span class="p">(</span><span class="n">callback</span><span class="p">:</span> <span class="p">(</span><span class="n">User</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">backgroundScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">getUser</span><span class="p">()</span> <span class="c1">// suspending call</span>
+</span><span class='line'>        <span class="n">callback</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">synchronized</span><span class="p">(</span><span class="n">lock</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>    <span class="n">getUser</span> <span class="p">{</span> <span class="n">user</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2><a href="#outdated-runblocking-uses">过时的 <code>runBlocking</code> 用法</a></h2>
+
+<p><code>runBlocking</code> 传统上用于包装 <code>main</code> 函数体。它的属性非常适合此目的：它启动一个协程，因此它可以调用挂起函数或启动其他协程，并且它会阻塞线程直到协程完成，因此我们可以确保程序不会在所有这些进程完成之前结束。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">():</span> <span class="n">Unit</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">getUser</span><span class="p">()</span> <span class="c1">// suspending call</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;User: $user&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>runBlocking</code> 仍然可以以这种方式使用，但是在大多数现代情况下，我们更喜欢使用 Kotlin 1.3 中引入的挂起 <code>main</code> 函数。此类函数在底层被一个类似于 <code>runBlocking</code> 的阻塞构建器包装。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">getUser</span><span class="p">()</span> <span class="c1">// suspending call</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;User: $user&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>关键区别在于 <code>runBlocking</code> 设置了一个调度器，使其所有子协程在其正在使用的同一线程上运行。挂起 main 函数不会设置调度器，因此其子协程默认在不同的线程上运行。引入此更改是因为 <code>runBlocking</code> 使用的单线程调度器经常导致意外行为。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">():</span> <span class="n">Unit</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="n">Thread</span><span class="p">.</span><span class="n">currentThread</span><span class="p">().</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="n">Thread</span><span class="p">.</span><span class="n">currentThread</span><span class="p">().</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">// main</span>
+</span><span class='line'><span class="c1">// main</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">main</span><span class="p">():</span> <span class="n">Unit</span> <span class="p">=</span> <span class="n">coroutineScope</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="n">Thread</span><span class="p">.</span><span class="n">currentThread</span><span class="p">().</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="n">Thread</span><span class="p">.</span><span class="n">currentThread</span><span class="p">().</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="c1">// main</span>
+</span><span class='line'><span class="c1">// DefaultDispatcher-worker-1</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>runBlocking</code> 的第二个传统用途是在测试中。它被用来包装测试主体，以便我们可以调用挂起函数并在其中启动协程。现在，我们更倾向于使用 <code>kotlinx-coroutines-test</code> 库中的 <code>runTest</code>，它是 <code>runBlocking</code> 的一个更强大、更灵活的替代方案。它允许我们控制时间、生成后台作用域并跟踪子协程上的异常。<code>runTest</code> 将在<em>测试协程</em>课程中讨论。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">UserRepositoryTest</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">userRepository</span> <span class="p">=</span> <span class="n">InMemoryUserRepository</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">userService</span> <span class="p">=</span> <span class="n">UserService</span><span class="p">(</span><span class="n">userRepository</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">testGetUser</span><span class="p">()</span> <span class="p">=</span> <span class="n">runTest</span> <span class="p">{</span> <span class="c1">// previously runBlocking</span>
+</span><span class='line'>        <span class="c1">// given</span>
+</span><span class='line'>        <span class="n">userRepository</span><span class="p">.</span><span class="n">hasUser</span><span class="p">(</span><span class="n">UserEntity</span><span class="p">(</span><span class="s">&quot;1234&quot;</span><span class="p">,</span> <span class="s">&quot;John Doe&quot;</span><span class="p">))</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// when</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">userService</span><span class="p">.</span><span class="n">getUser</span><span class="p">(</span><span class="s">&quot;1234&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// then</span>
+</span><span class='line'>        <span class="n">assertEquals</span><span class="p">(</span><span class="s">&quot;John Doe&quot;</span><span class="p">,</span> <span class="n">user</span><span class="p">.</span><span class="n">name</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2><a href="#%E6%80%BB%E7%BB%93">总结</a></h2>
+
+<ul>
+<li><code>runBlocking</code> 是一个阻塞协程构建器，它启动一个协程并阻塞当前线程直到它完成。</li>
+<li><code>runBlocking</code> 是从阻塞世界(blocking)到挂起世界(suspending)的桥梁，它用于在需要阻塞当前线程直到协程完成的地方启动协程。</li>
+<li>如果你需要在项目中频繁使用 <code>runBlocking</code>，那么它就是一种代码异味。在设计合理的基于协程的项目中，应该尽量少用，或者干脆不用。</li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2025-09-23T22:34:01+08:00'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>23</span><span class='date-suffix'>rd</span>, <span class='date-year'>2025</span></span> <span class='time'>10:34 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/kotlin/'>kotlin</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2025/09/22/viewmodel-loading/" title="Previous Post: Android ViewModel数据加载：基于Flow架构的最佳实践">&laquo; Android ViewModel数据加载：基于Flow架构的最佳实践</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2025/09/24/system-design-for-developers/" title="Next Post: 面向开发者的系统设计：像建筑师一样思考">面向开发者的系统设计：像建筑师一样思考 &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2025 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

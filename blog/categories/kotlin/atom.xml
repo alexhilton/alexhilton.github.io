@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-08-19T20:56:26+08:00</updated>
+  <updated>2025-09-24T22:42:05+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,295 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[runBlocking实践：哪里该使用，哪里不该用]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/09/23/runblocking-in-practice/"/>
+    <updated>2025-09-23T22:34:01+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/09/23/runblocking-in-practice</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「runBlocking in practice: Where it should be used and where not」，原文链接<a href="https://kt.academy/article/run_blocking">https://kt.academy/article/run_blocking</a>，由Marcin Moskała发布于2025年9月1日。</p></blockquote>
+
+<p><a href=""><img src="https://kt.academy/_next/image?url=https%3A%2F%2Fmarcinmoskala.com%2Fkt-academy-articles%2Fpromotion%2Frun_blocking.png&amp;w=3840&amp;q=75" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>传统意义上讲，Java 和 Kotlin 项目都基于阻塞调用(blocking)。我所说的阻塞调用是指函数在等待某些操作（例如，等待网络响应）时会阻塞调用者的线程。Kotlin 协程最重要的规则之一是，我们不应该在挂起函数(suspending function)上进行阻塞调用（除非我们使用允许阻塞调用的调度程序，例如 <code>Dispatchers.IO</code>）。</p>
+
+<pre><code class="kotlin">// Incorrect: blocking call in a suspending function
+suspend fun getUser(): User {
+    val response = api.getUser() // blocking call
+    return response.toDomainUser()
+}
+
+// Correct: Using withContext(Dispatchers.IO) to make a blocking call in a suspending function
+suspend fun getUser(): User = withContext(Dispatchers.IO) {
+    val response = api.getUser() // blocking call
+    response.toDomainUser()
+}
+</code></pre>
+
+<p>但是如何反其道而行之呢？如何将挂起调用转换为阻塞调用？为此，我们使用 <code>runBlocking</code>！</p>
+
+<h2><a href="#how-runblocking-works"><code>runBlocking</code> 的工作原理</a></h2>
+
+<p><code>runBlocking</code> 在调用它的线程上启动一个协程，并阻塞该线程直到协程完成。因此，runBlocking 本质上是同步的，因为如果我们多次调用它，第二个调用要等到第一个调用完成后才会启动。作为一个同步协程构建器，<code>runBlocking</code> 返回它启动的协程的结果。</p>
+
+<pre><code class="kotlin">fun main() {
+    log("Starting main")
+    runBlocking {
+        log("Starting first runBlocking")
+        delay(1000)
+        log("Finishing first runBlocking")
+    }
+    val result: String = runBlocking {
+        log("Starting second runBlocking")
+        delay(1000)
+        "ABCD"
+    }
+    log("Second runBlocking finished with result: $result")
+}
+
+fun log(message: String) {
+    println("[${Thread.currentThread().name}] $message")
+}
+// [main] Starting main
+// [main] Starting first runBlocking
+// (1 sec)
+// [main] Finishing first runBlocking
+// [main] Starting second runBlocking
+// (1 sec)
+// [main] Second runBlocking finished with result: ABCD
+</code></pre>
+
+<p>由于 <code>runBlocking</code> 启动了一个作用域，它会等待其中启动的所有协程完成。这意味着它会等待所有子协程完成。这就是为什么下面的程序要等到所有三个异步协程都完成才会完成。为了展示如何使用 <code>runBlocking</code> 定义结果，我还让这个程序从 <code>main</code> 函数返回 <code>0</code>。</p>
+
+<pre><code class="kotlin">import kotlinx.coroutines.*
+
+fun main(): Int = runBlocking {
+    launch { delayAndPrintHello() }
+    launch { delayAndPrintHello() }
+    launch { delayAndPrintHello() }
+    println("Hello")
+    0 // result from main
+}
+
+suspend fun delayAndPrintHello() {
+    delay(1000L)
+    println("World!")
+}
+// Hello
+// (1 sec)
+// World!
+// World!
+// World!
+</code></pre>
+
+<p><code>runBlocking</code> 的行为可能会让你想起 <code>coroutineScope</code>，这并非巧合，因为它们都启动同步协程，但 <code>runBlocking</code> 是阻塞的，而 <code>coroutineScope</code> 是暂停的。这意味着完全不同的用法，我们只在暂停函数中使用 <code>coroutineScope</code>，而我们永远不应该在暂停函数中使用 <code>runBlocking</code>。这也意味着 <code>coroutineScope</code> 与其调用者建立关系，并且始终处于协程层次结构的中间，而 <code>runBlocking</code> 则启动一个新的协程层次结构。</p>
+
+<h2><a href="#the-practice-of-using-runblocking">使用 <code>runBlocking</code> 的实践</a></h2>
+
+<p>在正确实现的基于协程的项目中，并使用设计良好的协程友好库，我们几乎不需要使用 <code>runBlocking</code>。如果我们在项目中经常使用它，那就被认为是代码异味。然而，在某些情况下，runBlocking 是有用的，甚至是必要的。也有一些情况下，runBlocking 不应该被使用。我们还会讨论那些曾经需要 runBlocking 但现在有了更好的替代方案的情况。现在，让我们来看看。</p>
+
+<h2><a href="#where-to-use-runblocking">在哪里使用 <code>runBlocking</code></a></h2>
+
+<p><code>runBlocking</code> 应该用于需要启动协程并阻塞当前线程直到其完成的情况。这意味着它可以在以下情况下使用：</p>
+
+<ul>
+<li>我们需要等待协程的结果。</li>
+<li>我们可以阻塞当前线程。</li>
+</ul>
+
+
+<p>一个常见的 Android 示例是在 Retrofit 客户端中设置一个拦截器，将令牌附加到网络调用。获取令牌可能需要发起网络调用，因此我们需要启动一个协程来获取令牌。同时，拦截器需要结果才能继续执行。这个拦截器在 Retrofit 的池中启动，因此可以调用它的调用。这使得它成为使用 <code>runBlocking</code> 的理想场所。</p>
+
+<pre><code class="kotlin">class AddTokenInterceptor: Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val token = runBlocking { getToken() }
+        val request = chain.request().newBuilder()
+            .addHeader("Authorization", "Bearer $token")
+            .build()
+        return chain.proceed(request)
+    }
+}
+</code></pre>
+
+<p>在后端系统上，有时我们需要阻塞当前线程以等待协程完成，例如为了让我们的工具正确测量此进程的执行时间，或者当我们需要调用某些阻塞脚本并获取其结果时。</p>
+
+<pre><code class="kotlin">@MeasureExecutionTime
+fun runDataMigrationScript() = runBlocking {
+    val sourceData = readDataFromSource()
+    val transformedData = transformData(sourceData)
+    writeDataToTarget(transformedData)
+}
+</code></pre>
+
+<p>这些情况很少见，大多数后端项目不需要使用 <code>runBlocking</code>。除非它们有一些基于阻塞调用的遗留代码。考虑以下 <code>UserService</code>，它在我们的应用程序中用于管理用户。我们已经将其迁移到暂停调用，但我们仍然有一些基于阻塞调用的遗留控制器和服务。为了避免重写所有这些，我们可以为暂停函数提供阻塞替代方案。这些替代方案可以通过使用 <code>runBlocking</code> 包装暂停函数来实现（你也可以考虑使用一些调度器）。</p>
+
+<pre><code class="kotlin">class UserService(
+    private val userRepository: UserRepository,
+) {
+    suspend fun findUserById(id: String): User = userRepository.findUserById(id)
+
+    // Blocking alternative for legacy parts of our application
+    fun findUserByIdBlocking(id: String): User = runBlocking {
+        findUserById(id)
+    }
+
+    // ...
+}
+</code></pre>
+
+<p>这可能是 <code>runBlocking</code> 最重要的用途，它充当了从阻塞到暂停的桥梁。一些库为 Java 定义了阻塞替代方案。</p>
+
+<pre><code class="kotlin">suspend fun readDataFromSource(): Data {
+    // ...
+}
+
+fun readDataFromSourceBlocking(): Data = runBlocking {
+    readDataFromSource()
+}
+</code></pre>
+
+<h2><a href="#where-not-to-use-runblocking">哪些情况下不应使用 <code>runBlocking</code></a></h2>
+
+<p>在某些情况下，不应使用 <code>runBlocking</code>。此外，切勿在挂起函数中直接使用 <code>runBlocking</code>。<code>runBlocking</code> 会阻塞当前线程，因此不应在挂起函数中进行阻塞调用（除非使用允许阻塞调用的调度程序，例如 <code>Dispatchers.IO</code>）。在这种情况下，很可能不需要 <code>runBlocking</code>。</p>
+
+<pre><code class="kotlin">// Incorrect: runBlocking in a suspending function
+suspend fun getToken() = runBlocking {
+    // ...
+}
+
+// runBlocking is most likely not needed
+suspend fun getToken() {
+    // ...
+}
+</code></pre>
+
+<p>不应在不需要等待结果的函数中使用 <code>runBlocking</code>。如果你只需要启动协程，通常最好使用 <code>launch</code> 启动异步协程。</p>
+
+<pre><code class="kotlin">// Incorrect: runBlocking used where we do not need to await result
+fun startBackgroundProcess() = runBlocking {
+    doSomething()
+}
+
+// Correct: Using launch to start an asynchronous coroutine
+fun startBackgroundProcess() {
+    backgroundScope.launch {
+        doSomething()
+    }
+}
+</code></pre>
+
+<p>我们还应注意，不要在不应被阻塞的线程上使用 <code>runBlocking</code>。这在 Android 上尤其成问题，因为阻塞主线程会导致应用程序卡死。</p>
+
+<pre><code class="kotlin">// Incorrect: runBlocking on the main thread
+fun onClick() = runBlocking {
+    userNameView.test = getUserName()
+}
+
+// Correct: Using launch to start an asynchronous coroutine
+fun onClick() {
+    lifecycleScope.launch {
+        userNameView.test = getUserName()
+    }
+}
+</code></pre>
+
+<p>在后端，如果我们在 <code>synchronized</code> 块中使用它，可能会出现问题。一个技巧是使用 <code>launch</code> 实现回调函数。但是，通常情况下，最好重新设计代码，使用暂停而不是阻塞调用，并使用协程友好的工具（我们将在<em>同步协程</em>课程中讨论）。</p>
+
+<pre><code class="kotlin">// Possibly incorrect: runBlocking inside synchronized block
+synchronized(lock) {
+    // ...
+    val user = runBlocking { getUser() }
+    // ...
+}
+
+// One solution: use launch to implement a callback
+fun getUser(callback: (User) -&gt; Unit) {
+    backgroundScope.launch {
+        val user = getUser() // suspending call
+        callback(user)
+    }
+}
+synchronized(lock) {
+    // ...
+    getUser { user -&gt;
+        // ...
+    }
+}
+</code></pre>
+
+<h2><a href="#outdated-runblocking-uses">过时的 <code>runBlocking</code> 用法</a></h2>
+
+<p><code>runBlocking</code> 传统上用于包装 <code>main</code> 函数体。它的属性非常适合此目的：它启动一个协程，因此它可以调用挂起函数或启动其他协程，并且它会阻塞线程直到协程完成，因此我们可以确保程序不会在所有这些进程完成之前结束。</p>
+
+<pre><code class="kotlin">fun main(): Unit = runBlocking {
+    val user = getUser() // suspending call
+    println("User: $user")
+}
+</code></pre>
+
+<p><code>runBlocking</code> 仍然可以以这种方式使用，但是在大多数现代情况下，我们更喜欢使用 Kotlin 1.3 中引入的挂起 <code>main</code> 函数。此类函数在底层被一个类似于 <code>runBlocking</code> 的阻塞构建器包装。</p>
+
+<pre><code class="kotlin">suspend fun main() {
+    val user = getUser() // suspending call
+    println("User: $user")
+}
+</code></pre>
+
+<p>关键区别在于 <code>runBlocking</code> 设置了一个调度器，使其所有子协程在其正在使用的同一线程上运行。挂起 main 函数不会设置调度器，因此其子协程默认在不同的线程上运行。引入此更改是因为 <code>runBlocking</code> 使用的单线程调度器经常导致意外行为。</p>
+
+<pre><code class="kotlin">fun main(): Unit = runBlocking {
+    println(Thread.currentThread().name)
+    launch {
+        println(Thread.currentThread().name)
+    }
+}
+// main
+// main
+</code></pre>
+
+<pre><code class="kotlin">suspend fun main(): Unit = coroutineScope {
+    println(Thread.currentThread().name)
+    launch {
+        println(Thread.currentThread().name)
+    }
+}
+// main
+// DefaultDispatcher-worker-1
+</code></pre>
+
+<p><code>runBlocking</code> 的第二个传统用途是在测试中。它被用来包装测试主体，以便我们可以调用挂起函数并在其中启动协程。现在，我们更倾向于使用 <code>kotlinx-coroutines-test</code> 库中的 <code>runTest</code>，它是 <code>runBlocking</code> 的一个更强大、更灵活的替代方案。它允许我们控制时间、生成后台作用域并跟踪子协程上的异常。<code>runTest</code> 将在<em>测试协程</em>课程中讨论。</p>
+
+<pre><code class="kotlin">class UserRepositoryTest {
+    val userRepository = InMemoryUserRepository()
+    val userService = UserService(userRepository)
+
+    @Test
+    fun testGetUser() = runTest { // previously runBlocking
+        // given
+        userRepository.hasUser(UserEntity("1234", "John Doe"))
+
+        // when
+        val user = userService.getUser("1234")
+
+        // then
+        assertEquals("John Doe", user.name)
+    }
+}
+</code></pre>
+
+<h2><a href="#%E6%80%BB%E7%BB%93">总结</a></h2>
+
+<ul>
+<li><code>runBlocking</code> 是一个阻塞协程构建器，它启动一个协程并阻塞当前线程直到它完成。</li>
+<li><code>runBlocking</code> 是从阻塞世界(blocking)到挂起世界(suspending)的桥梁，它用于在需要阻塞当前线程直到协程完成的地方启动协程。</li>
+<li>如果你需要在项目中频繁使用 <code>runBlocking</code>，那么它就是一种代码异味。在设计合理的基于协程的项目中，应该尽量少用，或者干脆不用。</li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[学会说不！让你彻底学会Kotlin Flow的取消机制]]></title>
@@ -630,139 +919,6 @@ kapt {
 <li><a href="https://www.baeldung.com/kotlin/annotations">Kotlin Annotations</a></li>
 <li><a href="https://kt.academy/article/ak-annotation-processing">Annotation Processing</a></li>
 <li><a href="https://www.kodeco.com/8574679-annotation-processing-supercharge-your-development">Annotation Processing: Supercharge Your Development</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Deep Dive Into Kotlin Generics Runtime]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/03/16/deep-dive-into-kotlin-generics-runtime/"/>
-    <updated>2024-03-16T19:16:00+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/03/16/deep-dive-into-kotlin-generics-runtime</id>
-    <content type="html"><![CDATA[<p>通过前面的学习，对Kotlin的泛型已经有了比较全面的了解了，泛型的目的是让通用的代码更加的类型安全。现在我们离写出类型安全的泛型代码还差最后一块拼图，那就是泛型的类型擦除，今天就来深入地学习一下运行时的泛型，彻底的弄懂类型擦除的前因后果，并学会如何在运行时做类型检查和类型转换，以期完成拼图掌握泛型，写出类型安全的通用代码。</p>
-
-<p><a href=""><img src="https://global-uploads.webflow.com/618fa90c201104b94458e1fb/61978c1b9e0bf52082dabe92_Kotlin-Generics.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>关于泛型话题的一系列文章：</p>
-
-<ul>
-<li><a href="/blog/2024/03/04/kotlin-generics-made-easy/">这回就好好聊聊Kotlin的泛型</a></li>
-<li><a href="/blog/2024/03/10/java-generics-made-easy/">深入浅出Java泛型</a></li>
-<li><a href="/blog/2024/03/13/kotlin-generics-revisited/">Kotlin Generics Revisited</a></li>
-<li><a href="">Dive deep into Kotlin type erasure</a></li>
-</ul>
-
-
-<h2>泛型类型擦除（Type erasure）</h2>
-
-<p>泛型的类型安全性（包括类型检查type check，和类型转换type casting）都是由编译器在编译时做的，为了保持在JVM上的兼容性，编译器在保障完类型安全性后会对泛型类型进行<a href="https://en.wikipedia.org/wiki/Type_erasure">擦除（Type erasure）</a>。在运行时泛型类型的实例并不包含其类型信息，也就是说它不知道具体的类型参数，比如Foo&lt;Bar&gt;和Foo&lt;Baz?&gt;都被擦除成了Foo&lt;&#42;&gt;，在虚拟机（JVM）来看，它们的类型是一样的。</p>
-
-<p>因为泛型Foo&lt;T&gt;的类型参数T会<strong>被擦除（erased）</strong>，所以与类型参数相关的类型操作（类型检查is T和类型转换as T）都是不允许的。</p>
-
-<h2>可行的类型检查和转换</h2>
-
-<p>虽然类型参数会被擦除，但并不是说对泛型完全不能进行类型操作。</p>
-
-<h3>星号类型操作</h3>
-
-<p>因为所有泛型会被擦除成为星号无界通配Foo&lt;&#42;&gt;，它相当于Foo&lt;Any?&gt;，是所有Foo泛型的基类，类型参数Any?是根基类，所以可以进行类型检查和类型转换：</p>
-
-<pre><code class="Kotlin">if (something is List&lt;*&gt;) {
-    something.forEach { println(it) } // 元素被视为Any?类型
-}
-</code></pre>
-
-<p>针对星号通配做类型操作，类型参数会被视为Any?。但其实这种类型操作没有任何意义，毕竟Any是根基类，任何类当成Any都是没有问题的。</p>
-
-<h3>完全已知具体的类型参数时</h3>
-
-<p>另外一种情况就是，整个方法的上下文中已经完全知道了具体的类型参数时，不涉及泛型类型时，也是可以进行类型操作的，说的比较绕，我们来看一个&#127792;：</p>
-
-<pre><code class="Kotlin">fun handleStrings(list: MutableList&lt;String) {
-    if (list is ArrayList) {
-        // list is smart-cast to ArrayList&lt;String&gt;
-    }
-}
-</code></pre>
-
-<p>这个方法并不涉及泛型类型，已经知道了具体的类型参数是String，所以类型操作也是可行的，因为编译器知道具体的类型，能对类型进行检查 保证是类型安全的。并且因为具体类型参数String可以推断出来，所以&lt;String&gt;是可以省略的。</p>
-
-<h2>未检查的转换</h2>
-
-<p>当编译器能推断出具体的类型时，进行类型转换就是安全的，这就是被检查的转型（checked cast），如上面的&#127792;。</p>
-
-<p>如果无法推断出类型时，比如涉及泛型类型T时，因为类型会被擦除，编译器不知道具体的类型，这时as T或者as List&lt;T&gt;都是不安全的，编译器会报错，这就是未检查转型（unchecked cast）。</p>
-
-<p>但如果能确信是类型转换是安全的，可以用注解&#64;Suppress(&ldquo;UNCHECKED_CAST&rdquo;)来忽略。</p>
-
-<h2>用关键reified修饰inline泛型函数</h2>
-
-<p><img src="https://tse3-mm.cn.bing.net/th/id/OIP-C.Y0Gq_pPe6TUb1g0oEN_51wHaEb?rs=1&amp;pid=ImgDetMain" alt="" /></p>
-
-<p>要想能够对泛型类型参数T做类型操作，只能是在用关键字reified修饰了的inline泛型函数，在这种函数体内可以对泛型类型参数T做类型操作，&#127792;如：</p>
-
-<pre><code class="Kotlin">inline fun &lt;reified A, reified B&gt; Pair&lt;*, *&gt;.asPairOf(): Pair&lt;A, B&gt;? {
-    if (first !is A || second !is B) return null
-    return first as A to second as B
-}
-
-val somePair: Pair&lt;Any?, Any?&gt; = "items" to listOf(1, 2, 3)
-
-
-val stringToSomething = somePair.asPairOf&lt;String, Any&gt;()
-val stringToInt = somePair.asPairOf&lt;String, Int&gt;()
-</code></pre>
-
-<p>需要注意的是关键字reified能够让针对类型参数T的操作得到编译器的检查，保证安全，是允许的。但是对于泛型仍是不允许的，&#127792;如：</p>
-
-<pre><code class="Kotlin">inline fun &lt;reified T&gt; List&lt;*&gt;.asListOfType(): List&lt;T&gt;? =
-    if (all { it is T })
-        @Suppress("UNCHECKED_CAST")
-        this as List&lt;T&gt; else
-        null
-</code></pre>
-
-<p>这个inline泛型函数用关键字reified修饰了，因此针对类型参数T是允许类型检查类型转换，如第2行是允许的。但泛型仍是不合法，如第4行，这时可以用上一小节提到的注解&#64;Suppress(&ldquo;UNCHECKED_CAST&rdquo;)来忽略未检查类型转换。</p>
-
-<h2>inline和reified的原理</h2>
-
-<p>对于一些泛型工厂方法，就非常适合使用inline和reified，以保证转换为类型参数（因为工厂方法最终肯定要as T）是允许的且是安全的：</p>
-
-<pre><code class="Kotlin">inline fun &lt;reified T&gt; logger(): Logger = LoggerFactory.getLogger(T::class.java)
-
-class User {
-    private val log = logger&lt;User&gt;()
-    // ...
-}
-</code></pre>
-
-<p>关键字reified其实也没有什么神秘的，因为这是inline函数，这种函数是会把函数体嵌入到任何调用它的地方（call site），而每个调用泛型函数的地方必然会有明确的具体类型参数，那么编译器就知道了具体的类型能保证类型安全（checked cast）。上面的工厂方法在调用时就会大概变成酱紫：</p>
-
-<pre><code class="Kotlin">class User {
-    private val log = LoggerFactory.getLogger(User.class.java)
-}
-</code></pre>
-
-<p>这时其实在函数体内已经知道了具体的类型参数User，编译器能够进行类型检查，所以是安全的。</p>
-
-<h2>总结</h2>
-
-<p>本文深入的讨论一下运行时泛型的一些特性，泛型类型在运行时会被擦除，无法做泛型相关的类型操作，因为编译器无法保证其类型安全。例外就是在用reified修饰的inline函数中可以对类型参数T做类型操作，但泛型类型（带尖括号的&lt;T&gt;）仍是会被擦除，可以用注解&#64;Suppress(&ldquo;UNCHECKED_CAST&rdquo;)来忽略unchecked cast。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/generics.html#type-erasure">Type erasure</a></li>
-<li><a href="https://www.baeldung.com/kotlin/generics#generics-at-runtime">6. Generics at Runtime</a></li>
-<li><a href="https://www.baeldung.com/kotlin/type-erased-list-array-conversion">How to Convert a Type-Erased List to an Array in Kotlin</a></li>
-<li><a href="https://discuss.kotlinlang.org/t/type-erasure/14519">Discussion about Type Erasure</a></li>
-<li><a href="https://stackoverflow.com/questions/42916801/how-does-erasure-work-in-kotlin">How does erasure work in Kotlin?</a></li>
-<li><a href="https://workingdev.net/2018/09/reified-generics-in-kotlin.html">Reified Generics in Kotlin</a></li>
-<li><a href="https://duongnt.com/type-erasure-reified/">Type erasure and reified in Kotlin</a></li>
 </ul>
 
 ]]></content>
