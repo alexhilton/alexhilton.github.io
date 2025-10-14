@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-09-24T22:42:05+08:00</updated>
+  <updated>2025-10-14T22:50:03+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,681 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[突破速度障碍：非阻塞启动画面如何将Android 应用启动时间缩短90%]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/10/14/non-blocking-splash/"/>
+    <updated>2025-10-14T22:41:32+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/10/14/non-blocking-splash</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Breaking the Speed Barrier: How Non-Blocking Splash Screens Cut Android App Launch Time by 90%」，原文链接<a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90">https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90</a>，由Sankalp Chauhan发布于2025年9月28日。</p></blockquote>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#overview">概述</a></h2>
+
+<p>正值佳节期间，我们在每个应用上都能看到精美的启动画面和自定义徽标。在开发这些应用时，每个 Android 开发者都会面临启动画面的困境：用户期望获得美观且品牌化的启动体验，但 Google 原生的启动画面 API 却存在明显的局限性。创建自定义 <strong>SplashActivity</strong> 的常见解决方案看似合理，但却会引入隐藏的性能损失，导致应用运行缓慢且响应迟钝。</p>
+
+<p><a href=""><img src="https://sankalpchauhan.com/2db6f13d4b8881938f2fccacd47ff90b/untitled-design-1-.mp4.gif" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>为了应对这一挑战，我开发了一个名为<strong>EventSplash</strong>的测试库，该库实现了一种非阻塞启动画面方法。完整的实现和基准测试代码可在 GitHub 上获取：<a href="https://github.com/sankalpchauhan-me/fast-splash-experiment">fast-splash-experiment</a>（链接：<a href="https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E3%80%82">https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E3%80%82</a></p>
+
+<p>本案例研究通过一项对照实验，比较了传统的基于活动的启动画面和创新的基于视图的启动画面方法，并提供了实证证据。使用<strong>保守的同类比较</strong>，结果显示：<strong>页面加载时间缩短 90%</strong>，<strong>首次内容绘制时间提升 78%</strong>，<strong>完全绘制时间缩短 41%</strong>。</p>
+
+<p>我们将探索 Lottie 等复杂动画可能带来的显著优势，同时明确并发处理的利弊权衡和资源成本。</p>
+
+<ul>
+<li><strong>首次内容绘制 (FCP)</strong>：屏幕上出现第一个有意义内容的时间</li>
+<li><strong>完全绘制时间 (FPT)</strong>：屏幕完全渲染并可交互的时间</li>
+<li><strong>冷启动</strong>：应用在进程未运行时启动（性能影响最大）</li>
+<li><strong>卡顿</strong>：用户认为性能不佳的卡顿或掉帧</li>
+<li><strong>TTID/TTFD</strong>：初始显示时间/完全绘制时间（Android 官方指标）</li>
+<li><strong>内存压力</strong>：可用内存极低时的系统状态</li>
+<li><strong>低内存终止程序 (LMK)</strong>：在内存压力下终止进程的 Android 守护进程</li>
+<li><strong>Choreographer.doFrame</strong>：Android 的帧协调系统，用于管理动画、输入和绘制</li>
+</ul>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-problem-statement">问题声明</a></h3>
+
+<p>Google 原生的 Android 12+ SplashScreen API 性能出色，但自定义选项有限 <a href="https://developer.android.com/develop/ui/views/launch/splash-screen">[1]</a>。它不支持：</p>
+
+<ul>
+<li>视频背景</li>
+<li>Lottie 动画</li>
+<li>复杂的品牌元素</li>
+<li>促销/活动期间的促销内容</li>
+<li>自定义过渡效果</li>
+</ul>
+
+
+<p>这迫使开发者不得不进行自定义实现，通常使用专用的“SplashActivity”。虽然这种方法提供了创作自由，但它会创建一个<strong>阻塞序列</strong>，从而延迟应用主内容的显示。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-traditional-splash-activities-hurt-performance">为什么传统的闪屏活动会损害性能</a></h3>
+
+<p>Android 文档强调，应用应该针对冷启动进行优化，因为这“也可以提高温启动和热启动的性能”<a href="https://developer.android.com/topic/performance/vitals/launch-time">[2]</a>。然而，传统的闪屏实现方式违背了这一原则。</p>
+
+<p>当你使用单独的“SplashActivity”时，系统必须：</p>
+
+<ol>
+<li>创建并初始化启动画面 Activity</li>
+<li>扩展启动画面视图</li>
+<li>运行启动画面动画直至完成</li>
+<li>销毁启动画面 Activity</li>
+<li>创建并初始化主 Activity</li>
+<li>扩展主内容视图</li>
+</ol>
+
+
+<p>这种顺序流程意味着你的主内容在启动画面完成之前无法开始加载，这是一个影响用户感知性能的根本架构缺陷。</p>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-journey-exploring-different-approaches">折腾：探索不同的方法</a></h2>
+
+<p>在最终确定 EventSplash 实现方案之前，我探索了几种方法。了解这些探索为最终的设计决策提供了宝贵的背景，并展示了性能优化的迭代本质。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#discarded-approach-the-translucent-activity-overlay">弃用的方法：半透明 Activity 覆盖</a></h3>
+
+<p>最初的想法是使用带有半透明主题的“SplashActivity”覆盖“MainActivity”。理论上，MainActivity 可以在后台加载，而启动画面则显示在最上面。</p>
+
+<p><strong>启动顺序：</strong></p>
+
+<ol>
+<li>应用以具有半透明主题的 SplashActivity 启动</li>
+<li>SplashActivity 显示在 MainActivity 之上，但不会完全遮挡 MainActivity</li>
+<li>短暂延迟或初始化完成后，SplashActivity 结束，MainActivity 显露出来</li>
+</ol>
+
+
+<p><strong>弃用原因：</strong></p>
+
+<p>这种方法导致<strong>14% 的性能下降</strong>。问题在于 Android 处理 Activity 生命周期和渲染的方式。系统并非真正并行启动两个 Activity。相反，它创建了一种顺序依赖关系，GPU 被迫组合两个独立的 Activity 缓冲区，这会在 RAM 和电池方面造成巨大的开销，有时甚至会禁用窗口过渡动画。</p>
+
+<p>正如 Android 文档中关于半透明 Activity 的说明 <a href="https://medium.com/androiddevelopers/the-android-lifecycle-cheat-sheet-part-iv-49946659b094">[3]</a>：</p>
+
+<blockquote><p>“窗口管理器会保持原先的屏幕表面按 Z 轴顺序排列，并将新的屏幕表面混合在其上方。原先的 Activity 仍然可以通过新窗口中任何透明或部分透明的像素看到。”</p></blockquote>
+
+<p>正是这种混合操作导致了性能下降。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-winning-approach-the-gated-splash-screen-mechanism">制胜之道：门控启动画面机制</a></h3>
+
+<p>我最终找到了一种更复杂的方法，它采用了<strong>门控启动画面机制</strong>。此方法使用“ViewTreeObserver.OnPreDrawListener”来阻止所有 UI 渲染，直到满足特定条件为止。</p>
+
+<p><strong>工作原理：</strong></p>
+
+<ol>
+<li>启动时，会立即将 <code>OnPreDrawListener</code> 附加到 Activity 的 <code>decorView</code> 上。</li>
+<li>监听器的 <code>onPreDraw()</code> 方法返回 <code>false</code>，从而有效阻止所有绘制操作。</li>
+<li>监听器仅在所有条件都满足时才返回 <code>true</code>，允许内容渲染。</li>
+</ol>
+
+
+<p><strong>关键实现：</strong></p>
+
+<pre><code class="kotlin">// The gate mechanism
+
+gate.onPreDraw() → returns false = BLOCK all drawing
+
+gate.onPreDraw() → returns true = ALLOW drawing to proceed
+</code></pre>
+
+<p>这种方法完全符合 Android 官方文档中关于延长启动画面在屏幕上停留时间的建议 <a href="https://developer.android.com/develop/ui/views/launch/splash-screen">[1]</a>:</p>
+
+<blockquote><p>“如果你需要加载少量数据，例如从本地磁盘异步加载应用内设置，可以使用 ViewTreeObserver.OnPreDrawListener 暂停应用以绘制其第一帧。”</p></blockquote>
+
+<p>EventSplash 库扩展了这一概念，在应用启动时提供对用户可见内容的帧完美控制，防止任何内容闪烁，确保无缝体验。</p>
+
+<p><img src="https://sankalpchauhan.com/static/6810168ee26fb4ae7c236e03fbdd71bc/e5715/view-hirearchy.png" alt="DecorView 将包含我们的 SplashView 和 ContentView" /></p>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-experiment-measuring-real-world-impact">实验：测量实际影响</a></h2>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#test-environment">测试环境</a></h3>
+
+<ul>
+<li><strong>设备</strong>：小米 POCO F1，Android 10</li>
+<li><strong>构建</strong>：发布配置</li>
+<li><strong>方法</strong>：每个配置 35 次冷启动，每次运行之间暂停 2 秒</li>
+<li><strong>指标</strong>：自定义 PerfTracker 库，用于测量页面加载时间、FCP 和 FPT</li>
+<li><strong>脚本</strong>：通过 <code>perf_loop.sh</code> 自动执行可重复性</li>
+</ul>
+
+
+<p>所有测试代码和脚本均可在 <a href="https://github.com/sankalpchauhan-me/fast-splash-experiment">GitHub 代码库</a> （链接：<a href="https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E8%8E%B7%E5%8F%96%EF%BC%8C%E4%BB%A5%E7%A1%AE%E4%BF%9D%E5%8F%AF%E9%87%8D%E5%A4%8D%E6%80%A7%E3%80%82">https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E8%8E%B7%E5%8F%96%EF%BC%8C%E4%BB%A5%E7%A1%AE%E4%BF%9D%E5%8F%AF%E9%87%8D%E5%A4%8D%E6%80%A7%E3%80%82</a></p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#implementation-approaches-tested">测试的实现方法</a></h3>
+
+<ol>
+<li><strong>默认阻塞闪屏</strong>：简单的 <code>SplashActivity</code> 和基本路由（保守的基准）</li>
+<li><strong>默认非阻塞闪屏</strong>：EventSplash 库和简单的叠加层</li>
+<li><strong>Lottie 阻塞闪屏</strong>：传统方法和复杂的动画</li>
+<li><strong>Lottie 非阻塞闪屏</strong>：EventSplash 与 Lottie 动画并行运行</li>
+</ol>
+
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#results-conservative-claims-with-dramatic-potential">结果：保守的声明，但效果显著潜力</a></h2>
+
+<p><img src="https://sankalpchauhan.com/static/b4c51a8a6d8ebb0f3f12161c0441e89d/e5715/performance_comparison.png" alt="性能对比" /></p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-honest-comparison-default-splash-performance">真实对比：默认闪屏性能</a></h3>
+
+<p>为了进行<strong>同类比较</strong>，我们重点关注在默认的闪屏实现中，阻塞方法只是简单地为了路由目的而扩大 Activity：</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:center;"> 方法 </th>
+<th style="text-align:center;"> 页面加载时间 (毫秒) </th>
+<th style="text-align:center;"> FCP (毫秒) </th>
+<th style="text-align:center;"> FPT (毫秒) </th>
+<th style="text-align:center;"> 用户影响 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;"> <strong>默认阻塞</strong> </td>
+<td style="text-align:center;"> 366 </td>
+<td style="text-align:center;"> 744 </td>
+<td style="text-align:center;"> 2,195 </td>
+<td style="text-align:center;"> 明显的延迟 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> <strong>默认非阻塞</strong> </td>
+<td style="text-align:center;"> 37 </td>
+<td style="text-align:center;"> 164 </td>
+<td style="text-align:center;"> 1,295 </td>
+<td style="text-align:center;"> 流畅、响应迅速 </td>
+</tr>
+<tr>
+<td style="text-align:center;"> <strong>提升</strong> </td>
+<td style="text-align:center;"> <strong>90%</strong> </td>
+<td style="text-align:center;"> <strong>78%</strong> </td>
+<td style="text-align:center;"> <strong>41%</strong> </td>
+<td style="text-align:center;"> <strong>显著提升</strong> </td>
+</tr>
+</tbody>
+</table>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-lottie-animation-advantage">Lottie 动画的优势</a></h3>
+
+<p>当我们引入复杂的 Lottie 动画时，架构上的差异会更加明显发音：</p>
+
+<table>
+<thead>
+<tr>
+<th style="text-align:center;"> 方法 </th>
+<th style="text-align:center;"> 页面加载时间 (毫秒) </th>
+<th style="text-align:center;"> FCP (毫秒) </th>
+<th style="text-align:center;"> FPT (毫秒) </th>
+<th style="text-align:center;"> 备注 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center;"> <strong>Lottie 阻塞</strong> </td>
+<td style="text-align:center;"> 2,228 </td>
+<td style="text-align:center;"> 2,347 </td>
+<td style="text-align:center;"> 3,524 </td>
+<td style="text-align:center;"> <em>包含动画时长</em> </td>
+</tr>
+<tr>
+<td style="text-align:center;"> <strong>Lottie 非阻塞</strong> </td>
+<td style="text-align:center;"> 109 </td>
+<td style="text-align:center;"> 312 </td>
+<td style="text-align:center;"> 1,467 </td>
+<td style="text-align:center;"> <em>动画并行运行</em> </td>
+</tr>
+<tr>
+<td style="text-align:center;"> <strong>提升</strong> </td>
+<td style="text-align:center;"> <strong>95%</strong> </td>
+<td style="text-align:center;"> <strong>87%</strong> </td>
+<td style="text-align:center;"> <strong>58%</strong> </td>
+<td style="text-align:center;"> <strong>显著提升</strong> </td>
+</tr>
+</tbody>
+</table>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#understanding-the-lottie-numbers">理解 Lottie 数值</a></h3>
+
+<p><strong>重要提示</strong>：Lottie 阻塞数值在设计上包含动画时长，用户必须等待整个动画完成后才能看到任何主要内容。在非阻塞方法中，<strong>动画和内容加载并行运行</strong>，因此当 Lottie 动画完成时，FPT 通常已经完成或接近完成。</p>
+
+<p>这种并行执行是其关键的架构优势：<strong>无需牺牲性能即可获得精美的动画</strong>。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#performance-improvements-breakdown">性能改进细分</a></h3>
+
+<p><img src="https://sankalpchauhan.com/static/620f7ce36b7f1d75840820adb257fa7f/e5715/improvement_chart.png" alt="改进图表" />
+改进图表</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#recap-what-happened">回顾：发生了什么</a></h3>
+
+<p>即使与保守的默认启动画面相比，非阻塞方法也实现了<strong>90% 的页面加载速度提升次</strong>。用户体验从“明显的延迟”转变为“流畅且响应迅速”。</p>
+
+<p>对于像 Lottie 这样的复杂动画，其优势更加显著，因为传统方法迫使用户等待整个动画序列，然后才会出现任何有意义的内容。</p>
+
+<p><img src="https://sankalpchauhan.com/6f6ac6fcfed426f343bb76cd31f4694e/comparison.mp4.gif" alt="旧用户体验与新用户体验对比" /></p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-the-technical-mechanism">原因：技术机制</a></h3>
+
+<p>性能提升源于<strong>并行执行</strong>。传统方法<strong>顺序</strong>运行启动画面和主内容，而基于视图的方法<strong>并发</strong>运行它们：</p>
+
+<p><strong>传统（顺序）</strong>：</p>
+
+<pre><code class="css">Splash Activity → Animation → Destroy → Main Activity → Content Load → Display
+</code></pre>
+
+<p><strong>非阻塞（并行）</strong>：</p>
+
+<pre><code class="css">Main Activity + Content Load (background)
+     ↓
+Splash View (overlay) → Remove overlay → Display loaded content
+</code></pre>
+
+<p>这种架构差异彻底消除了阻塞瓶颈。</p>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#deep-dive-understanding-the-technical-implementation">深入探究：理解技术实现</a></h2>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#traditional-splash-activity-implementation">传统的 Splash Activity 实现</a></h3>
+
+<pre><code class="kotlin">class SplashActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        installSplashScreen()
+        enableEdgeToEdge()
+        setContent {
+            Loader { // Blocks until animation completes
+                startActivity(Intent(this@SplashActivity, MainActivity::class.java))
+            }
+        }
+    }
+
+    @Composable
+    fun Loader(onComplete: () -&gt; Unit) {
+        val composition by rememberLottieComposition(LottieCompositionSpec.RawRes(R.raw.sale_tags))
+        val progress by animateLottieCompositionAsState(composition)
+
+        // Animation blocks main content loading
+        if (progress == 1.0f) {
+            onComplete.invoke()
+        }
+    }
+}
+</code></pre>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#event-splash-non-blocking-implementation">EventSplash：非阻塞实现</a></h3>
+
+<pre><code class="kotlin">class EventSplash(
+    private val activity: ComponentActivity,
+    private val config: EventSplashConfig,
+) {
+    private val decorView: ViewGroup = activity.window.decorView as ViewGroup
+    private var composeView: ComposeView? = null
+
+    // Gate prevents premature display until main content ready
+    private val gate = object : ViewTreeObserver.OnPreDrawListener {
+        override fun onPreDraw(): Boolean {
+            return if (isReady) {
+                decorView.viewTreeObserver.removeOnPreDrawListener(this)
+                true
+            } else false
+        }
+    }
+
+    init {
+        decorView.viewTreeObserver.addOnPreDrawListener(gate)
+        setupSplashCompose() // Non-blocking overlay
+        isReady = true
+    }
+
+    private fun setupSplashCompose() {
+        val view = ComposeView(activity).apply {
+            layoutParams = ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+            setContent {
+                getProvider(config).Content(onFinish = { dismiss() })
+            }
+        }
+        composeView = view
+        decorView.addView(view) // Overlay on main content
+    }
+}
+</code></pre>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#usage-comparison">使用情况比较</a></h3>
+
+<p><strong>传统方法</strong>:</p>
+
+<pre><code class="kotlin">// Requires separate activity, blocks main content
+class MainActivity : ComponentActivity() {
+    // Main content only loads after splash completes
+}
+</code></pre>
+
+<p><strong>EventSplash 方法</strong>:</p>
+
+<pre><code class="kotlin">class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // Non-blocking: splash displays while content loads
+        EventSplashApi.attachTo(this).with(getSaleConfig()).show()
+
+        setContent {
+            // Main content loads immediately in parallel
+            MainAppContent()
+        }
+    }
+}
+</code></pre>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#recap-implementation-differences">回顾：实现差异</a></h3>
+
+<p>传统方法需要单独的 Activity 生命周期，而 EventSplash 会注入一个与主内容加载过程共存的视图叠加层。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-architectural-advantages">原因：架构优势</a></h3>
+
+<ol>
+<li><strong>单一 Activity 上下文</strong>：消除 Activity 转换开销</li>
+<li><strong>并行处理</strong>：主内容在启动画面显示时加载</li>
+<li><strong>减少内存占用</strong>：没有重复的 Activity 对象</li>
+<li><strong>减少 Choreographer.doFrame 循环</strong>：减少渲染管线压力</li>
+<li><strong>优化视图层级</strong>：使用单一装饰视图，而非多个独立的 Activity</li>
+</ol>
+
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-choreographer-do-frame-problem">Choreographer.doFrame 问题</a></h2>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#understanding-frame-rendering-issues">理解帧渲染问题</a></h3>
+
+<p>Android 的渲染系统依赖于 <code>Choreographer.doFrame</code> 来协调动画、输入和绘制 <a href="https://developer.android.com/topic/performance/vitals/render">[4]</a>。文档警告：</p>
+
+<blockquote><p>“如果 Systrace 显示 Choreographer#doFrame 的布局部分工作过多或过于频繁，则意味着你遇到了布局性能问题”</p></blockquote>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-splash-activities-cause-jank">为什么闪屏 Activity 会导致卡顿</a></h3>
+
+<p>传统的闪屏实现会造成多个性能瓶颈：</p>
+
+<ol>
+<li><strong>双重布局传递</strong>：每个 Activity 都需要单独的视图填充和布局</li>
+<li><strong>上下文切换开销</strong>：操作系统必须管理多个 Activity 上下文</li>
+<li><strong>内存压力</strong>：重复的视图层次结构会消耗额外的 RAM</li>
+<li><strong>帧时序问题</strong>：Activity 转换会触发额外的 doFrame 周期</li>
+</ol>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#perfetto-analysis-insights">Perfetto 分析洞察</a></h3>
+
+<p>使用 Perfetto 分析轨迹时，传统的启动画面会显示：</p>
+
+<ul>
+<li><code>Choreographer.doFrame</code> 执行时间延长</li>
+<li>布局膨胀多次峰值</li>
+<li>垃圾回收压力增加</li>
+<li>主线程可用性延迟</li>
+</ul>
+
+
+<p>基于视图的方法通过在整个启动过程中维护单一渲染上下文来消除这些问题。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#critical-consideration-concurrent-processing-isnt-free">⚠️ 关键考虑：并发处理并非免费</a></h3>
+
+<p>虽然我们的结果显示性能显著提升，但<strong>非阻塞方法也带来了一系列挑战</strong>，必须仔细考虑。同时运行启动动画和主内容加载会带来额外的资源压力，而顺序加载方法则不会出现这种压力。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#memory-pressure-the-primary-concern">内存压力：主要问题</a></h3>
+
+<p><strong>峰值内存使用量增加</strong>：</p>
+
+<pre><code class="nix">// Memory usage pattern comparison
+Traditional Approach:
+Splash: 50MB → 0MB → Main Content: 120MB = Peak: 120MB
+
+Non-blocking Approach:  
+Splash + Main Content: 50MB + 120MB = Peak: 170MB
+</code></pre>
+
+<p><strong>实际影响</strong>：</p>
+
+<ul>
+<li><strong>简单的闪屏叠加</strong>在并发执行期间会增加 20-50MB 的内存</li>
+<li><strong>Lottie 动画</strong>在渲染期间可能会消耗 50-100MB 以上的内存</li>
+<li><strong>综合峰值使用量</strong>可能比顺序加载方法高出 40-70%</li>
+<li><strong>低端设备</strong>（1-2GB RAM）容易受到内存压力的影响</li>
+</ul>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#low-memory-killer-risk">低内存杀手风险</a></h3>
+
+<p>Android 的低内存终止守护进程会监控系统内存，并可能在压力下终止应用 <a href="https://source.android.com/docs/core/perf/lmkd">[5]</a>:</p>
+
+<blockquote><p>“内存压力是指系统内存不足的状态，需要 Android 通过限制或终止不重要的进程来释放内存”</p></blockquote>
+
+<p><strong>风险因素</strong>:</p>
+
+<ul>
+<li>启动过程中终止应用进程会导致糟糕的用户体验</li>
+<li>后台应用被更频繁地终止</li>
+<li>并发分配导致的内存碎片</li>
+<li>在预算设备上尤其成问题</li>
+</ul>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#cpu-and-battery-implications">CPU 和电池影响</a></h3>
+
+<p><strong>CPU 开销增加</strong>：</p>
+
+<ul>
+<li><code>Choreographer.doFrame</code> 处理多个并发操作</li>
+<li>主线程因 UI 工作重叠而变得更加繁忙</li>
+<li>GPU 渲染管线同时处理启动画面和内容</li>
+</ul>
+
+
+<p><strong>功耗问题</strong>：研究表明，“智能手机上的 UI 渲染需要强大的 CPU 和 GPU 才能满足用户感知的流畅度，并且这占了相当一部分的功耗”<a href="https://www.sciencedirect.com/science/article/abs/pii/S1383762122001540">[6]</a>。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#device-compatibility-challenges">设备兼容性挑战</a></h3>
+
+<p><strong>低端设备注意事项</strong>:</p>
+
+<ul>
+<li>单核或双核处理器难以并行化</li>
+<li>有限的 RAM 使得内存压力至关重要</li>
+<li>较慢的存储速度加剧加载延迟</li>
+<li>优势可能无法转化为低端设备的优势</li>
+</ul>
+
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#when-not-to-use-non-blocking-approach">何时不应使用非阻塞方法</a></h2>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#scenarios-where-traditional-approach-may-be-better">传统方法可能更佳的场景：</a></h3>
+
+<ol>
+<li><strong>资源极其受限的设备</strong>（&lt; 2GB RAM）</li>
+<li><strong>电池关键型应用</strong>，功耗至关重要</li>
+<li><strong>简单的启动画面</strong>，没有复杂的动画</li>
+<li><strong>启动处理繁重的应用</strong>，已经给应用带来了压力系统</li>
+<li><strong>遗留代码库</strong>，重构风险大于收益</li>
+</ol>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#risk-mitigation-strategies">风险缓解策略</a></h3>
+
+<p><strong>自适应实施</strong>：</p>
+
+<pre><code class="kotlin">class AdaptiveSplashStrategy {
+    fun chooseSplashApproach(): SplashConfig {
+        return when {
+            isLowEndDevice() -&gt; SimpleSplashConfig()
+            isBatteryLow() -&gt; ReducedAnimationConfig()
+            isHighPerformanceDevice() -&gt; FullLottieConfig()
+            else -&gt; DefaultConfig()
+        }
+    }
+
+    private fun isLowEndDevice(): Boolean {
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        return activityManager.isLowRamDevice || 
+               Runtime.getRuntime().maxMemory() &lt; 256 * 1024 * 1024
+    }
+}
+</code></pre>
+
+<p><strong>内存监控</strong>：</p>
+
+<pre><code class="kotlin">private fun monitorMemoryPressure() {
+    val memoryInfo = ActivityManager.MemoryInfo()
+    activityManager.getMemoryInfo(memoryInfo)
+
+    if (memoryInfo.lowMemory) {
+        // Fallback to simpler splash
+        simplifyOrDismissSplash()
+    }
+}
+</code></pre>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#industry-context-and-validation">行业背景和验证</a></h2>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#alignment-with-industry-best-practices">与行业最佳做法保持一致实践</a></h3>
+
+<p>EventSplash 方法符合最新的行业趋势和官方建议。像 Turo 这样的公司通过消除专用的启动活动也取得了类似的效果。正如他们的案例研究 <a href="https://medium.com/androiddevelopers/turo-reduced-its-app-startup-time-by-77-using-android-developer-tools-and-best-practices-bcf82f596bcf">[7]</a> 中所述：</p>
+
+<blockquote><p>“最初，我们使用专用的 SplashActivity 来运行所有启动工作，然后再将应用路由到 HomeActivity。然而，最新的指南建议不要采用这种方法。因此，我们移除了多余的 SplashActivity，并将所有启动逻辑转移到了根 Activity。”</p></blockquote>
+
+<p>Turo 使用类似的原理实现了<strong>77% 的启动时间缩短</strong>。</p>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#validation-through-official-documentation">通过官方文档验证</a></h3>
+
+<p>Android 官方文档明确建议使用“ViewTreeObserver.OnPreDrawListener”进行启动画面管理，<a href="https://developer.android.com/develop/ui/views/launch/splash-screen">[1]</a>，这进一步验证了该方法，而这正是 EventSplash 的核心实现。</p>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#best-practices-and-common-pitfalls">最佳实践和常见陷阱</a></h2>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#dos">建议✅</a></h3>
+
+<ul>
+<li>在性能强大的设备上，<strong>使用基于视图的启动画面实现</strong>自定义动画</li>
+<li>根据设备性能<strong>实施自适应策略</strong></li>
+<li>使用真实设备**测量性能，并跨设备层级发布版本</li>
+<li>监控内存使用情况**并实施内存泄漏预防</li>
+<li>针对最坏情况进行冷启动优化</li>
+<li>在低端设备上进行广泛测试**以确保广泛的兼容性</li>
+<li><strong>为启动画面实施适当的生命周期管理</strong></li>
+</ul>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#donts">注意事项❌</a></h3>
+
+<ul>
+<li><strong>不要想当然地认为一刀切</strong>：设备性能差异巨大</li>
+<li><strong>不要忽视内存压力</strong>：监控并适应系统限制</li>
+<li><strong>不要在未考虑替代方案的情况下使用单独的 SplashActivity</strong></li>
+<li><strong>不要用启动画面动画阻碍主内容加载</strong></li>
+<li><strong>不要忽略 Play 管理中心内的 Android Vitals 指标</strong></li>
+<li><strong>不要只在高端设备</strong>或调试版本上进行测试</li>
+<li><strong>不要在启动画面中创建复杂的视图层次结构</strong></li>
+<li><strong>不要在启动画面中执行繁重的操作</strong></li>
+<li><strong>不要忘记清理启动画面</strong>并清除缓存</li>
+</ul>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#common-pitfalls">常见陷阱</a></h3>
+
+<ol>
+<li><strong>内存泄漏</strong>：未能清除 LottieCompositionCache</li>
+<li><strong>设备能力假设</strong>：未适应低端设备限制</li>
+<li><strong>生命周期问题</strong>：未正确处理 Activity 状态变化</li>
+<li><strong>动画冲突</strong>：闪屏动画干扰主内容</li>
+<li><strong>测试偏差</strong>：仅在快速设备或调试版本上进行测试</li>
+<li><strong>指标误解</strong>：关注动画时长而非用户感知的性能</li>
+<li><strong>资源监控疏忽</strong>：未监控内存和 CPU 使用模式</li>
+</ol>
+
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#making-informed-architectural-decisions">制定明智的架构决策</a></h2>
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#decision-framework">决策框架</a></h3>
+
+<p>在选择启动画面方案时，请考虑以下因素：</p>
+
+<p><strong>设备受众特征</strong>：</p>
+
+<ul>
+<li>你的用户中有多少比例使用低端设备？</li>
+<li>你支持的最低 RAM 配置是多少？</li>
+<li>你是否瞄准了拥有廉价设备的新兴市场？</li>
+</ul>
+
+
+<p><strong>应用特性</strong>：</p>
+
+<ul>
+<li>你的主要内容加载复杂度如何？</li>
+<li>你是否对网络依赖性很强？</li>
+<li>你当前的内存占用是多少？</li>
+</ul>
+
+
+<p><strong>业务需求</strong>：</p>
+
+<ul>
+<li>自定义启动动画对你的品牌有多重要？</li>
+<li>你能实现渐进式增强吗？</li>
+<li>你的开发和测试能力如何？</li>
+</ul>
+
+
+<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#recommended-strategy">推荐策略</a></h3>
+
+<p><strong>渐进式增强方法</strong>：</p>
+
+<pre><code class="kotlin">EventSplashApi.attachTo(this)
+    .withFallback(SimpleSplashConfig())
+    // Low-end devices
+    .withStandard(ImageSplashConfig())
+    // Mid-range devices
+    .withEnhanced(LottieConfig())
+    // High-end devices
+    .adaptToDevice()
+    // Automatic selection
+    .show()
+</code></pre>
+
+<p>此方法提供：</p>
+
+<ul>
+<li>适用于所有设备的<strong>基本功能</strong></li>
+<li>在资源允许的情况下<strong>增强体验</strong></li>
+<li>根据设备性能<strong>自动适配</strong></li>
+<li>在内存压力下<strong>优雅降级</strong></li>
+</ul>
+
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#insights-recommendations">见解与建议</a></h2>
+
+<p>非阻塞启动画面方法<strong>显著提升性能</strong>（保守测试中页面加载速度提升 90%，复杂动画下最高可达 95%），但也存在一些不足。<strong>并发处理会增加峰值内存使用量和 CPU 开销</strong>，这在低端设备上可能会造成问题。</p>
+
+<p><strong>关键见解</strong>：其优势显著且可衡量，但也伴随着资源成本，必须通过自适应的实施策略进行管理。</p>
+
+<p><strong>诚挚建议</strong>：使用非阻塞方法并结合设备感知回退机制。即使是保守估计，也能显​​示出显著的性能提升，其架构优势也令人信服。然而，该实现必须足够复杂，才能支持所有 Android 设备。</p>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#conclusion">结论</a></h2>
+
+<p>_本案例研究表明，性能优化需要在保持诚实声明的同时平衡相互竞争的约束条件。非阻塞、基于视图的方法提供了显著且可衡量的优势，但成功实施需要深入了解其收益和成本。</p>
+
+<p>通过摆脱传统的“SplashActivity”模式，采用更复杂、更并发的架构，我们可以构建速度更快、响应更灵敏的 Android 应用，并在整个生态系统中可靠地运行。</p>
+
+<p><strong>我们的目标不仅仅是构建更快的应用，而是构建使用体验即时、愉悦的应用，因为最终，性能是用户能够注意到并欣赏的功能。</strong></p>
+
+<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#references">参考</a></h2>
+
+<ol>
+<li><a href="https://developer.android.com/develop/ui/views/launch/splash-screen">闪屏 | 视图 | Android 开发者</a></li>
+<li><a href="https://developer.android.com/topic/performance/vitals/launch-time">应用启动时间 | 应用质量 | Android 开发者</a></li>
+<li><a href="https://medium.com/androiddevelopers/the-android-lifecycle-cheat-sheet-part-iv-49946659b094">Android 生命周期速查表 — 第四部分：ViewModel、半透明 Activity 和启动模式 | 作者：Jose Alcérreca</a></li>
+<li><a href="https://developer.android.com/topic/performance/vitals/render">渲染缓慢 | 应用质量 | Android 开发者</a></li>
+<li><a href="https://source.android.com/docs/core/perf/lmkd">低内存终止守护进程 (lmkd) | Android 开源项目</a></li>
+<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S1383762122001540">移动 UI 渲染功耗研究</a></li>
+<li><a href="https://medium.com/androiddevelopers/turo-reduced-its-app-startup-time-by-77-using-android-developer-tools-and-best-practices-bcf82f596bcf">Turo 利用 Android 开发者工具和最佳实践将其应用启动时间缩短了 77%</a></li>
+</ol>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[为什么你的App总是忘记所有事情]]></title>
@@ -776,475 +1451,6 @@ public class GzipInterceptor implements Interceptor {
 compression-in-web-development</a></li>
 <li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://en.wikipedia.org/wiki/Gzip</a></li>
 <li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://www.youtube.com/watch?v=Mjab_aZsdxw</a></li>
-</ol>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[详解DiffUtils、Myers算法和 Jetpack Compose]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/02/24/diffutils-and-jetpack-compose/"/>
-    <updated>2025-02-24T22:33:47+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/02/24/diffutils-and-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/diffutils-myers-algorithm-and-jetpack-compose-028c726e574d">《DiffUtils, Myers’ Algorithm and Jetpack Compose》</a>，原文发布于2024年12月27日。</p></blockquote>
-
-<p>在 Android UI 开发领域，DiffUtils 是优化 RecyclerView 中列表更新的必备工具。DiffUtils 是一个实用程序类，它计算将一个列表转换为另一个列表所需的<strong>最小更改</strong>，并仅更新 UI 中已更改的部分，从而<strong>节省性能并减少不必要的重绘</strong>。这个强大的工具依赖于<strong>Myers算法</strong>，这是一种在两个序列之间找到<strong>最短编辑脚本（Shortest edit script）</strong>的有效方法。</p>
-
-<p><a href=""><img src="https://www.pngmart.com/files/Android-App-Development-PNG-Free-Download.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>但在 Jetpack Compose 中，是没有DiffUtils的，这又是为什么呢？</p>
-
-<p>在这篇博客中，我将详细分析 DiffUtils 的工作原理、它与 Myers 算法的联系、为什么它是现代 Android 开发的重要组成部分，并探讨为什么 DiffUtil 在 Compose 中是不必要的、Compose 如何优化 UI 更新，以及你应该使用什么来代替。</p>
-
-<p>让我们开始吧！</p>
-
-<h2>DiffUtils 是什么？</h2>
-
-<p>DiffUtils 是 Android 中的一个实用程序，它可以比较两个列表并生成一系列更新操作，例如：</p>
-
-<ul>
-<li>插入：添加新项目。</li>
-<li>删除：移除过时的项目。</li>
-<li>移动：重新排序现有项目。</li>
-</ul>
-
-
-<p>然后可以应用这些操作来有效地更新列表，最大限度地减少不必要的重绘或重新计算。这在 RecyclerView 等性能至关重要的组件中特别有用。</p>
-
-<h3>DiffUtils 的工作原理</h3>
-
-<blockquote><p>DiffUtil 使用 Eugene W. Myers 的差异算法来计算将一个列表转换为另一个列表所需的最少更新次数。Myers 的算法不处理移动的项目，因此 DiffUtil 对结果进行第二次遍历以检测移动的项目。&ndash; <a href="https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil">https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil</a></p></blockquote>
-
-<p>Android 中的 DiffUtils 基于 Myers 算法，用于比较列表并找出它们之间的差异。Myers 算法和 DiffUtils 的目标是相同的：确定将一个序列（列表）转换为另一个序列（列表）所需的最小更改次数，包括插入、删除和移动。从本质上讲，DiffUtils 通过识别以下内容来计算两个列表之间的差异：</p>
-
-<ol>
-<li>最长公共子序列 (LCS)：新旧列表之间保持不变的元素。</li>
-<li>编辑操作：将旧列表转换为新列表所需的插入、删除和移动。</li>
-</ol>
-
-
-<p><strong>关键见解：</strong>
-DiffUtils使用 LCS 的概念来最小化更改（插入和删除），并且还针对移动进行了优化——这是基于列表的比较所特有的功能，其中元素不仅被删除和插入，而且还被重新定位。</p>
-
-<h3>Myers 算法：DiffUtils 的基础</h3>
-
-<p>Myers 算法于 1986 年推出，旨在计算两个序列之间的<strong>最短编辑脚本 (SES，Shortest Edit Script)</strong>。它找到将一个序列转换为另一个序列所需的最少操作数。这些操作包括：</p>
-
-<ul>
-<li>插入</li>
-<li>删除</li>
-<li>匹配（按顺序排列的公共元素）</li>
-</ul>
-
-
-<h4>Myers 算法的关键概念</h4>
-
-<p>Myers 算法旨在找到将一个序列（例如，旧列表）转换为另一个序列（新列表）所需的最少<strong>插入、删除和移动</strong>次数。该算法基于<strong>编辑距离（Edit Distance）</strong>的概念，并专门计算将一个序列转换为另一个序列的一系列操作。</p>
-
-<p>Myers 算法在计算<strong>最短的编辑操作序列</strong>方面特别有效，从而最小化所需的总更改次数。核心思想是找到两个序列之间的<strong>最长公共子序列 (LCS)</strong>，然后确定将旧序列转换为新序列的最小操作。</p>
-
-<p>最长公共子序列 (LCS)：Myers 算法首先确定两个列表之间的 LCS。LCS 表示不需要修改的元素。</p>
-
-<p><strong>编辑图：</strong></p>
-
-<ul>
-<li>该算法将转换可视化为一个图，其中每条路径
-代表一系列操作（插入、删除或匹配）。</li>
-<li>通过该图的最短路径对应于最短编辑脚本
-（SES）。</li>
-</ul>
-
-
-<p><strong>优化：</strong></p>
-
-<ul>
-<li>Myers 算法使用动态规划来减少计算开销，实现高效的 O(ND) 时间复杂度，其中 N 和 D 是序列的长度和它们之间的距离。</li>
-</ul>
-
-
-<h3>DiffUtils 实际应用示例</h3>
-
-<p>让我们考虑两个列表：</p>
-
-<pre><code class="Kotlin">// Old list
-["a", "b", "c", "d"]
-// New List
-["a", "d", "c", "b"]
-</code></pre>
-
-<ol>
-<li><strong>确定 LCS</strong>：此处的 LCS 为 [&ldquo;a&rdquo;] 。</li>
-<li><strong>计算编辑脚本</strong>：</li>
-<li>删除“b”（旧列表）。</li>
-<li>将“d”移到“c”之前。</li>
-<li>在“c”之后插入“b”。</li>
-<li><strong>应用更改</strong>：使用这些最少的操作将旧列表转换为新列表。</li>
-</ol>
-
-
-<h3>DiffUtils 在 RecyclerView 中的作用</h3>
-
-<p>在 RecyclerView 中，每次更新都涉及计算哪些项目发生了变化、哪些项目被添加以及哪些项目被删除。单纯地更新整个列表可能会导致卡顿或无响应等性能问题。DiffUtils 通过以下方式解决此问题：</p>
-
-<ul>
-<li>最小化更改：仅执行必要的更新。</li>
-<li>优化性能：实现流畅的动画和高效的列表更新。</li>
-<li>减少重绘：仅重新渲染受影响的项目，从而提高整体 UI 响应能力。</li>
-</ul>
-
-
-<pre><code class="Java">// 第1步: 创建一个DiffUtil.Callback
-public class MyDiffCallback extends DiffUtil.Callback {
-    private final List&lt;String&gt; oldList;
-    private final List&lt;String&gt; newList;
-
-    public MyDiffCallback(List&lt;String&gt; oldList, List&lt;String&gt; newList) {
-        this.oldList = oldList;
-        this.newList = newList;
-    }
-
-    @Override
-    public int getOldListSize() {
-        return oldList.size();
-    }
-
-    @Override
-    public int getNewListSize() {
-        return newList.size();
-    }
-
-    @Override
-    public boolean areItemsTheSame(int oldItemPosition, int newItemPosition) {
-        return oldList.get(oldItemPosition).equals(newList.get(newItemPosition));
-    }
-
-    @Override
-    public boolean areContentsTheSame(int oldItemPosition, int newItemPosition) {
-        return oldList.get(oldItemPosition).equals(newList.get(newItemPosition));
-    }
-}
-
-// 第2步: 计算差异
-DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(
-    new MyDiffCallback(oldList, newList)
-);
-
-// 第3步: 派发更新
-myAdapter.submitList(newList);
-diffResult.dispatchUpdatesTo(myAdapter);
-</code></pre>
-
-<p>DiffUtils 是一款功能强大的工具，用于处理 Android 中的列表更新，确保高效且最小的更改。通过利用 Myers 算法，它可以计算出将一个列表转换为另一个列表的最短编辑脚本。了解其工作原理不仅可以提高你对 Android 开发的掌握，还可以帮助你优化 RecyclerView 的性能。</p>
-
-<h2>为什么 Compose 不需要 DiffUtils</h2>
-
-<p>Jetpack Compose 建立在<strong>声明性 UI 原则</strong>之上，这意味着你可以根据当前状态<strong>描述 UI 应该是</strong>什么样子，而 Compose 会处理其余的事情。</p>
-
-<p><strong>命令式 UI（视图）：</strong></p>
-
-<ul>
-<li>通过确定需要应用哪些更改，你可以手动更新 UI 组件。</li>
-<li>DiffUtil 等工具对于计算列表的最小更新以控制性能必不可少。</li>
-</ul>
-
-
-<p><strong>声明式 UI（Compose）：</strong></p>
-
-<ul>
-<li>你描述给定状态下的 UI 应该是什么样子，而不是如何更改它。</li>
-<li>Compose 会自动重新组合受状态更改影响的 UI 部分。</li>
-</ul>
-
-
-<p>在 Compose 中，<strong>状态驱动 UI，重组处理更新</strong>。DiffUtils 无需计算增量，因为系统会自动优化要重新渲染的内容。</p>
-
-<p>以下是 Compose 不再需要 DiffUtils 的主要原因：</p>
-
-<ol>
-<li><strong>状态驱动的UI</strong></li>
-</ol>
-
-
-<p>在 Compose 中，当状态发生变化时，UI 会自动重组。你无需手动计算列表之间的差异；Compose 会为你处理。</p>
-
-<pre><code class="Kotlin">val items = remember { mutableStateListOf("Apple", "Banana", "Cherry") }
-
-LazyColumn {
-    items(items) { item -&gt;
-        Text(text = item)
-    }
-}
-</code></pre>
-
-<p>如果你从 items 中添加或删除项目，Compose 将仅重组 UI 中受影响的部分。无需 DiffUtils！</p>
-
-<ol>
-<li><strong>内置优化</strong></li>
-</ol>
-
-
-<p>Compose 使用 LazyColumn 和 LazyRow 中的键来优化项目渲染。通过为每个项目指定一个唯一键，Compose 可以识别哪些项目已更改、已添加或已移除。</p>
-
-<pre><code class="Kotlin">LazyColumn {
-    items(items = yourList, key = { item -&gt; item.id }) { item -&gt;
-        Text(text = item.name)
-    }
-}
-</code></pre>
-
-<p>该key确保 Compose 有效地仅更新受影响的项目，类似于 DiffUtils 所做的。</p>
-
-<ol>
-<li><strong>智能重组</strong></li>
-</ol>
-
-
-<p>Compose 可以智能地跳过未发生改变的 UI 元素的重组。使用 Remember 和 RememberSaveable 等工具，你可以进一步优化重组行为。</p>
-
-<pre><code class="Kotlin">@Composable
-fun RememberExample() {
-    val count = remember { mutableStateOf(0) }
-
-    Button(onClick = { count.value++ }) {
-        Text("Clicked ${count.value} times")
-    }
-}
-// 在这里，当状态发生变化时，只有Button中的Text，而不是整个组件，会发生重组
-</code></pre>
-
-<p><strong>Compose 中的重组：</strong></p>
-
-<ul>
-<li>Compose 会观察状态变化。当特定 UI 元素的状态发生变化时，只会重组该元素（及其依赖项）。</li>
-<li>系统会完全跳过未更改的 UI 元素。</li>
-</ul>
-
-
-<p><strong>Views 中的 DiffUtils：</strong></p>
-
-<ul>
-<li>需要明确计算列表的新旧状态之间的变化。</li>
-<li>然后分派计算出的更改以更新 RecyclerView。</li>
-</ul>
-
-
-<h3>在 Compose 中用什么来代替 DiffUtils</h3>
-
-<p>虽然你不需要 DiffUtils ，但 Compose 提供了实现类似优化的工具：</p>
-
-<ol>
-<li>带 Keys 的 LazyColumn</li>
-</ol>
-
-
-<p>使用 key 可以有效地识别和管理列表中的更改。</p>
-
-<pre><code class="Kotlin">LazyColumn {
-    items(items = yourList, key = { item -&gt; item.id }) { item -&gt;
-        Text(text = item.name)
-    }
-}
-</code></pre>
-
-<ol>
-<li>SnapshotStateList</li>
-</ol>
-
-
-<p>若要以被动方式管理列表，请使用 SnapshotStateList 。</p>
-
-<pre><code class="Kotlin">val items = remember { mutableStateListOf("Apple", "Banana", "Cherry") }
-Button(onClick = { items.add("Date") }) {
-    Text("Add Item")
-}
-LazyColumn {
-    items(items) { item -&gt;
-        Text(text = item)
-    }
-}
-</code></pre>
-
-<ol>
-<li>SubcomposeLayout</li>
-</ol>
-
-
-<p>对于复杂的场景，SubcomposeLayout 可以精确控制要重组的内容。</p>
-
-<h2>相关的面试问题</h2>
-
-<ol>
-<li>为什么 Jetpack Compose 不需要 DiffUtils ？</li>
-</ol>
-
-
-<p>Compose 依赖于声明性 UI 模型。它会根据状态变化自动更新 UI，无需像 DiffUtil 那样手动计算列表差异。使用 LazyColumn 中的键可确保高效更新，而无需使用外部工具。</p>
-
-<ol>
-<li>Jetpack Compose 处理列表更新的方式与 RecyclerView 有何不同？</li>
-</ol>
-
-
-<p>Compose 不依赖手动差异计算 (DiffUtils)，而是观察状态变化并仅重组受影响的组件。这是通过使用键和 Compose 的重组逻辑在内部管理的。</p>
-
-<ol>
-<li><p>在 Android 开发中，声明式 UI 与命令式 UI 相比有哪些优势？</p></li>
-<li><p>代码更简单：声明式 UI 通过关注内容而不是方式来减少样板代码。</p></li>
-<li>自动状态管理：Compose 根据状态变化自动更新 UI。</li>
-<li>可测试性提高：无状态可组合项可以独立测试。</li>
-<li>一致性：重组确保 UI 始终反映当前状态。</li>
-<li><p>Compose 中的重组是什么？它与 RecyclerView 中的传统视图失效有何不同？</p></li>
-<li><p>重组：当 Compose 检测到状态变化时发生。它仅重新生成受变化影响的 UI 部分。</p></li>
-<li>视图失效：在 RecyclerView 中，失效会触发视图重绘，如果没有 DiffUtil 之类的工具，这可能会很低效。</li>
-<li><p>何时应在 Compose 中使用 Remember 和 RememberSaveable？</p></li>
-<li><p>使用 Remember 在单个组合生命周期内存储状态。</p></li>
-<li>使用 RememberSaveable 在配置更改（如屏幕旋转）期间保留状态。</li>
-<li>Compose 如何决定要重组 UI 的哪些部分？</li>
-</ol>
-
-
-<p>Compose 会跟踪每个可组合项中的状态读取。当状态发生变化时，只有读取已更改状态的可组合项才会被重组。</p>
-
-<ol>
-<li>在 Compose 中实现 LazyColumn 以显示项目列表并添加按钮来更新列表。确保它能够高效更新。</li>
-</ol>
-
-
-<pre><code class="Kotlin">@Composable
-fun LazyColumnExample() {
-    val items = remember { mutableStateListOf("Apple", "Banana", "Cherry") }
-
-    Column {
-        Button(onClick = { items.add("Date") }) {
-            Text("Add Item")
-        }
-
-        LazyColumn {
-            items(items, key = { it }) { item -&gt;
-                Text(text = item)
-            }
-        }
-    }
-}
-</code></pre>
-
-<ol>
-<li>识别并修复 Compose 组件中不必要的重组。</li>
-</ol>
-
-
-<pre><code class="Kotlin">LazyColumn {
-    items(items = list, key = { item -&gt; item.id }) { item -&gt;
-        Text(text = item.name)
-    }
-}
-</code></pre>
-
-<ol>
-<li><p>诊断 LazyColumn 中的滞后：</p></li>
-<li><p>检查关键参数：确保每个项目都有唯一的键。</p></li>
-<li>使用分析工具：使用 Android Studio 的Compose 调试器分析重组计数。</li>
-<li>优化项目渲染：避免在 LazyColumn 中使用的可组合函数中进行大量计算。</li>
-<li>调试列表更新中的不一致行为：</li>
-</ol>
-
-
-<p>确保数据源稳定并符合 UI 预期。使用SnapshotStateList 可以帮助保持反应性。</p>
-
-<ol>
-<li>SnapshotStateList 和 ArrayList 之间的区别：</li>
-</ol>
-
-
-<p>SnapshotStateList 是被动的；更改会自动触发 Compose 中的重组。ArrayList 不是被动的，需要手动通知 UI 更新。</p>
-
-<ol>
-<li>使用 SubcomposeLayout</li>
-</ol>
-
-
-<p>SubcomposeLayout 是 Jetpack Compose 中一个强大的布局工具，可让你按需组合布局的各个部分。这对于 UI 的某些部分占用大量资源或可能无法立即使用的情况尤其有用，例如从网络或数据库加载图像。SubcomposeLayout 允许按需组合布局的各个部分。</p>
-
-<p>示例：动态加载图像并显示占位符，直到准备好为止。</p>
-
-<pre><code class="Kotlin">@Composable
-fun ImageWithPlaceholder(imageUrl: String, placeholder: Painter) {
-    Box(modifier = Modifier.fillMaxSize()) {
-        SubcomposeLayout { constraints -&gt;
-            // First, compose the placeholder
-            val placeholderLayout = subcompose(0) {
-                Image(painter = placeholder, contentDescription = null, modifier = Modifier.fillMaxSize())
-            }
-
-            // Compose the image once it's loaded
-            val imageLayout = subcompose(1) {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )你
-            }
-
-            // Return the max size for the layout
-            layout(constraints.maxWidth, constraints.maxHeight) {
-                placeholderLayout[0].measure(constraints).placeRelative(0, 0)
-                imageLayout[0].measure(constraints).placeRelative(0, 0)
-            }
-        }
-    }
-}
-
-@Preview
-@Composable
-fun ImageWithPlaceholderPreview() {
-    ImageWithPlaceholder(
-        imageUrl = "https://www.example.com/image.jpg",
-        placeholder = painterResource(id = R.drawable.placeholder_image)
-    )
-}
-</code></pre>
-
-<ul>
-<li>SubcomposeLayout：此布局允许你根据需要组合布局的各个部分。在这里，我们首先组合占位符，然后在图像准备好后组合图像。</li>
-<li>subcompose()：此函数用于组合布局的各个部分。subcompose 函数返回 MeasureResult 对象列表，然后你可以测量这些对象并将其放置在屏幕上。</li>
-<li>AsyncImage：我们使用 coil-compose 库中的 AsyncImage 异步加载图像。加载时，会显示占位符。</li>
-<li>占位符：首先显示占位符。图像准备好后，它会接管。</li>
-</ul>
-
-
-<p>此方法可帮助你通过减少不必要的重新组合和更优雅地处理图像或数据等动态内容来创建更高效​​的 UI。</p>
-
-<ol>
-<li><p>将旧版 RecyclerView 迁移到 Compose：</p></li>
-<li><p>用 LazyColumn 替换 RecyclerView。</p></li>
-<li>将适配器逻辑移至可组合函数。</li>
-<li>使用 Remember 或 SnapshotStateList 进行状态管理。</li>
-<li>使用 Keys 进行优化。</li>
-</ol>
-
-
-<h2>结论</h2>
-
-<ul>
-<li>Compose 不需要 DiffUtils，因为它建立在声明性和状态驱动的架构上。</li>
-<li>带有 key 的 LazyColumn 和 SnapshotStateList 提供类似的优化。</li>
-<li>智能重组可确保高效的 UI 更新，从而减少手动优化的需要。</li>
-</ul>
-
-
-<p>通过拥抱 Compose 的声明性特性，你可以专注于构建美观、响应迅速的 UI，而无需担心列表更新的复杂性。</p>
-
-<p>Happy Composing！</p>
-
-<h2>参考文献</h2>
-
-<ol>
-<li>Myers, E. (1986)。O(ND) 差分算法及其变体。ACM编程语言和系统事务，1(2)，251–266。</li>
-<li><a href="https://developer.android.com/reference/androidx/recyclerview/widget/DiffUtil">Android 开发者文档 — DiffUtils</a></li>
 </ol>
 
 ]]></content>
