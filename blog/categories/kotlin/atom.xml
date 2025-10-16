@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-10-14T22:50:03+08:00</updated>
+  <updated>2025-10-16T20:12:27+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,647 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Kotlin互斥锁(Mutex)：协程的线程安全守护神]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex/"/>
+    <updated>2025-10-15T23:05:51+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Kotlin Mutex: Thread-Safe Concurrency for Coroutines」，原文链接<a href="https://carrion.dev/en/posts/kotlin-mutex-concurrency-guide/">https://carrion.dev/en/posts/kotlin-mutex-concurrency-guide/</a>，由Ignacio Carrión发布于2025年10月3日。</p></blockquote>
+
+<p><a href=""><img src="file:///Users/alexhilton/Downloads/kotlin_mutex.webp" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>使用 Kotlin 协程构建并发应用程序时，保护共享的可变状态至关重要。虽然传统的 Java 同步工具（例如 <code>synchronized</code> 块和 <code>ReentrantLock</code>）可以正常工作，但它们会阻塞线程，并且与协程的挂起模型不兼容。因此，引入 <code>Mutex</code>——一个协程友好的同步原语，它提供互斥而不阻塞线程。</p>
+
+<p>本指南探讨了何时使用 Mutex、最佳实践以及它与其他并发控制机制的比较。</p>
+
+<h2>TL;DR：省流版本的建议</h2>
+
+<ul>
+<li>当需要保护多个协程访问的共享可变状态时，请使用 <code>Mutex</code>。</li>
+<li>在协程代码中，优先使用 <code>Mutex</code> 而不是 <code>synchronized</code>，以避免阻塞线程。</li>
+<li>使用 <code>mutex.withLock { }</code> 自动获取和释放锁。</li>
+<li>对于更复杂的状态管理场景，请考虑使用 <code>Actor</code> 或 <code>StateFlow</code>。</li>
+<li>对于简单的计数器，请改用 <code>AtomicInteger</code> 或 <code>AtomicReference</code>。</li>
+<li>如果需要将并发访问限制为多个许可，请使用 <code>Semaphore</code>。</li>
+<li>如果不使用 <code>withLock</code>，请始终在 finally 块中释放锁。</li>
+</ul>
+
+
+<h2>什么是互斥锁？</h2>
+
+<p><code>Mutex</code>（互斥）是 <code>kotlinx.coroutines</code> 中的同步原语，用于确保同一时间只有一个协程可以执行临界区。与阻塞线程的传统锁不同，Mutex 会暂停协程，从而使线程可以自由地执行其他工作。</p>
+
+<p>基本结构：</p>
+
+<pre><code class="kotlin">import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+val mutex = Mutex()
+
+suspend fun protectedOperation() {
+    mutex.withLock {
+        // Critical section - only one coroutine at a time
+        // Modify shared state safely here
+    }
+}
+</code></pre>
+
+<p>关键特性：</p>
+
+<ul>
+<li>非阻塞：暂停协程而不是阻塞线程</li>
+<li>公平：默认按先进先出顺序授予访问权限</li>
+<li>不重入安全：持有锁的协程无法再次获取锁（防止死锁）</li>
+<li>轻量级：比线程阻塞锁更高效</li>
+</ul>
+
+
+<h2>互斥锁的核心用例</h2>
+
+<p>最常见的用例——确保对共享变量的安全访问：</p>
+
+<pre><code class="kotlin">class CounterService {
+    private var counter = 0
+    private val mutex = Mutex()
+
+    suspend fun increment() {
+        mutex.withLock {
+            counter++
+        }
+    }
+
+    suspend fun getCount(): Int {
+        return mutex.withLock {
+            counter
+        }
+    }
+}
+</code></pre>
+
+<h3>2. 协调资源访问</h3>
+
+<p>当多个协程需要对某个资源进行独占访问时：</p>
+
+<pre><code class="kotlin">class FileWriter(private val file: File) {
+    private val mutex = Mutex()
+
+    suspend fun appendLine(line: String) {
+        mutex.withLock {
+            file.appendText("$line\n")
+        }
+    }
+}
+</code></pre>
+
+<h3>3.确保顺序执行</h3>
+
+<p>即使操作是并发触发的，也必须按顺序执行：</p>
+
+<pre><code class="kotlin">class OrderProcessor {
+    private val mutex = Mutex()
+    private val orders = mutableListOf&lt;Order&gt;()
+
+    suspend fun processOrder(order: Order) {
+        mutex.withLock {
+            // Ensure orders are processed sequentially
+            orders.add(order)
+            validateOrder(order)
+            persistOrder(order)
+        }
+    }
+}
+</code></pre>
+
+<h3>4. 线程安全的延迟初始化</h3>
+
+<p>在挂起上下文中实现线程安全的延迟初始化：</p>
+
+<pre><code class="kotlin">class DatabaseConnection {
+    private var connection: Connection? = null
+    private val mutex = Mutex()
+
+    suspend fun getConnection(): Connection {
+        if (connection != null) return connection!!
+
+        return mutex.withLock {
+            // Double-check inside lock
+            connection ?: createConnection().also { connection = it }
+        }
+    }
+
+    private suspend fun createConnection(): Connection {
+        delay(1000) // Simulate connection setup
+        return Connection()
+    }
+}
+</code></pre>
+
+<h2>最佳实践</h2>
+
+<h3>1. 始终使用 withLock</h3>
+
+<p>即使发生异常，withLock 也会自动处理锁的获取和释放：</p>
+
+<pre><code class="kotlin">// ✅ Good: Automatic cleanup
+mutex.withLock {
+    dangerousOperation()
+}
+
+// ❌ Bad: Manual management, error-prone
+mutex.lock()
+try {
+    dangerousOperation()
+} finally {
+    mutex.unlock()
+}
+</code></pre>
+
+<h3>2. 保持临界区较小</h3>
+
+<p>尽量减少锁的持有时间以减少争用：</p>
+
+<pre><code class="kotlin">// ✅ Good: Lock only for critical section
+suspend fun updateUser(userId: String, name: String) {
+    val validated = validateName(name) // Outside lock
+
+    mutex.withLock {
+        userCache[userId] = validated // Only this needs protection
+    }
+
+    notifyObservers(userId) // Outside lock
+}
+
+// ❌ Bad: Holding lock during slow operations
+suspend fun updateUserSlow(userId: String, name: String) {
+    mutex.withLock {
+        val validated = validateName(name) // Slow operation inside lock
+        userCache[userId] = validated
+        notifyObservers(userId) // I/O inside lock
+    }
+}
+</code></pre>
+
+<h3>3. 避免嵌套锁</h3>
+
+<p>互斥锁不可重入。避免两次获取同一个锁：</p>
+
+<pre><code class="kotlin">// ❌ Bad: Deadlock!
+suspend fun problematic() {
+    mutex.withLock {
+        helperFunction() // Tries to acquire mutex again
+    }
+}
+
+suspend fun helperFunction() {
+    mutex.withLock {
+        // Will suspend forever
+    }
+}
+
+// ✅ Good: Restructure to avoid nesting
+suspend fun better() {
+    mutex.withLock {
+        helperFunctionUnsafe() // No lock acquisition
+    }
+}
+
+fun helperFunctionUnsafe() {
+    // Assumes caller holds lock
+}
+</code></pre>
+
+<h3>4. 优先考虑无锁替代方案</h3>
+
+<p>对于简单操作，原子类型速度更快：</p>
+
+<pre><code class="kotlin">// ✅ Better for simple counters
+class AtomicCounter {
+    private val counter = AtomicInteger(0)
+
+    fun increment() = counter.incrementAndGet()
+    fun get() = counter.get()
+}
+
+// ❌ Overkill for a simple counter
+class MutexCounter {
+    private var counter = 0
+    private val mutex = Mutex()
+
+    suspend fun increment() {
+        mutex.withLock { counter++ }
+    }
+}
+</code></pre>
+
+<h3>5.文档锁不变量</h3>
+
+<p>明确锁保护的对象：</p>
+
+<pre><code class="kotlin">class UserCache {
+    private val mutex = Mutex() // Protects userMap and lastUpdate
+    private val userMap = mutableMapOf&lt;String, User&gt;()
+    private var lastUpdate = 0L
+
+    suspend fun updateUser(id: String, user: User) {
+        mutex.withLock {
+            userMap[id] = user
+            lastUpdate = System.currentTimeMillis()
+        }
+    }
+}
+</code></pre>
+
+<h2>互斥锁 vs. 其他同步方法</h2>
+
+<h3>互斥锁 vs. synchronized</h3>
+
+<pre><code class="kotlin">// Traditional synchronized (blocks thread)
+class SynchronizedCounter {
+    private var count = 0
+
+    @Synchronized
+    fun increment() {
+        count++ // Thread blocked while waiting
+    }
+}
+
+// Mutex (suspends coroutine)
+class MutexCounter {
+    private var count = 0
+    private val mutex = Mutex()
+
+    suspend fun increment() {
+        mutex.withLock {
+            count++ // Coroutine suspended, thread free
+        }
+    }
+}
+</code></pre>
+
+<p><strong>何时该用哪个：</strong></p>
+
+<ul>
+<li>对于非暂停代码和旧版 Java 互操作，请使用 <code>synchronized</code></li>
+<li>对于暂停函数和基于协程的代码，请使用 <code>Mutex</code></li>
+<li>在协程上下文中，<code>Mutex</code> 效率更高，因为线程不会被阻塞</li>
+</ul>
+
+
+<h3>互斥锁 vs. 信号量</h3>
+
+<pre><code class="kotlin">// Mutex: Only one coroutine at a time
+val mutex = Mutex()
+
+// Semaphore: N coroutines at a time
+val semaphore = Semaphore(permits = 3)
+
+// Example: Rate limiting API calls
+class ApiClient {
+    private val semaphore = Semaphore(5) // Max 5 concurrent requests
+
+    suspend fun makeRequest(endpoint: String): Response {
+        semaphore.withPermit {
+            return httpClient.get(endpoint)
+        }
+    }
+}
+</code></pre>
+
+<p><strong>何时使用谁：</strong></p>
+
+<ul>
+<li>需要独占访问（单次许可）时使用 <code>Mutex</code></li>
+<li>需要将并发限制为 N 个操作时使用 <code>Semaphore</code></li>
+</ul>
+
+
+<h3>互斥锁 vs. Actor</h3>
+
+<pre><code class="kotlin">// Mutex: Manual synchronization
+class MutexBasedCache {
+    private val cache = mutableMapOf&lt;String, Data&gt;()
+    private val mutex = Mutex()
+
+    suspend fun get(key: String) = mutex.withLock { cache[key] }
+    suspend fun put(key: String, value: Data) = mutex.withLock { cache[key] = value }
+}
+
+// Actor: Message-based synchronization
+sealed class CacheMessage
+data class Get(val key: String, val response: CompletableDeferred&lt;Data?&gt;) : CacheMessage()
+data class Put(val key: String, val value: Data) : CacheMessage()
+
+fun CoroutineScope.cacheActor() = actor&lt;CacheMessage&gt; {
+    val cache = mutableMapOf&lt;String, Data&gt;()
+
+    for (msg in channel) {
+        when (msg) {
+            is Get -&gt; msg.response.complete(cache[msg.key])
+            is Put -&gt; cache[msg.key] = msg.value
+        }
+    }
+}
+</code></pre>
+
+<p><strong>何时使用谁：</strong></p>
+
+<ul>
+<li>使用 <code>Mutex</code> 进行直接方法调用的简单同步</li>
+<li>对于复杂的状态机或需要消息队列时，使用 <code>Actor</code></li>
+<li>Actor 提供更好的封装性，并且可以处理背压</li>
+</ul>
+
+
+<h3>Mutex 与 StateFlow</h3>
+
+<pre><code class="kotlin">// Mutex: Imperative state management
+class MutexState {
+    private var state = 0
+    private val mutex = Mutex()
+
+    suspend fun updateState(transform: (Int) -&gt; Int) {
+        mutex.withLock {
+            state = transform(state)
+        }
+    }
+}
+
+// StateFlow: Reactive state management
+class FlowState {
+    private val _state = MutableStateFlow(0)
+    val state: StateFlow&lt;Int&gt; = _state.asStateFlow()
+
+    fun updateState(transform: (Int) -&gt; Int) {
+        _state.update(transform) // Thread-safe built-in
+    }
+}
+</code></pre>
+
+<p><strong>何时使用哪个：</strong></p>
+
+<ul>
+<li>需要自定义同步逻辑时使用 <code>Mutex</code></li>
+<li>使用 <code>StateFlow</code> 进行内置线程安全的可观察状态</li>
+<li><code>StateFlow</code> 更适合 UI 状态和响应式架构</li>
+</ul>
+
+
+<h3>Mutex 与原子类型</h3>
+
+<pre><code class="kotlin">// AtomicInteger: Lock-free for simple operations
+class AtomicCounter {
+    private val counter = AtomicInteger(0)
+
+    fun increment() = counter.incrementAndGet()
+    fun addAndGet(delta: Int) = counter.addAndGet(delta)
+}
+
+// Mutex: For complex operations
+class ComplexCounter {
+    private var counter = 0
+    private var history = mutableListOf&lt;Int&gt;()
+    private val mutex = Mutex()
+
+    suspend fun increment() {
+        mutex.withLock {
+            counter++
+            history.add(counter) // Multiple operations
+        }
+    }
+}
+</code></pre>
+
+<p><strong>何时使用哪个：</strong></p>
+
+<ul>
+<li>使用原子类型进行单变量操作（计数器、标志）</li>
+<li>需要协调多个变量时使用 <code>Mutex</code></li>
+<li>原子操作速度更快，但受限于特定操作</li>
+</ul>
+
+
+<h2>常见陷阱</h2>
+
+<h3>1. 忘记使用 suspend</h3>
+
+<p>互斥操作需要暂停：</p>
+
+<pre><code class="kotlin">// ❌ Won't compile
+fun broken() {
+    mutex.withLock { } // Error: suspend function called in non-suspend context
+}
+
+// ✅ Correct
+suspend fun correct() {
+    mutex.withLock { }
+}
+</code></pre>
+
+<h3>2. 长时间操作期间持有锁</h3>
+
+<pre><code class="kotlin">// ❌ Bad: Holding lock during I/O
+suspend fun bad(url: String) {
+    mutex.withLock {
+        val data = httpClient.get(url) // Network call inside lock
+        cache[url] = data
+    }
+}
+
+// ✅ Good: Fetch outside lock
+suspend fun good(url: String) {
+    val data = httpClient.get(url)
+    mutex.withLock {
+        cache[url] = data
+    }
+}
+</code></pre>
+
+<h3>3. 假设可重入</h3>
+
+<pre><code class="kotlin">// ❌ Deadlock: Mutex is not reentrant
+suspend fun outer() {
+    mutex.withLock {
+        inner() // Deadlock!
+    }
+}
+
+suspend fun inner() {
+    mutex.withLock {
+        // Never reached
+    }
+}
+</code></pre>
+
+<h3>4. 不处理取消</h3>
+
+<p>持有锁时务必考虑取消：</p>
+
+<pre><code class="kotlin">// ✅ Good: withLock handles cancellation
+suspend fun proper() {
+    mutex.withLock {
+        doWork()
+    } // Lock released even on cancellation
+}
+
+// ❌ Risky: Manual lock management
+suspend fun risky() {
+    mutex.lock()
+    try {
+        doWork() // If cancelled here, lock stays acquired
+    } finally {
+        mutex.unlock()
+    }
+}
+</code></pre>
+
+<h2>性能考量</h2>
+
+<ul>
+<li><strong>互斥 vs. synchronized</strong>：在协程密集型代码中，互斥更高效，因为线程不会被阻塞</li>
+<li><strong>争用</strong>：高争用会降低性能；考虑分片（为不同的键设置多个锁）</li>
+<li><strong>锁粒度</strong>：更细粒度的锁（更多锁，每个锁保护更少的数据）可减少争用</li>
+<li><strong>无锁替代方案</strong>：对于简单操作，原子类型和 <code>StateFlow</code> 速度更快</li>
+</ul>
+
+
+<p>示例：分片以减少争用：</p>
+
+<pre><code class="kotlin">class ShardedCache(private val shardCount: Int = 16) {
+    private val mutexes = Array(shardCount) { Mutex() }
+    private val caches = Array(shardCount) { mutableMapOf&lt;String, Data&gt;() }
+
+    private fun shardIndex(key: String) = key.hashCode() and (shardCount - 1)
+
+    suspend fun put(key: String, value: Data) {
+        val index = shardIndex(key)
+        mutexes[index].withLock {
+            caches[index][key] = value
+        }
+    }
+
+    suspend fun get(key: String): Data? {
+        val index = shardIndex(key)
+        return mutexes[index].withLock {
+            caches[index][key]
+        }
+    }
+}
+</code></pre>
+
+<h2>真实示例：线程安全的Repository</h2>
+
+<pre><code class="kotlin">class UserRepository(
+    private val api: UserApi,
+    private val database: UserDatabase
+) {
+    private val cache = mutableMapOf&lt;String, User&gt;()
+    private val mutex = Mutex()
+
+    suspend fun getUser(userId: String): User? {
+        // Check cache first (read lock)
+        mutex.withLock {
+            cache[userId]?.let { return it }
+        }
+
+        // Try database (outside lock)
+        database.getUser(userId)?.let { user -&gt;
+            mutex.withLock {
+                cache[userId] = user
+            }
+            return user
+        }
+
+        // Fetch from API (outside lock)
+        return try {
+            val user = api.fetchUser(userId)
+            mutex.withLock {
+                cache[userId] = user
+                database.insertUser(user)
+            }
+            user
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    suspend fun updateUser(user: User) {
+        mutex.withLock {
+            cache[user.id] = user
+            database.updateUser(user)
+        }
+    }
+
+    suspend fun clearCache() {
+        mutex.withLock {
+            cache.clear()
+        }
+    }
+}
+</code></pre>
+
+<h2>测试互斥锁保护的代码</h2>
+
+<pre><code class="kotlin">@Test
+fun `concurrent increments should be thread-safe`() = runTest {
+    val counter = CounterService()
+
+    // Launch 1000 concurrent increments
+    val jobs = List(1000) {
+        launch {
+            counter.increment()
+        }
+    }
+
+    jobs.joinAll()
+
+    // Should be exactly 1000
+    assertEquals(1000, counter.getCount())
+}
+
+@Test
+fun `mutex prevents race conditions`() = runTest {
+    val cache = mutableMapOf&lt;String, Int&gt;()
+    val mutex = Mutex()
+
+    // Simulate race condition
+    coroutineScope {
+        repeat(100) {
+            launch {
+                mutex.withLock {
+                    val current = cache["key"] ?: 0
+                    delay(1) // Simulate work
+                    cache["key"] = current + 1
+                }
+            }
+        }
+    }
+
+    assertEquals(100, cache["key"])
+}
+</code></pre>
+
+<h2>总结</h2>
+
+<p><code>Mutex</code> 是一个强大的工具，用于在基于协程的应用程序中保护共享可变状态。它提供线程安全的同步，而不会阻塞线程，使其成为并发协程代码的理想选择。</p>
+
+<p><strong>关键要点</strong>：</p>
+
+<ul>
+<li>使用 <code>withLock</code> 进行自动锁管理</li>
+<li>保持临界区简洁高效</li>
+<li>适当时考虑更简单的替代方案（例如原子操作、StateFlow）</li>
+<li>了解何时使用 Mutex 而非其他同步原语</li>
+<li>始终妥善处理取消操作</li>
+</ul>
+
+
+<p>记住：最好的同步就是没有同步。尽可能地，设计系统时，通过使用不可变数据结构、消息传递（Actors/Channels）或响应式流（Flow/StateFlow）来完全避免共享可变状态。但是，当你在协程代码中确实需要互斥时，<code>Mutex</code> 是你的最佳选择。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[runBlocking实践：哪里该使用，哪里不该用]]></title>
@@ -625,300 +1266,6 @@ net.toughcoder.MyProcessorProvider
 <li><a href="https://www.kodeco.com/33148161-write-a-symbol-processor-with-kotlin-symbol-processing">Write a Symbol Processor with Kotlin Symbol Processing</a></li>
 <li><a href="https://www.codecentric.de/wissens-hub/blog/kotlin-symbol-processing-introduction">An Introduction to Kotlin Symbol Processing</a></li>
 <li><a href="https://kt.academy/article/ak-ksp">Kotlin Symbol Processing</a></li>
-</ul>
-
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Kotlin Annotation Made Easy]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/04/09/kotlin-annotation-made-easy/"/>
-    <updated>2024-04-09T22:14:10+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/04/09/kotlin-annotation-made-easy</id>
-    <content type="html"><![CDATA[<p>注解（Annotations）允许我们在代码中添加元数据（Meta data），提供代码以外的信息，这些元数据可以在编译时被编译器或其他工具读取和处理。 Kotlin作为一种功能强大且易于使用的多范式通用编程语言，注解（Annotations）是其核心特性之一。在Kotlin中，注解的使用非常广泛，可以用于框架设计、代码生成、测试、依赖注入等多个方面。今天就来学习一下Kotlin中注解的使用方法。</p>
-
-<p><a href=""><img src="https://appmaster.dev/wp-content/uploads/2023/03/Understan-Kotlin-Annotations-1024x536.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>Kotlin是基于JVM的编程语言，并且可以与Java互通使用，因此事先了解一下Java的注解对于学习Kotlin的注解是非常有帮助的。可以阅读一下前面的文章来<a href="https://juejin.cn/post/7353138889458319412">回顾Java语言的注解</a>。</p>
-
-<h2>什么是注解</h2>
-
-<p>注解是元编程的一种实现方式，它并不直接改变代码，而是为代码提供额外的数据。注解不能单独存在，必须与代码中的其他元素一起使用。在Kotlin中，注解要使用符号『@』后面加一个已定义的注解名字，如『@Deprecated』。注解在Kotlin中的使用非常广泛的，相信有过代码经验的同学都至少看过大量的注解。</p>
-
-<h2>注解的使用方法</h2>
-
-<p>注解的使用是非常的直观的，在需要的代码元素（类，变量，属性，函数，参数等等）加上想要使用的注解就可以了：</p>
-
-<pre><code class="Kotlin">@Fancy class Foo {
-    @Fancy fun baz(@Fancy foo: Int): Int {
-        return (@Fancy 1)
-    }
-}
-</code></pre>
-
-<p>Kotlin的注解也可以用在lambda上面，这实际上相当于应用于lambda函数生成的函数实例的invoke()上面：</p>
-
-<pre><code class="Kotlin">annotation class Suspendable
-
-val f = @Suspendable { Fiber.sleep(10) }
-</code></pre>
-
-<h3>注解的使用点目标</h3>
-
-<p>由于Kotlin最终要编译成为字节码，运行在JVM上，所以它必须符合Java的规范。但语法上Kotlin与Java还是不一样的，比如一句Kotlin代码可能会相当于Java的好几句，换句话说一个Kotlin语句中的元素可能会对应着Java中的好几个。这可能会带来问题。</p>
-
-<p>注解并不能单独出现，它必须作用到某一个语法上的元素，因为Kotlin语法元素可能会对应着几个Java语法元素，那么注解可能会被用在多个目标元素上面。为了能精确的指定注解的作用目标，可以使用『使用点目标』（use-site targets）来标记具体的目标元素：</p>
-
-<pre><code class="Kotlin">class Example(@field:Ann val foo,    // annotate Java field
-              @get:Ann val bar,      // annotate Java getter
-              @param:Ann val quux)   // annotate Java constructor parameter
-</code></pre>
-
-<p>这里面『Ann』是一个注解，其前面的『field/get/param』就用以指定具体的注解目标元素。可用的使用点目标有这些：</p>
-
-<ul>
-<li>file</li>
-<li>property</li>
-<li>field</li>
-<li>get 属性的getter</li>
-<li>set 属性的setter</li>
-<li>receiver 扩展函数或者扩展属性的底层对象</li>
-<li>param 构造函数的参数</li>
-<li>setparam 属性setter的参数</li>
-<li>delegate 指存储着受托对象实例的域成员</li>
-</ul>
-
-
-<p>『receiver』指的是扩展函数发生作用的实例，比如说：</p>
-
-<pre><code class="Kotlin">fun @receiver:Fancy String.myExtension() { ... }
-</code></pre>
-
-<p>那么，这个注解『Fancy』将作用于具体调用这个扩展方法myExtension的String实例上面。</p>
-
-<p>这些具体的使用点目标可以精确的指定JVM认识的元素上面，可以发现，它们远比定义注解时的<a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/">@Target</a>要丰富。如果不指定具体的使用点目标，那么就会按照@Target指定的目标，如果有多个目标，会按如下顺序选择：</p>
-
-<ul>
-<li>param</li>
-<li>property</li>
-<li>field</li>
-</ul>
-
-
-<h3>兼容Java注解</h3>
-
-<p>Kotlin是完全兼容Java注解，也就是说Java中定义的注解，在Kotlin中都可以直接使用。</p>
-
-<pre><code class="Java">// Java
-public @interface Ann {
-    int intValue();
-    String stringValue();
-}
-</code></pre>
-
-<pre><code class="Kotlin">// Kotlin
-@Ann(intValue = 1, stringValue = "abc") class C
-</code></pre>
-
-<p>虽然可以直接用，但毕竟Kotlin的语法要丰富得多，所以为了避免歧义，要使用前面介绍的使用点目标来精确指定注解的作用目标。</p>
-
-<h2>自定义注解</h2>
-
-<p>使用关键字『annotation』来声明自定义注解，如：</p>
-
-<pre><code class="Kotlin">annotation class Fancy
-</code></pre>
-
-<p>之后就可以使用注解了：</p>
-
-<pre><code class="Kotlin">@Fancy class Foo {
-    @Fancy fun baz(@Fancy foo: Int): Int {
-        return (@Fancy 1)
-    }
-}
-</code></pre>
-
-<p>光这样声明还不够，还需要定义注解具体的内容，如可修饰的目标和行为特点，这就需要用到元注解（Meta annotations），也即定义注解时所需要的注解。</p>
-
-<h3>元注解（Meta annotations）</h3>
-
-<h4>@MustBeDocumented</h4>
-
-<p>用于指定此注解是公开API的一部分，必须包含在文档中。</p>
-
-<h4>@Repeatable</h4>
-
-<p>允许在同一个地方多次使用注解。</p>
-
-<h4><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-target/">@Target</a></h4>
-
-<p>用于指定此注解可以应用到哪些程序元素上面，如类和接口，函数，属性和表达式。</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-c-l-a-s-s.html#kotlin.annotation.AnnotationTarget.CLASS">AnnotationTarget.CLASS</a> - 类型，包括类型原型（classes），接口，对象，注解类型</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-p-r-o-p-e-r-t-y.html#kotlin.annotation.AnnotationTarget.PROPERTY">AnnotationTarget.PROPERTY</a> - 属性</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-f-i-e-l-d.html#kotlin.annotation.AnnotationTarget.FIELD">AnnotationTarget.FIELD</a> - 域变量</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-l-o-c-a-l_-v-a-r-i-a-b-l-e.html#kotlin.annotation.AnnotationTarget.LOCAL_VARIABLE">AnnotationTarget.LOCAL_VARIABLE</a> - 局部变量（本地变量）</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-v-a-l-u-e_-p-a-r-a-m-e-t-e-r.html#kotlin.annotation.AnnotationTarget.VALUE_PARAMETER">AnnotationTarget.VALUE_PARAMETER</a> - 参数</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-c-o-n-s-t-r-u-c-t-o-r.html#kotlin.annotation.AnnotationTarget.CONSTRUCTOR">AnnotationTarget.CONSTRUCTOR</a> - 构造函数</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-f-u-n-c-t-i-o-n.html#kotlin.annotation.AnnotationTarget.FUNCTION">AnnotationTarget.FUNCTION</a> - 函数</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-p-r-o-p-e-r-t-y_-g-e-t-t-e-r.html#kotlin.annotation.AnnotationTarget.PROPERTY_GETTER">AnnotationTarget.PROPERTY_GETTER</a> - 属性的getter</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-target/-p-r-o-p-e-r-t-y_-s-e-t-t-e-r.html#kotlin.annotation.AnnotationTarget.PROPERTY_SETTER">AnnotationTarget.PROPERTY_SETTER</a> - 属性的setter</li>
-</ul>
-
-
-<h4>@Retention</h4>
-
-<p>指定注解信息保存到代码生命周期的哪一阶段，编译前，编译时还是运行时。默认值是运行时，也即在运行时注解是可见的。</p>
-
-<ul>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-retention/-s-o-u-r-c-e.html">AnnotationRetention.SOURCE</a> - 只在源码过程中保留，并不会出现在编译后的class中（二进制文件中）。</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-retention/-b-i-n-a-r-y.html">AnnotationRetention.BINARY</a> - 会在class中保留，但对于运行时并不可见，也就是通过反射无法得到注解。</li>
-<li><a href="https://kotlinlang.org/api/latest/jvm/stdlib/kotlin.annotation/-annotation-retention/-r-u-n-t-i-m-e.html">AnnotationRetention.RUNTIME</a> - 注解会保留到运行时，运行时的操作如反射可以解析注解，这是默认的@Rentention值。</li>
-</ul>
-
-
-<h3>构造方法（Constructors）</h3>
-
-<p>与Java很不同的是Kotlin的注解更加的像常规的类（class），注解也可以有构造函数：</p>
-
-<pre><code class="Kotlin">annotation class Special(val why: String)
-
-@Special("example") class Foo {}
-</code></pre>
-
-<p>构造函数可以使用的参数包括：</p>
-
-<ul>
-<li>基础数据类型Int，Long，Float和String等</li>
-<li>类型原型（即class，如Foo::class）</li>
-<li>枚举类型</li>
-<li>其他注解类型</li>
-<li>由以上类型组成的数组</li>
-</ul>
-
-
-<p>注意不能有可能为空（如String?）的类型，当然也不可以传递null给注解的构造函数。还有，如果用其他注解作为参数时，注解名字前就不用再加『@』了：</p>
-
-<pre><code class="Kotlin">annotation class ReplaceWith(val expression: String)
-
-annotation class Deprecated(
-        val message: String,
-        val replaceWith: ReplaceWith = ReplaceWith(""))
-</code></pre>
-
-<h3>注解的实例化（Instantiation）</h3>
-
-<p>在Kotlin中可以通过调用注解的构造函数来实例化一个注解来使用。而不必非要像Java那样用反射接口去获取。</p>
-
-<pre><code class="Kotlin">annotation class InfoMarker(val info: String)
-
-fun processInfo(marker: InfoMarker): Unit = TODO()
-
-fun main(args: Array&lt;String&gt;) {
-    if (args.isNotEmpty())
-        processInfo(getAnnotationReflective(args))
-    else
-        processInfo(InfoMarker("default"))
-}
-</code></pre>
-
-<h2>注解解析</h2>
-
-<p>Kotlin是基于JVM的编程语言，最终要编译成为字节码运行在JVM上面，所以注解的解析与Java语言注解解析是一样的，可以在运行时用反射API来解析注解。关于Java注解解析可以<a href="/blog/2024/03/24/java-annotations-made-easy/">参考另一篇文章</a>，因为运行时注解解析用处并不大，并且也不复杂，看一个简单&#127792;就可以了：</p>
-
-<pre><code class="Kotlin">class Item(
-  @Positive val amount: Float, 
-  @AllowedNames(["Alice", "Bob"]) val name: String)
-
-val fields = item::class.java.declaredFields
-for (field in fields) {
-    for (annotation in field.annotations) {
-        if (field.isAnnotationPresent(AllowedNames::class.java)) {
-            val allowedNames = field.getAnnotation(AllowedNames::class.java)?.names
-         }
-    }
-}
-</code></pre>
-
-<h2>注解处理器</h2>
-
-<p>注解是元编程的一种方式，它最大的威力是在编译前进行代码处理和代码生成。除了注解的定义和使用外，更为关键的注解的处理需要用到注解处理器（Annotation Processor），并且要配合编译器插件<a href="https://kotlinlang.org/docs/kapt.html">kapt</a>和<a href="https://kotlinlang.org/docs/ksp-overview.html">KSP</a>来使用。</p>
-
-<p>需要注意，因为注解是JVM支持的特性，在编译时需要借助javac编译器，所以只有运行目标是JVM时注解才有效。因为Kotlin是支持编译为不同运行目标的，除了JVM外，还有JavaScript和Native。</p>
-
-<h3>实现注解处理器</h3>
-
-<p>与Java的注解处理器类似，在定义好注解后，还需要实现一个注解处理器，以对注解进行处理。一般情况下实现AbstractProcessor就可以了。在其process方法中过滤出来想要处理的注解进行处理，比如使用<a href="https://github.com/square/kotlinpoet">KotlinPoet</a>生成代码。</p>
-
-<p>另外，还要注意，注解处理器必须在一个单独的module中，然后添加为使用此注解module的依赖，这是因为注解的处理是在编译前，所以处理器需要在正式编译前就已经编译好。</p>
-
-<pre><code class="kotlin">package net.toughcoder
-
-import javax.annotation.processing.*
-import javax.lang.model.element.*
-import javax.tools.Diagnostic
-
-@SupportedAnnotationTypes("com.example.MyAnnotation")
-@SupportedSourceVersion(SourceVersion.RELEASE_8)
-class MyAnnotationProcessor : AbstractProcessor() {
-
-    override fun process(annotations: MutableSet&lt;out TypeElement&gt;, roundEnv: RoundEnvironment): Boolean {
-        for (annotation : annotations) {
-            for (element : roundEnv.getElementsAnnotatedWith(annotation)) {
-                val myAnnotation = element.getAnnotation(MyAnnotation::class.java)
-                val message = "Processing element with annotation MyAnnotation(value = ${myAnnotation.value})"
-                processingEnv.getMessager().printMessage(Diagnostic.Kind.NOTE, message, element)
-            }
-        }
-        return true
-    }
-}
-</code></pre>
-
-<p>从例子中可以看到，其实Kotlin中的注解处理器（Processor）直接就是用的Java的，所以在用的时候最好加上Java语言的版本。</p>
-
-<h3>注册注解处理器</h3>
-
-<p>为能正常使用注解处理器，需要把注解处理器放在一个单独的Module里，并作为其他module的依赖，这样能确保它在编译被依赖项时正常使用，被依赖项也即注解使用的地方。</p>
-
-<p>需要在处理器module中与代码平级的文件夹创建resources文件夹，创建一个子文件夹META-INF，再在META-INF创建一个子文件services，在里面创建一个文件名为『javax.annotation.processing.Processor』，然后把实现的注解处理器的完整类名，写在这个文件的第一行：</p>
-
-<pre><code class="Kotlin">// file: resources/META-INF/services/javax.annotation.processing.Processor
-net.toughcoder.MyAnnotationProcessor
-</code></pre>
-
-<h3>使用注解处理器</h3>
-
-<p><img src="https://bigknol.com/wp-content/uploads/2023/07/android-ksp-kapt-768x439.png" alt="" /></p>
-
-<p>需要做两个事情，一个是把注解处理器添加为其他项目或者module的依赖。然后再用<a href="https://kotlinlang.org/docs/kapt.html">专门处理注解处理器的编译器插件</a>使用注解处理器。</p>
-
-<pre><code class="Groovy">dependencies {
-    implementation(kotlin('stdlib'))
-    kapt 'net.toughcoder:my-annotation-processor:1.0.0'
-}
-
-kapt {
-    useBuildCache = true
-    annotationProcessors = ['net.toughcoder:my-annotation-processor:1.0.0']
-}
-</code></pre>
-
-<h2>总结</h2>
-
-<p>本文介绍了Kotlin中注解的基本语法、使用方法和处理过程。通过自定义注解处理器，我们可以在编译时处理注解并生成相应的代码或执行其他任务。注解是Kotlin编程中的核心特性，它可以帮助我们提高代码的可读性、可维护性和可扩展性。大部分的注解都在编译时，也不会对性能产生影响，所以可以放心大胆的用注解来提升开发效率。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/annotations.html">Annotations</a></li>
-<li><a href="https://www.baeldung.com/kotlin/annotations">Kotlin Annotations</a></li>
-<li><a href="https://kt.academy/article/ak-annotation-processing">Annotation Processing</a></li>
-<li><a href="https://www.kodeco.com/8574679-annotation-processing-supercharge-your-development">Annotation Processing: Supercharge Your Development</a></li>
 </ul>
 
 ]]></content>

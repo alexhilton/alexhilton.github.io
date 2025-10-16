@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-10-14T22:50:03+08:00</updated>
+  <updated>2025-10-16T20:12:27+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,1078 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Kotlin互斥锁(Mutex)：协程的线程安全守护神]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex/"/>
+    <updated>2025-10-15T23:05:51+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Kotlin Mutex: Thread-Safe Concurrency for Coroutines」，原文链接<a href="https://carrion.dev/en/posts/kotlin-mutex-concurrency-guide/">https://carrion.dev/en/posts/kotlin-mutex-concurrency-guide/</a>，由Ignacio Carrión发布于2025年10月3日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex/"><img src="file:///Users/alexhilton/Downloads/kotlin_mutex.webp" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>使用 Kotlin 协程构建并发应用程序时，保护共享的可变状态至关重要。虽然传统的 Java 同步工具（例如 <code>synchronized</code> 块和 <code>ReentrantLock</code>）可以正常工作，但它们会阻塞线程，并且与协程的挂起模型不兼容。因此，引入 <code>Mutex</code>——一个协程友好的同步原语，它提供互斥而不阻塞线程。</p>
+
+<p>本指南探讨了何时使用 Mutex、最佳实践以及它与其他并发控制机制的比较。</p>
+
+<h2>TL;DR：省流版本的建议</h2>
+
+<ul>
+<li>当需要保护多个协程访问的共享可变状态时，请使用 <code>Mutex</code>。</li>
+<li>在协程代码中，优先使用 <code>Mutex</code> 而不是 <code>synchronized</code>，以避免阻塞线程。</li>
+<li>使用 <code>mutex.withLock { }</code> 自动获取和释放锁。</li>
+<li>对于更复杂的状态管理场景，请考虑使用 <code>Actor</code> 或 <code>StateFlow</code>。</li>
+<li>对于简单的计数器，请改用 <code>AtomicInteger</code> 或 <code>AtomicReference</code>。</li>
+<li>如果需要将并发访问限制为多个许可，请使用 <code>Semaphore</code>。</li>
+<li>如果不使用 <code>withLock</code>，请始终在 finally 块中释放锁。</li>
+</ul>
+
+
+<h2>什么是互斥锁？</h2>
+
+<p><code>Mutex</code>（互斥）是 <code>kotlinx.coroutines</code> 中的同步原语，用于确保同一时间只有一个协程可以执行临界区。与阻塞线程的传统锁不同，Mutex 会暂停协程，从而使线程可以自由地执行其他工作。</p>
+
+<p>基本结构：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.sync.Mutex</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.sync.withLock</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">protectedOperation</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// Critical section - only one coroutine at a time</span>
+</span><span class='line'>        <span class="c1">// Modify shared state safely here</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>关键特性：</p>
+
+<ul>
+<li>非阻塞：暂停协程而不是阻塞线程</li>
+<li>公平：默认按先进先出顺序授予访问权限</li>
+<li>不重入安全：持有锁的协程无法再次获取锁（防止死锁）</li>
+<li>轻量级：比线程阻塞锁更高效</li>
+</ul>
+
+
+<h2>互斥锁的核心用例</h2>
+
+<p>最常见的用例——确保对共享变量的安全访问：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">CounterService</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">counter</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">counter</span><span class="p">++</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getCount</span><span class="p">():</span> <span class="n">Int</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">counter</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 协调资源访问</h3>
+
+<p>当多个协程需要对某个资源进行独占访问时：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">FileWriter</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">file</span><span class="p">:</span> <span class="n">File</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">appendLine</span><span class="p">(</span><span class="n">line</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">file</span><span class="p">.</span><span class="n">appendText</span><span class="p">(</span><span class="s">&quot;$line\n&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3.确保顺序执行</h3>
+
+<p>即使操作是并发触发的，也必须按顺序执行：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">OrderProcessor</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">orders</span> <span class="p">=</span> <span class="n">mutableListOf</span><span class="p">&lt;</span><span class="n">Order</span><span class="p">&gt;()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">processOrder</span><span class="p">(</span><span class="n">order</span><span class="p">:</span> <span class="n">Order</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// Ensure orders are processed sequentially</span>
+</span><span class='line'>            <span class="n">orders</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">validateOrder</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">persistOrder</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>4. 线程安全的延迟初始化</h3>
+
+<p>在挂起上下文中实现线程安全的延迟初始化：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">DatabaseConnection</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">connection</span><span class="p">:</span> <span class="n">Connection</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getConnection</span><span class="p">():</span> <span class="n">Connection</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">connection</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="k">return</span> <span class="n">connection</span><span class="o">!!</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">return</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// Double-check inside lock</span>
+</span><span class='line'>            <span class="n">connection</span> <span class="o">?:</span> <span class="n">createConnection</span><span class="p">().</span><span class="n">also</span> <span class="p">{</span> <span class="n">connection</span> <span class="p">=</span> <span class="n">it</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">createConnection</span><span class="p">():</span> <span class="n">Connection</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="c1">// Simulate connection setup</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">Connection</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>最佳实践</h2>
+
+<h3>1. 始终使用 withLock</h3>
+
+<p>即使发生异常，withLock 也会自动处理锁的获取和释放：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Good: Automatic cleanup</span>
+</span><span class='line'><span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">dangerousOperation</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ❌ Bad: Manual management, error-prone</span>
+</span><span class='line'><span class="n">mutex</span><span class="p">.</span><span class="n">lock</span><span class="p">()</span>
+</span><span class='line'><span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">dangerousOperation</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">unlock</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 保持临界区较小</h3>
+
+<p>尽量减少锁的持有时间以减少争用：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Good: Lock only for critical section</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUser</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">validated</span> <span class="p">=</span> <span class="n">validateName</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="c1">// Outside lock</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">userCache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">validated</span> <span class="c1">// Only this needs protection</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">notifyObservers</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span> <span class="c1">// Outside lock</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ❌ Bad: Holding lock during slow operations</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUserSlow</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">validated</span> <span class="p">=</span> <span class="n">validateName</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="c1">// Slow operation inside lock</span>
+</span><span class='line'>        <span class="n">userCache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">validated</span>
+</span><span class='line'>        <span class="n">notifyObservers</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span> <span class="c1">// I/O inside lock</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3. 避免嵌套锁</h3>
+
+<p>互斥锁不可重入。避免两次获取同一个锁：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Bad: Deadlock!</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">problematic</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">helperFunction</span><span class="p">()</span> <span class="c1">// Tries to acquire mutex again</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">helperFunction</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// Will suspend forever</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ✅ Good: Restructure to avoid nesting</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">better</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">helperFunctionUnsafe</span><span class="p">()</span> <span class="c1">// No lock acquisition</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">fun</span> <span class="nf">helperFunctionUnsafe</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Assumes caller holds lock</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>4. 优先考虑无锁替代方案</h3>
+
+<p>对于简单操作，原子类型速度更快：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Better for simple counters</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">AtomicCounter</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">counter</span> <span class="p">=</span> <span class="n">AtomicInteger</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="n">incrementAndGet</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="k">get</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ❌ Overkill for a simple counter</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">MutexCounter</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">counter</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="n">counter</span><span class="p">++</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>5.文档锁不变量</h3>
+
+<p>明确锁保护的对象：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">UserCache</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span> <span class="c1">// Protects userMap and lastUpdate</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">userMap</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">User</span><span class="p">&gt;()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">lastUpdate</span> <span class="p">=</span> <span class="m">0L</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUser</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">userMap</span><span class="p">[</span><span class="n">id</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
+</span><span class='line'>            <span class="n">lastUpdate</span> <span class="p">=</span> <span class="n">System</span><span class="p">.</span><span class="n">currentTimeMillis</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>互斥锁 vs. 其他同步方法</h2>
+
+<h3>互斥锁 vs. synchronized</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Traditional synchronized (blocks thread)</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">SynchronizedCounter</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">count</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@Synchronized</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">count</span><span class="p">++</span> <span class="c1">// Thread blocked while waiting</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Mutex (suspends coroutine)</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">MutexCounter</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">count</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">count</span><span class="p">++</span> <span class="c1">// Coroutine suspended, thread free</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>何时该用哪个：</strong></p>
+
+<ul>
+<li>对于非暂停代码和旧版 Java 互操作，请使用 <code>synchronized</code></li>
+<li>对于暂停函数和基于协程的代码，请使用 <code>Mutex</code></li>
+<li>在协程上下文中，<code>Mutex</code> 效率更高，因为线程不会被阻塞</li>
+</ul>
+
+
+<h3>互斥锁 vs. 信号量</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Mutex: Only one coroutine at a time</span>
+</span><span class='line'><span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Semaphore: N coroutines at a time</span>
+</span><span class='line'><span class="k">val</span> <span class="py">semaphore</span> <span class="p">=</span> <span class="n">Semaphore</span><span class="p">(</span><span class="n">permits</span> <span class="p">=</span> <span class="m">3</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Example: Rate limiting API calls</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">ApiClient</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">semaphore</span> <span class="p">=</span> <span class="n">Semaphore</span><span class="p">(</span><span class="m">5</span><span class="p">)</span> <span class="c1">// Max 5 concurrent requests</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">makeRequest</span><span class="p">(</span><span class="n">endpoint</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">Response</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">semaphore</span><span class="p">.</span><span class="n">withPermit</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">httpClient</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">endpoint</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>何时使用谁：</strong></p>
+
+<ul>
+<li>需要独占访问（单次许可）时使用 <code>Mutex</code></li>
+<li>需要将并发限制为 N 个操作时使用 <code>Semaphore</code></li>
+</ul>
+
+
+<h3>互斥锁 vs. Actor</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Mutex: Manual synchronization</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">MutexBasedCache</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Data</span><span class="p">&gt;()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">get</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">=</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">put</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="p">=</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="p">=</span> <span class="n">value</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Actor: Message-based synchronization</span>
+</span><span class='line'><span class="n">sealed</span> <span class="k">class</span> <span class="nc">CacheMessage</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Get</span><span class="p">(</span><span class="k">val</span> <span class="py">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="k">val</span> <span class="py">response</span><span class="p">:</span> <span class="n">CompletableDeferred</span><span class="p">&lt;</span><span class="n">Data</span><span class="p">?&gt;)</span> <span class="p">:</span> <span class="n">CacheMessage</span><span class="p">()</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Put</span><span class="p">(</span><span class="k">val</span> <span class="py">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="k">val</span> <span class="py">value</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="p">:</span> <span class="n">CacheMessage</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">fun</span> <span class="nf">CoroutineScope</span><span class="p">.</span><span class="n">cacheActor</span><span class="p">()</span> <span class="p">=</span> <span class="n">actor</span><span class="p">&lt;</span><span class="n">CacheMessage</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Data</span><span class="p">&gt;()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">for</span> <span class="p">(</span><span class="n">msg</span> <span class="k">in</span> <span class="n">channel</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">when</span> <span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">is</span> <span class="n">Get</span> <span class="p">-&gt;</span> <span class="n">msg</span><span class="p">.</span><span class="n">response</span><span class="p">.</span><span class="n">complete</span><span class="p">(</span><span class="n">cache</span><span class="p">[</span><span class="n">msg</span><span class="p">.</span><span class="n">key</span><span class="p">])</span>
+</span><span class='line'>            <span class="k">is</span> <span class="n">Put</span> <span class="p">-&gt;</span> <span class="n">cache</span><span class="p">[</span><span class="n">msg</span><span class="p">.</span><span class="n">key</span><span class="p">]</span> <span class="p">=</span> <span class="n">msg</span><span class="p">.</span><span class="n">value</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>何时使用谁：</strong></p>
+
+<ul>
+<li>使用 <code>Mutex</code> 进行直接方法调用的简单同步</li>
+<li>对于复杂的状态机或需要消息队列时，使用 <code>Actor</code></li>
+<li>Actor 提供更好的封装性，并且可以处理背压</li>
+</ul>
+
+
+<h3>Mutex 与 StateFlow</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Mutex: Imperative state management</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">MutexState</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">state</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateState</span><span class="p">(</span><span class="n">transform</span><span class="p">:</span> <span class="p">(</span><span class="n">Int</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Int</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">state</span> <span class="p">=</span> <span class="n">transform</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// StateFlow: Reactive state management</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">FlowState</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_state</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">state</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">_state</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">updateState</span><span class="p">(</span><span class="n">transform</span><span class="p">:</span> <span class="p">(</span><span class="n">Int</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Int</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">_state</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">transform</span><span class="p">)</span> <span class="c1">// Thread-safe built-in</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>何时使用哪个：</strong></p>
+
+<ul>
+<li>需要自定义同步逻辑时使用 <code>Mutex</code></li>
+<li>使用 <code>StateFlow</code> 进行内置线程安全的可观察状态</li>
+<li><code>StateFlow</code> 更适合 UI 状态和响应式架构</li>
+</ul>
+
+
+<h3>Mutex 与原子类型</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// AtomicInteger: Lock-free for simple operations</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">AtomicCounter</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">counter</span> <span class="p">=</span> <span class="n">AtomicInteger</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="n">incrementAndGet</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">addAndGet</span><span class="p">(</span><span class="n">delta</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="n">addAndGet</span><span class="p">(</span><span class="n">delta</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Mutex: For complex operations</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">ComplexCounter</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">counter</span> <span class="p">=</span> <span class="m">0</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">history</span> <span class="p">=</span> <span class="n">mutableListOf</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">counter</span><span class="p">++</span>
+</span><span class='line'>            <span class="n">history</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">counter</span><span class="p">)</span> <span class="c1">// Multiple operations</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>何时使用哪个：</strong></p>
+
+<ul>
+<li>使用原子类型进行单变量操作（计数器、标志）</li>
+<li>需要协调多个变量时使用 <code>Mutex</code></li>
+<li>原子操作速度更快，但受限于特定操作</li>
+</ul>
+
+
+<h2>常见陷阱</h2>
+
+<h3>1. 忘记使用 suspend</h3>
+
+<p>互斥操作需要暂停：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Won&#39;t compile</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">broken</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="p">}</span> <span class="c1">// Error: suspend function called in non-suspend context</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ✅ Correct</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">correct</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 长时间操作期间持有锁</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Bad: Holding lock during I/O</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">bad</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">data</span> <span class="p">=</span> <span class="n">httpClient</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span> <span class="c1">// Network call inside lock</span>
+</span><span class='line'>        <span class="n">cache</span><span class="p">[</span><span class="n">url</span><span class="p">]</span> <span class="p">=</span> <span class="n">data</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ✅ Good: Fetch outside lock</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">good</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">data</span> <span class="p">=</span> <span class="n">httpClient</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">cache</span><span class="p">[</span><span class="n">url</span><span class="p">]</span> <span class="p">=</span> <span class="n">data</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3. 假设可重入</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Deadlock: Mutex is not reentrant</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">outer</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">inner</span><span class="p">()</span> <span class="c1">// Deadlock!</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">inner</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// Never reached</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>4. 不处理取消</h3>
+
+<p>持有锁时务必考虑取消：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Good: withLock handles cancellation</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">proper</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">doWork</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span> <span class="c1">// Lock released even on cancellation</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ❌ Risky: Manual lock management</span>
+</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">risky</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">lock</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">doWork</span><span class="p">()</span> <span class="c1">// If cancelled here, lock stays acquired</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">unlock</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>性能考量</h2>
+
+<ul>
+<li><strong>互斥 vs. synchronized</strong>：在协程密集型代码中，互斥更高效，因为线程不会被阻塞</li>
+<li><strong>争用</strong>：高争用会降低性能；考虑分片（为不同的键设置多个锁）</li>
+<li><strong>锁粒度</strong>：更细粒度的锁（更多锁，每个锁保护更少的数据）可减少争用</li>
+<li><strong>无锁替代方案</strong>：对于简单操作，原子类型和 <code>StateFlow</code> 速度更快</li>
+</ul>
+
+
+<p>示例：分片以减少争用：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">ShardedCache</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">shardCount</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">16</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutexes</span> <span class="p">=</span> <span class="n">Array</span><span class="p">(</span><span class="n">shardCount</span><span class="p">)</span> <span class="p">{</span> <span class="n">Mutex</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">caches</span> <span class="p">=</span> <span class="n">Array</span><span class="p">(</span><span class="n">shardCount</span><span class="p">)</span> <span class="p">{</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Data</span><span class="p">&gt;()</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">shardIndex</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">=</span> <span class="n">key</span><span class="p">.</span><span class="n">hashCode</span><span class="p">()</span> <span class="n">and</span> <span class="p">(</span><span class="n">shardCount</span> <span class="p">-</span> <span class="m">1</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">put</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">index</span> <span class="p">=</span> <span class="n">shardIndex</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">mutexes</span><span class="p">[</span><span class="n">index</span><span class="p">].</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">caches</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="n">key</span><span class="p">]</span> <span class="p">=</span> <span class="n">value</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">get</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">Data</span><span class="p">?</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">index</span> <span class="p">=</span> <span class="n">shardIndex</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+</span><span class='line'>        <span class="k">return</span> <span class="n">mutexes</span><span class="p">[</span><span class="n">index</span><span class="p">].</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">caches</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="n">key</span><span class="p">]</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>真实示例：线程安全的Repository</h2>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">UserRepository</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">api</span><span class="p">:</span> <span class="n">UserApi</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">database</span><span class="p">:</span> <span class="n">UserDatabase</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">User</span><span class="p">&gt;()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getUser</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">User</span><span class="p">?</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// Check cache first (read lock)</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">cache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="k">return</span> <span class="n">it</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// Try database (outside lock)</span>
+</span><span class='line'>        <span class="n">database</span><span class="p">.</span><span class="n">getUser</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="n">user</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">cache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">user</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// Fetch from API (outside lock)</span>
+</span><span class='line'>        <span class="k">return</span> <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">api</span><span class="p">.</span><span class="n">fetchUser</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">cache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
+</span><span class='line'>                <span class="n">database</span><span class="p">.</span><span class="n">insertUser</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="n">user</span>
+</span><span class='line'>        <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">null</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUser</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">cache</span><span class="p">[</span><span class="n">user</span><span class="p">.</span><span class="n">id</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
+</span><span class='line'>            <span class="n">database</span><span class="p">.</span><span class="n">updateUser</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">clearCache</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">cache</span><span class="p">.</span><span class="n">clear</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>测试互斥锁保护的代码</h2>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Test</span>
+</span><span class='line'><span class="k">fun</span> <span class="err">`</span><span class="nf">concurrent</span> <span class="n">increments</span> <span class="n">should</span> <span class="n">be</span> <span class="n">thread</span><span class="p">-</span><span class="n">safe</span><span class="err">`</span><span class="p">()</span> <span class="p">=</span> <span class="n">runTest</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">counter</span> <span class="p">=</span> <span class="n">CounterService</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Launch 1000 concurrent increments</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">jobs</span> <span class="p">=</span> <span class="n">List</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">counter</span><span class="p">.</span><span class="n">increment</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">jobs</span><span class="p">.</span><span class="n">joinAll</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Should be exactly 1000</span>
+</span><span class='line'>    <span class="n">assertEquals</span><span class="p">(</span><span class="m">1000</span><span class="p">,</span> <span class="n">counter</span><span class="p">.</span><span class="n">getCount</span><span class="p">())</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Test</span>
+</span><span class='line'><span class="k">fun</span> <span class="err">`</span><span class="nf">mutex</span> <span class="n">prevents</span> <span class="n">race</span> <span class="n">conditions</span><span class="err">`</span><span class="p">()</span> <span class="p">=</span> <span class="n">runTest</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Int</span><span class="p">&gt;()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Simulate race condition</span>
+</span><span class='line'>    <span class="n">coroutineScope</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">repeat</span><span class="p">(</span><span class="m">100</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="k">val</span> <span class="py">current</span> <span class="p">=</span> <span class="n">cache</span><span class="p">[</span><span class="s">&quot;key&quot;</span><span class="p">]</span> <span class="o">?:</span> <span class="m">0</span>
+</span><span class='line'>                    <span class="n">delay</span><span class="p">(</span><span class="m">1</span><span class="p">)</span> <span class="c1">// Simulate work</span>
+</span><span class='line'>                    <span class="n">cache</span><span class="p">[</span><span class="s">&quot;key&quot;</span><span class="p">]</span> <span class="p">=</span> <span class="n">current</span> <span class="p">+</span> <span class="m">1</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">assertEquals</span><span class="p">(</span><span class="m">100</span><span class="p">,</span> <span class="n">cache</span><span class="p">[</span><span class="s">&quot;key&quot;</span><span class="p">])</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>总结</h2>
+
+<p><code>Mutex</code> 是一个强大的工具，用于在基于协程的应用程序中保护共享可变状态。它提供线程安全的同步，而不会阻塞线程，使其成为并发协程代码的理想选择。</p>
+
+<p><strong>关键要点</strong>：</p>
+
+<ul>
+<li>使用 <code>withLock</code> 进行自动锁管理</li>
+<li>保持临界区简洁高效</li>
+<li>适当时考虑更简单的替代方案（例如原子操作、StateFlow）</li>
+<li>了解何时使用 Mutex 而非其他同步原语</li>
+<li>始终妥善处理取消操作</li>
+</ul>
+
+
+<p>记住：最好的同步就是没有同步。尽可能地，设计系统时，通过使用不可变数据结构、消息传递（Actors/Channels）或响应式流（Flow/StateFlow）来完全避免共享可变状态。但是，当你在协程代码中确实需要互斥时，<code>Mutex</code> 是你的最佳选择。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[突破速度障碍：非阻塞启动画面如何将Android 应用启动时间缩短90%]]></title>
@@ -12546,749 +13618,6 @@
 
 
 <p>选择最合适的简单选项，Kotlin Flow 会处理余下的事情。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[在Kotlin ViewModel中正确处理相同的UI组件交互]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/07/01/handling-ui-action/"/>
-    <updated>2025-07-01T22:34:20+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/07/01/handling-ui-action</id>
-    <content type="html"><![CDATA[<p>本文译自「Handling UI Actions the Right Way in Kotlin ViewModels」，原文链接<a href="https://proandroiddev.com/handling-ui-actions-the-right-way-in-kotlin-viewmodels-119a06bb43ef">https://proandroiddev.com/handling-ui-actions-the-right-way-in-kotlin-viewmodels-119a06bb43ef</a>，由Vaibhav Jaiswal发布于2025年4月16日。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2025/07/01/handling-ui-action/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*MLROq8NAKOSnutBMj3WivQ.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>缘起</h2>
-
-<p>作为Android开发者，我们经常会遇到需要在多个ViewModel中实现相同或者非常类似UI功能的情况。</p>
-
-<p>例如，我们有多个页面，它们具有类似的功能，例如显示帖子、撰写评论或处理用户交互。</p>
-
-<p>在每个ViewModel中分别处理这些UI交互很快就会变得混乱，导致大量的代码重复。随着应用规模的扩大和页面数量的增加，这个问题会变得更加棘手，导致代码库难以维护，并带来可扩展性问题。</p>
-
-<p>对于这种代码重复问题，我们Android开发者常用的几种常见解决方案包括：</p>
-
-<ul>
-<li>额外的辅助类方法</li>
-<li>“继承”或“使用委托的组合”方法</li>
-</ul>
-
-
-<p>在以下章节中，我们将详细探讨这些解决方案，了解每种方法如何解决代码重复问题，并重点介绍每种方法的局限性。然后，我们将深入探讨我的解决方案，它基于这些想法，并解决了它们的局限性，从而实现了更高效的UI交互管理。</p>
-
-<blockquote><p>这个解决方案我已经在<a href="https://medial.app/"> Medial 的应用</a>（链接 <a href="https://medial.app/%EF%BC%89%E4%BB%A3%E7%A0%81%E5%BA%93%E4%B8%AD%E4%BD%BF%E7%94%A8%E8%BF%87%E4%BA%86%E2%80%94%E2%80%94%E5%B0%86">https://medial.app/%EF%BC%89%E4%BB%A3%E7%A0%81%E5%BA%93%E4%B8%AD%E4%BD%BF%E7%94%A8%E8%BF%87%E4%BA%86%E2%80%94%E2%80%94%E5%B0%86</a> UI交互处理代码变成了近乎即插即用的体验。</p></blockquote>
-
-<p>我的解决方案根本不建议使用 BaseViewModel，也不基于 BaseViewModel。BaseViewModel 只是一个例子，用来说明我们可以使用从任何其他类/接口继承的功能，这些类/接口可以是 BaseViewModel、ViewModel、Decompose 的 ComponentContext 或其他任何东西。</p>
-
-<h2>⚡️ TL;DR: 处理ViewModel中的共享UI交互</h2>
-
-<p>当在多个页面上显示相同的UI组件时，在每个ViewModel中处理它们的交互会导致重复和逻辑混乱。我们探索了三种方法来解决这个问题：</p>
-
-<ol>
-<li>辅助类方法</li>
-<li>➖ 简单，但无法覆写任何行为</li>
-<li>➖ 并非ViewModel的直接功能</li>
-<li>通过 Kotlin 委托进行组合</li>
-<li>✅ 更好的设计，支持覆写行为。</li>
-<li>➖ 无法访问viewModelScope或其他ViewModel功能。</li>
-<li>➖ 无法从任何其他继承类访问任何内容。</li>
-<li>💡 我的解决方案 — 使用带有默认函数的接口</li>
-<li>✅ 简洁、可复用，支持覆写（Override）行为。</li>
-<li>✅ 完全访问ViewModel功能或任何其他继承类的功能。</li>
-<li>✅ 只需从接口实现即可轻松插入任何 ViewModel</li>
-</ol>
-
-
-<p>本博客中的所有解决方案均在<a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample">此示例项目</a>（链接 <a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E5%AE%9E%E7%8E%B0%EF%BC%9A">https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E5%AE%9E%E7%8E%B0%EF%BC%9A</a></p>
-
-<h2>🏗️ 设置</h2>
-
-<p>假设我们有一个后置UI 元素，它有一些UI 交互，并像 MVI 建议的那样，在一个密封的界面中呈现。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">PostAction</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">Clicked</span><span class="p">(</span><span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">PostAction</span>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">LikeClicked</span><span class="p">(</span><span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">PostAction</span>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">ShareClicked</span><span class="p">(</span><span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">PostAction</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>我们还有一个 BaseViewModel 类，用于保存每个ViewModel所需的通用功能</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">abstract</span> <span class="k">class</span> <span class="nc">BaseViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">var</span> <span class="py">showShackBar</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">showBottomSheet</span> <span class="k">by</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">navigate</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>      <span class="c1">// 实现</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">showSnackbar</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">showSnackBar</span> <span class="p">=</span> <span class="n">message</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>额外的辅助类方法</h3>
-
-<p>在这种方法中，我们创建一个单独的辅助类来封装UI交互的处理。我们将这个类作为ViewModel的一个属性。</p>
-
-<p>首先，我们定义一个辅助类 PostActionHandler 来处理交互。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">PostActionHandler</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">viewModel</span><span class="p">:</span> <span class="n">BaseViewModel</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">handleAction</span><span class="p">(</span><span class="n">action</span><span class="p">:</span> <span class="n">PostAction</span><span class="p">)</span> <span class="p">=</span> <span class="k">when</span> <span class="p">(</span><span class="n">action</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">Clicked</span> <span class="p">-&gt;</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">navigate</span><span class="p">()</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">LikeClicked</span> <span class="p">-&gt;</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">showSnackBar</span><span class="p">(</span><span class="s">&quot;Liked&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">ShareClicked</span> <span class="p">-&gt;</span> <span class="p">{</span> <span class="cm">/* 实现 */</span> <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>现在，在 PostScreenViewModel 中我们创建一个 PostActionHandler 实例</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">PostScreenViewModel</span> <span class="p">:</span> <span class="n">BaseViewModel</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">actionHandler</span> <span class="p">=</span> <span class="n">PostActionHandler</span><span class="p">(</span><span class="k">this</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">PostScreen</span><span class="p">(</span><span class="n">viewModel</span><span class="p">:</span> <span class="n">PostScreenViewModel</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">PostItem</span><span class="p">(</span><span class="n">onAction</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">actionHandler</span><span class="o">::</span><span class="n">handleAction</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">PostItem</span><span class="p">(</span><span class="n">onAction</span><span class="p">:</span> <span class="p">(</span><span class="n">PostAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>虽然这种方法确实解决了跨多个ViewModel重复代码的问题，但它也存在一些主要缺点，这些缺点包括：</p>
-
-<ul>
-<li>🚫 自定义功能有限：由于 PostActionHandler 是一个封装类，我们无法覆写任何行为。</li>
-<li>🚫 通过属性访问：我们不是将功能添加到ViewModel本身，而是将其作为ViewModel的一个属性添加。</li>
-</ul>
-
-
-<p><strong>无法覆写（Override）行为是这种方法不建议用于UI交互处理的主要原因。</strong></p>
-
-<h2>🧬 使用 Kotlin 委托进行组合（优雅但受限的解决方案）</h2>
-
-<p>这是互联网上解决这个问题的标准方法，也是最受推荐的方法。该解决方案基于继承，但不是继承自某个类，这样就无法再扩展任何类。我们利用 Kotlin 委托将实现委托给另一个类，这样就无需扩展某个类，也无需再终止继承。</p>
-
-<p>以下是我们实现该解决方案的方法</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">interface</span> <span class="n">PostActionHandler</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">handleAction</span><span class="p">(</span><span class="n">action</span><span class="p">:</span> <span class="n">PostAction</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">class</span> <span class="nc">PostActionHandlerImpl</span> <span class="p">:</span> <span class="n">PostActionHandler</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">handleAction</span><span class="p">(</span><span class="n">action</span><span class="p">:</span> <span class="n">PostAction</span><span class="p">)</span> <span class="p">=</span> <span class="k">when</span> <span class="p">(</span><span class="n">action</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">Clicked</span> <span class="p">-&gt;</span> <span class="n">handlePostClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">LikeClicked</span> <span class="p">-&gt;</span> <span class="n">handleLikeClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">ShareClicked</span> <span class="p">-&gt;</span> <span class="n">handleShareClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">handlePostClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">handleLikeClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">handleShareClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这就是我们的使用方法</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">PostViewModel</span> <span class="p">:</span> <span class="n">BaseViewModel</span><span class="p">(),</span> <span class="n">PostActionHandler</span> <span class="k">by</span> <span class="n">PostActionHandlerImpl</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">PostScreen</span><span class="p">(</span><span class="n">viewModel</span><span class="p">:</span> <span class="n">PostViewModel</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">PostItem</span><span class="p">(</span><span class="n">onAction</span> <span class="p">=</span> <span class="n">viewModel</span><span class="o">::</span><span class="n">handleAction</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">PostItem</span><span class="p">(</span><span class="n">onAction</span><span class="p">:</span> <span class="p">(</span><span class="n">PostAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这种方法解决了额外辅助类方法中存在的所有问题。</p>
-
-<ul>
-<li>✅ 覆写行为：通过使用接口和委托，我们可以轻松地覆写任何行为。</li>
-<li>✅ 更简洁的设计：功能直接成为ViewModel的一部分，允许我们像调用原生ViewModel方法一样调用这些函数。</li>
-</ul>
-
-
-<p>然而，这种方法有一个主要缺点，使其在处理UI交互和UI逻辑方面不够完善。</p>
-
-<h3>访问从其他类继承的功能</h3>
-
-<p>此模式的一个主要挑战是我们无法访问从其他类继承的功能，因为我们无法传递引用。</p>
-
-<p>让我们看看这个限制带来了哪些挑战：</p>
-
-<ul>
-<li>无法访问ViewModel功能：我们无法从实现类访问任何ViewModel功能。这是因为我们无法在实现类中传递当前类的引用。</li>
-<li>无法使用 viewModelScope：此限制带来的一个主要警告是，我们无法使用 viewModelScope，因此无法直接启动协程。我们必须在 viewModel 中创建包装函数，这会破坏可重用性，因为现在可组合函数会调用我们的ViewModel函数。</li>
-</ul>
-
-
-<p>当我们尝试将其作为构造函数参数传递时，Android Studio 会抛出一个错误：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*xcJAyapM8023-hqu06vwUw.png" alt="Kotlin Compiler showing error when passing “this”" /></p>
-
-<h2>🧩 我的解决方案：使用接口默认函数进行组合</h2>
-
-<p>在我自己实现使用委托的 Composition 方案时，我遇到了一个难题：如何传递当前ViewModel的引用来访问viewModelScope 和我的 BaseViewModel 功能。后来我想起了 Kotlin 接口中的默认函数，于是尝试了这个方案，完美地解决了这个问题。</p>
-
-<p>通过这个方案，我可以：</p>
-
-<ul>
-<li>💡 支持功能重写</li>
-<li>🔗 完全访问我的BaseViewModel和ViewModel 的功能，例如viewModelScope 等，或任何其他类的功能。</li>
-<li>❌ 无需单独的实现类</li>
-</ul>
-
-
-<blockquote><p>在我们<a href="https://medial.app/"> Medial 的应用</a>（链接 <a href="https://medial.app/%EF%BC%89%E7%94%9F%E4%BA%A7%E4%BB%A3%E7%A0%81%E4%B8%AD%EF%BC%8C%E6%88%91%E9%9B%86%E6%88%90%E4%BA%86%E8%BF%99%E4%B8%AA%E6%96%B9%E6%A1%88%EF%BC%8C%E4%BB%A5%E7%AE%80%E5%8C%96ViewModel%E5%A4%84%E7%90%86UI%E4%BA%A4%E4%BA%92%E7%9A%84%E6%96%B9%E5%BC%8F%E3%80%82%E7%BB%93%E6%9E%9C%E5%A6%82%E4%BD%95%EF%BC%9F%E6%AF%8F%E4%B8%AA%E6%96%B0%E9%A1%B5%E9%9D%A2%E5%8F%AA%E9%9C%80%E5%AE%9E%E7%8E%B0%E8%BF%99%E4%B8%AA%E6%8E%A5%E5%8F%A3%EF%BC%8C%E7%84%B6%E5%90%8E%EF%BC%8C%E5%AE%83%E5%B0%B1%E5%B9%B2%E5%87%80%E5%88%A9%E8%90%BD%E5%9C%B0%E8%8E%B7%E5%BE%97%E4%BA%86%E5%8A%9F%E8%83%BD%E3%80%82">https://medial.app/%EF%BC%89%E7%94%9F%E4%BA%A7%E4%BB%A3%E7%A0%81%E4%B8%AD%EF%BC%8C%E6%88%91%E9%9B%86%E6%88%90%E4%BA%86%E8%BF%99%E4%B8%AA%E6%96%B9%E6%A1%88%EF%BC%8C%E4%BB%A5%E7%AE%80%E5%8C%96ViewModel%E5%A4%84%E7%90%86UI%E4%BA%A4%E4%BA%92%E7%9A%84%E6%96%B9%E5%BC%8F%E3%80%82%E7%BB%93%E6%9E%9C%E5%A6%82%E4%BD%95%EF%BC%9F%E6%AF%8F%E4%B8%AA%E6%96%B0%E9%A1%B5%E9%9D%A2%E5%8F%AA%E9%9C%80%E5%AE%9E%E7%8E%B0%E8%BF%99%E4%B8%AA%E6%8E%A5%E5%8F%A3%EF%BC%8C%E7%84%B6%E5%90%8E%EF%BC%8C%E5%AE%83%E5%B0%B1%E5%B9%B2%E5%87%80%E5%88%A9%E8%90%BD%E5%9C%B0%E8%8E%B7%E5%BE%97%E4%BA%86%E5%8A%9F%E8%83%BD%E3%80%82</a></p></blockquote>
-
-<p>让我们来探索一下这个方案是如何解决我们的问题的。</p>
-
-<h3>设计 ActionHandler 接口</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">interface</span> <span class="n">PostActionHandler</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">val</span> <span class="py">viewModel</span><span class="p">:</span> <span class="n">BaseViewModel</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">handleAction</span><span class="p">(</span><span class="n">action</span><span class="p">:</span> <span class="n">PostAction</span><span class="p">)</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">when</span> <span class="p">(</span><span class="n">action</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">Clicked</span> <span class="p">-&gt;</span> <span class="n">handlePostClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>            <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">LikeClicked</span> <span class="p">-&gt;</span> <span class="n">handleLikeClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>            <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">ShareClicked</span> <span class="p">-&gt;</span> <span class="n">handleShareClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">handlePostClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">navigate</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">handleLikeClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">showToast</span><span class="p">(</span><span class="s">&quot;Liked&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">handleShareClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// 实现</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>让我们的ViewModel实现这个接口</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">PostViewModel</span> <span class="p">:</span> <span class="n">BaseViewModel</span><span class="p">(),</span> <span class="n">PostActionHandler</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// 传入当前的baseViewModel</span>
-</span><span class='line'>    <span class="k">override</span> <span class="n">valViewModel</span><span class="p">=</span> <span class="k">this</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">handleShareClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// 添加 override实现</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>这是它在 Composable 中的使用方式</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">PostScreen</span><span class="p">(</span><span class="n">viewModel</span><span class="p">:</span> <span class="n">PostViewModel</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">PostItem</span><span class="p">(</span><span class="n">onAction</span> <span class="p">=</span> <span class="n">viewModel</span><span class="o">::</span><span class="n">handleAction</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">PostItem</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">onAction</span><span class="p">:</span> <span class="p">(</span><span class="n">PostAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>所以，正如你所见，我们只需要定义 viewModel 变量，就大功告成了，现在我们可以使用ViewModel和 BaseViewModel 提供的所有功能了。</p>
-
-<p>请注意，我们是如何解决使用委托进行组合的主要缺点的：</p>
-
-<ul>
-<li>通过将 viewModel 引用保留为接口属性，我们可以轻松地在ViewModel中定义它。这使我们能够直接访问 BaseViewModel 或任何其他ViewModel提供的所有功能。</li>
-<li>我们简化了 viewModelScope 的使用。现在，启动协程、收集流程以及执行其他任务都变得非常简单，无需任何复杂的变通方法或 hack。这就是此解决方案带来的优雅和简洁之处。</li>
-</ul>
-
-
-<p>这种方法只有一个小缺点，那就是</p>
-
-<ul>
-<li>我们必须在ViewModel中定义所有接口属性，这在大多数情况下是可以接受的，因为我们主要会引用 Repository 或 Domain Layer 类，以及一些可变状态（如果有的话）。</li>
-</ul>
-
-
-<p>这个问题比我们在这个解决方案中克服的缺点要小得多，这使得它成为处理任何共享UI交互或任何共享UI业务逻辑的最佳解决方案。</p>
-
-<blockquote><p>嗯，这一部分比前面几部分简单得多。这里没有复杂的问题需要深入研究——只是一个简单的解决方案，它确实做到了它应该做的事情，并解决了我们所有的问题。</p></blockquote>
-
-<h2>🥷🏻 让我们在实际用例中看看这个解决方案的实际应用。</h2>
-
-<p>假设我们有一个主页面，它以列表形式显示各种UI元素，例如包含帖子和新闻等项目的动态。每个元素都包含一组用户交互，例如点赞帖子、分享新闻文章或导航到详情视图。我们的解决方案可以帮助我们高效地处理跨不同ViewModel的这些交互，确保以可扩展的方式处理通用功能。</p>
-
-<h3>为每个UI组件设计UI交互</h3>
-
-<p>然后，我们使用 Kotlin 的 Sealed 接口，像在典型的 MVI 架构中一样设计UI交互：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">PostAction</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">Clicked</span><span class="p">(</span><span class="k">val</span> <span class="py">post</span><span class="p">:</span> <span class="n">Post</span><span class="p">)</span> <span class="p">:</span> <span class="n">PostAction</span>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">LikeClicked</span><span class="p">(</span><span class="k">val</span> <span class="py">post</span><span class="p">:</span> <span class="n">Post</span><span class="p">)</span> <span class="p">:</span> <span class="n">PostAction</span>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">ShareClicked</span><span class="p">(</span><span class="k">val</span> <span class="py">post</span><span class="p">:</span> <span class="n">Post</span><span class="p">)</span> <span class="p">:</span> <span class="n">PostAction</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">NewsAction</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">Clicked</span><span class="p">(</span><span class="k">val</span> <span class="py">news</span><span class="p">:</span> <span class="n">News</span><span class="p">)</span> <span class="p">:</span> <span class="n">NewsAction</span>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">LikeClicked</span><span class="p">(</span><span class="k">val</span> <span class="py">news</span><span class="p">:</span> <span class="n">News</span><span class="p">)</span> <span class="p">:</span> <span class="n">NewsAction</span>
-</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">BookmarkClicked</span><span class="p">(</span><span class="k">val</span> <span class="py">news</span><span class="p">:</span> <span class="n">News</span><span class="p">)</span> <span class="p">:</span> <span class="n">NewsAction</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>创建我们的动作处理程序接口</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">interface</span> <span class="n">PostActionHandler</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">val</span> <span class="py">viewModel</span><span class="p">:</span> <span class="n">BaseViewModel</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">postRepo</span><span class="p">:</span> <span class="n">PostRepository</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">handleAction</span><span class="p">(</span><span class="n">action</span><span class="p">:</span> <span class="n">PostAction</span><span class="p">)</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>      <span class="k">when</span> <span class="p">(</span><span class="n">action</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>          <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">Clicked</span> <span class="p">-&gt;</span> <span class="n">handlePostClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>          <span class="k">is</span> <span class="n">PostAction</span><span class="p">.</span><span class="n">LikeClicked</span> <span class="p">-&gt;</span> <span class="n">handleLikeClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">handlePostClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">viewModel</span><span class="p">.</span><span class="n">navigate</span><span class="p">(......)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">handleLikeClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">postRepo</span><span class="p">.</span><span class="n">like</span><span class="p">(</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>      <span class="n">viewModel</span><span class="p">.</span><span class="n">showSnackbar</span><span class="p">(</span><span class="s">&quot;Post Liked&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">interface</span> <span class="n">NewsActionHandler</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">val</span> <span class="py">viewModel</span><span class="p">:</span> <span class="n">BaseViewModel</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">newsRepo</span><span class="p">:</span> <span class="n">NewsRepository</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">handleAction</span><span class="p">(</span><span class="n">action</span><span class="p">:</span> <span class="n">NewsAction</span><span class="p">)</span> <span class="p">=</span> <span class="k">when</span> <span class="p">(</span><span class="n">action</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">NewsAction</span><span class="p">.</span><span class="n">Clicked</span> <span class="p">-&gt;</span> <span class="n">handleNewsClick</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>        <span class="k">is</span> <span class="n">NewsAction</span><span class="p">.</span><span class="n">Bookmark</span> <span class="p">-&gt;</span> <span class="n">handleNewsBookmark</span><span class="p">(</span><span class="n">action</span><span class="p">.</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">handleNewsClick</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">viewModel</span><span class="p">.</span><span class="n">navigate</span><span class="p">(.....)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">handleNewsBookmark</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">newsRepo</span><span class="p">.</span><span class="n">bookmark</span><span class="p">(</span><span class="n">id</span><span class="p">)</span>
-</span><span class='line'>      <span class="n">viewModel</span><span class="p">.</span><span class="n">showSnackBar</span><span class="p">(</span><span class="s">&quot;News Bookmarked&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如上所示，我们为每个数据模型创建了一个 Action Handler 接口。</p>
-
-<p>我们在这里所做的就是遵循上一节所示的接口设计。</p>
-
-<ul>
-<li>我们有两个属性，分别是ViewModel和Repository 类。</li>
-<li>我们分别创建了处理每个 Action 的函数。当然，这是可选的。我保留这种方式是为了方便覆写任何特定的行为，并且我们为每个 Action 类型分别调用相应的 Action 处理函数。</li>
-</ul>
-
-
-<h3>创建 ViewModel</h3>
-
-<p>让我们构建一个实现这两个接口的 ViewModel，以继承它们的功能。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">class</span> <span class="nc">HomeViewModel</span> <span class="p">:</span> <span class="n">BaseViewModel</span><span class="p">(),</span> <span class="n">PostActionHandler</span><span class="p">,</span> <span class="n">NewsActionHandler</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">viewModel</span> <span class="p">=</span> <span class="k">this</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">postRepo</span> <span class="p">=</span> <span class="n">PostRepository</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">newsRepo</span> <span class="p">=</span> <span class="n">NewsRepository</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="cm">/**</span>
-</span><span class='line'><span class="cm">      ViewModel其余代码</span>
-</span><span class='line'><span class="cm">    **/</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后，我们在ViewModel中定义必要的属性（ viewModel 、 postRepo 和 newsRepo ），这些属性会被两个接口使用。</p>
-
-<p>这种设计消除了冗余，并保持了代码的简洁性，因为我们只需设置一次属性，只要属性名称相同，两个接口就可以无缝地与其交互。
-这种方法保持了ViewModel的中心地位，同时又可以轻松处理不同组件的UI交互和业务逻辑。</p>
-
-<h2>🪝连接一切：将操作连接到 UI</h2>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">HomeScreen</span><span class="p">(</span><span class="n">viewModel</span><span class="p">:</span> <span class="n">HomeViewModel</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">LazyColumn</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">items</span><span class="p">(</span><span class="n">viewModel</span><span class="p">.</span><span class="n">items</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">when</span><span class="p">(</span><span class="n">it</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="k">is</span> <span class="n">News</span> <span class="p">-&gt;</span> <span class="n">NewsCard</span><span class="p">(</span><span class="n">it</span><span class="p">,</span> <span class="n">onAction</span> <span class="p">=</span> <span class="n">viewModel</span><span class="o">::</span><span class="n">handleAction</span><span class="p">)</span>
-</span><span class='line'>                <span class="k">is</span> <span class="n">Post</span> <span class="p">-&gt;</span> <span class="n">PostCard</span><span class="p">(</span><span class="n">it</span><span class="p">,</span> <span class="n">onAction</span> <span class="p">=</span> <span class="n">viewModel</span><span class="o">::</span><span class="n">handleAction</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">NewsCard</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">news</span><span class="p">:</span> <span class="n">News</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onAction</span><span class="p">:</span> <span class="p">(</span><span class="n">NewsAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">PostCard</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">post</span><span class="p">:</span> <span class="n">Post</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">onAction</span><span class="p">:</span> <span class="p">(</span><span class="n">PostAction</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>在我们的UI组件中，我们可以直接将这些函数用作ViewModel本身的函数，这样就完成了在 Screen 中添加交互处理的功能。</p>
-
-<ul>
-<li>现在，假设我们有另一个只显示新闻的页面（Screen）。我们需要做的就是在ViewModel中实现 NewsActionHandler 接口——就这样，一切就绪。</li>
-<li>我们可以无缝地从 BaseViewModel 或ViewModel调用任何函数，从而能够在一个单一的、集中的位置实现完整的端到端功能。如果我们在多个位置显示相同的数据模型，这将非常有利。</li>
-</ul>
-
-
-<h2>📦 整合所有功能</h2>
-
-<p>在这篇博文中，我们探讨了在扩展Android UI（基本上是任何 UI）时最容易被忽视的问题之一，即跨ViewModel的重复UI交互逻辑。我们探索了三种不同的方法来解决这个问题：</p>
-
-<ol>
-<li>辅助类 - 一种快速解决方案，但存在严格的限制。</li>
-<li>使用委托进行组合——一种更现代的继承驱动解决方案，
-但它难以从外部访问功能。</li>
-<li>使用默认函数的接口（我的解决方案）——一种实用、优雅且灵活的方法，克服了前两种方法的所有限制。</li>
-</ol>
-
-
-<p>通过利用 Kotlin 的接口默认方法并将ViewModel作为接口内部的属性，我们解锁了完整的可扩展性，并能够从其他继承的类/接口访问扩展功能。</p>
-
-<p>现在，让我们以表格的形式比较一下每个解决方案：</p>
-
-<table>
-<thead>
-<tr>
-<th> 好处                           </th>
-<th> 通过辅助类                                       </th>
-<th> 使用委托进行组合                             </th>
-<th> 带有默认函数的接口 (✅ 最好)         </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td> 🔁 可重用性                                 </td>
-<td>  ✅ Yes        </td>
-<td>  ✅ Yes         </td>
-<td>  ✅ Yes </td>
-</tr>
-<tr>
-<td> 🧠 覆写行为                        </td>
-<td> ❌ 不可能          </td>
-<td> ✅ 可以，由于继承        </td>
-<td> ✅  可以，由于继承           </td>
-</tr>
-<tr>
-<td> 🔗 访问从其他来源继承的功能                 </td>
-<td> ❌ 不可以，因为它是一个封装类      </td>
-<td> ❌  不可以，因为我们无法传递当前引用       </td>
-<td> ✅  可以，因为我们可以将继承类保留为接口属性    </td>
-</tr>
-<tr>
-<td> 🏗️ 跨页面可扩展性                  </td>
-<td> ⚠️ 差——当逻辑还涉及视图模型特定功能时会变得困难               </td>
-<td> ✅ 更好——可重复使用的逻辑                    </td>
-<td> ✅ 最佳——跨页面即插即用            </td>
-</tr>
-<tr>
-<td> ✅ 最佳用例                               </td>
-<td> 对于非UI交互封装功能                   </td>
-<td> 业务逻辑重用，非UI上下文            </td>
-<td> 多个ViewModel中需要的UI交互 </td>
-</tr>
-</tbody>
-</table>
-
-
-<p>你可以在<a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample">专用的 GitHub 代码库</a>（链接：<a href="https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E6%8E%A2%E7%B4%A2%E6%9C%AC%E5%8D%9A%E5%AE%A2%E4%B8%AD%E6%8F%90%E5%88%B0%E7%9A%84%E6%89%80%E6%9C%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E3%80%82%E6%AC%A2%E8%BF%8E%E9%9A%8F%E6%84%8Fclone%E3%80%81fork%E6%88%96%E8%AF%95%E7%94%A8%E3%80%82">https://github.com/Vaibhav2002/Ui-Intreraction-Handler-Sample%EF%BC%89%E4%B8%AD%E6%8E%A2%E7%B4%A2%E6%9C%AC%E5%8D%9A%E5%AE%A2%E4%B8%AD%E6%8F%90%E5%88%B0%E7%9A%84%E6%89%80%E6%9C%89%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88%E3%80%82%E6%AC%A2%E8%BF%8E%E9%9A%8F%E6%84%8Fclone%E3%80%81fork%E6%88%96%E8%AF%95%E7%94%A8%E3%80%82</a></p>
-
-<h2>✌️ 告别</h2>
-
-<p>总而言之，希望这篇博客能帮助你解锁一些强大的技巧，提升你的Kotlin 和UI处理知识。有了Kotlin 的界面默认函数，你的构建将更加简洁、快速，并兼顾长期可扩展性。</p>
-
-<p>如果你喜欢这篇文章并想随时了解最新动态：</p>
-
-<ul>
-<li>查看我的 LinkedIn、GitHub 和 X 个人资料，了解我正在做的事情。</li>
-<li>想要更多 Kotlin 的魔法？阅读我之前的博客，了解另一种可以让你的代码库更精简、更智能的技术。</li>
-</ul>
-
-
-<p>感谢你的阅读，希望你喜欢！🚀</p>
 ]]></content>
   </entry>
   
