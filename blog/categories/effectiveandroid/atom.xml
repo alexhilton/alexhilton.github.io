@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-11-02T22:24:28+08:00</updated>
+  <updated>2025-11-08T18:25:44+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,285 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[使用CameraX 1.5进行高速拍摄和慢动作视频拍摄]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/11/05/camerax-slow-motion/"/>
+    <updated>2025-11-05T21:59:12+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/11/05/camerax-slow-motion</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「High-Speed Capture and Slow-Motion Video with CameraX 1.5」，原文链接<a href="https://android-developers.googleblog.com/2025/10/high-speed-capture-and-slow-motion.html">https://android-developers.googleblog.com/2025/10/high-speed-capture-and-slow-motion.html</a>，由Leo Huang发布于2025年10月28日。</p></blockquote>
+
+<p><a href=""><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhSMEQNJHjQybdOLzAewkopnpZ6OUC0jYiXboj3chVWnaFbKtD5bPA4azyqjM7_ffdGv_nBnvYUgoqvhISE7-lff-aGkF8f200ENGHF9" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>清晰捕捉快速运动的画面是现代相机应用的关键特性。这可以通过高速拍摄来实现——即以 120 或 240 fps 等速率采集帧。这种高保真拍摄可用于两种截然不同的用途：创建高帧率视频以进行逐帧的详细分析，或生成慢动作视频，使动作在屏幕上呈现出戏剧性的展开效果。</p>
+
+<p>以前，使用 Camera2 API 实现这些功能需要更多的人工操作。现在，CameraX 1.5 中新增的<a href="https://developer.android.com/reference/androidx/camera/video/HighSpeedVideoSessionConfig">高速 API</a>简化了整个流程，让你可以灵活地创建真正的高帧率视频或即用型慢动作短片。本文将向你展示如何掌握这两种方法。如果你是 CameraX 新手，可以先阅读<a href="https://developer.android.com/media/camera/camerax">CameraX 概述</a>快速上手。</p>
+
+<h2>慢动作原理</h2>
+
+<p>慢动作的基本原理是以远高于播放帧率的帧率来录制视频。例如，如果你以每秒 120 帧 (fps) 的帧率录制一个一秒钟的事件，然后以标准的 30 fps 播放该录像，则视频需要四秒钟才能播放完毕。这种时间的“拉伸”正是慢动作效果的来源，让你能够看到肉眼无法捕捉到的快速细节。</p>
+
+<p>为确保最终输出视频流畅自然，通常应以至少 30 fps 的帧率进行渲染。这意味着，要制作 4 倍慢动作视频，原始拍摄帧率必须至少为 120 fps（120 fps 拍摄帧率 ÷ 4 = 30 fps 播放帧率）。</p>
+
+<p>拍摄高帧率素材后，主要有两种方法可以实现所需效果：</p>
+
+<ul>
+<li><p>播放器控制的慢动作（高帧率视频）：高速录制的视频（例如 120 fps）直接保存为高帧率视频文件。然后，视频播放器负责降低播放速度。这样，用户可以灵活地在正常播放和慢动作播放之间切换。</p></li>
+<li><p>即用型慢动作（重新编码的视频）：高速视频流经过处理和重新编码，生成标准帧率（例如 30 fps）的文件。慢动作效果是通过调整帧时间戳“嵌入”到视频中的。生成的视频无需特殊处理即可在任何标准视频播放器中以慢动作播放。虽然视频默认以慢动作播放，但视频播放器仍然可以提供播放速度控制，允许用户加快播放速度并以原始速度观看视频。</p></li>
+</ul>
+
+
+<p>CameraX API 简化了这一过程，为你提供了一种统一的方式来选择所需的播放方式，如下所示。</p>
+
+<h2>全新高速视频 API</h2>
+
+<p>全新的 CameraX 解决方案基于两个主要组件：</p>
+
+<ul>
+<li><p><a href="https://developer.android.com/reference/kotlin/androidx/camera/video/Recorder#getHighSpeedVideoCapabilities(androidx.camera.core.CameraInfo)">Recorder#getHighSpeedVideoCapabilities(CameraInfo)</a>: 此方法用于检查摄像头是否支持高速录制，如果支持，则可查看支持哪些分辨率（Quality 对象）。</p></li>
+<li><p><a href="https://developer.android.com/reference/androidx/camera/video/HighSpeedVideoSessionConfig">HighSpeedVideoSessionConfig</a>: 这是一个特殊的配置对象，用于将你的 VideoCapture 和 Preview 使用场景分组，并指示 CameraX 创建一个统一的高速摄像头会话。请注意，虽然 VideoCapture 流将以配置的高帧率运行，但为了确保屏幕流畅显示，预览流通常会被摄像头系统限制在至少 30 FPS 的标准帧率。</p></li>
+</ul>
+
+
+<h2>入门指南</h2>
+
+<p>开始之前，请确保已将必要的 CameraX 依赖项添加到应用程序的 build.gradle.kts 文件中。你需要 camera-video 组件以及 CameraX 核心库。</p>
+
+<pre><code class="kotlin">// build.gradle.kts (Module: app)
+
+
+dependencies {
+
+    val camerax_version = "1.5.1"
+
+
+    implementation("androidx.camera:camera-core:$camerax_version")
+
+    implementation("androidx.camera:camera-camera2:$camerax_version")
+
+    implementation("androidx.camera:camera-lifecycle:$camerax_version")
+
+    implementation("androidx.camera:camera-video:$camerax_version")
+
+    implementation("androidx.camera:camera-view:$camerax_version")
+
+}
+</code></pre>
+
+<h3>关于实验性 API 的说明</h3>
+
+<p>需要注意的是，高速录制 API 目前处于实验阶段。这意味着它们在未来的版本中可能会发生变化。要使用它们，你必须通过在代码中添加以下注释来启用它们：</p>
+
+<pre><code class="kotlin">@kotlin.OptIn(ExperimentalSessionConfig::class, ExperimentalHighSpeedVideo::class)
+</code></pre>
+
+<h2>具体实现</h2>
+
+<p>两种结果的实现都从相同的设置步骤开始。创建高帧率视频还是慢动作视频的选择取决于一个设置。</p>
+
+<h3>1.设置高速拍摄</h3>
+
+<p>首先，无论你的目标是什么，你都需要获取 <a href="https://developer.android.com/reference/androidx/camera/lifecycle/ProcessCameraProvider">ProcessCameraProvider</a>，检查设备功能，并创建你的使用场景。</p>
+
+<p>以下代码块展示了在挂起函数中的完整设置流程。你可以从协程作用域调用此函数，例如 <code>lifecycleScope.launch</code>。</p>
+
+<pre><code class="kotlin">// Add the OptIn annotation at the top of your function or class
+
+@kotlin.OptIn(ExperimentalSessionConfig::class, ExperimentalHighSpeedVideo::class)
+
+private suspend fun setupCamera() {
+
+    // Asynchronously get the CameraProvider
+
+    val cameraProvider = ProcessCameraProvider.awaitInstance(this)
+
+
+    // -- CHECK CAPABILITIES --
+
+    val cameraInfo = cameraProvider.getCameraInfo(CameraSelector.DEFAULT_BACK_CAMERA)
+
+    val videoCapabilities = Recorder.getHighSpeedVideoCapabilities(cameraInfo)
+
+    if (videoCapabilities == null) {
+
+        // This camera device does not support high-speed video.
+
+        return
+
+    }
+
+
+    // -- CREATE USE CASES --
+
+    val preview = Preview.Builder().build()    
+
+
+    // You can create a Recorder with default settings.
+
+    // CameraX will automatically select a suitable quality.
+
+    val recorder = Recorder.Builder().build()
+
+
+    // Alternatively, to use a specific resolution, you can configure the
+    // Recorder with a QualitySelector. This is useful if your app has
+    // specific resolution requirements or you want to offer user
+    // preferences. 
+
+    // To use a specific quality, you can uncomment the following lines.
+
+    // Get the list of qualities supported for high-speed video. 
+
+    // val supportedQualities = videoCapabilities.getSupportedQualities(DynamicRange.SDR)
+
+    // Build the Recorder using the quality from the supported list.
+
+    // val recorderWithQuality = Recorder.Builder()
+
+    //     .setQualitySelector(QualitySelector.from(supportedQualities.first()))
+
+    //     .build()
+
+
+    // Create the VideoCapture use case, using either recorder or recorderWithQuality
+
+    val videoCapture = VideoCapture.withOutput(recorder)
+
+    // Now you are ready to configure the session for your desired output...
+
+}
+</code></pre>
+
+<h3>2. 选择输出</h3>
+
+<p>现在，你需要决定要创建哪种类型的视频。此代码将在上面所示的 <code>setupCamera()suspend</code> 函数中运行。</p>
+
+<h4>选项 A：创建高帧率视频</h4>
+
+<p>如果你希望最终文件具有高帧率（例如，120fps 的视频），请选择此选项。</p>
+
+<pre><code class="kotlin">// Create a builder for the high-speed session
+
+val sessionConfigBuilder = HighSpeedVideoSessionConfig.Builder(videoCapture)
+
+    .setPreview(preview)
+
+
+// Query and apply a supported frame rate. Common supported frame rates include 120 and 240 fps.
+
+val supportedFrameRateRanges =
+
+    cameraInfo.getSupportedFrameRateRanges(sessionConfigBuilder.build())
+
+
+sessionConfigBuilder.setFrameRateRange(supportedFrameRateRanges.first())
+</code></pre>
+
+<h4>选项 B：创建可直接播放的慢动作视频</h4>
+
+<p>如果你希望视频在任何标准视频播放器中自动以慢动作播放，请选择此选项。</p>
+
+<pre><code class="kotlin">// Create a builder for the high-speed session
+
+val sessionConfigBuilder = HighSpeedVideoSessionConfig.Builder(videoCapture)
+
+    .setPreview(preview)
+
+
+// This is the key: enable automatic slow-motion!
+
+sessionConfigBuilder.setSlowMotionEnabled(true)
+
+
+// Query and apply a supported frame rate. Common supported frame rates include 120, 240, and 480 fps.
+
+val supportedFrameRateRanges =
+
+   cameraInfo.getSupportedFrameRateRanges(sessionConfigBuilder.build())
+
+sessionConfigBuilder.setFrameRateRange(supportedFrameRateRanges.first())
+</code></pre>
+
+<p>这个标志位是创建可直接播放的慢动作视频的关键。当 <code>setSlowMotionEnabled</code> 设置为 true 时，CameraX 会处理高速视频流并将其保存为标准的 30 fps 视频文件。慢动作播放速度由拍摄帧速率与标准播放速率的比值决定。</p>
+
+<p>例如：</p>
+
+<ul>
+<li><p>以 120 fps 录制的视频将以 &frac14; 倍速播放 (120 ÷ 30 = 4)。</p></li>
+<li><p>以 240 fps 录制的视频将以 1/8 倍速播放 (240 ÷ 30 = 8)。</p></li>
+</ul>
+
+
+<h2>整合所有步骤：录制视频</h2>
+
+<p>配置好 HighSpeedVideoSessionConfig 并将其绑定到生命周期后，最后一步就是开始录制。准备输出选项、开始录制和处理视频事件的过程与标准视频捕获相同。</p>
+
+<p>本文重点介绍高速配置，因此不会详细介绍录制过程。如需了解从准备 FileOutputOptions 或 MediaStoreOutputOptions 对象到处理 VideoRecordEvent 回调的完整指南，请参阅<a href="https://developer.android.com/media/camera/camerax/video-capture#videocapture-api-overview">VideoCapture 文档</a>。</p>
+
+<pre><code class="kotlin">// Bind the session config to the lifecycle
+
+cameraProvider.bindToLifecycle(
+
+    this as LifecycleOwner,
+
+    CameraSelector.DEFAULT_BACK_CAMERA,
+
+    sessionConfigBuilder.build() // Bind the config object from Option A or B
+
+)
+
+
+// Start the recording using the VideoCapture use case
+
+val recording = videoCapture.output
+
+    .prepareRecording(context, outputOptions) // See docs for creating outputOptions
+
+    .start(ContextCompat.getMainExecutor(context)) { recordEvent -&gt;
+
+        // Handle recording events (e.g., Start, Pause, Finalize)
+
+    }
+</code></pre>
+
+<h2>Google Photos 对慢动作视频的支持</h2>
+
+<p>在 CameraX 中启用 setSlowMotionEnabled(true) 后，生成的视频文件将被设计为可在标准视频播放器和图库应用中立即识别并播放为慢动作视频。谷歌相册尤其针对慢动作视频提供了增强功能，当拍摄帧速率为 120、240、360、480 或 960fps 时，功能更加完善：</p>
+
+<ul>
+<li>缩略图中的独特 UI 识别：在谷歌相册中，慢动作视频会通过特定的 UI 元素进行识别，从而与普通视频区分开来。</li>
+</ul>
+
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEjPLQRSSF3hvj89T9DvO92-JNi_rjtUXQ-i76ZuyX4GHv4KitBFPVP5oHdqxICQJUf3l7HaOQeI0skgVK9bPM0qz7GToNYiIMszVYj6IsE4-wGa4jqZfYka03TTlFwUTDdYq56unwoIwv1fTnJrNpWIZ-5Iybgk-hFHlvcy08Bkm8xM0adbvYjqVxH12xc" alt="普通视频缩略图" /></p>
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEiDmd0jikxU58PkjrGG1K181pYs-G-drnrNG_q_mQqVJWkK4NdbuwDSB4jCbQzGAgYeyikORVsPT3pyQp_VCfw_7rNDzafFudhj0x56-bqNZc6mQuRktDCa7ycSx2-qsIJsCCTiQXmxxrtImiBOFwlTz3ufBtbGDsonZvqzSQqWbNugNt-bbDVvyQz7Hw8" alt="慢动作视频缩略图" /></p>
+
+<ul>
+<li>播放时可调整速度：播放慢动作视频时，Google Photos 提供控制选项，允许用户调整视频中哪些部分以慢速播放，哪些部分以正常速度播放，从而赋予用户更大的创作自由。编辑后的视频可以使用“分享”按钮导出为新的视频文件，同时保留你定义的慢动作片段。</li>
+</ul>
+
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEj-dp-bHPORhk_l0I4zkSEdzYUNRYvRwb2boA4KKgd1s4Sr1D61iAV2rWUD6dOdVezRn10qIGtMLae4brWI8RxlP9wFz18gsrZu4qOdAydWnhqgpmmsuLcHAMfo5Rv6XZIxtTCC5dSJeIJERbOKmPZyUXTOdweJ6EjQett5iOVl4yJzaLYR7rrHXz0WnAI" alt="正常视频播放" /></p>
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEi4AaVc78zpZzsG-hgOsuPdAqwCuSD6bb1b6de366Agvy2c3OG5qJ5mSPg94GA8GjR-LXDU4H7zBCoI_Pe3SxrfdDPiTyPmimTRM49IcTkGovC2mccTu0GnwcSyVAL5iW7qnNlWHGCoGHU9EeX3-8bZiSsmLWr6Ljf5KfJjInUuCEODrqF-g8Je3iLvEF4" alt="慢动作视频播放（带编辑控制）" /></p>
+
+<h2>关于设备支持的说明</h2>
+
+<p>CameraX 的高速 API 依赖于底层 Android 的 <a href="https://developer.android.com/reference/android/media/CamcorderProfile">CamcorderProfile</a> 系统来确定设备支持的高速分辨率和帧速率。CamcorderProfile 经过 <a href="https://source.android.com/docs/compatibility/cts">Android 兼容性测试套件 (CTS)</a> 的验证，这意味着你可以信赖设备所报告的视频录制功能。</p>
+
+<p>这意味着，设备内置相机应用能够录制慢动作视频并不能保证 CameraX 高速 API 能够正常工作。出现这种差异的原因是，设备制造商负责在其设备固件中填充 CamcorderProfile 条目，而有时必要的高速配置文件（例如 CamcorderProfile.QUALITY_HIGH_SPEED_1080P 和 CamcorderProfile.QUALITY_HIGH_SPEED_720P）可能并未包含在内。当缺少这些配置文件时，<code>Recorder.getHighSpeedVideoCapabilities()</code> 将返回 null。</p>
+
+<p>因此，务必始终使用 <code>Recorder.getHighSpeedVideoCapabilities()</code> 以编程方式检查支持的功能，因为这是确保在不同设备上获得一致体验的最可靠方法。如果尝试在 <code>Recorder.getHighSpeedVideoCapabilities()</code> 返回 null 的设备上绑定 <code>HighSpeedVideoSessionConfig</code>，则操作将失败并抛出 <code>IllegalArgumentException</code> 异常。你可以在 Google Pixel 设备上确认支持，因为它们始终包含这些高速配置文件。此外，其他制造商的各种设备，例如 Motorola Edge 30、OPPO Find N2 Flip 和 Sony Xperia 1 V，也支持高速视频功能。</p>
+
+<h2>结论</h2>
+
+<p>CameraX 高速视频 API 功能强大且灵活。无论你是需要用于技术分析的真正高帧率视频素材，还是想为你的应用添加电影级的慢动作效果，HighSpeedVideoSessionConfig 都能提供统一且简便的解决方案。通过了解 setSlowMotionEnabled 标志的作用，你可以轻松支持这两种使用场景，并赋予用户更大的创作自由。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[突破速度障碍：非阻塞启动画面如何将Android 应用启动时间缩短90%]]></title>
@@ -1291,168 +1570,6 @@ adb shell am kill com.yourpackage.name
 <h2>结论</h2>
 
 <p>在 Retrofit 和 Ktor 之间进行选择取决于你的项目需求和你的团队对这些工具的熟悉程度。Retrofit 是传统 Android 项目的可靠选择，而 Ktor 则在现代 Kotlin 优先和多平台应用程序中表现出色。了解这些差异将有助于你为下一个 Android 应用做出正确的选择。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[一文带你理解OkHttp中的Gzip压缩]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/02/25/understanding-okhttp-gzip-compression/"/>
-    <updated>2025-02-25T22:28:09+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/02/25/understanding-okhttp-gzip-compression</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="ttps://medium.com/tech-insider/okhttps-gzip-compression-904919638458">OkHttp’s Gzip Compression</a>，原文发布于2020年5月1日。本文假定读者对HTTP有基本的了解，以及使用过OkHttp，否则理解起来可能会一点困难。</p></blockquote>
-
-<p><strong>译注：</strong> OkHttp确实会自动添加gzip并处理响应。但如果显示的给请求添加除了gzip之外的字段，如&#8221;Accept-Encoding: gzip, deflate, br&#8221;，那么就需要手动处理响应。其实一般时候我们并不需要手动设置，除非是模拟浏览器时（比如用了浏览器的UA），或者某些服务器强制deflate字段。更多的信息可以<a href="https://stackoverflow.com/questions/51901333/okhttp-3-how-to-decompress-gzip-deflate-response-manually-using-java-android">看这里</a>。</p>
-
-<p><a href=""><img src="https://img-blog.csdnimg.cn/879e064594104e0ab5671f6710ffea24.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>压缩是一种简单有效的节省带宽和加快移动用户交互速度的方法。当用户点击你的页面屏幕时，会调用你的服务器来提供请求的响应。响应越大，屏幕上显示数据的时间就越长。通过压缩，即使你的访问者的互联网连接速度非常慢并且你的 API 响应过于繁重，他们也能享受快速加载。</p>
-
-<h2>这是如何工作的呢？</h2>
-
-<p><strong>Gzip 会找到相似的字符串，并用一些占位符临时替换这些字符串，以缩小整体大小。</strong>如果你使用大量重复文本，并且有大量空格， 这也没有问题。你可以使用 Gzip 压缩你的响应主体以及请求主体。由于文件小得多，此操作可大大减少传输时间。</p>
-
-<p><strong>注意：</strong>如果你尝试使用postman，它会默认在header的隐藏部分中添加 Accept-Encoding: gzip字段。</p>
-
-<blockquote><p>重要提示：OkHttp 也会自动在请求中添加字段 Accept-Encoding 并自动识别响应中的 Content-Encoding，因此会自行解压缩响应数据，因此无需单独设置，但假设当我们必须将压缩的请求数据发送到服务器时，我们就必须编写自己的拦截器。</p></blockquote>
-
-<p>这种压缩的棘手之处在于请求者和服务器都知道可以发送压缩文件。你必须告诉服务器您接受这种编码，然后它才会提供。该协议分为两部分：</p>
-
-<ul>
-<li>请求者发送一个header，告知服务器它接受压缩内容：Accept-Encoding：gzip</li>
-<li>服务器使用此header确认你的请求：Content-Encoding：gzip</li>
-</ul>
-
-
-<p>说得够多的了，我想你还有耐心，所以让我们看一些代码。</p>
-
-<h2>编写自己的拦截器</h2>
-
-<p>先决条件：了解 OkHttp 中的<a href="https://square.github.io/okhttp/features/interceptors/">拦截器（Interceptors）</a>。</p>
-
-<ol>
-<li>解开 Gzip 响应：在请求header中添加 Accept-Encoding: gzip，并在获取响应时在其响应header中查找 Content-Encoding: gzip。如果存在则解压缩，否则直接返回响应。</li>
-</ol>
-
-
-<pre><code class="Java">import java.io.IOException;
-
-import okhttp3.Headers;
-import okhttp3.Interceptor;
-import okhttp3.Request;
-import okhttp3.Response;
-import okhttp3.ResponseBody;
-import okio.GzipSource;
-import okio.Okio;
-
-public class GzipInterceptor implements Interceptor {
-    @Override
-    public Response intercept(Chain chain) throws IOException {
-        Request.Builder newRequest = chain.request().newBuilder();
-        newRequest.addHeader("Accept-Encoding", "gzip");
-        Response response = chain.proceed(newRequest.build());
-
-        if (isGzipped(response)) {
-            return unzip(response);
-        } else {
-            return response;
-        }
-    }
-
-    private Response unzip(final Response response) throws IOException {
-
-        if (response.body() == null) {
-            return response;
-        }
-
-        GzipSource gzipSource = new GzipSource(response.body().source());
-        String bodyString = Okio.buffer(gzipSource).readUtf8();
-
-        ResponseBody responseBody = ResponseBody.create(response.body().contentType(), bodyString);
-
-        Headers strippedHeaders = response.headers().newBuilder()
-                .removeAll("Content-Encoding")
-                .removeAll("Content-Length")
-                .build();
-        return response.newBuilder()
-                .headers(strippedHeaders)
-                .body(responseBody)
-                .message(response.message())
-                .build();
-
-    }
-
-    private Boolean isGzipped(Response response) {
-        return response.header("Content-Encoding") != null &amp;&amp; response.header("Content-Encoding").equals("gzip");
-    }
-}
-</code></pre>
-
-<ol>
-<li>创建 Gzip 请求：如果你的请求过大，那么我们可以使用它来压缩我们的请求。为了通知服务器，我们将在请求header中添加 Content-Encoding: gzip。</li>
-</ol>
-
-
-<pre><code class="Java">import java.io.IOException;
-
-import okhttp3.Interceptor;
-import okhttp3.MediaType;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
-import okio.BufferedSink;
-import okio.GzipSink;
-import okio.Okio;
-
-public class GzipInterceptor implements Interceptor {
-    @Override public Response intercept(Interceptor.Chain chain) throws IOException {
-        Request originalRequest = chain.request();
-
-        if (originalRequest.body() == null || originalRequest.header("Content-Encoding") != null) {
-            return chain.proceed(originalRequest);
-        }
-
-        Request compressedRequest = originalRequest.newBuilder()
-                .header("Content-Encoding", "gzip")
-                .method(originalRequest.method(), gzip(originalRequest.body()))
-                .build();
-        return chain.proceed(compressedRequest);
-    }
-
-    private RequestBody gzip(final RequestBody body) {
-        return new RequestBody() {
-            @Override public MediaType contentType() {
-                return body.contentType();
-            }
-
-            @Override public long contentLength() {
-                return -1; // 事先不知道请求内容的长度
-            }
-
-            @Override public void writeTo(BufferedSink sink) throws IOException {
-                BufferedSink gzipSink = Okio.buffer(new GzipSink(sink));
-                body.writeTo(gzipSink);
-                gzipSink.close();
-            }
-        };
-    }
-}
-</code></pre>
-
-<p>好了，就到这里吧，如果你愿意的话，可以赞一下。</p>
-
-<p>参考资料：</p>
-
-<ol>
-<li><a href="https://square.github.io/okhttp/">https://square.github.io/okhttp/</a></li>
-<li><a href="https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-compression-in-web-development">https://www.apphp.com/tutorials/index.php?page=gzip-and-deflate-
-compression-in-web-development</a></li>
-<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://en.wikipedia.org/wiki/Gzip</a></li>
-<li><a href="https://www.youtube.com/watch?v=Mjab_aZsdxw">https://www.youtube.com/watch?v=Mjab_aZsdxw</a></li>
-</ol>
-
 ]]></content>
   </entry>
   

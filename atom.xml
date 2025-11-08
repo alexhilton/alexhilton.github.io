@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-11-02T22:24:28+08:00</updated>
+  <updated>2025-11-08T18:25:44+08:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,434 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[使用CameraX 1.5进行高速拍摄和慢动作视频拍摄]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/11/05/camerax-slow-motion/"/>
+    <updated>2025-11-05T21:59:12+08:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/11/05/camerax-slow-motion</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「High-Speed Capture and Slow-Motion Video with CameraX 1.5」，原文链接<a href="https://android-developers.googleblog.com/2025/10/high-speed-capture-and-slow-motion.html">https://android-developers.googleblog.com/2025/10/high-speed-capture-and-slow-motion.html</a>，由Leo Huang发布于2025年10月28日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2025/11/05/camerax-slow-motion/"><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhSMEQNJHjQybdOLzAewkopnpZ6OUC0jYiXboj3chVWnaFbKtD5bPA4azyqjM7_ffdGv_nBnvYUgoqvhISE7-lff-aGkF8f200ENGHF9" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>清晰捕捉快速运动的画面是现代相机应用的关键特性。这可以通过高速拍摄来实现——即以 120 或 240 fps 等速率采集帧。这种高保真拍摄可用于两种截然不同的用途：创建高帧率视频以进行逐帧的详细分析，或生成慢动作视频，使动作在屏幕上呈现出戏剧性的展开效果。</p>
+
+<p>以前，使用 Camera2 API 实现这些功能需要更多的人工操作。现在，CameraX 1.5 中新增的<a href="https://developer.android.com/reference/androidx/camera/video/HighSpeedVideoSessionConfig">高速 API</a>简化了整个流程，让你可以灵活地创建真正的高帧率视频或即用型慢动作短片。本文将向你展示如何掌握这两种方法。如果你是 CameraX 新手，可以先阅读<a href="https://developer.android.com/media/camera/camerax">CameraX 概述</a>快速上手。</p>
+
+<h2>慢动作原理</h2>
+
+<p>慢动作的基本原理是以远高于播放帧率的帧率来录制视频。例如，如果你以每秒 120 帧 (fps) 的帧率录制一个一秒钟的事件，然后以标准的 30 fps 播放该录像，则视频需要四秒钟才能播放完毕。这种时间的“拉伸”正是慢动作效果的来源，让你能够看到肉眼无法捕捉到的快速细节。</p>
+
+<p>为确保最终输出视频流畅自然，通常应以至少 30 fps 的帧率进行渲染。这意味着，要制作 4 倍慢动作视频，原始拍摄帧率必须至少为 120 fps（120 fps 拍摄帧率 ÷ 4 = 30 fps 播放帧率）。</p>
+
+<p>拍摄高帧率素材后，主要有两种方法可以实现所需效果：</p>
+
+<ul>
+<li><p>播放器控制的慢动作（高帧率视频）：高速录制的视频（例如 120 fps）直接保存为高帧率视频文件。然后，视频播放器负责降低播放速度。这样，用户可以灵活地在正常播放和慢动作播放之间切换。</p></li>
+<li><p>即用型慢动作（重新编码的视频）：高速视频流经过处理和重新编码，生成标准帧率（例如 30 fps）的文件。慢动作效果是通过调整帧时间戳“嵌入”到视频中的。生成的视频无需特殊处理即可在任何标准视频播放器中以慢动作播放。虽然视频默认以慢动作播放，但视频播放器仍然可以提供播放速度控制，允许用户加快播放速度并以原始速度观看视频。</p></li>
+</ul>
+
+
+<p>CameraX API 简化了这一过程，为你提供了一种统一的方式来选择所需的播放方式，如下所示。</p>
+
+<h2>全新高速视频 API</h2>
+
+<p>全新的 CameraX 解决方案基于两个主要组件：</p>
+
+<ul>
+<li><p><a href="https://developer.android.com/reference/kotlin/androidx/camera/video/Recorder#getHighSpeedVideoCapabilities(androidx.camera.core.CameraInfo)">Recorder#getHighSpeedVideoCapabilities(CameraInfo)</a>: 此方法用于检查摄像头是否支持高速录制，如果支持，则可查看支持哪些分辨率（Quality 对象）。</p></li>
+<li><p><a href="https://developer.android.com/reference/androidx/camera/video/HighSpeedVideoSessionConfig">HighSpeedVideoSessionConfig</a>: 这是一个特殊的配置对象，用于将你的 VideoCapture 和 Preview 使用场景分组，并指示 CameraX 创建一个统一的高速摄像头会话。请注意，虽然 VideoCapture 流将以配置的高帧率运行，但为了确保屏幕流畅显示，预览流通常会被摄像头系统限制在至少 30 FPS 的标准帧率。</p></li>
+</ul>
+
+
+<h2>入门指南</h2>
+
+<p>开始之前，请确保已将必要的 CameraX 依赖项添加到应用程序的 build.gradle.kts 文件中。你需要 camera-video 组件以及 CameraX 核心库。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// build.gradle.kts (Module: app)</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">camerax_version</span> <span class="p">=</span> <span class="s">&quot;1.5.1&quot;</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.camera:camera-core:$camerax_version&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.camera:camera-camera2:$camerax_version&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.camera:camera-lifecycle:$camerax_version&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.camera:camera-video:$camerax_version&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.camera:camera-view:$camerax_version&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>关于实验性 API 的说明</h3>
+
+<p>需要注意的是，高速录制 API 目前处于实验阶段。这意味着它们在未来的版本中可能会发生变化。要使用它们，你必须通过在代码中添加以下注释来启用它们：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@kotlin</span><span class="p">.</span><span class="n">OptIn</span><span class="p">(</span><span class="n">ExperimentalSessionConfig</span><span class="o">::</span><span class="k">class</span><span class="p">,</span> <span class="n">ExperimentalHighSpeedVideo</span><span class="o">::</span><span class="k">class</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>具体实现</h2>
+
+<p>两种结果的实现都从相同的设置步骤开始。创建高帧率视频还是慢动作视频的选择取决于一个设置。</p>
+
+<h3>1.设置高速拍摄</h3>
+
+<p>首先，无论你的目标是什么，你都需要获取 <a href="https://developer.android.com/reference/androidx/camera/lifecycle/ProcessCameraProvider">ProcessCameraProvider</a>，检查设备功能，并创建你的使用场景。</p>
+
+<p>以下代码块展示了在挂起函数中的完整设置流程。你可以从协程作用域调用此函数，例如 <code>lifecycleScope.launch</code>。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Add the OptIn annotation at the top of your function or class</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@kotlin</span><span class="p">.</span><span class="n">OptIn</span><span class="p">(</span><span class="n">ExperimentalSessionConfig</span><span class="o">::</span><span class="k">class</span><span class="p">,</span> <span class="n">ExperimentalHighSpeedVideo</span><span class="o">::</span><span class="k">class</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">private</span> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">setupCamera</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Asynchronously get the CameraProvider</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">cameraProvider</span> <span class="p">=</span> <span class="n">ProcessCameraProvider</span><span class="p">.</span><span class="n">awaitInstance</span><span class="p">(</span><span class="k">this</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// -- CHECK CAPABILITIES --</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">cameraInfo</span> <span class="p">=</span> <span class="n">cameraProvider</span><span class="p">.</span><span class="n">getCameraInfo</span><span class="p">(</span><span class="n">CameraSelector</span><span class="p">.</span><span class="n">DEFAULT_BACK_CAMERA</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">videoCapabilities</span> <span class="p">=</span> <span class="n">Recorder</span><span class="p">.</span><span class="n">getHighSpeedVideoCapabilities</span><span class="p">(</span><span class="n">cameraInfo</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">videoCapabilities</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// This camera device does not support high-speed video.</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">return</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// -- CREATE USE CASES --</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">preview</span> <span class="p">=</span> <span class="n">Preview</span><span class="p">.</span><span class="n">Builder</span><span class="p">().</span><span class="n">build</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// You can create a Recorder with default settings.</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// CameraX will automatically select a suitable quality.</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">recorder</span> <span class="p">=</span> <span class="n">Recorder</span><span class="p">.</span><span class="n">Builder</span><span class="p">().</span><span class="n">build</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Alternatively, to use a specific resolution, you can configure the</span>
+</span><span class='line'>    <span class="c1">// Recorder with a QualitySelector. This is useful if your app has</span>
+</span><span class='line'>    <span class="c1">// specific resolution requirements or you want to offer user</span>
+</span><span class='line'>    <span class="c1">// preferences. </span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// To use a specific quality, you can uncomment the following lines.</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Get the list of qualities supported for high-speed video. </span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// val supportedQualities = videoCapabilities.getSupportedQualities(DynamicRange.SDR)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Build the Recorder using the quality from the supported list.</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// val recorderWithQuality = Recorder.Builder()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">//     .setQualitySelector(QualitySelector.from(supportedQualities.first()))</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">//     .build()</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Create the VideoCapture use case, using either recorder or recorderWithQuality</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">videoCapture</span> <span class="p">=</span> <span class="n">VideoCapture</span><span class="p">.</span><span class="n">withOutput</span><span class="p">(</span><span class="n">recorder</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Now you are ready to configure the session for your desired output...</span>
+</span><span class='line'>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 选择输出</h3>
+
+<p>现在，你需要决定要创建哪种类型的视频。此代码将在上面所示的 <code>setupCamera()suspend</code> 函数中运行。</p>
+
+<h4>选项 A：创建高帧率视频</h4>
+
+<p>如果你希望最终文件具有高帧率（例如，120fps 的视频），请选择此选项。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Create a builder for the high-speed session</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">sessionConfigBuilder</span> <span class="p">=</span> <span class="n">HighSpeedVideoSessionConfig</span><span class="p">.</span><span class="n">Builder</span><span class="p">(</span><span class="n">videoCapture</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="p">.</span><span class="n">setPreview</span><span class="p">(</span><span class="n">preview</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Query and apply a supported frame rate. Common supported frame rates include 120 and 240 fps.</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">supportedFrameRateRanges</span> <span class="p">=</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">cameraInfo</span><span class="p">.</span><span class="n">getSupportedFrameRateRanges</span><span class="p">(</span><span class="n">sessionConfigBuilder</span><span class="p">.</span><span class="n">build</span><span class="p">())</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'><span class="n">sessionConfigBuilder</span><span class="p">.</span><span class="n">setFrameRateRange</span><span class="p">(</span><span class="n">supportedFrameRateRanges</span><span class="p">.</span><span class="n">first</span><span class="p">())</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h4>选项 B：创建可直接播放的慢动作视频</h4>
+
+<p>如果你希望视频在任何标准视频播放器中自动以慢动作播放，请选择此选项。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Create a builder for the high-speed session</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">sessionConfigBuilder</span> <span class="p">=</span> <span class="n">HighSpeedVideoSessionConfig</span><span class="p">.</span><span class="n">Builder</span><span class="p">(</span><span class="n">videoCapture</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="p">.</span><span class="n">setPreview</span><span class="p">(</span><span class="n">preview</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// This is the key: enable automatic slow-motion!</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">sessionConfigBuilder</span><span class="p">.</span><span class="n">setSlowMotionEnabled</span><span class="p">(</span><span class="k">true</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Query and apply a supported frame rate. Common supported frame rates include 120, 240, and 480 fps.</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">supportedFrameRateRanges</span> <span class="p">=</span>
+</span><span class='line'>
+</span><span class='line'>   <span class="n">cameraInfo</span><span class="p">.</span><span class="n">getSupportedFrameRateRanges</span><span class="p">(</span><span class="n">sessionConfigBuilder</span><span class="p">.</span><span class="n">build</span><span class="p">())</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">sessionConfigBuilder</span><span class="p">.</span><span class="n">setFrameRateRange</span><span class="p">(</span><span class="n">supportedFrameRateRanges</span><span class="p">.</span><span class="n">first</span><span class="p">())</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个标志位是创建可直接播放的慢动作视频的关键。当 <code>setSlowMotionEnabled</code> 设置为 true 时，CameraX 会处理高速视频流并将其保存为标准的 30 fps 视频文件。慢动作播放速度由拍摄帧速率与标准播放速率的比值决定。</p>
+
+<p>例如：</p>
+
+<ul>
+<li><p>以 120 fps 录制的视频将以 &frac14; 倍速播放 (120 ÷ 30 = 4)。</p></li>
+<li><p>以 240 fps 录制的视频将以 1/8 倍速播放 (240 ÷ 30 = 8)。</p></li>
+</ul>
+
+
+<h2>整合所有步骤：录制视频</h2>
+
+<p>配置好 HighSpeedVideoSessionConfig 并将其绑定到生命周期后，最后一步就是开始录制。准备输出选项、开始录制和处理视频事件的过程与标准视频捕获相同。</p>
+
+<p>本文重点介绍高速配置，因此不会详细介绍录制过程。如需了解从准备 FileOutputOptions 或 MediaStoreOutputOptions 对象到处理 VideoRecordEvent 回调的完整指南，请参阅<a href="https://developer.android.com/media/camera/camerax/video-capture#videocapture-api-overview">VideoCapture 文档</a>。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Bind the session config to the lifecycle</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">cameraProvider</span><span class="p">.</span><span class="n">bindToLifecycle</span><span class="p">(</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">this</span> <span class="k">as</span> <span class="n">LifecycleOwner</span><span class="p">,</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">CameraSelector</span><span class="p">.</span><span class="n">DEFAULT_BACK_CAMERA</span><span class="p">,</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">sessionConfigBuilder</span><span class="p">.</span><span class="n">build</span><span class="p">()</span> <span class="c1">// Bind the config object from Option A or B</span>
+</span><span class='line'>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Start the recording using the VideoCapture use case</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">val</span> <span class="py">recording</span> <span class="p">=</span> <span class="n">videoCapture</span><span class="p">.</span><span class="n">output</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="p">.</span><span class="n">prepareRecording</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">outputOptions</span><span class="p">)</span> <span class="c1">// See docs for creating outputOptions</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="p">.</span><span class="n">start</span><span class="p">(</span><span class="n">ContextCompat</span><span class="p">.</span><span class="n">getMainExecutor</span><span class="p">(</span><span class="n">context</span><span class="p">))</span> <span class="p">{</span> <span class="n">recordEvent</span> <span class="p">-&gt;</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// Handle recording events (e.g., Start, Pause, Finalize)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>Google Photos 对慢动作视频的支持</h2>
+
+<p>在 CameraX 中启用 setSlowMotionEnabled(true) 后，生成的视频文件将被设计为可在标准视频播放器和图库应用中立即识别并播放为慢动作视频。谷歌相册尤其针对慢动作视频提供了增强功能，当拍摄帧速率为 120、240、360、480 或 960fps 时，功能更加完善：</p>
+
+<ul>
+<li>缩略图中的独特 UI 识别：在谷歌相册中，慢动作视频会通过特定的 UI 元素进行识别，从而与普通视频区分开来。</li>
+</ul>
+
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEjPLQRSSF3hvj89T9DvO92-JNi_rjtUXQ-i76ZuyX4GHv4KitBFPVP5oHdqxICQJUf3l7HaOQeI0skgVK9bPM0qz7GToNYiIMszVYj6IsE4-wGa4jqZfYka03TTlFwUTDdYq56unwoIwv1fTnJrNpWIZ-5Iybgk-hFHlvcy08Bkm8xM0adbvYjqVxH12xc" alt="普通视频缩略图" /></p>
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEiDmd0jikxU58PkjrGG1K181pYs-G-drnrNG_q_mQqVJWkK4NdbuwDSB4jCbQzGAgYeyikORVsPT3pyQp_VCfw_7rNDzafFudhj0x56-bqNZc6mQuRktDCa7ycSx2-qsIJsCCTiQXmxxrtImiBOFwlTz3ufBtbGDsonZvqzSQqWbNugNt-bbDVvyQz7Hw8" alt="慢动作视频缩略图" /></p>
+
+<ul>
+<li>播放时可调整速度：播放慢动作视频时，Google Photos 提供控制选项，允许用户调整视频中哪些部分以慢速播放，哪些部分以正常速度播放，从而赋予用户更大的创作自由。编辑后的视频可以使用“分享”按钮导出为新的视频文件，同时保留你定义的慢动作片段。</li>
+</ul>
+
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEj-dp-bHPORhk_l0I4zkSEdzYUNRYvRwb2boA4KKgd1s4Sr1D61iAV2rWUD6dOdVezRn10qIGtMLae4brWI8RxlP9wFz18gsrZu4qOdAydWnhqgpmmsuLcHAMfo5Rv6XZIxtTCC5dSJeIJERbOKmPZyUXTOdweJ6EjQett5iOVl4yJzaLYR7rrHXz0WnAI" alt="正常视频播放" /></p>
+
+<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEi4AaVc78zpZzsG-hgOsuPdAqwCuSD6bb1b6de366Agvy2c3OG5qJ5mSPg94GA8GjR-LXDU4H7zBCoI_Pe3SxrfdDPiTyPmimTRM49IcTkGovC2mccTu0GnwcSyVAL5iW7qnNlWHGCoGHU9EeX3-8bZiSsmLWr6Ljf5KfJjInUuCEODrqF-g8Je3iLvEF4" alt="慢动作视频播放（带编辑控制）" /></p>
+
+<h2>关于设备支持的说明</h2>
+
+<p>CameraX 的高速 API 依赖于底层 Android 的 <a href="https://developer.android.com/reference/android/media/CamcorderProfile">CamcorderProfile</a> 系统来确定设备支持的高速分辨率和帧速率。CamcorderProfile 经过 <a href="https://source.android.com/docs/compatibility/cts">Android 兼容性测试套件 (CTS)</a> 的验证，这意味着你可以信赖设备所报告的视频录制功能。</p>
+
+<p>这意味着，设备内置相机应用能够录制慢动作视频并不能保证 CameraX 高速 API 能够正常工作。出现这种差异的原因是，设备制造商负责在其设备固件中填充 CamcorderProfile 条目，而有时必要的高速配置文件（例如 CamcorderProfile.QUALITY_HIGH_SPEED_1080P 和 CamcorderProfile.QUALITY_HIGH_SPEED_720P）可能并未包含在内。当缺少这些配置文件时，<code>Recorder.getHighSpeedVideoCapabilities()</code> 将返回 null。</p>
+
+<p>因此，务必始终使用 <code>Recorder.getHighSpeedVideoCapabilities()</code> 以编程方式检查支持的功能，因为这是确保在不同设备上获得一致体验的最可靠方法。如果尝试在 <code>Recorder.getHighSpeedVideoCapabilities()</code> 返回 null 的设备上绑定 <code>HighSpeedVideoSessionConfig</code>，则操作将失败并抛出 <code>IllegalArgumentException</code> 异常。你可以在 Google Pixel 设备上确认支持，因为它们始终包含这些高速配置文件。此外，其他制造商的各种设备，例如 Motorola Edge 30、OPPO Find N2 Flip 和 Sony Xperia 1 V，也支持高速视频功能。</p>
+
+<h2>结论</h2>
+
+<p>CameraX 高速视频 API 功能强大且灵活。无论你是需要用于技术分析的真正高帧率视频素材，还是想为你的应用添加电影级的慢动作效果，HighSpeedVideoSessionConfig 都能提供统一且简便的解决方案。通过了解 setSlowMotionEnabled 标志的作用，你可以轻松支持这两种使用场景，并赋予用户更大的创作自由。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Compose CameraX现已稳定：给Composer的端到端指南]]></title>
@@ -14826,211 +15254,6 @@
 <p>谢谢！😄</p>
 
 <p>让我们一起回顾 X （链接：<a href="https://twitter.com/imShreyasPatil%EF%BC%89%E7%9A%84%E6%9C%80%E6%96%B0%E5%8A%A8%E6%80%81%EF%BC%8C%E6%88%96%E8%80%85%E8%AE%BF%E9%97%AE%E6%88%91%E7%9A%84%E7%BD%91%E7%AB%99%EF%BC%88%E9%93%BE%E6%8E%A5%EF%BC%9Ahttps://shreyaspatil.dev/%EF%BC%89%E4%BA%86%E8%A7%A3%E6%9B%B4%E5%A4%9A%E5%85%B3%E4%BA%8E%E6%88%91%E7%9A%84%E4%BF%A1%E6%81%AF">https://twitter.com/imShreyasPatil%EF%BC%89%E7%9A%84%E6%9C%80%E6%96%B0%E5%8A%A8%E6%80%81%EF%BC%8C%E6%88%96%E8%80%85%E8%AE%BF%E9%97%AE%E6%88%91%E7%9A%84%E7%BD%91%E7%AB%99%EF%BC%88%E9%93%BE%E6%8E%A5%EF%BC%9Ahttps://shreyaspatil.dev/%EF%BC%89%E4%BA%86%E8%A7%A3%E6%9B%B4%E5%A4%9A%E5%85%B3%E4%BA%8E%E6%88%91%E7%9A%84%E4%BF%A1%E6%81%AF</a> 😎。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[SnapshotFlow还是collectAsState？对于Jetpack Compose来说哪个更香？]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/07/16/snapshotflow-or-collectasstate/"/>
-    <updated>2025-07-16T22:31:22+08:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/07/16/snapshotflow-or-collectasstate</id>
-    <content type="html"><![CDATA[<p>本文译自「SnapshotFlow or collectAsState? How to pick the right tool for Jetpack Compose」，原文链接<a href="https://proandroiddev.com/snapshotflow-or-collectasstate-how-to-pick-the-right-tool-for-jetpack-compose-d6f1cc9d2123">https://proandroiddev.com/snapshotflow-or-collectasstate-how-to-pick-the-right-tool-for-jetpack-compose-d6f1cc9d2123</a>，由Dmitry Glazunov发布于2025年7月7日。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2025/07/16/snapshotflow-or-collectasstate/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*P0darOG2IeBIDWdY" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>构建 UI 可能感觉很简单，直到需要订阅状态变化并有效处理副作用时之前。许多开发者过度使用 collectAsState，导致延迟和意外的重组（reComposition）。还有一些人听说过 snapshotFlow，但却不太明白既然 StateFlow 和 collectAsState 已经存在，为什么还需要它？</p>
-
-<p>在这篇文章中，我将通过探索实际项目中简短且实用的示例，分享我对何时使用 snapshotFlow 以及何时更适合使用 collectAsState 的看法，帮助你避免项目中隐藏的 bug 和性能问题。</p>
-
-<p>让我们来详细分析一下。</p>
-
-<h2>collectAsState 的作用</h2>
-
-<p>collectAsState 在 Compose 中订阅 Flow，并自动将其公开为State，以便在 UI 中轻松显示：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">uiState</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">uiStateFlow</span><span class="p">.</span><span class="n">collectAsState</span><span class="p">()</span>
-</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="n">uiState</span><span class="p">.</span><span class="n">text</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>要点：</p>
-
-<ul>
-<li>非常易于使用。</li>
-<li>重组时自动取消并重新开始收集。</li>
-<li>非常适合 ViewModel → UI 数据绑定。</li>
-</ul>
-
-
-<p>但是：</p>
-
-<ul>
-<li>每次发出新数据时都会触发重组，哪怕只是发生了微小的变化。</li>
-<li>可组合项进入重组状态后立即开始收集。</li>
-<li>不适用于观察 Compose 特有的状态，例如滚动或手势。</li>
-</ul>
-
-
-<h2>快照流 (snapshotFlow) 的作用</h2>
-
-<p>快照流 (snapshotFlow) 将 Compose 状态（例如 LazyListState 、 derivedStateOf ）转换为冷流 (cold Flow)，让你无需进行不必要的重组即可对状态变化做出反应：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">listState</span> <span class="p">=</span> <span class="n">rememberLazyListState</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">snapshotFlow</span> <span class="p">{</span> <span class="n">listState</span><span class="p">.</span><span class="n">firstVisibleItemIndex</span> <span class="p">}</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">distinctUntilChanged</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">index</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="n">analytics</span><span class="p">.</span><span class="n">logScrollPosition</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>要点：</p>
-
-<ul>
-<li>非常适合 Compose 状态变化的副作用。</li>
-<li>不会触发重组。</li>
-<li>可在 LaunchedEffect 或协程中使用。</li>
-</ul>
-
-
-<p>但是：</p>
-
-<ul>
-<li>不会公开状态以进行直接 UI 渲染。</li>
-<li>不会替代 CollectAsState 来实现 ViewModel → UI 更新。</li>
-</ul>
-
-
-<h2>何时使用 collectAsState</h2>
-
-<ul>
-<li>从 ViewModel 订阅 UI 的 Flow 或 StateFlow。</li>
-<li>在 UI 中显示数据（文本、加载状态、获取的数据）。</li>
-<li>用户需要看到的低频更新。</li>
-</ul>
-
-
-<p>避免使用：</p>
-
-<ul>
-<li>高频更新（滚动偏移、传感器数据）。</li>
-<li>触发不需要 UI 更新的副作用。</li>
-</ul>
-
-
-<h2>何时使用 snaphotFlow</h2>
-
-<ul>
-<li>响应 Compose 状态（滚动、手势、动画）。</li>
-<li>触发副作用但不会导致重组。</li>
-<li>从 Compose 状态构建 Flow 管道（分析、延迟加载触发器）。</li>
-</ul>
-
-
-<p>避免使用：</p>
-
-<ul>
-<li>直接 UI 数据渲染。</li>
-<li>用 viewModel → UI 流替换 collectAsState。</li>
-</ul>
-
-
-<h2>snapshotFlow 的实用示例</h2>
-
-<p>错误体位：使用 snaphotFlow.collectAsState 进行动画进度</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">progress</span> <span class="k">by</span> <span class="n">snapshotFlow</span> <span class="p">{</span> <span class="n">animationState</span><span class="p">.</span><span class="n">progress</span> <span class="p">}</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">collectAsState</span><span class="p">(</span><span class="n">initial</span> <span class="p">=</span> <span class="m">0f</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="s">&quot;Progress: ${(progress * 100).toInt()}%&quot;</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>使用 snaphotFlow 和 collectAsState 来驱动动画进度的 UI 更新会导致每一帧都重新合成，从而导致卡顿，违背了 snaphotFlow 的初衷。</p>
-
-<p>正确姿式：使用 snaphotFlow 在动画过程中进行分析</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">snapshotFlow</span> <span class="p">{</span> <span class="n">animationState</span><span class="p">.</span><span class="n">progress</span> <span class="p">}</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">distinctUntilChanged</span> <span class="p">{</span> <span class="n">old</span><span class="p">,</span> <span class="n">new</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="p">(</span><span class="n">old</span> <span class="p">*</span> <span class="m">100</span><span class="p">).</span><span class="n">toInt</span><span class="p">()</span> <span class="p">==</span> <span class="p">(</span><span class="n">new</span> <span class="p">*</span> <span class="m">100</span><span class="p">).</span><span class="n">toInt</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">progress</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="n">analytics</span><span class="p">.</span><span class="n">logAnimationProgress</span><span class="p">(</span><span class="n">progress</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这会跟踪动画进度，以便进行分析或记录，而不会触发 UI 重构。</p>
-
-<h2>collectAsState 的实用示例</h2>
-
-<p>错误体位：将 collectAsState 用于高频滚动数据</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">scrollOffset</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">scrollOffsetFlow</span><span class="p">.</span><span class="n">collectAsState</span><span class="p">()</span>
-</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="s">&quot;Offset: $scrollOffset&quot;</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这会在滚动的每个像素上触发重新合成，导致 CPU 过载。</p>
-
-<p>正确姿式：使用 collectAsState 获取有意义的 UI 数据</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='Kotlin'><span class='line'><span class="k">val</span> <span class="py">userName</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">userNameFlow</span><span class="p">.</span><span class="n">collectAsState</span><span class="p">()</span>
-</span><span class='line'><span class="n">Text</span><span class="p">(</span><span class="s">&quot;Hello, $userName!&quot;</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这适用于显示用户需要查看且不经常更改的数据。</p>
-
-<h2>结论</h2>
-
-<p>collectAsState 和 snapshotFlow 相辅相成：</p>
-
-<ul>
-<li>使用 collectAsState 在 UI 中显示 ViewModel 数据。</li>
-<li>使用 snapshotFlow 响应 Compose 状态变化的副作用，而无需触发重组。</li>
-</ul>
-
-
-<p>正确使用它们将帮助你避免不必要的重组，提升应用的响应速度，并保持 Compose 代码简洁、可扩展且可预测。</p>
-
-<p>如果你觉得本文分析有用，请随时关注我以获取更多见解。</p>
 ]]></content>
   </entry>
   
