@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-11-25T08:34:05+00:00</updated>
+  <updated>2025-12-05T12:02:15+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,325 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[深入理解withContext和launch的真正区别]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch/"/>
+    <updated>2025-12-05T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「The Real Difference Between withContext(Dispatchers.IO) and launch(Dispatchers.IO)」，原文链接<a href="https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2">https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2</a>，由
+Anatolii Frolov发布于2025年11月20日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*nHuLhSAjZIEbeLHiFdMeSA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在使用 Kotlin 协程时，很容易遇到两种看起来几乎相同的模式。它们都使用了 <code>Dispatchers.IO</code>。它们都将工作移出主线程。它们都出现在不同团队编写的仓库、服务层和 ViewModel 代码中。</p>
+
+<p>但相似之处仅限于表面。它们的行为截然不同——这种差异会影响实际 Android 项目中的顺序、正确性，甚至线程安全。当后台操作影响 UI 状态或共享数据时，这一点尤为重要。</p>
+
+<p>这种困惑不难理解。它们的语法几乎相同，并且都在同一个调度器上运行。但一个会暂停直到工作完成，而另一个会启动并行工作并立即返回。这创建了不同的执行路径，很容易被忽略。</p>
+
+<p>本文解释了 <code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 之间的真正区别，通过实际代码展示了它们的行为差异，并重点介绍了这种差异在生产环境 Android 应用中的重要性。</p>
+
+<h2>看似相同的代码行为却截然不同</h2>
+
+<p>以下两段代码看起来几乎一样：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// work</span>
+</span><span class='line'><span class="p">}</span><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// work</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>它们运行在同一个调度器上。它们都将工作转移到后台线程。但它们的行为<strong>并不</strong>相同。</p>
+
+<p>以下是并排运行它们的结果：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;Start&quot;</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;Inside launch&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">50</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;Inside withContext&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;End&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>Start
+</span><span class='line'>Inside withContext
+</span><span class='line'>End
+</span><span class='line'>Inside launch
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这展示了关键区别。</p>
+
+<p><code>withContext</code> 会等待其工作完成才会继续执行。</p>
+
+<p><code>launch</code> 则完全不等待——它并行运行，并在稍后完成。</p>
+
+<h2>为什么会发生这种情况</h2>
+
+<p><code>withContext</code> 是一个挂起函数。这意味着当前协程会在该行暂停，切换到 <code>Dispatchers.IO</code>，执行代码块，然后从中断的地方继续执行。这里的关键词是<strong>等待</strong>。在该行之后的任何代码都会等待代码块执行完毕。</p>
+
+<p><code>launch</code> 会创建一个新的协程并立即返回。当前协程会立即继续执行，而新创建的代码块会独立执行。这是一种“触发并继续”模式。除非你显式地对新创建的协程调用 <code>join()</code>，否则不会有等待。</p>
+
+<p>这不是一个 bug，而是协程构建器的设计决策。</p>
+
+<p><code>withContext</code> 确保单个协程内部的执行顺序。</p>
+
+<p><code>launch</code> 的设计本身就引入了并发性。</p>
+
+<p>这种视觉上的相似性掩盖了行为上的差异。前者保持代码的可预测顺序，而后者引入了并行工作，这些工作可能会根据调度和负载情况随时完成。</p>
+
+<h2>这种差异在实际项目中的重要性</h2>
+
+<p>在许多 Android 场景中，任务完成的确切时间至关重要。哪怕是顺序上的细微差别，都可能导致一些难以察觉的 bug，直到生产环境才会被发现。</p>
+
+<h3>1. 后台任务完成后更新 UI</h3>
+
+<p>在 ViewModel 中：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">userRepository</span><span class="p">.</span><span class="n">loadUser</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">_state</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">user</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出（概念图）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>User loaded first
+</span><span class='line'>UI updated second
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>由于 <code>withContext</code> 会等待，因此 UI 只有在加载完成后才会更新。</p>
+
+<p>但如果将其替换为 <code>launch(Dispatchers.IO)</code>：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">result</span><span class="p">:</span> <span class="n">User</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">result</span> <span class="p">=</span> <span class="n">userRepository</span><span class="p">.</span><span class="n">loadUser</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">_state</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">result</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出（概念图）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>UI updated first
+</span><span class='line'>User loaded later
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里，UI 在后台任务完成之前就更新了。语法上的视觉相似性掩盖了执行顺序的不同。</p>
+
+<h3>2.协调多步骤后台操作</h3>
+
+<p>在自定义仓库代码中，你可能需要操作严格按照顺序执行。例如，先保存数据，然后写入日志：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">fileWriter</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">logWriter</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="s">&quot;Saved&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>suspend</code> 保证了操作顺序。日志写入必须在保存完成后才能进行。</p>
+
+<p>但使用 <code>launch</code> 则：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">fileWriter</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">logWriter</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="s">&quot;Saved&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这两个操作可以以任意顺序执行。在负载较高的情况下，日志写入可能早于保存操作。这听起来似乎无关紧要，但一旦调试或审计变得困难，就会造成问题。</p>
+
+<h3>3. 访问共享状态</h3>
+
+<p>使用 <code>withContext</code> 进行顺序执行在更新共享对象时更安全：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">cache</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用 <code>launch</code>，两个更新操作可以同时运行：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">cache</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">item1</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">cache</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">item2</span><span class="p">)</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>除非缓存本身是线程安全的，否则并行写入可能会导致竞态条件。</p>
+
+<h2>为什么这种差异容易被忽略</h2>
+
+<p>主要原因是语法。两者都使用相同的括号。两者都显示 <code>Dispatchers.IO</code>。两者都将代码包裹在代码块中。人们的注意力会集中在调度器上，而不是协程构建器上。</p>
+
+<p>另一个原因是许多现代库已经在内部处理线程。Room DAO 方法和 Retrofit 的挂起函数不需要 <code>withContext(Dispatchers.IO)</code>。由于这些库减少了手动切换调度器，开发者看到的协程构建器之间的明显差异较少。</p>
+
+<p>这可能会造成一种错觉，即所有调度器的用法都可以互换，但对于自定义操作来说并非如此。</p>
+
+<h2>与 async/await 的深入比较</h2>
+
+<p>为了进一步突出差异，请比较以下三个示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">deferred</span> <span class="p">=</span> <span class="n">async</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">loadData</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span><span class="k">val</span> <span class="py">result</span> <span class="p">=</span> <span class="n">deferred</span><span class="p">.</span><span class="n">await</span><span class="p">()</span>
+</span><span class='line'><span class="n">println</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出（概念图）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>loadData completes
+</span><span class='line'>result printed
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>async</code> 的行为类似于 <code>launch</code>，但返回 <code>Deferred</code>。</p>
+
+<p><code>await()</code> 会将其转换为顺序行为——就像 <code>withContext</code> 一样。</p>
+
+<p>关键点：<strong>顺序行为仅在显式等待时发生。</strong></p>
+
+<h2>异常处理行为</h2>
+
+<p><code>withContext</code> 直接在调用协程中抛出异常。它们不会被延迟或存储。</p>
+
+<p><code>launch</code> 将异常报告给其父作用域。如果该作用域有 supervisor 或自定义异常处理程序，则效果不同。异常不会立即中断调用者的执行路径。</p>
+
+<p>这意味着：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">error</span><span class="p">(</span><span class="s">&quot;Boom&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">println</span><span class="p">(</span><span class="s">&quot;Next&quot;</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>崩溃会在“Next”执行之前停止协程。</p>
+
+<p>但使用 <code>launch</code>：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">error</span><span class="p">(</span><span class="s">&quot;Boom&quot;</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">println</span><span class="p">(</span><span class="s">&quot;Next&quot;</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>“Next”仍然会打印。启动的协程会自行崩溃。</p>
+
+<h2>需要记住的内容</h2>
+
+<ul>
+<li><p><code>withContext</code> <strong>等待</strong>代码块执行完毕后才会继续执行。</p></li>
+<li><p><code>launch</code> 会启动<strong>并行</strong>工作并立即返回。</p></li>
+<li><p>当<strong>结果或顺序</strong>至关重要时，请使用 <code>withContext</code>。</p></li>
+<li><p>当你需要<strong>并发工作</strong>且无需阻塞调用者时，请使用 <code>launch</code>。</p></li>
+<li><p>视觉上的相似性掩盖了行为上的差异——协程构建器定义了语义，而不是调度器。</p></li>
+</ul>
+
+
+<h2>总结</h2>
+
+<p><code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 看起来相似，但行为却不同。前者会暂停并确保顺序执行，而后者会创建并发并立即继续执行。当工作顺序、共享状态、UI 更新或异常处理依赖于工作完成时间时，这种差异至关重要。</p>
+
+<p>理解这种区别可以使协程代码更易于预测，并避免那些只有在实际应用中才会显现的细微错误。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack Compose中的阴影艺术]]></title>
@@ -14844,23 +15163,6 @@
 <p>我已经演示了最基础的部分。我的目标是提供一个切入点，并展示它是多么的简单。关于着色器，我还有很多想讨论的，但我们留到下次再说。</p>
 
 <p>感谢你的关注，祝你使用 Android、Compose 和Shader（着色器）顺利进入非凡的 UI 世界。期待与你相见！</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[学会说不！让你彻底学会Kotlin Flow的取消机制]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/08/08/flow-cancellation/"/>
-    <updated>2025-08-08T12:25:21+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/08/08/flow-cancellation</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Cancellable Flows in Kotlin Coroutines: The Complete Guide to Flow Cancellation Techniques」，原文链接<a href="https://proandroiddev.com/cancellable-flows-in-kotlin-coroutines-the-complete-guide-to-flow-cancellation-techniques-8988a85fc158">https://proandroiddev.com/cancellable-flows-in-kotlin-coroutines-the-complete-guide-to-flow-cancellation-techniques-8988a85fc158</a>，由Sahil Thakar发布于2025年7月21日。</p></blockquote>
-
-<p><strong>译者按：</strong> 本文并不是Flow的基础教程，而是专门讲解如何取消flow的，适合对Flow有一定基础的同学。如果对Flow还不够熟悉，可以先行阅读一下之前的文章：</p>
-
-<ul>
-<li><a href="https://juejin.cn/post/7336751931375648820">包教包会的Kotlin Flow教程</a></li>
-<li><a href="https://juejin.cn/post/7337517508151590947">专家之路上的Flow高级秘籍</a></li>
-</ul>
-
 ]]></content>
   </entry>
   

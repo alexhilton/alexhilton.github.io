@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-11-25T08:34:05+00:00</updated>
+  <updated>2025-12-05T12:02:15+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,243 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[深入理解withContext和launch的真正区别]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch/"/>
+    <updated>2025-12-05T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「The Real Difference Between withContext(Dispatchers.IO) and launch(Dispatchers.IO)」，原文链接<a href="https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2">https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2</a>，由
+Anatolii Frolov发布于2025年11月20日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*nHuLhSAjZIEbeLHiFdMeSA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在使用 Kotlin 协程时，很容易遇到两种看起来几乎相同的模式。它们都使用了 <code>Dispatchers.IO</code>。它们都将工作移出主线程。它们都出现在不同团队编写的仓库、服务层和 ViewModel 代码中。</p>
+
+<p>但相似之处仅限于表面。它们的行为截然不同——这种差异会影响实际 Android 项目中的顺序、正确性，甚至线程安全。当后台操作影响 UI 状态或共享数据时，这一点尤为重要。</p>
+
+<p>这种困惑不难理解。它们的语法几乎相同，并且都在同一个调度器上运行。但一个会暂停直到工作完成，而另一个会启动并行工作并立即返回。这创建了不同的执行路径，很容易被忽略。</p>
+
+<p>本文解释了 <code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 之间的真正区别，通过实际代码展示了它们的行为差异，并重点介绍了这种差异在生产环境 Android 应用中的重要性。</p>
+
+<h2>看似相同的代码行为却截然不同</h2>
+
+<p>以下两段代码看起来几乎一样：</p>
+
+<pre><code class="kotlin">withContext(Dispatchers.IO) {
+    // work
+}launch(Dispatchers.IO) {
+    // work
+}
+</code></pre>
+
+<p>它们运行在同一个调度器上。它们都将工作转移到后台线程。但它们的行为<strong>并不</strong>相同。</p>
+
+<p>以下是并排运行它们的结果：</p>
+
+<pre><code class="kotlin">fun main() = runBlocking {
+    println("Start")
+
+    launch(Dispatchers.IO) {
+        delay(100)
+        println("Inside launch")
+    }
+
+    withContext(Dispatchers.IO) {
+        delay(50)
+        println("Inside withContext")
+    }
+
+    println("End")
+}
+</code></pre>
+
+<p>输出：</p>
+
+<pre><code class="bash">Start
+Inside withContext
+End
+Inside launch
+</code></pre>
+
+<p>这展示了关键区别。</p>
+
+<p><code>withContext</code> 会等待其工作完成才会继续执行。</p>
+
+<p><code>launch</code> 则完全不等待——它并行运行，并在稍后完成。</p>
+
+<h2>为什么会发生这种情况</h2>
+
+<p><code>withContext</code> 是一个挂起函数。这意味着当前协程会在该行暂停，切换到 <code>Dispatchers.IO</code>，执行代码块，然后从中断的地方继续执行。这里的关键词是<strong>等待</strong>。在该行之后的任何代码都会等待代码块执行完毕。</p>
+
+<p><code>launch</code> 会创建一个新的协程并立即返回。当前协程会立即继续执行，而新创建的代码块会独立执行。这是一种“触发并继续”模式。除非你显式地对新创建的协程调用 <code>join()</code>，否则不会有等待。</p>
+
+<p>这不是一个 bug，而是协程构建器的设计决策。</p>
+
+<p><code>withContext</code> 确保单个协程内部的执行顺序。</p>
+
+<p><code>launch</code> 的设计本身就引入了并发性。</p>
+
+<p>这种视觉上的相似性掩盖了行为上的差异。前者保持代码的可预测顺序，而后者引入了并行工作，这些工作可能会根据调度和负载情况随时完成。</p>
+
+<h2>这种差异在实际项目中的重要性</h2>
+
+<p>在许多 Android 场景中，任务完成的确切时间至关重要。哪怕是顺序上的细微差别，都可能导致一些难以察觉的 bug，直到生产环境才会被发现。</p>
+
+<h3>1. 后台任务完成后更新 UI</h3>
+
+<p>在 ViewModel 中：</p>
+
+<pre><code class="kotlin">viewModelScope.launch {
+    val user = withContext(Dispatchers.IO) {
+        userRepository.loadUser()
+    }
+    _state.value = user
+}
+</code></pre>
+
+<p>输出（概念图）：</p>
+
+<pre><code class="bash">User loaded first
+UI updated second
+</code></pre>
+
+<p>由于 <code>withContext</code> 会等待，因此 UI 只有在加载完成后才会更新。</p>
+
+<p>但如果将其替换为 <code>launch(Dispatchers.IO)</code>：</p>
+
+<pre><code class="kotlin">viewModelScope.launch {
+    var result: User? = null
+
+    launch(Dispatchers.IO) {
+        result = userRepository.loadUser()
+    }
+
+    _state.value = result
+}
+</code></pre>
+
+<p>输出（概念图）：</p>
+
+<pre><code class="bash">UI updated first
+User loaded later
+</code></pre>
+
+<p>这里，UI 在后台任务完成之前就更新了。语法上的视觉相似性掩盖了执行顺序的不同。</p>
+
+<h3>2.协调多步骤后台操作</h3>
+
+<p>在自定义仓库代码中，你可能需要操作严格按照顺序执行。例如，先保存数据，然后写入日志：</p>
+
+<pre><code class="kotlin">withContext(Dispatchers.IO) {
+    fileWriter.save(data)
+}
+
+withContext(Dispatchers.IO) {
+    logWriter.write("Saved")
+}
+</code></pre>
+
+<p><code>suspend</code> 保证了操作顺序。日志写入必须在保存完成后才能进行。</p>
+
+<p>但使用 <code>launch</code> 则：</p>
+
+<pre><code class="kotlin">launch(Dispatchers.IO) { fileWriter.save(data) }
+launch(Dispatchers.IO) { logWriter.write("Saved") }
+</code></pre>
+
+<p>这两个操作可以以任意顺序执行。在负载较高的情况下，日志写入可能早于保存操作。这听起来似乎无关紧要，但一旦调试或审计变得困难，就会造成问题。</p>
+
+<h3>3. 访问共享状态</h3>
+
+<p>使用 <code>withContext</code> 进行顺序执行在更新共享对象时更安全：</p>
+
+<pre><code class="kotlin">withContext(Dispatchers.IO) {
+    cache.update(item)
+}
+</code></pre>
+
+<p>使用 <code>launch</code>，两个更新操作可以同时运行：</p>
+
+<pre><code class="kotlin">launch(Dispatchers.IO) { cache.update(item1) }
+launch(Dispatchers.IO) { cache.update(item2) }
+</code></pre>
+
+<p>除非缓存本身是线程安全的，否则并行写入可能会导致竞态条件。</p>
+
+<h2>为什么这种差异容易被忽略</h2>
+
+<p>主要原因是语法。两者都使用相同的括号。两者都显示 <code>Dispatchers.IO</code>。两者都将代码包裹在代码块中。人们的注意力会集中在调度器上，而不是协程构建器上。</p>
+
+<p>另一个原因是许多现代库已经在内部处理线程。Room DAO 方法和 Retrofit 的挂起函数不需要 <code>withContext(Dispatchers.IO)</code>。由于这些库减少了手动切换调度器，开发者看到的协程构建器之间的明显差异较少。</p>
+
+<p>这可能会造成一种错觉，即所有调度器的用法都可以互换，但对于自定义操作来说并非如此。</p>
+
+<h2>与 async/await 的深入比较</h2>
+
+<p>为了进一步突出差异，请比较以下三个示例：</p>
+
+<pre><code class="kotlin">val deferred = async(Dispatchers.IO) {
+    loadData()
+}val result = deferred.await()
+println(result)
+</code></pre>
+
+<p>输出（概念图）：</p>
+
+<pre><code class="bash">loadData completes
+result printed
+</code></pre>
+
+<p><code>async</code> 的行为类似于 <code>launch</code>，但返回 <code>Deferred</code>。</p>
+
+<p><code>await()</code> 会将其转换为顺序行为——就像 <code>withContext</code> 一样。</p>
+
+<p>关键点：<strong>顺序行为仅在显式等待时发生。</strong></p>
+
+<h2>异常处理行为</h2>
+
+<p><code>withContext</code> 直接在调用协程中抛出异常。它们不会被延迟或存储。</p>
+
+<p><code>launch</code> 将异常报告给其父作用域。如果该作用域有 supervisor 或自定义异常处理程序，则效果不同。异常不会立即中断调用者的执行路径。</p>
+
+<p>这意味着：</p>
+
+<pre><code class="kotlin">withContext(Dispatchers.IO) { error("Boom") }
+println("Next")
+</code></pre>
+
+<p>崩溃会在“Next”执行之前停止协程。</p>
+
+<p>但使用 <code>launch</code>：</p>
+
+<pre><code class="kotlin">launch(Dispatchers.IO) { error("Boom") }
+println("Next")
+</code></pre>
+
+<p>“Next”仍然会打印。启动的协程会自行崩溃。</p>
+
+<h2>需要记住的内容</h2>
+
+<ul>
+<li><p><code>withContext</code> <strong>等待</strong>代码块执行完毕后才会继续执行。</p></li>
+<li><p><code>launch</code> 会启动<strong>并行</strong>工作并立即返回。</p></li>
+<li><p>当<strong>结果或顺序</strong>至关重要时，请使用 <code>withContext</code>。</p></li>
+<li><p>当你需要<strong>并发工作</strong>且无需阻塞调用者时，请使用 <code>launch</code>。</p></li>
+<li><p>视觉上的相似性掩盖了行为上的差异——协程构建器定义了语义，而不是调度器。</p></li>
+</ul>
+
+
+<h2>总结</h2>
+
+<p><code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 看起来相似，但行为却不同。前者会暂停并确保顺序执行，而后者会创建并发并立即继续执行。当工作顺序、共享状态、UI 更新或异常处理依赖于工作完成时间时，这种差异至关重要。</p>
+
+<p>理解这种区别可以使协程代码更易于预测，并避免那些只有在实际应用中才会显现的细微错误。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Kotlin互斥锁(Mutex)：协程的线程安全守护神]]></title>
@@ -1115,159 +1352,6 @@ synchronized(lock) {
 
 
 <p>选择最合适的简单选项，Kotlin Flow 会处理余下的事情。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[一文搞懂Kotlin符号处理接口KSP]]></title>
-    <link href="https://alexhilton.github.io/blog/2024/04/16/kotlin-ksp-made-easy/"/>
-    <updated>2024-04-16T13:17:43+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2024/04/16/kotlin-ksp-made-easy</id>
-    <content type="html"><![CDATA[<p>Kotlin符号处理（Kotlin Symbol Processing）即KSP是可以用于开发轻量级编译器插件的一套API。是Kotlin原生的，Kotlin语法友好的编译器插件。使用简单且易于上手，可以实现一些非常强大的编译时代码处理功能，如代码生成和代码检查。今天就来学习一下KSP的基本原理，以及如何使用KSP API。</p>
-
-<p><a href=""><img src="https://androiddeepdive.github.io/Team-Blog/images/cover_ksp.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p><strong>注意</strong>，本文是Kotlin中较为高级的话题，适合有一定的Kotlin基础的同学，否则理解起来可能有难度，可以事先<a href="https://juejin.cn/column/7351592055908892723">阅读前面的文章</a>。</p>
-
-<h2>什么是KSP</h2>
-
-<p>与前文提到的注解处理器kapt类似，KSP也是一种编译时的插件，能够在编译前处理Kotlin语言的符号。KSP API能地道地处理Kotlin的源码，因为它是专门为Kotlin而设计的，能够完全的理解和识别Kotlin的语言符号，以及Kotlin专属的特性：如扩展函数，声明点泛型变化以及本地函数。KSP API基于Kotlin的语法，把Kotlin程序拆解为各种静态的符号，可以处理如类，成员，函数，参数 以及注解等等。但它并不是运行时的（那是反射做的事情），因此像逻辑如循环和条件语句是没有办法进行处理，以及也无法得到表达式的结果。</p>
-
-<p>虽然KSP是编译器插件，但它是运行在最终编译之前，也就是说在编译器编译全部代码之前，事先会运行KSP插件。所以KSP API最适合做的事情是：</p>
-
-<ol>
-<li>读取代码和各种资源文件，并进行分析</li>
-<li>生成代码</li>
-</ol>
-
-
-<p>接下来看如何具体使用KSP API。</p>
-
-<h2>配置KSP</h2>
-
-<p><img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcStf17qaB5JSFveiBVlA6ljiI0OgI3kN4hnQkBKtuFnSw&amp;s" alt="" /></p>
-
-<p>KSP是由谷歌开发的一套工具，包括两部分一个是Kotlin plugin，另一个是依赖库。所以需要在项目的根build.gradle里面，先把plugin添加到项目里：</p>
-
-<pre><code class="Groovy">// The root build.gradle of your project
-plugins {
-    id 'org.jetbrains.kotlin.jvm' version '1.9.23' apply false
-    id 'com.google.devtools.ksp' version '1.9.23-1.0.20' apply false
-}
-</code></pre>
-
-<p>当然，这一步其实并不是必须的，也可以在每个模块中再配置plugin。</p>
-
-<p>接下来，在使用KSP的模块里面添加plugin，添加依赖以及指明KSP processor，这是最为关键的配置：</p>
-
-<pre><code class="Groovy">// module build.gradle
-plugins {
-    id 'org.jetbrains.kotlin.jvm'
-    id 'com.google.devtools.ksp'
-}
-
-dependencies {
-    implementation project(':kspannotation')
-    ksp project(':kspprocessor')
-}
-</code></pre>
-
-<p>如果项目顶层指定了plugin的版本，那么到了module这里，就不必再指定版本了。另外就是要注意版本的匹配，ksp的版本前半段『1.9.23』指明 的是最低的Kotlin版本要求。最好是让ksp要求的版本与指定的Kotlin版本匹配或者差距较小，否则可能会有问题。dependencies中的ksp指定的是KSP processor，对于有些库可能注解和定义和KSP的processor可能会在同一个包里，那么写一句就够了，如Room的，就一句：ksp &lsquo;androidx.room:room-compiler:2.6.1&#8217;。</p>
-
-<p>如果是自定义的processor，需要为processor单独建一个library module，配置ksp库为依赖即可：</p>
-
-<pre><code class="Groovy">// KSP processor module build.gradle
-plugins {
-    id 'org.jetbrains.kotlin.jvm'
-}
-
-dependencies {
-    implementation project(':kspannotation')
-
-    implementation 'com.google.devtools.ksp:symbol-processing-api:1.9.23-1.0.20'
-    implementation 'com.squareup:kotlinpoet-ksp:1.16.0'
-}
-</code></pre>
-
-<p>典型的KSP procesor（包括网上大部分的例子）都是分了三个module，一个是定义注解的module，一个是实现processor的，一个是使用注解和processor的。但这并不是必须的，为了方便，其实把注解的定义和processor放在一个module就可以了。只要把processor与使用它的module分开来了，就可以。</p>
-
-<p><strong>注意：</strong>对于processor module来说它的类型要是library，并且要是Java library或者Kotlin library，因为这是Kotlin语言层面的东西。对于Android同学来说在新建module时一定要选择『Java or Kotlin Library』。</p>
-
-<h2>实现KSP Processor</h2>
-
-<p>配置好了模块后，剩下的就是要实现一个KSP processor了。</p>
-
-<h3>实现Processor</h3>
-
-<p>大部分工作plugin已经做好了，我们需要做的就是实现一些接口。有两个需要实现，一个是<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/processing/SymbolProcessorProvider.kt">SymbolProcessorProvider</a>，另一个则是<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/processing/SymbolProcessor.kt">SymbolProcessor</a>。</p>
-
-<p>SymbolProcessorProvider相当于是processor的一个工厂方法，我们实现它的create方法，返回一个SymbolProcessor实例，一个典型的实现：</p>
-
-<pre><code class="Kotlin">class MyProcessorProvider : SymbolProcessorProvider {
-    override fun create(environment: SymbolProcessorEnvironment): SymbolProcessor {
-        return MyProcessor(environment.codeGenerator)
-    }
-}
-</code></pre>
-
-<p>它就相当于一个工厂方法，把上下文环境传给processor，SymbolProcessor是重点，我们需要实现它的process方法，针对感兴趣的符号进行处理，比如用<a href="https://square.github.io/kotlinpoet/">KotlinPoet</a>生成代码，这里是发挥创造力的地方：</p>
-
-<pre><code class="Kotlin">class MyProcessor(private val generator: CodeGenerator) : SymbolProcessor {
-    override fun process(resolver: Resolver): List&lt;KSAnnotated&gt; {
-        val annotatedClasses = resolver
-            .getSymbolsWithAnnotation(MyAnnotation::class.java.name)
-            .filterIsInstance&lt;KSClassDeclaration&gt;()
-
-        for (aclass in annotatedClasses) {
-            val packageName = aclass.packageName.asString()
-            val className = aclass.simpleName.asString()
-            val methods = aclass.getDeclaredFunctions())
-            // ...
-         }
-        return emptyList()
-    }
-}
-</code></pre>
-
-<h3>注册Processor</h3>
-
-<p>实现了process后还需要把process注册一下，否则ksp plugin无法找到这个processor。在processor module与代码同级文件夹下新建文件『resources/META-INF/services/com.google.devtools.ksp.processing.SymbolProcessorProvider』，然后把刚才实现的provider的完整类名，写在文件里，如果是使用IDE一般都会有提示的。</p>
-
-<pre><code class="Kotlin">// myprocessor/src/main/
-//    |-- kotlin/net/toughcoder/
-//              |-- MyProcessorProvider.kt
-//              |-- MyProcessor.kt
-//    |-- resources/META-INF/services/
-//              |-- com.google.devtools.ksp.processing.SymbolProcessorProvider
-// file: resources/META-INF/services/com.google.devtools.ksp.processing.SymbolProcessorProvider
-net.toughcoder.MyProcessorProvider
-</code></pre>
-
-<h2>为啥要用KSP</h2>
-
-<p>目前来说KSP最主要应用仍然 是注解的处理，以及配合注解进行代码生成。通过前面一篇<a href="https://juejin.cn/post/7355024828262334501">关于注解的文章</a>中我们知道，注解的处理已经有了一个专门的工具了叫做kapt，就目前来说KSP能做的事情kapt也都能做，它们都是用于编译时代码处理以及代码生成，都能处理注解。那么，在已经有了kapt的前提下，为啥还要搞KSP呢？</p>
-
-<p>kapt虽然是Kotlin的注解处理器，但是它保持Java的兼容性，它直接复用了Java的<a href="https://docs.oracle.com/javase/8/docs/api/javax/annotation/processing/AbstractProcessor.html">AbstractProcessor</a>，要依赖于Java的annotation procssor以及javac，只适用于Kotlin/JVM，其他target用不起来，因此它并不能算是Kotlin原生的工具，对Kotlin的特性支持不友好。再有就是，为了保持与javac的兼容性，它的处理速度很慢，必须先把Kotlin代码转成javac能认识的标准Java代码，这肯定会有不必要的性能开销。基于这些限制，kapt已经停止开发了，处于维护状态了，不会再添加新功能了。<strong>省流点来说，kapt是以Java角度来看待输入代码的（即也要处理的源码），而KSP是以Kotlin角度</strong>。</p>
-
-<p>KSP则是Kotlin原生的，基于Kotlin开发的，且是为了Kotlin开发的，并不受限于javac，因此所有的Kotlin目标平台都能用。并且对Kotlin的特性支持的很友好。它的处理速度也较kapt有提升，因为不必要做编码转换了，省了一道工序。从官方给出的数据看至少能省25%的编译时间。另外，KSP的API使用起来更加的Kotlin友好一些SymbolProcessor传递过来的<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/processing/Resolver.kt">Resolver</a>有很方便的接口可以取得被标的类，而且符号对象是<a href="https://github.com/google/ksp/blob/main/api/src/main/kotlin/com/google/devtools/ksp/symbol/KSClassDeclaration.kt">KSClassDeclaration</a>，它可以方便的取一个Kotlin类的相关的其他符号，如包名，类名，方法等。</p>
-
-<h2>总结</h2>
-
-<p>通过本文我们理解了KSP的概念，并学会了如何在项目中配置KSP， 以及如何实现一个KSP processor。KSP视Kotlin代码为一系列的静态符号，对Kotlin语言特性支持友好，处于活跃的开发状态且被官方大力支持，因此应该尽早转向KSP。并且相信KSP能做的事情会越来越多。</p>
-
-<h2>参考资料</h2>
-
-<ul>
-<li><a href="https://kotlinlang.org/docs/ksp-overview.html">Kotlin Symbol Processing API</a></li>
-<li><a href="https://developer.android.com/build/migrate-to-ksp">Migrate from kapt to KSP</a></li>
-<li><a href="https://www.kodeco.com/33148161-write-a-symbol-processor-with-kotlin-symbol-processing">Write a Symbol Processor with Kotlin Symbol Processing</a></li>
-<li><a href="https://www.codecentric.de/wissens-hub/blog/kotlin-symbol-processing-introduction">An Introduction to Kotlin Symbol Processing</a></li>
-<li><a href="https://kt.academy/article/ak-ksp">Kotlin Symbol Processing</a></li>
-</ul>
-
 ]]></content>
   </entry>
   
