@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-12-05T12:02:15+00:00</updated>
+  <updated>2025-12-11T14:11:05+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,1001 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[借助RemoteCompose开发动态化页面]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/12/11/intro-to-remotecompose/"/>
+    <updated>2025-12-11T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/12/11/intro-to-remotecompose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「RemoteCompose: Another Paradigm for Server-Driven UI in Jetpack Compose」，原文链接<a href="https://proandroiddev.com/remotecompose-another-paradigm-for-server-driven-ui-in-jetpack-compose-92186619ba8f">https://proandroiddev.com/remotecompose-another-paradigm-for-server-driven-ui-in-jetpack-compose-92186619ba8f</a>，由Jaewoong Eum发布于2025年11月29日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:2000/0*o9-kxXHKgJcB-Bvh" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>构建动态用户界面一直是 Android 开发中的一项根本性挑战。传统方法要求每次 UI 需要更改时都必须重新编译和重新部署整个应用程序，这给 A/B 测试、功能开关和实时内容更新带来了极大的不便。</p>
+
+<p>试想一下，你的营销团队想要测试一个新的结账按钮设计：在传统模式下，这种简单的更改需要开发人员花费时间、进行代码审查、QA 测试、提交到应用商店，以及等待数周才能获得用户采纳。RemoteCompose 的出现为解决这一问题提供了一个强大的方案，它使开发人员能够在运行时创建、传输和渲染 Jetpack Compose UI 布局，而无需重新编译。</p>
+
+<p>本文将探讨 RemoteCompose 的概念，理解其核心架构，并探索它如何为 Jetpack Compose 的动态页面设计带来诸多优势。本文并非库的使用教程，而是着重探讨它所代表的 Android UI 开发范式转变。</p>
+
+<h3><strong>集成与依赖</strong></h3>
+
+<p>在深入探讨概念之前，我们先来了解如何将 RemoteCompose 添加到你的项目中。对于运行在 JVM 上且不依赖 Android 的服务器和后端：</p>
+
+<pre><code class="groovy">// settings.gradle
+repositories {
+  maven {
+    url = uri("https://androidx.dev/snapshots/builds/14511716/artifacts/repository")
+  }
+}
+
+// JVM server - no Android dependencies
+dependencies {
+    implementation("androidx.compose.remote:remote-core:1.0.0-SNAPSHOT")
+    implementation("androidx.compose.remote:remote-creation-compose:1.0.0-SNAPSHOT")
+}
+
+// Compose-based app
+dependencies {
+    implementation("androidx.compose.remote:remote-player-compose:1.0.0-SNAPSHOT")
+    implementation("androidx.compose.remote:remote-tooling-preview:1.0.0-SNAPSHOT")
+}
+
+// View-based app
+dependencies {
+    implementation("androidx.compose.remote:remote-player-view:1.0.0-SNAPSHOT")
+}
+</code></pre>
+
+<p>请注意，RemoteCompose 仍在由 AndroidX 团队开发中，尚未正式发布；它仅可通过 AndroidX 快照 Maven 仓库获取。</p>
+
+<h3>理解核心抽象</h3>
+
+<p>RemoteCompose 的核心是一个框架，它支持 Compose UI 组件的远程渲染。它与传统 UI 方法的区别在于它遵循两个基本原则：声明式文档序列化和平台无关渲染。这些不仅仅是技术特性；这些架构决策从根本上改变了你对 UI 部署的思考方式。</p>
+
+<p><strong>声明式文档序列化</strong></p>
+
+<p>声明式文档序列化意味着你可以将任何 Jetpack Compose 布局捕获为紧凑的序列化格式。你可以把它想象成对 UI 进行“截图”，只不过你捕获的不是像素，而是实际的绘图指令。这个捕获的文档包含了重建 UI 所需的一切：形状、颜色、文本、图像、动画，甚至还有交互式触摸区域。</p>
+
+<pre><code class="kotlin">// On the server or creation side
+val document = captureRemoteDocument(
+    context = context,
+    creationDisplayInfo = displayInfo,
+    profile = profile
+) {
+    RemoteColumn(modifier = RemoteModifier.fillMaxSize()) {
+        RemoteText("Dynamic Content")
+        RemoteButton(onClick = { /* action */ }) {
+            RemoteText("Click Me")
+        }
+    }
+}
+</code></pre>
+
+<p>结果如何？一个可以通过网络发送的字节数组。这种方法的关键在于，创建端编写的是标准的 Compose 代码。无需学习新的 DSL，无需维护 JSON 模式，也无需掌握模板语言。只要可以用 Compose 编写，就可以用 RemoteCompose 捕获。</p>
+
+<p>你可以捕获一个普通的 Compose 代码，它会捕获绘制调用（这些调用非常静态）。更常见的情况是，你应该拥有镜像 Compose 的 Remote* 专用 API，这些 API 专为序列化和远程播放而设计，例如 <code>RemoteColumn</code>、<code>RemoteButton</code>、<code>RemoteText</code> 等。</p>
+
+<p><strong>平台无关渲染</strong></p>
+
+<p>平台无关渲染意味着捕获的文档可以通过网络传输，并在任何 Android 设备上渲染，而无需原始的 Compose 代码。客户端设备不需要你的可组合函数、视图模型或业务逻辑——它只需要文档字节和一个播放器。</p>
+
+<pre><code class="kotlin">// On the client or player side
+RemoteDocumentPlayer(
+    document = remoteDocument.document,
+    documentWidth = windowInfo.containerSize.width,
+    documentHeight = windowInfo.containerSize.height,
+    onAction = { actionId, value -&gt;
+        // Handle user interactions
+    }
+)
+</code></pre>
+
+<p>这些特性并非仅仅是为了方便；它们是架构约束，能够真正实现 UI 定义与部署的解耦。文档格式不仅包含静态布局，还包含状态、动画和交互，从而完整地呈现了 UI 体验。</p>
+
+<p><strong>​​方法比较：为什么不选择 JSON 或 WebView？</strong></p>
+
+<p>在深入探讨之前，我们有必要了解 RemoteCompose 为什么选择这种方法而不是其他方案。</p>
+
+<p>基于 JSON 的服务器端 UI，例如 Airbnb 的 Epoxy 或 Shopify 的方法，需要定义一个映射到原生组件的模式。这种方法适用于结构化内容，但难以处理复杂的动画和过渡效果、自定义绘图和图形、带有内联样式的富文本以及渐变和阴影等视觉效果。</p>
+
+<p>WebView 提供了全面的灵活性，但由于其独立的渲染过程，会带来性能开销；此外，Web 样式与原生设计在外观和体验上存在不一致；每个 WebView 都会占用大量资源，造成内存压力；触摸处理也较为复杂，容易出现手势冲突。</p>
+
+<p>RemoteCompose 另辟蹊径：捕获 Compose 实际执行的绘制操作。这意味着，你可以使用 Compose 构建的任何 UI，包括自定义 Canvas 绘制、复杂动画和 Material Design 组件，都可以被捕获并以原生性能远程重放。</p>
+
+<h3><strong>基于文档的架构：创建与回放</strong></h3>
+
+<p>RemoteCompose 的架构围绕着两个阶段的清晰分离而构建：文档创建和文档回放。理解这种分离是理解框架强大功能的关键。</p>
+
+<p><strong>文档创建：将 UI 作为数据捕获</strong></p>
+
+<p>创建阶段将 Compose UI 代码转换为序列化文档。这是通过捕获机制实现的，该机制会在 Canvas 层（Android 渲染管线的最底层）拦截绘制操作。</p>
+
+<pre><code class="kotlin">@Composable Content
+        ↓
+RemoteComposeCreationState (Tracks state and modifiers)
+        ↓
+CaptureComposeView (Virtual Display - no actual screen needed)
+        ↓
+RecordingCanvas (Intercepts every draw call)
+        ↓
+Operations (93+ operation types covering all drawing primitives)
+        ↓
+RemoteComposeBuffer (Efficient binary serialization)
+        ↓
+ByteArray (Network-ready, typically 10-100KB for complex UIs)
+</code></pre>
+
+<p>创建端提供了一个完整的 Compose 集成层。你只需编写标准的 <code>@Composable</code> 函数，框架即可捕获所有内容：布局层级、修饰符、文本样式、图像、动画，甚至触摸处理程序。</p>
+
+<p>其独特之处在于，捕获的文档是自包含的。它包含形状、颜色、渐变和阴影等视觉元素，以及带有字符串、字体、大小和样式的文本。图像可以嵌入为位图或 URL 以实现延迟加载。布局信息涵盖大小、位置、内边距和对齐方式。交互定义了触摸区域、点击处理程序和命名操作。状态变量可以在运行时更新，动画则通过基于时间的运动表达式来表达。</p>
+
+<p>接收方无需访问你的代码库，只需访问文档字节即可。这与其他服务器驱动的 UI 方法有着本质区别，在其他方法中，客户端需要理解架构或拥有预构建的组件。</p>
+
+<p><strong>文档播放：无需编译即可渲染</strong></p>
+
+<p>播放阶段接收序列化的文档并将其渲染到屏幕上。播放器会遍历一系列操作，对 Canvas 执行每个操作。其概念类似于视频播放器解码帧的方式，只不过我们解码的是绘图指令而不是像素。</p>
+
+<p>RemoteCompose 提供两种渲染后端以满足不同的架构需求。基于 Compose 的播放器推荐用于现代应用程序：</p>
+
+<pre><code class="kotlin">@Composable
+fun DynamicScreen(document: CoreDocument) {
+    RemoteDocumentPlayer(
+        document = document,
+        documentWidth = screenWidth,
+        documentHeight = screenHeight,
+        modifier = Modifier.fillMaxSize(),
+        onNamedAction = { name, value, stateUpdater -&gt;
+            // Handle named actions from the document
+            when (name) {
+                "addToCart" -&gt; cartManager.addItem(value)
+                "navigate" -&gt; navController.navigate(value)
+                "trackEvent" -&gt; analytics.logEvent(value)
+            }
+        },
+        bitmapLoader = rememberBitmapLoader()  // For lazy image loading
+    )
+}
+</code></pre>
+
+<p>基于 Compose 的播放器可以自然地与你现有的 Compose UI 集成。它是一个可组合的函数，你可以将其放置在组合层级结构中的任何位置，并像其他可组合函数一样对其应用修饰符和动画。</p>
+
+<p>为了与现有的 View 层级结构兼容，我们还提供了一个基于 View 的播放器：</p>
+
+<pre><code class="kotlin">class LegacyActivity : AppCompatActivity() {
+    private lateinit var player: RemoteComposePlayer
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        player = RemoteComposePlayer(this)
+        setContentView(player)
+
+        // Load document from network
+        lifecycleScope.launch {
+            val bytes = api.fetchDocument("home-screen")
+            player.setDocument(bytes)
+        }
+
+        player.onNamedAction { name, value, stateUpdater -&gt;
+            // Handle actions
+        }
+    }
+}
+</code></pre>
+
+<p>两种播放器提供相同的渲染保真度；选择哪种取决于你的应用程序架构。如果你完全使用 Compose，请使用可组合播放器。如果你是从 Views 迁移过来的，或者将其嵌入到 View 层级结构中，请使用基于 View 的播放器。</p>
+
+<h3><strong>操作模型：一套全面的绘图词汇表</strong></h3>
+
+<p>RemoteCompose 的优势在于其全面的操作模型。该框架定义了 93 种以上的不同操作，涵盖了 UI 渲染的方方面面。这并非随意设定的数字，而是表达任何 Canvas 绘图操作所需的完整词汇表。</p>
+
+<p><strong>操作的重要性</strong></p>
+
+<p>传统的服务器驱动型 UI 发送的是高级组件描述：“渲染一个带有文本‘提交’的按钮”。客户端必须解析这些描述并将其映射到原生组件。这导致服务器和客户端之间紧密耦合；双方必须就“按钮”的定义及其行为达成一致。</p>
+
+<p>RemoteCompose 则在更底层运行：它不发送“渲染一个按钮”这样的描述，而是发送实际的绘图指令：“在这些坐标处绘制一个带有这种颜色的圆角矩形，然后在这个位置绘制带有这种字体的文本‘提交’”。客户端无需了解“按钮”的定义；它只需执行绘图操作即可。</p>
+
+<p>这种底层方法意义深远。由于服务器和客户端无需就组件定义达成一致，因此无需进行模式同步。由于 Compose 中所有可能的视觉效果均可捕获，因此能够完整保留视觉保真度。由于新的视觉设计可在旧客户端上运行（它们只是不同的绘制操作），因此内置了向前兼容性。自定义组件无需注册即可自动运行。</p>
+
+<p><strong>绘制操作</strong></p>
+
+<p>绘制操作捕获 Canvas 绘制调用，这是 2D 图形的基本图元。这些图元包括：用于按钮、卡片和背景的矩形的 <code>DRAW_RECT</code>；用于带有圆角的 Material 曲面的 <code>DRAW_ROUND_RECT</code>；用于头像和指示器的 <code>DRAW_CIRCLE</code>；用于渲染带有完整样式的文本的 <code>DRAW_TEXT</code>；用于沿曲线绘制文本的 <code>DRAW_TEXT_ON_PATH</code>；以及用于图像的 <code>DRAW_BITMAP</code>。 <code>DRAW_TWEEN_PATH</code> 用于动画路径变形，等等。</p>
+
+<p>每个操作都包含执行它所需的所有信息：坐标、颜色、绘制样式以及对文档中其他位置存储的数据（例如文本字符串或位图）的引用。</p>
+
+<p><strong>布局操作</strong></p>
+
+<p>布局操作定义组件层次结构和空间关系。<code>Component</code> 操作声明一个布局组件，而 <code>Container</code> 操作创建一个类似于 <code>Column</code> 或 <code>Row</code> 的容器，<code>ContainerEnd</code> 操作则关闭它。<code>LoopOperation</code> 操作用于循环列表内容。<code>Modifier</code> 包括用于背景颜色和可绘制对象的 <code>BackgroundModifier</code>、用于边框样式的 <code>BorderModifier</code>、用于内部间距的 <code>PaddingModifier</code> 以及用于触摸处理的 <code>ClickModifier</code>。</p>
+
+<p>容器模型采用推送/弹出机制。当播放器遇到 <code>Container</code> 操作时，它会创建一个新的布局上下文。所有后续操作都将在该上下文中执行，直到 <code>ContainerEnd</code> 操作将其弹出。这与 Compose 的布局系统的工作方式类似。</p>
+
+<p><strong>状态和表达式操作</strong></p>
+
+<p>状态操作支持运行时可更改的动态值。<code>NamedVariable</code> 声明一个命名的状态变量。<code>ColorAttribute</code> 提供可自定义主题的颜色。<code>TimeAttribute</code> 引用动画时间。<code>FloatExpression</code> 和 <code>IntegerExpression</code> 每帧计算数学表达式。<code>ConditionalOp</code> 支持基于状态的条件渲染。</p>
+
+<p>表达式系统功能强大。你可以嵌入公式，而不是静态值：</p>
+
+<pre><code class="kotlin">// These expressions are evaluated every frame
+val opacity = FloatExpression("sin(time * 2) * 0.5 + 0.5")  // Pulsing effect
+val rotation = FloatExpression("time * 90 % 360")
+
+// Continuous rotation
+val position = FloatExpression("lerp(0, 100, time / 2)")
+
+// Linear interpolation
+</code></pre>
+
+<p>这使得完全在文档中定义丰富的动画成为可能——无需客户端动画代码。
+​​
+<strong>交互操作</strong></p>
+
+<p>交互操作处理用户输入。<code>TouchOperation</code> 定义触摸区域，而 <code>CLICK_AREA</code> 处理简单的点击操作。<code>ParticlesCreate</code> 初始化粒子系统，<code>ParticlesLoop</code> 驱动粒子动画。</p>
+
+<p>触摸操作注册带有命名操作的矩形区域。当用户点击某个区域时，播放器会触发相应的操作，宿主应用程序会通过回调函数来处理这些操作。这种设计既保持了文档格式的简洁性，又实现了丰富的交互功能。</p>
+
+<h3>动态屏幕设计的优势</h3>
+
+<p>现在，让我们通过常见应用场景中的真实案例，来探讨 RemoteCompose 为动态屏幕设计带来的切实优势。</p>
+
+<p><strong>服务器驱动 UI，性能毫不妥协</strong></p>
+
+<p>传统的服务器驱动 UI 方法需要权衡取舍。基于 JSON 的布局表达能力有限，无法实现复杂的动画或自定义绘制。WebView 会带来性能开销、外观不一致以及更高的内存占用。自定义 DSL 则会增加维护负担、学习曲线，并且对预定义组件有所限制。</p>
+
+<p>RemoteCompose 提供了第三条路径：从服务器定义的布局进行原生 Compose 渲染。你既能充分利用 Compose 渲染引擎的强大功能，又能享受服务器驱动内容的灵活性。</p>
+
+<p>例如，一个电商应用需要频繁更新产品卡片、添加新的徽章样式、促销叠加层或季节性主题。借助 RemoteCompose，服务器端允许营销团队无需发布应用即可更新卡片设计：</p>
+
+<pre><code class="kotlin">// Server-side: We can update card designs without app release
+@Composable
+fun ProductCard(product: Product) {
+    Card(
+        modifier = RemoteModifier
+            .fillMaxWidth()
+            .clickable { namedAction("viewProduct", product.id) }
+    ) {
+        Box {
+            // Product image with gradient overlay
+            AsyncImage(
+                url = product.imageUrl,
+                modifier = RemoteModifier.fillMaxWidth().aspectRatio(1.5f)
+            )
+
+            // Promotional badge - can be A/B tested server-side
+            if (product.hasPromotion) {
+                PromotionalBadge(
+                    text = product.promotionText,
+                    modifier = RemoteModifier.align(Alignment.TopEnd)
+                )
+            }
+
+            // Price with sale styling
+            PriceTag(
+                originalPrice = product.originalPrice,
+                salePrice = product.salePrice,
+                modifier = RemoteModifier.align(Alignment.BottomStart)
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>客户端只需渲染服务器发送的内容：</p>
+
+<pre><code class="kotlin">// Client-side: Just renders whatever the server sends
+@Composable
+fun ProductGrid(viewModel: ProductViewModel) {
+    val documents by viewModel.productDocuments.collectAsState()
+
+    LazyVerticalGrid(columns = GridCells.Fixed(2)) {
+        items(documents) { document -&gt;
+            RemoteDocumentPlayer(
+                document = document,
+                onNamedAction = { name, value, _ -&gt;
+                    if (name == "viewProduct") {
+                        navController.navigate("product/$value")
+                    }
+                }
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>现在，你的团队无需发布任何应用即可更新产品卡片设计，更改徽章颜色、添加动画和重新排列元素。由于它是原生应用，通过 Compose 的实际绘制管道渲染，因此 UI 的外观和体验与原生应用无异。</p>
+
+<h3>大规模 A/B 测试</h3>
+
+<p>传统的 A/B 测试 UI 变体需要在应用二进制文件中实现所有变体，为每个变体创建功能标志，发布包含所有变体的应用，然后等待用户采用后再衡量结果。从构思到获得数据，这个过程通常需要 2-4 周。</p>
+
+<p>借助 RemoteCompose，你无需部署任何客户端即可测试 UI 变体。假设一个电商团队想要测试单页结账流程是否比多步骤向导转化率更高：</p>
+
+<pre><code class="kotlin">// Server-side: Two completely different checkout experiences
+object CheckoutExperiments {
+
+    fun getCheckoutDocument(user: User, cart: Cart): ByteArray {
+        val variant = experimentService.getVariant(user.id, "checkout-flow")
+
+        return when (variant) {
+            "single-page" -&gt; captureSinglePageCheckout(cart)
+            "multi-step" -&gt; captureMultiStepCheckout(cart)
+            "express" -&gt; captureExpressCheckout(cart)  // New variant added without app update
+            else -&gt; captureSinglePageCheckout(cart)
+        }
+    }
+
+    private fun captureSinglePageCheckout(cart: Cart): ByteArray {
+        return captureRemoteDocument(context, displayInfo, profile) {
+            SinglePageCheckout(
+                cart = cart,
+                onPlaceOrder = { namedAction("placeOrder", cart.id) },
+                onUpdateQuantity = { itemId, qty -&gt;
+                    namedAction("updateQuantity", "$itemId:$qty")
+                }
+            )
+        }
+    }
+
+    private fun captureMultiStepCheckout(cart: Cart): ByteArray {
+        return captureRemoteDocument(context, displayInfo, profile) {
+            MultiStepCheckout(
+                cart = cart,
+                steps = listOf("Shipping", "Payment", "Review"),
+                onComplete = { namedAction("placeOrder", cart.id) }
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>客户端完全不知道显示的是哪个版本：</p>
+
+<pre><code class="kotlin">// Client-side: Completely agnostic to which variant is shown
+@Composable
+fun CheckoutScreen(viewModel: CheckoutViewModel) {
+    val document by viewModel.checkoutDocument.collectAsState()
+
+    document?.let { doc -&gt;
+        RemoteDocumentPlayer(
+            document = doc,
+            onNamedAction = { name, value, stateUpdater -&gt;
+                when (name) {
+                    "placeOrder" -&gt; viewModel.placeOrder(value)
+                    "updateQuantity" -&gt; {
+                        val (itemId, qty) = value.split(":")
+                        viewModel.updateQuantity(itemId, qty.toInt())
+                    }
+                }
+            }
+        )
+    }
+}
+</code></pre>
+
+<p>结果即时且实时，这意味着无需等待应用商店审核或用户反馈。你甚至可以添加全新的版本，例如“快速结账”，而无需对客户端进行任何更改。实验会持续运行，直到获得统计学意义上的显著性，然后将获胜版本推广到所有用户，同样无需发布新应用。</p>
+
+<h3>实时内容更新</h3>
+
+<p>内容密集型应用常常需要在原生性能和内容新鲜度之间寻求平衡。以新闻应用为例：文章需要丰富的格式、嵌入式媒体和交互元素，但同时也需要随着新闻事件的进展实时更新。</p>
+
+<p>一家报道重大事件的新闻机构需要实时更新文章布局。编辑团队可以根据新闻事件的进展调整布局：</p>
+
+<pre><code class="kotlin">// Server-side: Editorial team can update layout as story develops
+class ArticleLayoutService {
+
+    fun getArticleDocument(article: Article): ByteArray {
+        return captureRemoteDocument(context, displayInfo, profile) {
+            ArticleLayout(article)
+        }
+    }
+
+    @Composable
+    private fun ArticleLayout(article: Article) {
+        Column(modifier = RemoteModifier.fillMaxSize().padding(16.dp)) {
+            // Breaking news banner - can be added/removed instantly
+            if (article.isBreaking) {
+                BreakingNewsBanner(
+                    modifier = RemoteModifier.fillMaxWidth()
+                )
+            }
+
+            // Headline with dynamic styling
+            Text(
+                text = article.headline,
+                style = if (article.isBreaking) {
+                    HeadlineStyle.Breaking
+                } else {
+                    HeadlineStyle.Standard
+                }
+            )
+
+            // Live updates indicator
+            if (article.hasLiveUpdates) {
+                LiveUpdatesIndicator(
+                    lastUpdate = article.lastUpdate,
+                    modifier = RemoteModifier.clickable {
+                        namedAction("refreshArticle", article.id)
+                    }
+                )
+            }
+
+            // Rich content blocks - can include any Compose UI
+            article.contentBlocks.forEach { block -&gt;
+                when (block) {
+                    is TextBlock -&gt; ArticleText(block)
+                    is ImageBlock -&gt; ArticleImage(block)
+                    is VideoBlock -&gt; VideoEmbed(block)
+                    is LiveBlogBlock -&gt; LiveBlogTimeline(block)
+                    is InteractiveChartBlock -&gt; DataVisualization(block)
+                    is PullQuoteBlock -&gt; PullQuote(block)
+                }
+            }
+
+            // Related articles - layout can be A/B tested
+            RelatedArticles(
+                articles = article.relatedArticles,
+                onArticleClick = { namedAction("openArticle", it.id) }
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>客户端只需渲染服务器提供的任何布局：</p>
+
+<pre><code class="kotlin">// Client-side: Renders whatever layout the server sends
+@Composable
+fun ArticleScreen(articleId: String, viewModel: ArticleViewModel) {
+    val document by viewModel.articleDocument.collectAsState()
+    val refreshing by viewModel.isRefreshing.collectAsState()
+
+    SwipeRefresh(
+        state = rememberSwipeRefreshState(refreshing),
+        onRefresh = { viewModel.refresh() }
+    ) {
+        document?.let { doc -&gt;
+            RemoteDocumentPlayer(
+                document = doc,
+                onNamedAction = { name, value, _ -&gt;
+                    when (name) {
+                        "openArticle" -&gt; navController.navigate("article/$value")
+                        "refreshArticle" -&gt; viewModel.refresh()
+                        "playVideo" -&gt; videoPlayer.play(value)
+                    }
+                }
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>你的团队无需修改应用即可更新文章布局，添加实时博客时间线、嵌入交互式图表和更改字体。当新闻事件有进展时，他们可以立即在所有相关文章上添加“突发新闻”横幅。</p>
+
+<h3>避免代码膨胀的功能标志</h3>
+
+<p>传统的功能标志需要将所有变体都包含在二进制文件中：</p>
+
+<pre><code class="kotlin">// Traditional approach - all code ships, even unused variations
+@Composable
+fun HomeScreen() {
+    when {
+        featureFlags.newHomeV3 -&gt; NewHomeLayoutV3()  // Ships always
+        featureFlags.newHomeV2 -&gt; NewHomeLayoutV2()  // Ships always
+        else -&gt; OldHomeLayout()
+
+        // Ships always
+    }
+}
+</code></pre>
+
+<p>这会带来几个问题。二进制文件会因为包含所有变体而增加应用程序的大小。即使未使用，也会包含无用代码。当功能标志配置错误时，可能会暴露未发布的功能，从而带来安全风险。随着时间的推移，旧的变体不断累积，导致技术债务不断增加。</p>
+
+<p>使用 RemoteCompose，只会传输当前激活的变体：</p>
+
+<pre><code class="kotlin">// Server-side: Only the active variation exists on the server
+class HomeScreenService {
+    fun getHomeDocument(user: User): ByteArray {
+        return when (featureFlags.getHomeVariant(user)) {
+            "v3" -&gt; captureHomeV3(user)
+            "v2" -&gt; captureHomeV2(user)
+            else -&gt; captureHomeDefault(user)
+        }
+    }
+}
+
+// Client-side: No conditional code, no dead code
+@Composable
+fun HomeScreen(document: CoreDocument) {
+    RemoteDocumentPlayer(document = document)
+    // That's it. No feature flags, no conditionals.
+}
+</code></pre>
+
+<p>这消除了二进制文件膨胀，因为不会传输旧的变体；由于只存在服务器端代码，因此消除了无用代码；并且由于配置错误只会显示不同的 UI 而不是未发布的代码，因此降低了安全风险。</p>
+
+<p>设想一个社交媒体应用正在逐步重新设计其信息流：</p>
+
+<pre><code class="kotlin">// Server-side: Complete control over who sees what
+class FeedLayoutService {
+
+    fun getFeedDocument(user: User, posts: List&lt;Post&gt;): ByteArray {
+        val variant = rolloutService.getFeedVariant(user)
+
+        return captureRemoteDocument(context, displayInfo, profile) {
+            when (variant) {
+                FeedVariant.NEW_DESIGN -&gt; NewFeedLayout(posts)
+                FeedVariant.NEW_DESIGN_COMPACT -&gt; NewFeedCompactLayout(posts)
+                FeedVariant.CLASSIC -&gt; ClassicFeedLayout(posts)
+            }
+        }
+    }
+}
+
+// Rollout service controls the percentage
+class RolloutService {
+    fun getFeedVariant(user: User): FeedVariant {
+        // 5% get new design, 5% get compact variant, 90% get classic
+        return when {
+            user.id.hashCode() % 100 &lt; 5 -&gt; FeedVariant.NEW_DESIGN
+            user.id.hashCode() % 100 &lt; 10 -&gt; FeedVariant.NEW_DESIGN_COMPACT
+            else -&gt; FeedVariant.CLASSIC
+        }
+    }
+
+    // Instant rollback if issues are detected
+    fun emergencyRollback() {
+        // All users immediately get classic layout
+        // No app update needed
+    }
+}
+</code></pre>
+
+<p>如果新设计导致问题（例如崩溃、用户互动度下降或用户投诉），可以立即回滚。只需更改服务器配置即可。无需紧急发布应用。</p>
+
+<h3>跨平台一致性</h3>
+
+<p>RemoteCompose 的文档格式与平台无关。同一文档可以在手机、平板电脑、折叠屏设备和 Wear OS 设备上渲染，并由相应的平台播放器负责渲染。</p>
+
+<pre><code class="bash">Creation (Server/Backend)  
+    ↓  
+RemoteComposeBuffer (Platform-independent binary format)  
+    ↓  
+┌─────────────────────────────────────────────────────────┐  
+│
+
+│
+↓
+
+↓
+
+↓
+
+↓
+Android Phone
+
+Android Tablet
+
+Foldable Device
+
+Wear OS
+(Compose Player) (Compose Player)  (Compose Player)   (Wear Player)
+</code></pre>
+
+<p>假设一款健身应用在手机和手表应用上都显示锻炼总结。相同的数据会针对不同的设备尺寸进行优化，呈现不同的内容：</p>
+
+<pre><code class="kotlin">// Server-side: Same data, different presentations
+class WorkoutSummaryService {
+
+    fun getPhoneDocument(workout: Workout): ByteArray {
+        return captureRemoteDocument(context, phoneDisplayInfo, profile) {
+            PhoneWorkoutSummary(workout)  // Full detailed view
+        }
+    }
+
+    fun getWatchDocument(workout: Workout): ByteArray {
+        return captureRemoteDocument(context, watchDisplayInfo, profile) {
+            WatchWorkoutSummary(workout)  // Glanceable summary
+        }
+    }
+
+    @Composable
+    private fun PhoneWorkoutSummary(workout: Workout) {
+        Column {
+            WorkoutHeader(workout)
+            HeartRateChart(workout.heartRateData)
+            PaceChart(workout.paceData)
+            SplitsTable(workout.splits)
+            MapView(workout.route)
+            ShareButton { namedAction("share", workout.id) }
+        }
+    }
+
+    @Composable
+    private fun WatchWorkoutSummary(workout: Workout) {
+        // Optimized for small screen
+        Column(modifier = RemoteModifier.fillMaxSize()) {
+            Text(workout.type, style = WatchTypography.Title)
+            Row {
+                StatBox("Duration", workout.duration)
+                StatBox("Distance", workout.distance)
+            }
+            MiniHeartRateIndicator(workout.avgHeartRate)
+        }
+    }
+}
+</code></pre>
+
+<p>两款设备都显示锻炼数据，但布局针对各自的设备尺寸进行了优化。任一布局的更新都会立即生效，无需在任一平台上更新应用。</p>
+
+<h3>缩短发布周期</h3>
+
+<p>最显著的优势在于运营层面：UI 更改不再需要发布应用。考虑一下简单 UI 调整的开发周期。</p>
+
+<p>传统方法大约需要两到四周。第一天和第二天是开发人员实现。第三天和第四天用于代码审查和修改。第五天到第七天用于质量保证测试。第八天和第九天处理发布准备和应用商店提交。第十天到第十四天：等待应用商店审核。第十五天到第三十天用户逐步采用，通常两周内会有 50% 到 70% 的用户更新。大多数用户在两到四周内不会看到变化。</p>
+
+<p>RemoteCompose 方法只需一到两天即可完成。第一天和第二天是开发人员在服务器端实现。部署只需几分钟。所有用户都能立即看到变化。</p>
+
+<p>这种速度优势对于节假日促销活动至关重要，你可以根据需要在当天部署季节性主题；对于服务中断的紧急消息，你可以即时更新 UI；对于快速迭代，你可以快速测试想法并快速失败；对于竞争响应，你可以以小时而不是几周的时间对市场变化做出反应。</p>
+
+<p>以一个准备迎接黑色星期五的电商应用为例：</p>
+
+<pre><code class="kotlin">// Traditional approach: Ship all variations weeks in advance
+// Problem: All promotional code ships weeks early
+// Risk: Date logic bugs could show promotions early
+@Composable
+fun HomeScreen() {
+    val today = LocalDate.now()
+    when {
+        today == BlackFriday -&gt; BlackFridayHome()
+
+        // Must ship by Oct 15
+        today in BlackFridayWeek -&gt; BlackFridayWeekHome()   // Must ship by Oct 15
+        today == CyberMonday -&gt; CyberMondayHome()
+
+        // Must ship by Oct 15
+        else -&gt; RegularHome()
+    }
+}
+
+// Remote approach: Deploy each promotion on the exact day
+// Benefit: Each promotion deploys on the exact minute needed
+// Flexibility: Can react to competitor moves in real-time
+class HomeScreenService {
+    fun getHomeDocument(user: User): ByteArray {
+        val promotion = promotionService.getCurrentPromotion()
+
+        return captureRemoteDocument(context, displayInfo, profile) {
+            when (promotion) {
+                is BlackFridayPromotion -&gt; BlackFridayHome(promotion)
+                is CyberMondayPromotion -&gt; CyberMondayHome(promotion)
+                is FlashSale -&gt; FlashSaleHome(promotion)  // Can add new types anytime
+                else -&gt; RegularHome()
+            }
+        }
+    }
+}
+</code></pre>
+
+<h3>状态管理：超越静态布局</h3>
+
+<p>RemoteCompose 不仅限于静态布局。该框架包含一个状态管理系统，可以实现交互式、动态的 UI。</p>
+
+<p><strong>远程状态变量</strong></p>
+
+<p>状态可以嵌入文档中，并由客户端更新。这使得表单、计数器、切换开关和其他交互元素成为可能：</p>
+
+<pre><code class="kotlin">// Creation side: Define interactive widget
+@Composable
+fun QuantitySelector(initialQuantity: Int) {
+    var quantity by rememberRemoteState("quantity", initialQuantity)
+
+    Row(
+        modifier = RemoteModifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        IconButton(
+            onClick = {
+                if (quantity &gt; 1) {
+                    quantity--
+                    namedAction("quantityChanged", quantity.toString())
+                }
+            }
+        ) {
+            Icon(Icons.Minus)
+        }
+
+        Text(
+            text = quantity.toString(),
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        IconButton(
+            onClick = {
+                quantity++
+                namedAction("quantityChanged", quantity.toString())
+            }
+        ) {
+            Icon(Icons.Plus)
+        }
+    }
+}
+</code></pre>
+
+<p>播放器端通过操作回调处理状态更新：</p>
+
+<pre><code class="kotlin">// Player side: Handle state updates
+RemoteDocumentPlayer(
+    document = document,
+    onNamedAction = { name, value, stateUpdater -&gt;
+        when (name) {
+            "quantityChanged" -&gt; {
+                // Update cart
+                cartManager.setQuantity(itemId, value.toInt())
+
+                // Optionally update remote state directly
+                stateUpdater.updateState { state -&gt;
+                    state["quantity"] = RcInt(value.toInt())
+                }
+            }
+        }
+    }
+)
+</code></pre>
+
+<p><strong>动画时间跟踪</strong></p>
+
+<p>播放器跟踪动画时间并将其传递给文档，从而无需任何客户端动画代码即可实现基于时间的动画：</p>
+
+<pre><code class="kotlin">// Server side: Define animated elements
+@Composable
+fun PulsingNotificationBadge(count: Int) {
+    // Scale pulses between 0.9 and 1.1 over 1 second
+    val scale = FloatExpression("0.9 + 0.2 * sin(time * 6.28)")
+
+    // Opacity pulses between 0.7 and 1.0
+    val opacity = FloatExpression("0.7 + 0.3 * sin(time * 6.28)")
+
+    Box(
+        modifier = RemoteModifier
+            .scale(scale)
+            .alpha(opacity)
+            .background(Color.Red, CircleShape)
+            .size(24.dp)
+    ) {
+        Text(
+            text = count.toString(),
+            color = Color.White,
+            modifier = RemoteModifier.align(Alignment.Center)
+        )
+    }
+}
+
+// The player automatically:
+// 1. Tracks elapsed time since document load
+// 2. Evaluates expressions each frame
+// 3. Updates visual properties
+// No client animation code needed
+</code></pre>
+
+<p>这使得完全在文档格式中定义的流畅、高性能动画成为可能。表达式支持诸如 <code>sin</code>、<code>cos</code>、<code>lerp</code> 和 <code>clamp</code> 之类的数学函数，以及算术运算符和变量引用。</p>
+
+<p><strong>双向通信</strong></p>
+
+<p>操作系统支持文档与宿主应用之间的双向通信：</p>
+
+<pre><code class="kotlin">// Document triggers actions for various purposes
+@Composable
+fun ProductDetailPage(product: Product) {
+    Column {
+        // Analytics tracking
+        LaunchedEffect(Unit) {
+            namedAction("analytics", "product_viewed:${product.id}")
+        }
+
+        ProductImage(product.imageUrl)
+
+        // Navigation action
+        TextButton(onClick = { namedAction("navigate", "/reviews/${product.id}") }) {
+            Text("See all reviews")
+        }
+
+        // Cart action with data
+        Button(onClick = { namedAction("addToCart", product.id) }) {
+            Text("Add to Cart")
+        }
+
+        // State update action
+        var isFavorite by rememberRemoteState("favorite", product.isFavorite)
+        IconButton(
+            onClick = {
+                isFavorite = !isFavorite
+                namedAction("toggleFavorite", "${product.id}:$isFavorite")
+            }
+        ) {
+            Icon(if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.Favorite)
+        }
+    }
+}
+</code></pre>
+
+<p>宿主应用统一处理所有操作：</p>
+
+<pre><code class="kotlin">// Host app handles all actions uniformly
+RemoteDocumentPlayer(
+    document = document,
+    onNamedAction = { name, value, stateUpdater -&gt;
+        when (name) {
+            "analytics" -&gt; {
+                val (event, id) = value.split(":")
+                analytics.logEvent(event, mapOf("productId" to id))
+            }
+            "navigate" -&gt; navController.navigate(value)
+            "addToCart" -&gt; {
+                cartManager.add(value)
+                // Update UI to show confirmation
+                stateUpdater.updateState { state -&gt;
+                    state["cartCount"] = RcInt((state["cartCount"] as? RcInt)?.value?.plus(1) ?: 1)
+                }
+            }
+            "toggleFavorite" -&gt; {
+                val (id, isFavorite) = value.split(":")
+                favoritesManager.setFavorite(id, isFavorite.toBoolean())
+            }
+        }
+    }
+)
+</code></pre>
+
+<p>这种双向通信意味着远程文档可以完全集成到你应用的导航、分析、状态管理和业务逻辑中，而文档本身无需了解你的具体实现。</p>
+
+<h3><strong>实际应用架构模式</strong></h3>
+
+<p>让我们来探讨一下 RemoteCompose 如何融入实际应用架构。</p>
+
+<p><strong>模式 1：混合架构（推荐）</strong></p>
+
+<p>大多数应用都能从混合架构中获益：关键页面使用本地 Compose 代码构建，而动态内容区域则使用 RemoteCompose。</p>
+
+<pre><code class="kotlin">// Navigation: Local Compose (fast, reliable)
+@Composable
+fun AppNavigation() {
+    NavHost(navController, startDestination = "home") {
+        composable("home") { HomeScreen() }
+        composable("product/{id}") { ProductScreen(it.arguments?.getString("id")) }
+        composable("cart") { CartScreen() }
+        composable("checkout") { CheckoutScreen() }
+    }
+}
+
+// Home screen: Remote (marketing can update freely)
+@Composable
+fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
+    val document by viewModel.homeDocument.collectAsState()
+
+    when (val state = document) {
+        is Loading -&gt; LoadingIndicator()
+        is Success -&gt; RemoteDocumentPlayer(
+            document = state.document,
+            onNamedAction = { name, value, _ -&gt; handleAction(name, value) }
+        )
+        is Error -&gt; LocalFallbackHome()  // Graceful degradation
+    }
+}
+
+// Product screen: Hybrid (shell is local, content is remote)
+@Composable
+fun ProductScreen(productId: String, viewModel: ProductViewModel = hiltViewModel()) {
+    val product by viewModel.product.collectAsState()
+    val contentDocument by viewModel.contentDocument.collectAsState()
+
+    Scaffold(
+        topBar = { ProductTopBar(product) },  // Local: consistent navigation
+        bottomBar = { AddToCartBar(product) } // Local: critical purchase flow
+    ) { padding -&gt;
+        // Remote: Rich product content, can be A/B tested
+        contentDocument?.let { doc -&gt;
+            RemoteDocumentPlayer(
+                document = doc,
+                modifier = Modifier.padding(padding)
+            )
+        }
+    }
+}
+</code></pre>
+
+<p><strong>模式 2：文档缓存以实现离线支持</strong></p>
+
+<p>远程文档可以缓存以供离线访问：</p>
+
+<pre><code class="kotlin">class DocumentRepository @Inject constructor(
+    private val api: DocumentApi,
+    private val cache: DocumentCache,
+    private val connectivity: ConnectivityManager
+) {
+    suspend fun getDocument(key: String): CoreDocument {
+        // Try cache first
+        cache.get(key)?.let { cached -&gt;
+            // Return cached immediately, refresh in background
+            refreshInBackground(key)
+            return cached
+        }
+
+        // No cache, must fetch
+        return if (connectivity.isConnected) {
+            fetchAndCache(key)
+        } else {
+            throw OfflineException("No cached document and no connectivity")
+        }
+    }
+
+    private suspend fun fetchAndCache(key: String): CoreDocument {
+        val bytes = api.fetchDocument(key)
+        val document = RemoteComposeBuffer.deserialize(bytes)
+        cache.store(key, document, ttl = 1.hours)
+        return document
+    }
+
+    private fun refreshInBackground(key: String) {
+        scope.launch {
+            try {
+                fetchAndCache(key)
+            } catch (e: Exception) {
+                // Silent failure, cached version is still valid
+                Log.w(TAG, "Background refresh failed", e)
+            }
+        }
+    }
+}
+</code></pre>
+
+<p><strong>模式 3：文档预加载以实现流畅导航</strong></p>
+
+<p>预加载用户可能访问的页面的文档：</p>
+
+<pre><code class="kotlin">class DocumentPreloader @Inject constructor(
+    private val repository: DocumentRepository
+) {
+    // Preload when user enters a screen
+    fun preloadForScreen(screen: Screen) {
+        val keysToPreload = when (screen) {
+            is HomeScreen -&gt; listOf("featured", "categories", "promotions")
+            is CategoryScreen -&gt; screen.subcategories.map { "category_${it.id}" }
+            is ProductScreen -&gt; listOf("reviews_${screen.productId}", "related_${screen.productId}")
+            else -&gt; emptyList()
+        }
+
+        keysToPreload.forEach { key -&gt;
+            scope.launch {
+                try {
+                    repository.getDocument(key)  // Caches for later
+                } catch (e: Exception) {
+                    // Preload failure is not critical
+                }
+            }
+        }
+    }
+}
+
+// Usage in navigation
+navController.addOnDestinationChangedListener { _, destination, arguments -&gt;
+    preloader.preloadForScreen(destination.toScreen(arguments))
+}
+</code></pre>
+
+<h3><strong>结论</strong></h3>
+
+<p>RemoteCompose 代表了我们对 Android UI 开发思维方式的一次范式转变。通过将 Compose 布局转换为可移植文档格式，RemoteCompose 实现了服务器驱动的 UI、即时 A/B 测试、实时内容更新和跨平台一致性，同时保持了原生渲染性能。</p>
+
+<p>该框架拥有包含 93 种以上操作的全面操作模型，充分展现了 Compose 的表达能力，包括动画、状态和交互。创建和播放的分离使得部署架构更加灵活：在后端生成具有完整 Compose 表达能力的文档，通过现有基础架构分发，并在任何 Android 设备上进行原生渲染。</p>
+
+<p>关键在于找到合适的平衡点：对于动态、频繁变化的内容区域，使用 RemoteCompose；同时将关键流程保留在本地 Compose 代码中。这种混合方法在需要灵活性的地方提供服务器驱动 UI 的优势，在需要可靠性的地方提供编译代码的优势。</p>
+
+<p>无论你是构建需要频繁更新布局的内容密集型应用、需要快速 A/B 测试的电子商务平台，还是需要快速迭代的企业级工具，RemoteCompose 都能为真正动态的 UI 提供架构基础。该框架处理了序列化、传输和渲染的复杂性，因此你可以专注于设计卓越的用户体验。</p>
+
+<p>你可以观看他们最近关于<a href="https://speakerdeck.com/camaelon/introducing-remotecompose-break-your-ui-out-of-the-app-sandbox">RemoteCompose 简介：将你的 UI 从应用程序沙盒中解放出来</a>的演讲。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack Compose中的阴影艺术]]></title>
@@ -1708,439 +2703,6 @@ fun retain_duplicateRetainKeys() = compositionTest {
 <p>无论是构建可旋转的视频播放器、保留滚动位置的导航系统，还是在配置更改后保持状态的复杂表单，<code>retain{}</code> 都能在 Jetpack Compose 中提供基于作用域的状态保存功能。</p>
 
 <p>如果你想了解最新的技能、新闻、技术文章、面试问题和实用代码技巧，请查看 <a href="https://github.com/doveletter/">Dove Letter</a>。如果你想深入了解面试准备，千万不要错过终极 Android 面试指南：<a href="https://www.android.skydoves.me/">Manifest Android Interview</a>。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Compose Unstyled：Compose UI中失传​​的设计系统层]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/09/10/compose-unstyled/"/>
-    <updated>2025-09-10T16:17:33+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/09/10/compose-unstyled</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Compose Unstyled: The missing Design System layer for Compose UI」，原文链接<a href="https://composables.com/blog/introducing-compose-unstyled">https://composables.com/blog/introducing-compose-unstyled</a>，由Alex Styl发布于2025年8月7日。</p></blockquote>
-
-<p><a href=""><img src="https://composables.com/og_unstyled.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>使用 Compose UI 构建应用的最大问题是 Material Compose 的灵活性不足。Material Compose 的可定制性不足以让你在其上构建自己的设计系统，因此你最终只能对其组件进行修改。另一方面，Compose Foundation 又过于“原始”——它有行和列，但没有按钮或底部表单。而且，由于主题设置与 Material 绑定，如果不完全遵循 Material 的设计决策，你甚至无法为你的应用设置主题。</p>
-
-<p>你可以从头开始构建所有内容，但谁有时间这样做呢？考虑到不同的状态、可访问性和边缘情况，像底部表单这样的单个组件可能需要 3-4 周才能完成。这个问题在 Compose Multiplatform 中变得更加严重——Material 在 iOS 上看起来笨拙，在桌面上显得不成比例。</p>
-
-<p>我需要一个灵活的解决方案，可以在任何平台上使用，而不受 Material 的限制。于是我撸起袖子，自己动手构建了一个：</p>
-
-<p><strong><a href="https://composables.com/docs/com.composables/core">Compose Unstyled</a> 是基于 Compose Foundation 的 API，可轻松构建任何设计系统</strong> （链接：<a href="https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82%E5%AE%83%E6%8F%90%E4%BE%9B%E6%97%A0%E6%A0%B7%E5%BC%8F%E3%80%81%E5%8F%AF%E8%AE%BF%E9%97%AE%E7%9A%84%E7%BB%84%E4%BB%B6%EF%BC%8C%E5%B9%B6%E9%85%8D%E6%9C%89%E7%81%B5%E6%B4%BB%E7%9A%84%E4%B8%BB%E9%A2%98">https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82%E5%AE%83%E6%8F%90%E4%BE%9B%E6%97%A0%E6%A0%B7%E5%BC%8F%E3%80%81%E5%8F%AF%E8%AE%BF%E9%97%AE%E7%9A%84%E7%BB%84%E4%BB%B6%EF%BC%8C%E5%B9%B6%E9%85%8D%E6%9C%89%E7%81%B5%E6%B4%BB%E7%9A%84%E4%B8%BB%E9%A2%98</a> API——所有关于用户体验和可访问性的繁琐工作都已为你处理。</p>
-
-<p>Unstyled 中的组件完全无需渲染，默认情况下不会在屏幕上显示任何内容。你可以将它们视为“组件模式”，它们将“底部表单”或“进度条”的概念引入你的应用，而无需你担心用户体验、键盘导航或可访问性实现。只需添加样式即可。</p>
-
-<h2>简洁的 API，提供你所需的样式</h2>
-
-<p>Compose Unstyled 不提供任何特殊的样式 API。所有操作都通过 <code>Modifier</code> 完成。如果你知道如何设置 <code>Box()</code> 的样式，那么你就知道如何设置 Compose Unstyled 中每个组件的样式。</p>
-
-<p>下面是一个使用 Compose Unstyled 构建模态底部表单的简单示例，其中包含自定义定位点（表单在屏幕上“停留”的位置）以及你选择的样式：</p>
-
-<pre><code class="kotlin">val Peek = SheetDetent("peek") { containerHeight, sheetHeight -&gt;
-    containerHeight * 0.6f
-}
-BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFF800080), Color(0xFFDA70D6))))) {
-    val modalSheetState = rememberModalBottomSheetState(
-        initialDetent = Hidden,
-        detents = listOf(Hidden, Peek, FullyExpanded)
-    )
-    LaunchedEffect(Unit) {
-        delay(50)
-        modalSheetState.targetDetent = Peek
-    }
-    Button(onClick = { modalSheetState.targetDetent = Peek }, modifier = Modifier.align(Alignment.Center).padding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal).asPaddingValues()), shape = RoundedCornerShape(6.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp), backgroundColor = Color.White) {
-        Text("Show Sheet", fontWeight = FontWeight(500))
-    }
-    val isCompact = maxWidth &lt; 600.dp
-    ModalBottomSheet(state = modalSheetState) {
-        Scrim(
-            scrimColor = Color.Black.copy(0.3f),
-            enter = fadeIn(),
-            exit = fadeOut()
-        )
-        Box(Modifier.fillMaxSize().padding(top = 12.dp).let { if (isCompact) it else it.padding(horizontal = 56.dp) }.displayCutoutPadding().statusBarsPadding().padding(WindowInsets.navigationBars.only(WindowInsetsSides.Horizontal).asPaddingValues())) {
-            Sheet(
-                modifier = Modifier
-                    .shadow(4.dp, RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                    .widthIn(max = 640.dp)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-                backgroundColor = Color.White,
-                contentColor = Color.Black
-            ) {
-                Box(Modifier.fillMaxWidth().height(600.dp), contentAlignment = Alignment.TopCenter) {
-                    DragIndication(
-                        modifier = Modifier.padding(top = 22.dp)
-                            .background(Color.Black.copy(0.4f), RoundedCornerShape(100)).width(32.dp).height(4.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-</code></pre>
-
-<p>现在，我知道你可能会想。“Alex！这 API 真奇怪。为什么我需要一个 <code>ModalBottomSheet</code> 和一个 <code>Sheet</code>？为什么不直接用 Slots 呢？”</p>
-
-<p>这个设计选择是经过深思熟虑的：</p>
-
-<h2>设计理念</h2>
-
-<p>Compose Unstyled 不会替你做出任何设计决策，而是让你完全掌控布局。事实上，如果你被迫使用无法根据需求更改的样式，则会被视为错误（请提交 GitHub 问题，以便我进行调查）。</p>
-
-<p>例如，你可能希望将底部表单放置在屏幕的左侧或右侧。当你想要求开发者提供一个在布局上具有严格位置的组件时，基于插槽的 API 非常实用。</p>
-
-<p>在这种情况下，你可以将 <code>ModalBottomSheet</code> 组件视为表单可以移动的区域。<code>Sheet</code> 是用户可以与之交互的实际表单。通过提供这样的组件，它为开发者提供了清晰的 API，并清楚地说明了组件的功能。例如，<code>Scrim()</code> 组件具有 <em>enter</em> 和 <em>exit</em> 过渡参数。 Compose Unstyled 会在恰当的时机为纱幕添加和隐藏动画，以实现最佳用户体验。你只需指定“如何”实现即可。</p>
-
-<p>由于 Compose Unstyled 在外观方面非常开放，因此与原始的 Compose Foundation 组件相比，它没有任何平台限制。Foundation 中的“对话框”具有固定的最大尺寸，这使得它们在诸如全屏对话框等情况下难以工作。</p>
-
-<p>Compose Unstyled 中的所有组件在所有平台上的工作方式完全相同。这是有意为之，因为此类决策应该属于设计系统层的一部分。尽管这会给开发者带来更多负担，但由于没有“陷阱”，它大大缩短了开发时间。组件的样式与你描述的完全一致。</p>
-
-<p>这不会使 Compose Unstyled 与底层平台脱节。在使用对话框和模态底部菜单等模态窗口时，设置系统窗口的样式是 Android 样式设置的重要组成部分。在这种情况下，Compose Unstyled 提供了一个 <code>LocalModalWindow</code> 组合本地接口，允许你访问渲染模态窗口的 <code>Window</code>。请注意，此类 API 仅适用于 Android 目标平台，不属于通用目标平台 API。</p>
-
-<p>最后，每个组件的代码都包含在其自己的文件中，即使你不是 Compose 专家，也能轻松理解。你无需担心任何限制。如果你现在需要更改某些内容，并且迫不及待地想要提交错误并在库级别修复它，你只需将组件的单个文件复制粘贴到你的代码库中即可。这为你节省了通常需要你自己完成的 4 周工作时间。</p>
-
-<h2>滑块</h2>
-
-<p>以下是如何构建一个具有你所选样式的滑块。</p>
-
-<p>它与 Compose 的“InteractionState”集成，以便你可以按照自己想要的方式完善组件。键盘交互功能开箱即用，用户可以通过按下键盘上的“向上”或“向下”键来增加或减少值：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose-style-1.png" alt="" /></p>
-
-<pre><code class="kotlin">Box(modifier = Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFED213A), Color(0xFF93291E)))),   contentAlignment = Alignment.Center) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val state = rememberSliderState(initialValue = 0.7f)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(horizontal = 16.dp).widthIn(max = 480.dp).fillMaxWidth()) {
-        Button(onClick = { state.value -= 0.1f }, modifier = Modifier.shadow(4.dp, CircleShape), shape = CircleShape, backgroundColor = Color.White, contentPadding = PaddingValues(8.dp),) {
-            Icon(VolumeDown, "Decrease")
-        }
-        Slider(
-            interactionSource = interactionSource,
-            state = state,
-            modifier = Modifier.weight(1f),
-            track = {
-                Box(Modifier.fillMaxWidth().height(8.dp).padding(horizontal = 16.dp).clip(RoundedCornerShape(100.dp))) {
-                    // the 'not yet completed' part of the track
-                    Box(Modifier.fillMaxHeight().fillMaxWidth().background(Color(0xFF93291E)))
-                    // the 'completed' part of the track
-                    Box(Modifier.fillMaxHeight().fillMaxWidth(state.value).background(Color.White))
-                }
-            },
-            thumb = {
-                val thumbSize by animateDpAsState(targetValue = if (isPressed) 22.dp else 18.dp)
-                val thumbInteractionSource = remember { MutableInteractionSource() }
-                val isHovered by thumbInteractionSource.collectIsHoveredAsState()
-                val glowColor by animateColorAsState(
-                    if (isFocused || isHovered) Color.White.copy(0.33f) else Color.Transparent
-                )
-                // keep the size fixed to ensure that the resizing animation is always centered
-                Box(
-                    modifier = Modifier.size(36.dp).clip(CircleShape).background(glowColor),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Thumb(
-                        color = Color.White,
-                        modifier = Modifier.size(thumbSize).shadow(4.dp, CircleShape).hoverable(thumbInteractionSource),
-                        shape = CircleShape,
-                    )
-                }
-            }
-        )
-        Button(onClick = { state.value += 0.1f }, modifier = Modifier.shadow(4.dp, CircleShape), shape = CircleShape, backgroundColor = Color.White, contentPadding = PaddingValues(8.dp),) {
-            Icon(VolumeUp, "Increase")
-        }
-    }
-}
-</code></pre>
-
-<h2>下拉菜单</h2>
-
-<p>下拉菜单的正确实现非常复杂，尤其是在键盘导航和焦点管理方面。</p>
-
-<p>要充分体验此组件，请在桌面上试用：点击“Options”按钮以聚焦演示，然后使用键盘的上下箭头键进行导航：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose-style-2.png" alt="" /></p>
-
-<pre><code class="kotlin">class DropdownOption(val text: String, val icon: ImageVector, val enabled: Boolean = true, val dangerous: Boolean = false)
-val options = listOf(
-    DropdownOption("Select All", Maximize),
-    DropdownOption("Copy", Copy),
-    DropdownOption("Cut", Scissors, enabled = false),
-    DropdownOption("Paste", Clipboard),
-    DropdownOption("Delete", Trash2, dangerous = true),
-)
-var expanded by remember { mutableStateOf(true) }
-DropdownMenu(onExpandRequest = { expanded = true }) {
-    Button(shape = RoundedCornerShape(6.dp), backgroundColor = Color.White, onClick = { expanded = true }, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),) {
-        Text("Options", fontWeight = FontWeight(500))
-        Spacer(Modifier.width(8.dp))
-        Icon(ChevronDown, null)
-    }
-    DropdownMenuPanel(
-        expanded = expanded,
-        onDismissRequest = { expanded = false },
-        backgroundColor = Color.White,
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier
-            .padding(vertical = 4.dp)
-            .width(240.dp)
-            .shadow(4.dp, RoundedCornerShape(8.dp)),
-        enter = scaleIn(
-            animationSpec = tween(durationMillis = 120, easing = LinearOutSlowInEasing),
-            initialScale = 0.8f,
-            transformOrigin = TransformOrigin(0f, 0f)
-        ) + fadeIn(tween(durationMillis = 30)),
-        exit = scaleOut(animationSpec = tween(durationMillis = 1, delayMillis = 75), targetScale = 1f) + fadeOut(tween(durationMillis = 75))
-    ) {
-        options.forEachIndexed { index, option -&gt;
-            if (index == 1 || index == options.lastIndex) {
-                Separator(color = Color(0xFFBDBDBD))
-            }
-            Button(onClick = { expanded = false }, enabled = option.enabled, modifier = Modifier.padding(4.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp), contentColor = (if (option.dangerous) Color(0xFFC62828) else LocalContentColor.current).copy(alpha = if (option.enabled) 1f else 0.5f), shape = RoundedCornerShape(8.dp),) {
-                Icon(option.icon, null)
-                Spacer(Modifier.width(4.dp))
-                Text(text = option.text, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 4.dp))
-            }
-        }
-    }
-}
-</code></pre>
-
-<p>以及更多未样式化的组件，例如：</p>
-
-<ul>
-<li><a href="https://composables.com/docs/com.composables/core/textfield">TextField</a>，全面支持屏幕阅读器的无障碍功能</li>
-<li><a href="https://composables.com/docs/com.composables/core/button">Button</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/dialog">Dialog</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/radiogroup">Radio Group</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/tabgroup">TabGroup</a>，用于构建标签式导航，例如底部应用栏或顶部标签桌面</li>
-<li><a href="https://composables.com/docs/com.composables/core/checkbox">复选框</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/tristatecheckbox">三态复选框</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/toggleswitch">切换开关</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/scrollarea">滚动条</a>（没错，就是滚动条。）</li>
-</ul>
-
-
-<p>每个组件在构建时都充分考虑了可访问性，包括合理的语义和完整的键盘导航支持。</p>
-
-<p>你可以<a href="https://composables.com/docs/com.composables/core">在文档中找到完整的组件列表 -></a>（链接：<a href="https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82">https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82</a></p>
-
-<h2>使用你的设计令牌自定义 Compose 主题</h2>
-
-<p>Compose Unstyled 包含一个灵活的主题系统，可与任何设计系统令牌兼容。</p>
-
-<p>以下是如何使用你选择的设计令牌创建完全自定义的主题：</p>
-
-<p>以下是创建 Compose Theme 函数的示例：</p>
-
-<pre><code class="kotlin">// define your theme properties
-private val colors = ThemeProperty&lt;Color&gt;("colors")
-private val typography = ThemeProperty&lt;TextStyle&gt;("typography")
-private val shapes = ThemeProperty&lt;Shape&gt;("shapes")
-private val elevation = ThemeProperty&lt;Dp&gt;("elevation")
-// define your theme tokens.
-// those are the potential values of your theme properties
-private val background = ThemeToken&lt;Color&gt;("background")
-private val card = ThemeToken&lt;Color&gt;("surface")
-private val onCard = ThemeToken&lt;Color&gt;("onCard")
-private val outline = ThemeToken&lt;Color&gt;("outline")
-private val accent = ThemeToken&lt;Color&gt;("accent")
-private val primary = ThemeToken&lt;Color&gt;("primary")
-private val onPrimary = ThemeToken&lt;Color&gt;("onPrimary")
-private val onSecondary = ThemeToken&lt;Color&gt;("onSecondary")
-private val secondary = ThemeToken&lt;Color&gt;("secondary")
-private val subtle = ThemeToken&lt;Dp&gt;("subtle")
-private val titleMedium = ThemeToken&lt;TextStyle&gt;("titleMedium")
-private val bodyMedium = ThemeToken&lt;TextStyle&gt;("bodyMedium")
-private val cardShape = ThemeToken&lt;Shape&gt;("cardShape")
-private val albumCoverShape = ThemeToken&lt;Shape&gt;("albumCoverShape")
-private val buttonShape = ThemeToken&lt;Shape&gt;("buttonShape")
-// create your Compose Theme and assign values to each token
-private val LightTheme = buildTheme {
-    name = "LightTheme"
-    properties[colors] = mapOf(
-        accent to Color(0xFF3B82F6),
-        card to Color.White,
-        onCard to Color(0xFF1E293B),
-        outline to Color(0xFFE2E8F0),
-        primary to Color(0xFF2563EB),
-        onPrimary to Color.White,
-        secondary to Color(0xFFE2E8F0),
-        onSecondary to Color(0xFF64748B),
-        background to Color(0xFFF8F9FA),
-    )
-    properties[typography] = mapOf(
-        titleMedium to TextStyle(
-            fontSize = 18.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = loadInterFont(),
-        ),
-        bodyMedium to TextStyle(
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Normal,
-            fontFamily = loadInterFont(),
-        )
-    )
-    properties[shapes] = mapOf(
-        cardShape to RoundedCornerShape(16.dp),
-        albumCoverShape to RoundedCornerShape(12.dp),
-        buttonShape to CircleShape
-    )
-    properties[elevation] = mapOf(
-        subtle to 8.dp
-    )
-}
-</code></pre>
-
-<p>然后，你可以使用新的主题函数包装你的应用：</p>
-
-<pre><code class="kotlin">@Composable
-fun MusicPlayerApp() {
-    LightTheme {
-        MusicPlayerCard()
-    }
-}
-</code></pre>
-
-<p>然后，它会使用 <code>Theme</code> 对象授予其子组件对主题的访问权限：</p>
-
-<pre><code class="kotlin">@Composable
-fun MusicPlayerCard(modifier: Modifier = Modifier) {
-    val sliderState = rememberSliderState(initialValue = 0.3f)
-    Box(
-        modifier = modifier
-            .outline(1.dp, Theme[colors][outline], Theme[shapes][cardShape])
-            .shadow(Theme[elevation][subtle], Theme[shapes][cardShape])
-            .background(Theme[colors][card], Theme[shapes][cardShape])
-            .padding(24.dp)
-    ) {
-        ProvideContentColor(Theme[colors][onCard]) {
-            Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Image(
-                        painter = painterResource(Res.drawable.just_hoist_it_cover),
-                        modifier = Modifier
-                            .clip(Theme[shapes][albumCoverShape])
-                            .background(Theme[colors][primary])
-                            .size(80.dp),
-                        contentDescription = "Album Cover",
-                        contentScale = ContentScale.Crop
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Just hoist it!", style = Theme[typography][titleMedium])
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "The Deprecated",
-                            style = Theme[typography][bodyMedium],
-                            color = Theme[colors][onSecondary]
-                        )
-                    }
-                }
-                Slider(
-                    state = sliderState,
-                    modifier = Modifier.fillMaxWidth(),
-                    track = {
-                        Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))) {
-                            // the empty part of the track
-                            Box(Modifier.fillMaxSize().background(Theme[colors][secondary]))
-                            // the filled part of the track
-                            Box(
-                                Modifier.fillMaxWidth(sliderState.value).fillMaxSize().background(Theme[colors][accent])
-                            )
-                        }
-                    },
-                    thumb = {
-                        Thumb(
-                            color = Theme[colors][accent],
-                            modifier = Modifier.size(16.dp),
-                            shape = Theme[shapes][buttonShape]
-                        )
-                    }
-                )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { }, contentPadding = PaddingValues(12.dp), shape = Theme[shapes][buttonShape]) {
-                        Icon(imageVector = Lucide.SkipBack, contentDescription = "Previous", modifier = Modifier.size(20.dp))
-                    }
-                    Button(onClick = { }, backgroundColor = Theme[colors][primary], contentColor = Theme[colors][onPrimary], contentPadding = PaddingValues(16.dp), shape = Theme[shapes][buttonShape]) {
-                        Icon(imageVector = Lucide.Pause, contentDescription = "Pause", modifier = Modifier.size(24.dp))
-                    }
-                    Button(onClick = { }, contentPadding = PaddingValues(12.dp), shape = Theme[shapes][buttonShape]) {
-                        Icon(imageVector = Lucide.SkipForward, contentDescription = "Next", modifier = Modifier.size(20.dp))
-                    }
-                }
-            }
-        }
-    }
-}
-</code></pre>
-
-<h2>轮廓修饰符</h2>
-
-<p>最后但同样重要的是，Compose Unstyled 引入了一些 Compose Foundation 中缺少的样式 <code>Modifier</code>，但这些修饰符对于构建视觉丰富的界面必不可少：</p>
-
-<h3>轮廓</h3>
-
-<p>与 Compose Foundation 的 <code>border()</code> 修饰符不同，此修饰符不会影响布局。它还会在组件周围而不是内部进行绘制。当你需要一个与阴影完美融合的半透明轮廓时，这个功能非常方便：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose-style-3.png" alt="" /></p>
-
-<pre><code class="kotlin">SimpleButton(
-  shape = RectangleShape,
-  modifier = Modifier.outline(2.dp, Color(0xFF3B82F6), shape = RectangleShape)
-)
-SimpleButton(
-  shape = RoundedCornerShape(8.dp),
-  modifier = Modifier.outline(2.dp, Color(0xFF3B82F6), shape = RoundedCornerShape(8.dp))
-)
-SimpleButton(
-  shape = CircleShape,
-  modifier = Modifier.outline(2.dp, Color(0xFF3B82F6), shape = CircleShape)
-)
-</code></pre>
-
-<h3>焦点环</h3>
-
-<p>焦点环在处理键盘导航和焦点时非常重要。它们只有在获得焦点时才会渲染轮廓。</p>
-
-<pre><code class="kotlin">val interactionSource = remember { MutableInteractionSource() }
-SimpleButton(
-    modifier = Modifier.focusRing(
-        interactionSource = interactionSource,
-        width = 2.dp,
-        color = Color(0xFF3B82F6),
-        shape = RoundedCornerShape(8.dp),
-        offset = 2.dp
-    ),
-    interactionSource = interactionSource
-)
-</code></pre>
-
-<h2>然后呢？</h2>
-
-<p>即将推出的组件包括：</p>
-
-<ul>
-<li>侧边栏</li>
-<li>工具提示</li>
-<li>上下文菜单</li>
-</ul>
-
-
-<p>以及更多。</p>
-
-<p>如果你愿意为该项目提供资金支持，我们还提供<a href="https://composables.com/ui-kit">正在制作中的 UI Kit</a>（链接：<a href="https://composables.com/ui-kit%EF%BC%89%E3%80%82%E8%AF%A5">https://composables.com/ui-kit%EF%BC%89%E3%80%82%E8%AF%A5</a> UI Kit 是一套完整的设计系统，适用于触控和指针应用。</p>
-
-<p>为了使这些 API 完美无缺，我们投入了大量的工作和专业知识。通过资金支持该项目，你将在未来几年获得更多资源，而我则可以继续从事开源工作，同时支付房租。</p>
-
-<p>想要随时了解最新动态？请务必<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/">在 Github 上关注 Unstyled</a>（链接:<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/%EF%BC%89%E3%80%82">https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/%EF%BC%89%E3%80%82</a></p>
-
-<p>想要评论这篇文章吗？<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106">在 GitHub 上讨论 →</a>（链接：<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106%EF%BC%89">https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106%EF%BC%89</a></p>
 ]]></content>
   </entry>
   
