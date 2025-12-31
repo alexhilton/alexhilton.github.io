@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-12-25T10:55:43+00:00</updated>
+  <updated>2025-12-31T11:30:07+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,930 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack ViewModel内幕：内部机制与跨平台设计]]></title>
+    <link href="https://alexhilton.github.io/blog/2025/12/31/inside-jetpack-viewmodel/"/>
+    <updated>2025-12-31T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2025/12/31/inside-jetpack-viewmodel</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Inside Jetpack ViewModel: Internal Mechanisms and Multiplatform Design」，原文链接<a href="https://proandroiddev.com/inside-jetpack-viewmodel-internal-mechanisms-and-multiplatform-design-2625671eaef8">https://proandroiddev.com/inside-jetpack-viewmodel-internal-mechanisms-and-multiplatform-design-2625671eaef8</a>，由Jaewoong Eum发布于2025年12月7日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/0*tOtkLxn9LUT6ZAsI" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>Jetpack 的 ViewModel 已成为现代 Android 开发中不可或缺的组件，它为 UI 相关数据提供了一个生命周期感知容器，即使配置发生更改，数据也能保持不变。虽然其 API 表面上看起来很简单，但其内部机制却展现了围绕生命周期管理、跨平台抽象、资源清理和线程安全缓存等方面的设计决策。了解 ViewModel 的底层工作原理有助于你做出更优的架构决策，并避免一些不易察觉的错误。</p>
+
+<p>本文将深入探讨 Jetpack ViewModel 的内部工作原理，包括 <code>ViewModelStore</code> 如何在配置更改后保留实例、<code>ViewModelProvider</code> 如何协调创建和缓存、工厂模式如何实现灵活的实例化、<code>CreationExtras</code> 如何实现无状态工厂、如何通过 Closeable 模式管理资源清理，以及 <code>viewModelScope</code> 如何将协程与 ViewModel 生命周期集成。</p>
+
+<h2>根本问题：配置更改后的保留</h2>
+
+<p>配置更改是 Android 开发面临的一项根本性挑战。当用户旋转设备、更改语言设置或触发任何配置更改时，系统会销毁并重新创建 Activity。Activity 中存储的所有数据都会丢失：</p>
+
+<pre><code class="kotlin">class MyActivity : ComponentActivity() {
+    private var userData: User? = null  // Lost on rotation!
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Must reload data after every rotation
+        loadUserData()
+    }
+}
+</code></pre>
+
+<p>一种简单的方法是使用 <code>onSaveInstanceState()</code>：</p>
+
+<pre><code class="kotlin">override fun onSaveInstanceState(outState: Bundle) {
+    super.onSaveInstanceState(outState)
+    outState.putParcelable("user", userData)
+}
+
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    userData = savedInstanceState?.getParcelable("user")
+}
+</code></pre>
+
+<p>这种方法适用于小型、可序列化的数据。但是，对于大型数据集、网络连接或无法序列化的对象呢？对于持续进行的网络请求等操作呢？Bundle 方法在这些情况下会失效，原因既有大小限制，也有序列化/反序列化的高昂开销。</p>
+
+<p>ViewModel 通过提供一个生命周期感知容器来解决这个问题，该容器通过保留对象模式（而非序列化）来应对配置更改。</p>
+
+<h2>ViewModelStore：保留机制</h2>
+
+<p>ViewModel 配置变更后仍能保留的核心是 <code>ViewModelStore</code>，它是一个简单的键值存储，用于保存 ViewModel 实例：</p>
+
+<pre><code class="kotlin">public open class ViewModelStore {
+
+    private val map = mutableMapOf&lt;String, ViewModel&gt;()
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public fun put(key: String, viewModel: ViewModel) {
+        val oldViewModel = map.put(key, viewModel)
+        oldViewModel?.clear()
+    }
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public operator fun get(key: String): ViewModel? {
+        return map[key]
+    }
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+    public fun keys(): Set&lt;String&gt; {
+        return HashSet(map.keys)
+    }
+
+    public fun clear() {
+        for (vm in map.values) {
+            vm.clear()
+        }
+        map.clear()
+    }
+}
+</code></pre>
+
+<p>实现非常简单，就是一个 <code>MutableMap&lt;String, ViewModel&gt;</code>。关键不在于存储本身，而在于存储的保留方式。</p>
+
+<h3>键替换行为</h3>
+
+<p>请注意 <code>put</code> 方法的行为：</p>
+
+<pre><code class="kotlin">public fun put(key: String, viewModel: ViewModel) {
+    val oldViewModel = map.put(key, viewModel)
+    oldViewModel?.clear()
+}
+</code></pre>
+
+<p>如果已存在具有相同键的 ViewModel，则旧的 ViewModel 会被立即清除。这确保了在替换 ViewModel 时能够正确清理。你可能想知道这种情况何时发生，它发生在你请求具有相同键但类型不同的 ViewModel 时：</p>
+
+<pre><code class="kotlin">// First request creates TestViewModel1 with key "my_key"
+val vm1: TestViewModel1 = viewModelProvider["my_key", TestViewModel1::class]
+
+// Second request with same key but different type
+val vm2: TestViewModel2 = viewModelProvider["my_key", TestViewModel2::class]
+
+// vm1.onCleared() has been called, vm1 is no longer valid
+</code></pre>
+
+<p>此行为已在测试套件中验证：</p>
+
+<pre><code class="kotlin">@Test
+fun twoViewModelsWithSameKey() {
+    val key = "the_key"
+    val vm1 = viewModelProvider[key, TestViewModel1::class]
+    assertThat(vm1.cleared).isFalse()
+    val vw2 = viewModelProvider[key, TestViewModel2::class]
+    assertThat(vw2).isNotNull()
+    assertThat(vm1.cleared).isTrue()
+}
+</code></pre>
+
+<h3>ViewModelStoreOwner 契约</h3>
+
+<p><code>ViewModelStoreOwner</code> 接口定义了谁拥有该存储：</p>
+
+<pre><code class="kotlin">public interface ViewModelStoreOwner {
+    public val viewModelStore: ViewModelStore
+}
+</code></pre>
+
+<p><code>ComponentActivity</code>、<code>Fragment</code> 和 <code>NavBackStackEntry</code> 都实现了这个简单的接口。所有者的职责有两方面：</p>
+
+<ol>
+<li><strong>在配置更改后保留存储</strong>：存储必须在 Activity 重建后仍然存在。</li>
+<li><strong>在真正完成后清除存储</strong>：当所有者被销毁而未重建时，调用 <code>ViewModelStore.clear()</code>。</li>
+</ol>
+
+
+<p>对于 Activity 而言，这通常使用 <code>NonConfigurationInstances</code> 来实现，这是一种特殊的机制，允许对象在配置更改后仍然存在。Activity 框架在 <code>onRetainNonConfigurationInstance()</code> 期间保留这些对象，并在 <code>getLastNonConfigurationInstance()</code> 中恢复它们。</p>
+
+<h3>为什么简单的映射有效</h3>
+
+<p>你可能期望使用复杂的缓存机制，但简单的 <code>MutableMap</code> 就足够了，原因如下：</p>
+
+<ol>
+<li><strong>大小有限</strong>：每个屏幕上的 ViewModel 数量很少（通常为 1-5 个）。</li>
+<li><strong>字符串键</strong>：键由类名生成，使得查找复杂度为 O(1)，并且哈希分布良好。</li>
+<li><strong>无需驱逐</strong>：ViewModel 仅在显式请求或所有者被销毁时才会被清除。</li>
+<li><strong>线程安全</strong>：访问在 ViewModelProvider 级别同步。</li>
+</ol>
+
+
+<h2>ViewModelProvider：编排层</h2>
+
+<p><code>ViewModelProvider</code> 是获取 ViewModel 实例的主要 API。它负责编排 store、factory 和创建 extras 之间的交互：</p>
+
+<pre><code class="kotlin">public actual open class ViewModelProvider
+private constructor(private val impl: ViewModelProviderImpl) {
+
+    public constructor(
+        store: ViewModelStore,
+        factory: Factory,
+        defaultCreationExtras: CreationExtras = CreationExtras.Empty,
+    ) : this(ViewModelProviderImpl(store, factory, defaultCreationExtras))
+
+    public constructor(
+        owner: ViewModelStoreOwner
+    ) : this(
+        store = owner.viewModelStore,
+        factory = ViewModelProviders.getDefaultFactory(owner),
+        defaultCreationExtras = ViewModelProviders.getDefaultCreationExtras(owner),
+    )
+
+    @MainThread
+    public actual operator fun &lt;T : ViewModel&gt; get(modelClass: KClass&lt;T&gt;): T =
+        impl.getViewModel(modelClass)
+
+    @MainThread
+    public actual operator fun &lt;T : ViewModel&gt; get(key: String, modelClass: KClass&lt;T&gt;): T =
+        impl.getViewModel(modelClass, key)
+}
+</code></pre>
+
+<h3>多平台抽象</h3>
+
+<p>请注意 <code>ViewModelProviderImpl</code> 委托。ViewModel 库是一个 Kotlin 多平台库，支持 JVM、Android、iOS 和其他平台。Kotlin 多平台目前还不支持带有默认实现的 expect 类，因此通用逻辑被提取到内部实现类中：</p>
+
+<pre><code class="kotlin">internal class ViewModelProviderImpl(
+    private val store: ViewModelStore,
+    private val factory: ViewModelProvider.Factory,
+    private val defaultExtras: CreationExtras,
+) {
+
+    private val lock = SynchronizedObject()
+
+    @Suppress("UNCHECKED_CAST")
+    internal fun &lt;T : ViewModel&gt; getViewModel(
+        modelClass: KClass&lt;T&gt;,
+        key: String = ViewModelProviders.getDefaultKey(modelClass),
+    ): T {
+        return synchronized(lock) {
+            val viewModel = store[key]
+            if (modelClass.isInstance(viewModel)) {
+                if (factory is ViewModelProvider.OnRequeryFactory) {
+                    factory.onRequery(viewModel!!)
+                }
+                return@synchronized viewModel as T
+            }
+
+            val modelExtras = MutableCreationExtras(defaultExtras)
+            modelExtras[ViewModelProvider.VIEW_MODEL_KEY] = key
+
+            return@synchronized createViewModel(factory, modelClass, modelExtras).also { vm -&gt;
+                store.put(key, vm)
+            }
+        }
+    }
+}
+</code></pre>
+
+<h3>获取或创建模式</h3>
+
+<p><code>getViewModel</code> 方法实现了经典的获取或创建模式：</p>
+
+<ol>
+<li><strong>生成键</strong>：默认键基于类的规范名称。</li>
+<li><strong>检查缓存</strong>：通过键查找已存在的 ViewModel。</li>
+<li><strong>类型检查</strong>：验证缓存实例的类型是否正确。</li>
+<li><strong>返回缓存</strong>：如果有效，则返回缓存的实例。</li>
+<li><strong>创建新实例</strong>：如果未找到或类型错误，则通过工厂模式创建新实例。</li>
+<li><strong>存储</strong>：将新实例放入存储中。</li>
+</ol>
+
+
+<h3>使用同步访问确保线程安全</h3>
+
+<p><code>synchronized(lock)</code> 代码块确保线程安全访问。虽然 ViewModel 的访问通常来自主线程（如 <code>@MainThread</code> 所示），但同步机制可以防止后台线程访问 ViewModel 等极端情况，尤其是在测试场景或使用 <code>viewModelScope</code> 时。</p>
+
+<h3>OnRequeryFactory 回调</h3>
+
+<p><code>OnRequeryFactory</code> 是一种特殊的机制，用于在检索缓存的 ViewModel 时执行操作的工厂：</p>
+
+<pre><code class="kotlin">@RestrictTo(RestrictTo.Scope.LIBRARY_GROUP)
+public actual open class OnRequeryFactory {
+    public actual open fun onRequery(viewModel: ViewModel) {}
+}
+</code></pre>
+
+<p><code>SavedStateHandle</code> 内部使用此机制在配置更改后将 ViewModel 与当前的 SavedStateRegistry 重新连接。当从缓存中检索 ViewModel 时，会调用工厂的 <code>onRequery</code> 方法，从而更新可能已更改的引用。</p>
+
+<h3>从类名生成键</h3>
+
+<p>默认的键生成机制可防止意外冲突：</p>
+
+<pre><code class="kotlin">internal fun &lt;T : ViewModel&gt; getDefaultKey(modelClass: KClass&lt;T&gt;): String {
+    val canonicalName =
+        requireNotNull(modelClass.canonicalName) {
+            "Local and anonymous classes can not be ViewModels"
+        }
+    return "$VIEW_MODEL_PROVIDER_DEFAULT_KEY:$canonicalName"
+}
+</code></pre>
+
+<p>前缀 <code>"androidx.lifecycle.ViewModelProvider.DefaultKey:"</code> 可确保键不会与用户提供的自定义键冲突。规范名称要求也解释了为什么本地类和匿名类不能是 ViewModel，因为它们没有规范名称：</p>
+
+<pre><code class="kotlin">@Test
+fun localViewModel() {
+    class LocalViewModel : ViewModel()
+    try {
+        viewModelProvider[LocalViewModel::class]
+        fail("Expected `IllegalArgumentException`")
+    } catch (e: IllegalArgumentException) {
+        assertThat(e)
+            .hasMessageThat()
+            .contains("Local and anonymous classes can not be ViewModels")
+    }
+}
+</code></pre>
+
+<h2>工厂模式：灵活实例化</h2>
+
+<p><code>ViewModelProvider.Factory</code> 是创建 ViewModel 实例的机制：</p>
+
+<pre><code class="kotlin">public actual interface Factory {
+    public fun &lt;T : ViewModel&gt; create(modelClass: Class&lt;T&gt;): T =
+        ViewModelProviders.unsupportedCreateViewModel()
+
+    public fun &lt;T : ViewModel&gt; create(modelClass: Class&lt;T&gt;, extras: CreationExtras): T =
+        create(modelClass)
+
+    public actual fun &lt;T : ViewModel&gt; create(modelClass: KClass&lt;T&gt;, extras: CreationExtras): T =
+        create(modelClass.java, extras)
+}
+</code></pre>
+
+<h3>方法重载链</h3>
+
+<p>工厂接口有三个 <code>create</code> 方法变体，形成一个链：</p>
+
+<ol>
+<li><code>create(KClass&lt;T&gt;, CreationExtras)</code>：Kotlin 优先 API，委托给 Java 变体</li>
+<li><code>create(Class&lt;T&gt;, CreationExtras)</code>：主要实现点，默认为无附加组件的变体</li>
+<li><code>create(Class&lt;T&gt;)</code>：传统 API，默认抛出异常</li>
+</ol>
+
+
+<p>此链在保持向后兼容性的同时，也鼓励使用基于 <code>CreationExtras</code> 的现代方法。</p>
+
+<h3>NewInstanceFactory：基于反射的创建</h3>
+
+<p>最简单的工厂使用反射来创建带有无参构造函数的 ViewModel：</p>
+
+<pre><code class="kotlin">public open class NewInstanceFactory : Factory {
+    public override fun &lt;T : ViewModel&gt; create(modelClass: Class&lt;T&gt;): T =
+        JvmViewModelProviders.createViewModel(modelClass)
+}
+</code></pre>
+
+<p>JVM 实现使用反射并进行了细致的错误处理：</p>
+
+<pre><code class="kotlin">internal object JvmViewModelProviders {
+    fun &lt;T : ViewModel&gt; createViewModel(modelClass: Class&lt;T&gt;): T {
+        val constructor =
+            try {
+                modelClass.getDeclaredConstructor()
+            } catch (e: NoSuchMethodException) {
+                throw RuntimeException("Cannot create an instance of $modelClass", e)
+            }
+
+        // Enforce public constructor for consistent behavior
+        if (!Modifier.isPublic(constructor.modifiers)) {
+            throw RuntimeException("Cannot create an instance of $modelClass")
+        }
+
+        return try {
+            constructor.newInstance()
+        } catch (e: InstantiationException) {
+            throw RuntimeException("Cannot create an instance of $modelClass", e)
+        } catch (e: IllegalAccessException) {
+            throw RuntimeException("Cannot create an instance of $modelClass", e)
+        }
+    }
+}
+</code></pre>
+
+<p>公共修饰符检查对于测试一致性至关重要。在插桩测试中，R8 可能会移除访问修饰符，使私有构造函数可访问。JVM 测试严格执行访问限制。此显式检查可确保跨测试环境的行为一致性。</p>
+
+<h3>AndroidViewModelFactory：应用感知创建</h3>
+
+<p><code>AndroidViewModelFactory</code> 继承自 <code>NewInstanceFactory</code> 以支持 <code>AndroidViewModel</code>，后者需要一个 <code>Application</code> 参数。该工厂在保持向后兼容性的同时，也采用了现代的 <code>CreationExtras</code> 方法：</p>
+
+<pre><code class="kotlin">public open class AndroidViewModelFactory
+private constructor(
+    private val application: Application?,
+    @Suppress("UNUSED_PARAMETER") unused: Int,
+) : NewInstanceFactory() {
+
+    override fun &lt;T : ViewModel&gt; create(modelClass: Class&lt;T&gt;, extras: CreationExtras): T {
+        return if (application != null) {
+            create(modelClass)
+        } else {
+            val application = extras[APPLICATION_KEY]
+            if (application != null) {
+                create(modelClass, application)
+            } else {
+                if (AndroidViewModel::class.java.isAssignableFrom(modelClass)) {
+                    throw IllegalArgumentException(
+                        "CreationExtras must have an application by `APPLICATION_KEY`"
+                    )
+                }
+                super.create(modelClass)
+            }
+        }
+    }
+
+    private fun &lt;T : ViewModel&gt; create(modelClass: Class&lt;T&gt;, app: Application): T {
+        return if (AndroidViewModel::class.java.isAssignableFrom(modelClass)) {
+            try {
+                modelClass.getConstructor(Application::class.java).newInstance(app)
+            } catch (e: NoSuchMethodException) {
+                throw RuntimeException("Cannot create an instance of $modelClass", e)
+            }
+        } else super.create(modelClass)
+    }
+}
+</code></pre>
+
+<p>该工厂实现了级联解析策略：首先检查是否将 <code>Application</code> 传递给了构造函数（传统方法），然后通过 <code>APPLICATION_KEY</code> 在 <code>CreationExtras</code> 中查找（现代无状态方法），最后对于常规 ViewModel 回退到 <code>NewInstanceFactory</code>，或者如果 <code>AndroidViewModel</code> 没有可用的 <code>Application</code>，则抛出异常。</p>
+
+<p>私有构造函数中的 <code>unused: Int</code> 参数是一个巧妙的技巧，用于区分重载构造函数，因为如果使用 <code>null</code> 调用 <code>constructor()</code>，编译器将无法区分 <code>constructor(application: Application?)</code>。</p>
+
+<p>实例化使用了反射（<code>modelClass.getConstructor(Application::class.java).newInstance(app)</code>），这意味着你的 <code>AndroidViewModel</code> 子类必须有一个接受且仅接受一个 <code>Application</code> 参数的构造函数。对于其他依赖项，你需要自定义工厂或依赖注入框架，例如 Hilt。</p>
+
+<h3>InitializerViewModelFactory：基于 Lambda 的创建</h3>
+
+<p>对于具有自定义依赖项的 ViewModel，<code>InitializerViewModelFactory</code> 提供了一种基于 DSL 的方法，可以减少样板代码：</p>
+
+<pre><code class="kotlin">val factory = viewModelFactory {
+    initializer { MyViewModel(get(MY_KEY)) }
+    initializer { AnotherViewModel(get(ANOTHER_KEY)) }
+}
+</code></pre>
+
+<p>该 DSL 由一个构建器类驱动，该构建器类收集初始化 Lambda 表达式，其中每个初始化器将一个 <code>KClass</code> 与其创建 Lambda 表达式配对：</p>
+
+<pre><code class="kotlin">@ViewModelFactoryDsl
+public class InitializerViewModelFactoryBuilder public constructor() {
+
+    private val initializers = mutableMapOf&lt;KClass&lt;*&gt;, ViewModelInitializer&lt;*&gt;&gt;()
+
+    public fun &lt;T : ViewModel&gt; addInitializer(
+        clazz: KClass&lt;T&gt;,
+        initializer: CreationExtras.() -&gt; T,
+    ) {
+        require(clazz !in initializers) {
+            "A `initializer` with the same `clazz` has already been added: ${clazz.canonicalName}."
+        }
+        initializers[clazz] = ViewModelInitializer(clazz, initializer)
+    }
+
+    public fun build(): ViewModelProvider.Factory =
+        ViewModelProviders.createInitializerFactory(initializers.values)
+}
+</code></pre>
+
+<p><code>@ViewModelFactoryDsl</code> 注解是一个 DSL 标记，可防止嵌套的构建器作用域意外访问外部作用域的方法。初始化 Lambda 表达式接收 <code>CreationExtras</code> 作为其接收器，允许通过 <code>get()</code> 直接访问额外内容。</p>
+
+<p>在创建时，工厂会通过初始化器进行线性搜索，以找到匹配的类：</p>
+
+<pre><code class="kotlin">internal fun &lt;VM : ViewModel&gt; createViewModelFromInitializers(
+    modelClass: KClass&lt;VM&gt;,
+    extras: CreationExtras,
+    vararg initializers: ViewModelInitializer&lt;*&gt;,
+): VM {
+    val viewModel =
+        initializers.firstOrNull { it.clazz == modelClass }?.initializer?.invoke(extras) as VM?
+    return requireNotNull(viewModel) {
+        "No initializer set for given class ${modelClass.canonicalName}"
+    }
+}
+</code></pre>
+
+<p>线性搜索是可以接受的，因为每个工厂创建的 ViewModel 数量通常很少（1-5 个），而且 ViewModel 的创建频率很低（每个生命周期一次）。</p>
+
+<h2>CreationExtras：无状态工厂配置</h2>
+
+<p><code>CreationExtras</code> 是一个类型安全的键值容器，用于在不使工厂成为有状态的情况下向其传递配置。工厂不再通过构造函数注入来持有依赖项，而是在创建时传递依赖项：</p>
+
+<pre><code class="kotlin">public abstract class CreationExtras internal constructor() {
+    internal val extras: MutableMap&lt;Key&lt;*&gt;, Any?&gt; = mutableMapOf()
+
+    public interface Key&lt;T&gt;
+
+    public abstract operator fun &lt;T&gt; get(key: Key&lt;T&gt;): T?
+
+    public object Empty : CreationExtras() {
+        override fun &lt;T&gt; get(key: Key&lt;T&gt;): T? = null
+    }
+}
+</code></pre>
+
+<h3>类型安全的键</h3>
+
+<p>每个键都由其关联的值类型参数化，从而提供编译时类型安全。当你使用 <code>extras[APPLICATION_KEY]</code> 获取值时，返回类型会自动为 <code>Application?</code>：</p>
+
+<pre><code class="kotlin">val APPLICATION_KEY: Key&lt;Application&gt; = CreationExtras.Companion.Key()
+val VIEW_MODEL_KEY: Key&lt;String&gt; = CreationExtras.Companion.Key()
+</code></pre>
+
+<p>键的创建使用了一个内联函数，该函数创建一个实现 <code>Key</code> 接口的新匿名对象。由于每个键都是一个唯一的对象实例，因此键之间通过标识（<code>===</code>）进行比较，即使两个键具有相同的类型参数，也不会发生意外冲突：</p>
+
+<pre><code class="kotlin">@JvmStatic
+public inline fun &lt;reified T&gt; Key(): Key&lt;T&gt; = object : Key&lt;T&gt; {}
+</code></pre>
+
+<h3>用于修改的 MutableCreationExtras</h3>
+
+<p>基类 <code>CreationExtras</code> 是只读的，而 <code>MutableCreationExtras</code> 允许添加条目。这种分离遵循 Kotlin 的集合设计理念（例如 <code>List</code> 与 <code>MutableList</code>），防止工厂意外修改共享的 extras：</p>
+
+<pre><code class="kotlin">public class MutableCreationExtras
+public constructor(initialExtras: CreationExtras = Empty) : CreationExtras() {
+
+    init {
+        extras += initialExtras.extras
+    }
+
+    public operator fun &lt;T&gt; set(key: Key&lt;T&gt;, t: T) {
+        extras[key] = t
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    public override fun &lt;T&gt; get(key: Key&lt;T&gt;): T? = extras[key] as T?
+}
+</code></pre>
+
+<h3>与 ViewModelProvider 集成</h3>
+
+<p><code>ViewModelProvider</code> 会在调用工厂之前自动将 ViewModel 的键添加到 extras 中，这对于像 <code>SavedStateHandle</code> 这样需要键来正确限定持久化范围的功能至关重要：</p>
+
+<pre><code class="kotlin">val modelExtras = MutableCreationExtras(defaultExtras)
+modelExtras[ViewModelProvider.VIEW_MODEL_KEY] = key
+
+return@synchronized createViewModel(factory, modelClass, modelExtras)
+</code></pre>
+
+<h3>HasDefaultViewModelProviderFactory</h3>
+
+<p><code>ViewModelStoreOwner</code> 的实现可以通过 <code>HasDefaultViewModelProviderFactory</code> 接口提供默认的工厂和 extras。 <code>ComponentActivity</code> 和 <code>Fragment</code> 都实现了此接口，并提供了支持 <code>SavedStateHandle</code> 且预先填充了 <code>APPLICATION_KEY</code> 的工厂：</p>
+
+<pre><code class="kotlin">public interface HasDefaultViewModelProviderFactory {
+    public val defaultViewModelProviderFactory: ViewModelProvider.Factory
+
+    public val defaultViewModelCreationExtras: CreationExtras
+        get() = CreationExtras.Empty
+}
+</code></pre>
+
+<p><code>ComponentActivity</code> 和 <code>Fragment</code> 都实现了此接口，并提供了支持 <code>SavedStateHandle</code> 和正确的 <code>CreationExtras</code> 且预先填充了 <code>APPLICATION_KEY</code> 的工厂。</p>
+
+<p>从 <code>ViewModelStoreOwner</code> 创建 <code>ViewModelProvider</code> 时，会自动使用以下默认值：</p>
+
+<pre><code class="kotlin">internal fun getDefaultFactory(owner: ViewModelStoreOwner): ViewModelProvider.Factory =
+    if (owner is HasDefaultViewModelProviderFactory) {
+        owner.defaultViewModelProviderFactory
+    } else {
+        DefaultViewModelProviderFactory
+    }
+
+internal fun getDefaultCreationExtras(owner: ViewModelStoreOwner): CreationExtras =
+    if (owner is HasDefaultViewModelProviderFactory) {
+        owner.defaultViewModelCreationExtras
+    } else {
+        CreationExtras.Empty
+    }
+</code></pre>
+
+<p>这种模式支持渐进增强：简单的 ViewModel 使用默认工厂，而复杂的 ViewModel 可以通过 extras 获取丰富的配置，而无需更改获取 ViewModelProvider 的方式。</p>
+
+<h2>ViewModel 类：资源管理</h2>
+
+<p><code>ViewModel</code> 类通过 <code>AutoCloseable</code> 模式管理资源生命周期。<code>expect</code> 关键字表明这是一个 Kotlin 多平台声明，每个平台都提供自己的 <code>actual</code> 实现：</p>
+
+<pre><code class="kotlin">public expect abstract class ViewModel {
+    public constructor()
+    public constructor(viewModelScope: CoroutineScope)
+    public constructor(vararg closeables: AutoCloseable)
+    public constructor(viewModelScope: CoroutineScope, vararg closeables: AutoCloseable)
+
+    protected open fun onCleared()
+
+    @MainThread internal fun clear()
+
+    public fun addCloseable(key: String, closeable: AutoCloseable)
+    public open fun addCloseable(closeable: AutoCloseable)
+    public fun &lt;T : AutoCloseable&gt; getCloseable(key: String): T?
+}
+</code></pre>
+
+<h3>ViewModelImpl 内部实现</h3>
+
+<p>实际实现委托给 <code>ViewModelImpl</code>，遵循多平台模式，将通用逻辑提取到内部类中。<code>isCleared</code> 上的 <code>@Volatile</code> 注解确保跨线程可见，这对于清除后的保护机制至关重要：</p>
+
+<pre><code class="kotlin">internal class ViewModelImpl {
+    private val lock = SynchronizedObject()
+    private val keyToCloseables = mutableMapOf&lt;String, AutoCloseable&gt;()
+    private val closeables = mutableSetOf&lt;AutoCloseable&gt;()
+
+    @Volatile private var isCleared = false
+
+    constructor()
+
+    constructor(viewModelScope: CoroutineScope) {
+        addCloseable(VIEW_MODEL_SCOPE_KEY, viewModelScope.asCloseable())
+    }
+
+    constructor(vararg closeables: AutoCloseable) {
+        this.closeables += closeables
+    }
+
+    constructor(viewModelScope: CoroutineScope, vararg closeables: AutoCloseable) {
+        addCloseable(VIEW_MODEL_SCOPE_KEY, viewModelScope.asCloseable())
+        this.closeables += closeables
+    }
+}
+</code></pre>
+
+<h3>两层可关闭存储</h3>
+
+<p>该实现维护两个集合：<code>keyToCloseables</code> 用于注册后需要检索的资源（例如 <code>viewModelScope</code>），以及 <code>closeables</code> 用于即用即弃的清理。使用 <code>Set</code> 来管理匿名可关闭资源可以防止重复注册导致双重关闭。</p>
+
+<h3>清除顺序</h3>
+
+<p>当 ViewModel 被清除时，资源会按照特定的顺序进行清理。<code>isCleared = true</code> 标志会在同步代码块之前设置，以防止并发的 <code>addCloseable</code> 调用添加会被遗漏的资源：</p>
+
+<pre><code class="kotlin">@MainThread
+fun clear() {
+    if (isCleared) return
+
+    isCleared = true
+    synchronized(lock) {
+        for (closeable in keyToCloseables.values) {
+            closeWithRuntimeException(closeable)
+        }
+        for (closeable in closeables) {
+            closeWithRuntimeException(closeable)
+        }
+        // Clear only resources without keys to prevent accidental recreation
+        closeables.clear()
+    }
+}
+</code></pre>
+
+<p>匿名 <code>closeables</code> 集合会被清除，但 <code>keyToCloseables</code> 会被有意保留。这可以防止在清除后代码访问 <code>viewModelScope</code> 等资源时意外地重新创建它们。</p>
+
+<h3>清除后保护</h3>
+
+<p>在清除 ViewModel 后添加可关闭对象会立即将其关闭，从而防止在协程仍在运行时 ViewModel 被清除时出现资源泄漏：</p>
+
+<pre><code class="kotlin">fun addCloseable(key: String, closeable: AutoCloseable) {
+    if (isCleared) {
+        closeWithRuntimeException(closeable)
+        return
+    }
+
+    val oldCloseable = synchronized(lock) { keyToCloseables.put(key, closeable) }
+    closeWithRuntimeException(oldCloseable)
+}
+</code></pre>
+
+<p>此外，请注意，添加键值可关闭对象时，任何具有相同键值的现有可关闭对象都会自动关闭，从而支持替换模式。</p>
+
+<h3>用于模拟的可空实现</h3>
+
+<p>JVM 实现提供了一个可空的 <code>impl</code> 对象，以支持模拟框架。当你模拟 ViewModel 时，模拟对象不会调用真正的构造函数，因此 <code>impl</code> 对象永远不会被初始化。如果没有可空类型和安全调用（<code>impl?.clear()</code>），测试会因 <code>NullPointerException</code> 而崩溃：</p>
+
+<pre><code class="kotlin">public actual abstract class ViewModel {
+    private val impl: ViewModelImpl?
+
+    public actual constructor() {
+        impl = ViewModelImpl()
+    }
+
+    @MainThread
+    internal actual fun clear() {
+        impl?.clear()
+        onCleared()
+    }
+}
+</code></pre>
+
+<h2>viewModelScope：协程集成</h2>
+
+<p><code>viewModelScope</code> 扩展属性提供了一个生命周期感知的 <code>CoroutineScope</code>，当 ViewModel 被清除时，该作用域会自动取消：</p>
+
+<pre><code class="kotlin">public val ViewModel.viewModelScope: CoroutineScope
+    get() =
+        synchronized(VIEW_MODEL_SCOPE_LOCK) {
+            getCloseable(VIEW_MODEL_SCOPE_KEY)
+                ?: createViewModelScope().also { scope -&gt;
+                    addCloseable(VIEW_MODEL_SCOPE_KEY, scope)
+                }
+        }
+</code></pre>
+
+<h3>使用键控存储的延迟创建</h3>
+
+<p>作用域在首次访问时延迟创建，并使用键控可关闭机制进行存储。键名故意设置得非常详细，以避免与用户自定义的键发生冲突：</p>
+
+<pre><code class="kotlin">internal const val VIEW_MODEL_SCOPE_KEY =
+    "androidx.lifecycle.viewmodel.internal.ViewModelCoroutineScope.JOB_KEY"
+</code></pre>
+
+<h3>CloseableCoroutineScope</h3>
+
+<p>协程和可关闭系统之间的桥梁是 <code>CloseableCoroutineScope</code>，它同时实现了 <code>CoroutineScope</code> 和 <code>AutoCloseable</code> 接口。在 ViewModel 清空期间调用 <code>close()</code> 时，所有正在运行的协程都会被取消：</p>
+
+<pre><code class="kotlin">internal class CloseableCoroutineScope(override val coroutineContext: CoroutineContext) :
+    AutoCloseable, CoroutineScope {
+
+    constructor(coroutineScope: CoroutineScope) : this(coroutineScope.coroutineContext)
+
+    override fun close() = coroutineContext.cancel()
+}
+</code></pre>
+
+<h3>平台感知调度器选择</h3>
+
+<p>作为 Kotlin 多平台库，ViewModel 在没有主线程概念的平台上也能工作，因为它会回退到 <code>EmptyCoroutineContext</code>。请注意，这里使用的是 <code>Dispatchers.Main.immediate</code> 而不是 <code>Dispatchers.Main</code>，这样可以避免在已经在主线程上运行时进行不必要的重新调度：</p>
+
+<pre><code class="kotlin">internal fun createViewModelScope(): CloseableCoroutineScope {
+    val dispatcher =
+        try {
+            Dispatchers.Main.immediate
+        } catch (_: NotImplementedError) {
+            // In Native environments where `Dispatchers.Main` might not exist (e.g., Linux)
+            EmptyCoroutineContext
+        } catch (_: IllegalStateException) {
+            // In JVM Desktop environments where `Dispatchers.Main` might not exist (e.g., Swing)
+            EmptyCoroutineContext
+        }
+    return CloseableCoroutineScope(coroutineContext = dispatcher + SupervisorJob())
+}
+</code></pre>
+
+<h3>SupervisorJob 实现子协程独立失败</h3>
+
+<p>该作用域使用 <code>SupervisorJob()</code>，允许子协程独立失败。而使用普通的 <code>Job</code> 时，如果一个子协程失败，它会取消所有同级协程。这种设计符合 UI 应用程序的预期，即失败的网络请求不应该取消正在进行的数据库操作。</p>
+
+<h2>ViewModelLazy：Kotlin 属性委托</h2>
+
+<p><code>viewModels()</code> 委托使用了 <code>ViewModelLazy</code>：</p>
+
+<pre><code class="kotlin">public class ViewModelLazy&lt;VM : ViewModel&gt;
+@JvmOverloads
+constructor(
+    private val viewModelClass: KClass&lt;VM&gt;,
+    private val storeProducer: () -&gt; ViewModelStore,
+    private val factoryProducer: () -&gt; ViewModelProvider.Factory,
+    private val extrasProducer: () -&gt; CreationExtras = { CreationExtras.Empty },
+) : Lazy&lt;VM&gt; {
+    private var cached: VM? = null
+
+    override val value: VM
+        get() {
+            val viewModel = cached
+            return if (viewModel == null) {
+                val store = storeProducer()
+                val factory = factoryProducer()
+                val extras = extrasProducer()
+                ViewModelProvider.create(store, factory, extras).get(viewModelClass).also {
+                    cached = it
+                }
+            } else {
+                viewModel
+            }
+        }
+
+    override fun isInitialized(): Boolean = cached != null
+}
+</code></pre>
+
+<h3>双重缓存架构</h3>
+
+<p>惰性委托会在首次访问后将 ViewModel 引用缓存到本地。这是一种双重缓存模式：</p>
+
+<ol>
+<li><strong>ViewModelStore 缓存</strong>：规范缓存，不受配置更改的影响。</li>
+<li><strong>ViewModelLazy 缓存</strong>：本地缓存，用于避免重复创建 ViewModelProvider。</li>
+</ol>
+
+
+<p>本地缓存是一种优化，创建 <code>ViewModelProvider</code> 并查找 ViewModel 的开销很小，但缓存可以避免后续访问中哪怕是这种微小的开销。</p>
+
+<h3>用于延迟访问的 Lambda 生产者</h3>
+
+<p>所有三个生产者（store、factory、extras）都是 Lambda 表达式，允许延迟求值：</p>
+
+<pre><code class="kotlin">private val viewModel by viewModels { MyViewModelFactory() }
+// Factory is only created when viewModel is first accessed
+</code></pre>
+
+<p>这对于 Fragment 尤其重要，因为在属性初始化期间 Activity 可能不可用。</p>
+
+<h2>Android 特有：AGP 代码脱糖兼容性</h2>
+
+<p>Android 有一个特殊的兼容层，用于处理混合使用针对不同 ViewModel 版本编译的库时出现的 AGP（Android Gradle 插件）代码脱糖问题：</p>
+
+<pre><code class="kotlin">internal actual fun &lt;VM : ViewModel&gt; createViewModel(
+    factory: ViewModelProvider.Factory,
+    modelClass: KClass&lt;VM&gt;,
+    extras: CreationExtras,
+): VM {
+    return try {
+        factory.create(modelClass, extras)
+    } catch (e: AbstractMethodError) {
+        try {
+            factory.create(modelClass.java, extras)
+        } catch (e: AbstractMethodError) {
+            factory.create(modelClass.java)
+        }
+    }
+}
+</code></pre>
+
+<p>这一系列 try-catch 代码块用于处理使用旧版本 ViewModel 编译的工厂缺少较新版本的 <code>create</code> 方法的情况。当运行时调用编译后的字节码中不存在的方法时，就会出现 <code>AbstractMethodError</code> 错误，这种情况通常发生在旧工厂只有 <code>create(Class&lt;T&gt;)</code> 方法，而运行时需要 <code>create(Class&lt;T&gt;, CreationExtras)</code> 方法时。这种防御性级联机制能够优雅地降级到方法变体，确保 ViewModel 创建功能不受库版本不匹配的影响。</p>
+
+<h2>性能特性和设计权衡</h2>
+
+<p>ViewModel 系统在设计上做出了一些权衡，以平衡正确性、灵活性和性能。</p>
+
+<h3>同步开销</h3>
+
+<p><code>ViewModelProviderImpl</code> 和 <code>ViewModelImpl</code> 都使用同步块来实现线程安全访问：</p>
+
+<pre><code class="kotlin">synchronized(lock) {
+    val viewModel = store[key]
+    // ...
+}
+</code></pre>
+
+<p>由于 ViewModel 访问通常发生在主线程上，临界区很短（简单的 map 操作），并且锁争用很少发生，因此这种同步开销非常小。该设计优先考虑正确性而非微优化，因为罕见的竞态条件代价远高于几乎察觉不到的同步开销。</p>
+
+<h3>反射开销</h3>
+
+<p><code>NewInstanceFactory</code> 使用 Java 反射来动态实例化 ViewModel 类：</p>
+
+<pre><code class="kotlin">modelClass.getDeclaredConstructor().newInstance()
+</code></pre>
+
+<p>由于运行时类型检查和动态方法解析，反射比直接构造函数调用要慢。但是，这种开销可以忽略不计，因为 ViewModel 的创建频率很低（每个生命周期一次），而且无需编译时信息即可实例化任何 ViewModel 子类的灵活性远远超过了这点微小的开销。</p>
+
+<h3>基于映射的存储</h3>
+
+<p>使用 <code>MutableMap</code> 作为 ViewModelStore 可以提供 O(1) 的查找时间，但清除操作的时间复杂度为 O(n)，因为每个 ViewModel 都必须单独清除：</p>
+
+<pre><code class="kotlin">public fun clear() {
+    for (vm in map.values) {
+        vm.clear()
+    }
+    map.clear()
+}
+</code></pre>
+
+<p>由于 ViewModelStore 通常只包含 1-5 个 ViewModel，因此线性时间的清除操作实际上并无影响。使用标准 HashMap 的简洁性使得代码更易于理解和维护，对于这种有限的用例而言，其价值远大于理论上的优化。</p>
+
+<h3>用于模拟的可空实现</h3>
+
+<p>JVM ViewModel 中的可空 <code>impl</code> 会在每个操作中添加空值检查：</p>
+
+<pre><code class="kotlin">impl?.clear()
+</code></pre>
+
+<p>这种微小的开销可以实现正确的模拟行为。当模拟框架创建 ViewModel 模拟对象时，它们会绕过真正的构造函数，导致 <code>impl</code> 未初始化。可空类型可以防止测试中出现 <code>NullPointerException</code>，这是一个值得的权衡。</p>
+
+<h2>实际应用模式：理解 ViewModel 的使用</h2>
+
+<p>理解其内部机制有助于你在实际应用中识别模式和反模式。</p>
+
+<h3>模式 1：作用域 ViewModel 共享</h3>
+
+<p>可以使用 Activity 的 ViewModelStore 而不是每个 Fragment 自己的存储来在 Fragment 之间共享 ViewModel：</p>
+
+<pre><code class="kotlin">class FragmentA : Fragment() {
+    private val sharedViewModel: SharedViewModel by activityViewModels()
+}
+
+class FragmentB : Fragment() {
+    private val sharedViewModel: SharedViewModel by activityViewModels()
+}
+</code></pre>
+
+<p>两个 Fragment 会获得相同的 ViewModel 实例，因为它们使用相同的 ViewModelStore（Activity 的）。这使得兄弟 Fragment 可以通过共享状态进行通信。内部机制：</p>
+
+<pre><code class="kotlin">// activityViewModels() uses:
+ViewModelProvider(
+    store = requireActivity().viewModelStore,  // Same store for both fragments
+    factory = ...,
+)
+</code></pre>
+
+<h3>模式 2：自定义键用于多个实例</h3>
+
+<p>你可以通过提供自定义键来拥有同一个 ViewModel 类的多个实例：</p>
+
+<pre><code class="kotlin">val viewModel1: MyViewModel = viewModelProvider["user_1", MyViewModel::class]
+val viewModel2: MyViewModel = viewModelProvider["user_2", MyViewModel::class]
+</code></pre>
+
+<p>该键包含自定义字符串，从而在 ViewModelStore 中创建单独的缓存条目。这对于同时管理多个用户配置文件或聊天对话等场景非常有用。</p>
+
+<h3>模式 3：使用 CreationExtras 进行工厂注入</h3>
+
+<p>现代工厂是无状态的，在创建时通过 CreationExtras 接收所有依赖项：</p>
+
+<pre><code class="kotlin">class MyViewModelFactory : ViewModelProvider.Factory {
+    override fun &lt;T : ViewModel&gt; create(modelClass: KClass&lt;T&gt;, extras: CreationExtras): T {
+        val repository = extras[REPOSITORY_KEY]!!
+        val userId = extras[USER_ID_KEY]!!
+        return MyViewModel(repository, userId) as T
+    }
+}
+</code></pre>
+
+<p>这使得工厂可以作为单例，同时每次调用配置都不同，从而避免为每个具有不同依赖项的 ViewModel 创建新的工厂实例。</p>
+
+<h3>反模式：在 ViewModel 中访问 Context</h3>
+
+<pre><code class="kotlin">// Bad: Leaks Activity context
+class MyViewModel(private val context: Context) : ViewModel()
+
+// Good: Use Application context via AndroidViewModel
+class MyViewModel(application: Application) : AndroidViewModel(application)
+
+// Better: Don't hold Context at all, pass it to methods
+class MyViewModel : ViewModel() {
+    fun loadData(context: Context) { ... }
+}
+</code></pre>
+
+<p>第一种方法可能会导致 Activity 泄漏，因为 ViewModel 在持有已销毁 Activity 的引用时，配置更改仍然存在。请使用 <code>AndroidViewModel</code> 来获取 Application 上下文，或者在需要时将 Context 传递给各个方法。</p>
+
+<h3>反模式：在 onCleared 中阻塞</h3>
+
+<p>你知道 <code>onCleared()</code> 是在主线程上调用的吗？诸如网络关闭或数据库清理之类的阻塞操作应该使用协程的 <code>addCloseable</code> 方法卸载到后台线程：</p>
+
+<pre><code class="kotlin">// Bad: Blocking call in onCleared
+override fun onCleared() {
+    networkClient.shutdown()  // May block the main thread until completing the shutdown process!
+}
+
+// Good: Use addCloseable for managed cleanup
+init {
+    addCloseable {
+        scope.launch { networkClient.shutdown() }
+    }
+}
+</code></pre>
+
+<h2>结论</h2>
+
+<p>Jetpack ViewModel 的内部机制展现了一个精心设计的生命周期感知状态管理系统。ViewModelStore 通过保留映射提供简单而有效的缓存，而 ViewModelProvider 则通过线程安全的访问和灵活的工厂支持来协调创建过程。CreationExtras 通过外部化配置来实现无状态工厂，而 AutoCloseable 集成则确保了资源的正确清理。</p>
+
+<p>多平台架构将通用逻辑提取到内部实现类中，使该库能够支持 JVM、Android、iOS 和其他平台。viewModelScope 集成通过 closeable 机制提供自动协程取消功能，并为没有主线程的环境提供平台感知的调度器选择。</p>
+
+<p>如果你想掌握最新的技能、新闻、技术文章、面试题和实用代码技巧，请查看<a href="https://github.com/doveletter/">Dove Letter</a>。想要更深入地了解面试准备，千万不要错过终极 Android 面试指南：<a href="https://www.android.skydoves.me/">Manifest Android Interview</a>。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[使用CameraX 1.5进行高速拍摄和慢动作视频拍摄]]></title>
@@ -1391,185 +2315,6 @@ adb shell am kill com.yourpackage.name
 <li><a href="https://square.github.io/leakcanary/">https://square.github.io/leakcanary/</a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[选择Retrofit还是Ktor：给Android开发者的指南]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/02/26/retrofit-vs-ktor/"/>
-    <updated>2025-02-26T14:50:55+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/02/26/retrofit-vs-ktor</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/when-to-use-retrofit-and-when-to-use-ktor-a-guide-for-android-developers-918491dcf69a">When to Use Retrofit and When to Use Ktor: A Guide for Android Developers</a></p></blockquote>
-
-<p>作为 Android 开发人员，为你的项目选择正确的 HTTP 客户端是一项关键的决定。当今最受欢迎的两个选项莫过于 Retrofit 和 Ktor。虽然Retrofit 多年来一直是事实上的标准，但 Ktor 因其现代架构和灵活性而势头强劲。</p>
-
-<p><a href=""><img src="https://robotqa.com/blog/wp-content/uploads/2024/06/202406120818248.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在本文中，我们将探讨你应该选择 Retrofit 或 Ktor 的场景，以及它们的优势如何满足你的应用要求。</p>
-
-<h2>了解基础知识</h2>
-
-<p>先来了解一下基础知识：</p>
-
-<h3>Retrofit</h3>
-
-<p>Retrofit 是 Square 开发的适用于 Android 和 Java 的类型安全 HTTP 客户端。它将 API 调用抽象为声明式接口，并使用 Gson 或 Moshi 等库无缝地将 JSON 解析为 Java/Kotlin 对象。</p>
-
-<h3>Ktor</h3>
-
-<p>Ktor 由 JetBrains 开发，是一款基于 Kotlin 的异步框架，用于构建联网应用程序。它不仅仅是一个 HTTP 客户端，而是一个多用途框架，让你能够使用同一个库构建后端服务并发出网络请求。</p>
-
-<h2>何时使用 Retrofit？</h2>
-
-<h3>1. 你需要简单和可读性</h3>
-
-<p>如果你更喜欢使用预定义接口以直观的方式进行 API 调用，Retrofit 是一个绝佳的选择。</p>
-
-<p>例子：</p>
-
-<pre><code class="Kotlin">interface ApiService {
-    @GET("posts")
-    suspend fun getPosts(): List&lt;Post&gt;
-}
-</code></pre>
-
-<p>使用 Retrofit，你可以预先定义 API 结构并专注于业务逻辑。</p>
-
-<h3>2. 你的团队已经熟悉 Retrofit</h3>
-
-<p>如果你的团队已有使用 Retrofit 的经验，那么坚持使用它可以降低学习曲线并加速开发。</p>
-
-<h3>3. 你需要开箱即用的功能</h3>
-
-<p>Retrofit 提供强大的功能，例如：</p>
-
-<ul>
-<li>自动解析 JSON 响应。</li>
-<li>内置对 OkHttp 拦截器的支持。</li>
-<li>轻松实现重试、缓存和日志记录。</li>
-</ul>
-
-
-<h3>4. 你在多语言环境中工作</h3>
-
-<p>Retrofit 非常适合涉及 Java 和 Kotlin 的项目，因此它对于遗留代码库来说是一个绝佳的选择。</p>
-
-<h3>5.你需要一个庞大的社区和资源</h3>
-
-<p>Retrofit 的成熟意味着丰富的文档、教程和社区支持，这使其成为许多团队更安全的选择。</p>
-
-<h2>何时使用 Ktor？</h2>
-
-<h3>1. 你需要高度可定制性</h3>
-
-<p>Ktor 允许你构建 HTTP 客户端，并对请求构建、日志记录和自定义管道进行细粒度的控制。</p>
-
-<p>例子：</p>
-
-<pre><code class="Kotlin">val client = HttpClient {
-    install(JsonFeature) {
-        serializer = KotlinxSerializer()
-    }
-}
-</code></pre>
-
-<h3>2. 你想利用 Kotlin Multiplatform</h3>
-
-<p>Ktor 的多平台支持是其突出的功能之一。如果你正在为 Android、iOS 和其他平台构建应用程序，Ktor 可确保你在所有平台上使用相同的网络逻辑。</p>
-
-<h3>3. 你正在构建轻量级或模块化应用程序</h3>
-
-<p>Ktor 的模块化设计使其成为轻量级应用程序或网络堆栈需要精简和集中的项目的理想选择。</p>
-
-<h3>4.你需要异步通信</h3>
-
-<p>Ktor 原生使用协程，这使得处理并发比传统的基于回调的方法更简单、更高效。</p>
-
-<h3>5. 你需要统一的后端和前端代码</h3>
-
-<p>借助 Ktor，你可以使用相同的框架构建服务器端 API 和移动应用程序，从而简化开发并确保一致性。</p>
-
-<h2>你应该选择哪一个？</h2>
-
-<p>用一张表格来总结一下两者各自的特点：</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:center;"> 特点 </th>
-<th style="text-align:center;"> Retrofit </th>
-<th style="text-align:center;"> Ktor </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:center;"> 易于使用 </td>
-<td style="text-align:center;"> 高 </td>
-<td style="text-align:center;"> 中等 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> Kotlin-first 设计 </td>
-<td style="text-align:center;"> 否 </td>
-<td style="text-align:center;"> 是 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 跨平台支持 </td>
-<td style="text-align:center;"> 否 </td>
-<td style="text-align:center;"> 是 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 可定制性 </td>
-<td style="text-align:center;"> 中等 </td>
-<td style="text-align:center;"> 高 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 学习曲线 </td>
-<td style="text-align:center;"> 低 </td>
-<td style="text-align:center;"> 中等 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 社区支持 </td>
-<td style="text-align:center;"> 规模很大 </td>
-<td style="text-align:center;"> 快速发展 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 与协程集成 </td>
-<td style="text-align:center;"> 通过添加suspend </td>
-<td style="text-align:center;"> 是（集成了原生协程） </td>
-</tr>
-<tr>
-<td style="text-align:center;"> 后端能力 </td>
-<td style="text-align:center;"> 否 </td>
-<td style="text-align:center;"> 是 </td>
-</tr>
-</tbody>
-</table>
-
-
-<h3>如果符合以下情况则选择 Retrofit：</h3>
-
-<ul>
-<li>你正在开发一个 Kotlin 或 Java 项目，其中简单性和快速开发是首要任务。</li>
-<li>你的项目依赖于久经考验的工具和广泛的社区支持。</li>
-<li>你需要对 REST API 进行最低限度的配置。</li>
-</ul>
-
-
-<h3>以下情况请选择 Ktor：</h3>
-
-<ul>
-<li>你正在构建一个 Kotlin Multiplatform 项目。</li>
-<li>你需要一个现代、灵活的网络堆栈。</li>
-<li>你需要同时支持前端和后端开发。</li>
-</ul>
-
-
-<h2>结论</h2>
-
-<p>在 Retrofit 和 Ktor 之间进行选择取决于你的项目需求和你的团队对这些工具的熟悉程度。Retrofit 是传统 Android 项目的可靠选择，而 Ktor 则在现代 Kotlin 优先和多平台应用程序中表现出色。了解这些差异将有助于你为下一个 Android 应用做出正确的选择。</p>
 ]]></content>
   </entry>
   
