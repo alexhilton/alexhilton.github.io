@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-12-31T11:30:07+00:00</updated>
+  <updated>2026-01-03T12:44:18+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,162 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[务实的模块化：连接模块(wiring Modules)的妙用]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/01/03/pragmatic-modularization/"/>
+    <updated>2026-01-03T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/01/03/pragmatic-modularization</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Pragmatic Modularization: The Case for Wiring Modules」，原文链接<a href="https://proandroiddev.com/pragmatic-modularization-the-case-for-wiring-modules-c936d3af3611">https://proandroiddev.com/pragmatic-modularization-the-case-for-wiring-modules-c936d3af3611</a>，由Alex Krafts发布于2025年11月22日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/0*9waVavO74e0cqQg6" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>如果你正在经历漫长的模块化之旅，你应该已经阅读过官方的<a href="https://developer.android.com/topic/modularization">Google 开发者指南</a>。你可能已经见过关于提供依赖项的这种具体建议：</p>
+
+<blockquote><p>“……app 模块通常是添加依赖项的好地方。要提供实现，请将其指定为所选构建变体或测试源集的依赖项。”</p></blockquote>
+
+<p>下图展示了这种模式的一个常见示例，其中 <code>:app</code> 模块使用 <code>:database:impl:room</code> 作为其 <code>main</code> 源集，并使用 <code>:database:impl:mock</code> 作为 <code>androidTest</code> 源集。这是一种强大且正确的测试依赖项管理方法。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1304/0*Q3MP_6C6i4qhNhQr.png" alt="图 1. App 模块提供实际实现。" /></p>
+
+<p>但这种模式存在一个<strong>微妙之处</strong>。当这种逻辑应用于大型项目中所有功能实现时，可能会<strong>无意中造成构建速度瓶颈</strong>，尤其是在处理遗留应用模块时。</p>
+
+<pre><code class="kotlin">// :app/build.gradle.kts
+dependencies {
+    implementation(project(":database:api"))
+    implementation(project(":database:impl:room")) // &lt;--- This is the trap for incremental builds
+}
+</code></pre>
+
+<p>代码是模块化的，但你的 <code>:app</code> 模块现在与 <code>:database:impl:room</code> 模块<strong>构建耦合</strong>。这意味着任何<strong>资源更改</strong>（例如添加字符串）或对<strong>实现自身的公共接口</strong>的任何更改（例如在 <code>:impl</code> 内部添加一个不属于官方 <code>:api</code> 模块的新的 <code>public</code> 辅助类）都会破坏编译避免机制，并强制整个 <code>:app</code> 模块重新编译，从而抵消模块化带来的主要速度优势。</p>
+
+<blockquote><p>即使启用了非传递 R 类等优化，直接依赖关系通常也会强制构建系统验证使用者是否与生产者的新资源符号匹配。布线模块充当防火墙，防止频繁的资源检查影响到庞大的 App 模块。</p></blockquote>
+
+<h2>“精简应用”的理想状态与“臃肿应用”的现实</h2>
+
+<p>官方建议让 <code>:app</code> 模块提供实现，这非常有效，尤其是在 Google 指南中展示的场景下：为不同的构建版本（例如 <code>main</code> 和 <code>androidTest</code>）替换依赖项。</p>
+
+<p>但是，如果将此模式误用作所有功能实现的<em>通用规则</em>，尤其是在包含<strong>“臃肿应用”模块</strong>的项目中，就会出现一个微妙的陷阱。</p>
+
+<p>官方指南通常会隐含地假设一种架构理想：<strong>“精简应用”模块</strong>。“精简应用”只是一个轻量级的汇编器。它几乎不包含任何代码或资源。它<em>唯一</em>的任务是应用 <code>com.android.application</code> 插件并将所有功能模块打包成一个 APK 文件。如果你的 <code>:app</code> 模块很精简，重新编译它既快速又便宜，因此它依赖于 <code>:impl</code> 模块并无大碍。</p>
+
+<p>但对我们大多数人来说，现实情况是<strong>“厚应用”模块</strong>。它是最初的单体应用，仍然充斥着遗留代码、资源和半模块化的功能。</p>
+
+<p>当你的“厚应用”模块直接依赖于某个功能的 <code>:impl</code> 时，例如 <code>:app</code> -> &ldquo;:database:impl:room&rdquo;<code>，你就创建了一个会拖慢构建速度的瓶颈。你最大、最复杂的模块现在与该功能的内部细节**构建耦合**了。任何对</code>:impl<code>中资源或实现自身公共接口的更改都会破坏编译规避机制，并强制整个</code>:app` 模块重新编译。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1304/1*su8uLnwQsJMVWsUxrlVBSg.png" alt="图 2. “厚应用”瓶颈。由于庞大的 :app 模块直接依赖于实现，因此底层任何 ABI 更改都会触发顶层的完全重新编译。红色箭头展示了功能模块中的一个微小改动如何迫使资源密集型的 `:app` 模块重新构建，从而破坏了避免编译的策略。" /></p>
+
+<p>“现在，一个纯粹主义者可能会说：‘你应该更加自律，永远不要让你的 <code>:app</code> 模块从 <code>:impl</code> 导入任何东西，即使是公共的。’</p>
+
+<p>他们的说法没错。但是，在一个拥有数十位贡献者的‘厚应用’单体应用中，‘自律’是一种脆弱的防御手段。而连接模块模式<strong>在构建系统层面强制执行了这种自律。</strong>它使得开发者<em>不可能</em>意外地将 <code>:app</code> 模块与某个功能的实现细节耦合在一起，从而默认地保证了构建速度。”</p>
+
+<h2>“理想”方案 vs. “赋能”方案</h2>
+
+<p>这让团队面临两条道路：</p>
+
+<ol>
+<li>“理想”（但缓慢）方案：纯粹主义者的解决方案是将“臃肿的应用”模块重构为真正“精简”的模块……这才是正确的长期目标，但这需要数年时间，循序渐进。</li>
+<li>“赋能”（但快速）方案：这是“连接模块”模式。这种模式并非理想方案的替代方案，而是实现理想方案的催化剂。它提供了团队所需的构建速度和稳定性，使团队有时间和信心真正执行长期的增量重构。</li>
+</ol>
+
+
+<p>虽然这会增加“模块蔓延”，但它以架构的纯粹性换取了工程速度。在大型团队中，速度通常是更关键的指标。</p>
+
+<p>但这种观点将问题简单地二元化了。实际上，这种模式是一种<strong>务实的权衡</strong>。你是在<strong>有意识地做出权衡</strong>。你接受了新的、可控的成本（增加模块数量和配置），以解决一个令人头疼的日常问题（缓慢的增量构建）。这种新的、明确的“连接”债务通常远比“臃肿应用”的单体架构债务成本低得多，后者正在扼杀团队的开发速度。这种构建速度往往正是团队能够拥有时间和稳定性来进行更大规模、更长期的重构的关键所在。</p>
+
+<p>像 Slack、Spotify 和 Uber 这样的大型 Android 代码库都公开讨论过一些模式，这些模式大量依赖于将实现细节隐藏在稳定的 API 之后。这并非权宜之计；这是大型团队保持构建速度快和代码库可维护性的根本方法。</p>
+
+<h2>解决方案：“连接模块”模式</h2>
+
+<blockquote><p>这种模式有时被称为聚合模块，但我们更倾向于使用“连接”，因为它更能体现其在连接架构中的积极作用。</p></blockquote>
+
+<p>此解决方案引入了一个新的轻量级<strong>“连接模块”</strong>（例如，<code>:database:wiring</code>）。该模块充当“守门人”或该功能的稳定外观。</p>
+
+<p>其原理很简单：</p>
+
+<ol>
+<li><code>:app</code> 模块<em>仅</em>依赖于新的、稳定的 <code>:database:wiring</code> 模块。</li>
+<li>连接模块<em>是唯一</em>了解其自身内部 <code>:impl</code>（以及 <code>:ui</code>、<code>:domain</code> 等）模块的模块。</li>
+</ol>
+
+
+<pre><code class="kotlin">// :app/build.gradle.kts (Corrected)
+dependencies {
+    // ...
+    implementation(project(":database:wiring")) // NOW it's decoupled!
+    implementation(project(":feature:home"))
+}
+</code></pre>
+
+<pre><code class="kotlin">// :database:wiring/build.gradle.kts (The new "Wiring Module")
+plugins {
+    id("com.android.library")
+}
+android {
+    namespace = "com.example.database.wiring"
+}
+dependencies {
+    // Link the bindings internally without exposing the API transitively
+    implementation(project(":database:api"))
+
+    // Hide the implementation details from the :app module
+    implementation(project(":database:impl:room"))
+}
+</code></pre>
+
+<p>这种模式并非免费。这是一个务实的步骤，它能实现你承诺的快速增量构建，赋予你的团队速度和稳定性，从而支持那些规模更大、周期更长的重构。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1304/1*H2gD-qUVVI2r7CsTtMSt6Q.png" alt="图 3. 使用 :impl:room 模块 ABI 更改后的增量构建仅触发轻量级 :wiring 模块重建" /></p>
+
+<p>现在，<code>:app</code> 模块仅依赖于稳定的 wiring 模块。</p>
+
+<p><strong>关于依赖注入的说明：</strong></p>
+
+<p>这个“wiring 模块”不仅仅是一个提升构建速度的技巧；它是你功能<strong>依赖注入绑定</strong>（例如 Dagger 或 Hilt 的 <code>@Module</code>）的理想存放位置。它的唯一职责就是将抽象的 <code>:api</code> 连接到具体的 <code>:impl</code>，这正是清晰依赖注入 (DI) 的精髓所在。</p>
+
+<p>这种模式能够确保良好的架构，而构建速度的提升则是这种清晰分离带来的一个绝佳附加效果。</p>
+
+<h2>为什么速度如此之快：理解编译避免</h2>
+
+<p>这种结构并非权宜之计；它是启用 Gradle 最强大的构建速度提升功能——<strong>编译避免</strong>——的<em>正确</em>方法。</p>
+
+<p>Gradle 团队在其精彩博文“<a href="https://blog.gradle.org/our-approach-to-faster-compilation">我们实现更快编译的方法</a>”中对此进行了解释。以下是关键要点：</p>
+
+<ol>
+<li><strong>Gradle 检查的是 ABI，而不是实现：</strong> 正如博文所述，Gradle 检查的是依赖项的<strong>应用程序二进制接口 (ABI)</strong>。ABI 是模块的“公共契约”或“公共结构”——即其公共类和方法签名。它<strong>不</strong>包含方法体等私有实现细节。</li>
+<li><strong>旧方法会破坏这一点：</strong> 当你的 <code>:app</code> 模块直接依赖于 <code>:database:impl:room</code> 时，你实际上是在强制 Gradle 将整个实现都视为应用构建的一部分。正如我们之前提到的，<code>:database:impl:room</code> 中任何<strong>资源更改</strong>或对实现本身的<strong>公共接口</strong>（例如新增的 <code>public</code> 辅助函数）的更改，对于 <code>:app</code> 来说都是 ABI 不兼容的更改，从而导致需要完全重新编译。</li>
+<li><p><strong>新方法可以解决这个问题：</strong> 使用我们的 <code>:database:wiring</code> 模块后：</p></li>
+<li><p>开发人员更改了 <code>:database:impl:room</code> 中的一个文件。</p></li>
+<li><code>:database:wiring</code> 模块重新编译（由于它很小，所以速度很快）。</li>
+<li><strong>至关重要的是</strong>，正如 Gradle 博客文章中所解释的，这是一个 <strong>ABI 兼容的更改</strong>。连接模块的<em>公共结构</em>（即其 <code>api</code> 依赖项）并未改变。</li>
+<li>Gradle 会检查 <code>:app</code>，发现其依赖项的 ABI 完全相同，因此<strong>完全跳过重新编译</strong> <code>:app</code>。</li>
+</ol>
+
+
+<p>这篇博文将此称为<strong>编译避免(Compilation Avoidance)</strong>（完全跳过模块的编译），并将其与<em>增量编译</em>（重新编译模块中的<em>某些</em>文件）区分开来。这种模式是实现主应用程序模块真正避免编译的最有效方法之一。</p>
+
+<h2>实际应用：效果如何</h2>
+
+<p>这并非纸上谈兵。我们在生产应用中使用 Gradle Profiler 来测试这种模式旨在解决的具体场景：在某个功能的 <code>:impl</code> 模块中进行破坏 ABI 的更改（例如，添加一个新的公共方法），然后运行增量 <code>:app:assembleDebug</code> 构建。</p>
+
+<p>我们对八个不同的功能模块重复了此操作，并在引入连接模块前后分别对每个功能模块进行了平均 10 次运行。在旧配置中，<code>:app</code> 直接依赖于 <code>:feature:impl</code>，这些增量构建平均耗时约 <strong>99 秒</strong>。引入连接模块后，<code>:app</code> 仅依赖于 <code>:feature:wiring</code>，相同场景下的平均耗时降至约 <strong>63 秒</strong>。</p>
+
+<p>在这八个功能模块中，速度提升幅度约为 <strong>29%</strong> 到 <strong>45%</strong>，在这种特定的增量构建场景下，平均提升幅度约为 <strong>36%</strong>。</p>
+
+<p>在进行此次重构时，我恰好在研究是否值得将我的 MacBook 升级到更新的 Apple Silicon 机型。这个对比让我恍然大悟：对于这种工作负载，此次连接模块的更改所带来的构建速度提升，与升级到性能更强劲的高端 MacBook 机型**的效果不相上下。区别在于，这种重构能够有效地让参与项目的每个开发者都感受到“新机器”般的体验——而这仅仅是通过一个小的、有针对性的 Gradle 修改实现的，而非硬件升级。</p>
+
+<h2>要点</h2>
+
+<p>官方文档的建议在理论上是正确的，但理解实践中的权衡取舍至关重要。</p>
+
+<p>对于任何实际的<strong>“厚应用”模块</strong>而言，直接依赖 <code>:impl</code> 模块通常会导致构建速度瓶颈，因为它将最大的模块与某个功能的内部变更耦合在一起。</p>
+
+<p>保护构建速度至关重要。“模块连接”模式是一种非常实用且低成本的重构方式，它能显著提升日常工作流程的构建速度，而成本通常仅为完整 <code>:app</code> 模块重构的一小部分。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack ViewModel内幕：内部机制与跨平台设计]]></title>
@@ -2133,188 +2289,6 @@ adb shell am kill com.yourpackage.name
 <p>这个双层系统看似复杂，但实际上非常优雅：常见情况（配置更改）的快速恢复，以及罕见情况（进程死亡）的可靠恢复。</p>
 
 <p>祝你编码愉快，愿你的状态始终持久！🚀</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[理解Android中的内存泄漏以及如何让LeakCanary来帮忙]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/03/01/understanding-memory-leaks/"/>
-    <updated>2025-03-01T03:05:54+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/03/01/understanding-memory-leaks</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自<a href="https://proandroiddev.com/understanding-memory-leaks-in-android-how-leakcanary-can-help-4768df60f646">Understanding Memory Leaks in Android &amp; How LeakCanary Can Help</a>，原文发布于2024年12月27日。</p></blockquote>
-
-<p><strong>译者注：</strong> 关于内存优化，笔者也曾经写过两篇文章，侧重于内存问题的深入分析，如有兴趣可以作为拓展阅读：<a href="https://juejin.cn/post/7277489569958756364">让你不再惧怕内存优化</a>和<a href="https://juejin.cn/post/7287913786038992915">Android应用性能剖析全攻略</a>。</p>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Sx4veSpq_Z1oYBsP5Q7nwQ.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>作为 Android 开发者，管理内存是构建高性能应用的一个最关键方面。开发者面临的一个最常见问题是内存泄漏。这些泄漏会对应用的性能和用户体验产生负面影响，导致运行缓慢、崩溃甚至电池耗尽你。但别担心——有一种解决方案可以让发现和修复内存泄漏变得更容易，那就是LeakCanary。</p>
-
-<p>在这篇文章中，我们将首先探讨什么是内存泄漏、为什么会发生内存泄漏，然后介绍 LeakCanary 作为检测和修复 Android 应用程序中这些泄漏的强大工具。</p>
-
-<h2>什么是内存泄漏？</h2>
-
-<p>当你的应用保留不再需要的内存时，就会发生内存泄漏。简单来说，当不再使用的对象没有从内存中正确清除时，就会发生内存泄漏，从而导致你的应用消耗了不必要的内存。随着时间的推移，这可能会导致性能下降，在极端情况下，还会导致应用崩溃。</p>
-
-<h2>内存泄漏为何如此危险？</h2>
-
-<p>内存泄漏乍一看似乎无害，但它可能会给你的 Android 应用带来严重问题：</p>
-
-<ol>
-<li><strong>内存使用量增加：</strong> 当内存未释放时，应用会不断消耗更多资源，导致内存消耗过高。</li>
-<li><strong>性能下降：</strong> 随着时间的推移，内存中保存的对象越来越多，应用会变得越来越慢，导致延迟和用户体验不佳。</li>
-<li><strong>应用崩溃：</strong> 如果内存消耗达到临界水平，你的应用可能会崩溃甚至强制关闭。</li>
-<li><strong>电池耗尽：</strong> 内存泄漏可能导致进程在后台运行，从而比预期更快地耗尽设备电池。</li>
-</ol>
-
-
-<h2>Android 中内存泄漏的常见原因</h2>
-
-<ol>
-<li><strong>保存对上下文的引用：</strong> 如果你在静态变量或单例中保存对 Activity 或 Context 的引用，它将永远不会被垃圾回收，因为系统仍会考虑正在使用的 Activity 或 Context。</li>
-<li><strong>内部类和匿名类：</strong> 它们隐式保存对外部类（通常是 Activity 或 Fragment）的引用，从而防止它们被垃圾回收。</li>
-<li><strong>未关闭的资源：</strong> 完成后不关闭 Cursor、Stream 或数据库连接等资源可能会导致内存堆积。</li>
-<li><strong>事件侦听器：</strong> 如果你向 UI 元素添加侦听器（例如 OnClickListener），但在不再需要它们后没有将其删除，这些对象可能会泄漏内存。</li>
-</ol>
-
-
-<h2>LeakCanary 如何帮助检测 Android 中的内存泄漏</h2>
-
-<p>现在我们了解了内存泄漏可能导致的问题，让我们来讨论一下可以帮助我们检测内存泄漏的工具：LeakCanary。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*xas01FOk-1FlwDFe.png" alt="LeakCanary" /></p>
-
-<p>LeakCanary 是一个适用于 Android 的开源内存泄漏检测库。它旨在自动识别开发过程中应用中的内存泄漏，让你在影响用户之前修复它们。</p>
-
-<ul>
-<li>当发生内存泄漏时，LeakCanary 会自动触发堆转储，对其进行分析，并向开发人员提供一份报告，指出泄漏发生的位置。这使开发人员能够更轻松地发现和解决内存泄漏，以免导致性能问题。</li>
-</ul>
-
-
-<h3>LeakCanary 如何工作？</h3>
-
-<p>LeakCanary 的工作原理是监控应用的内存并分析堆转储以识别不应该存在的对象。当检测到内存泄漏时，它会生成一份报告，显示泄漏发生的位置，从而帮助你找出根本原因。</p>
-
-<ol>
-<li><strong>堆转储：</strong> 当 LeakCanary 检测到潜在泄漏时，它会进行堆转储（应用内存的快照），并将其与垃圾回收后的堆进行比较。如果它发现不应保留的对象，它会将其标记为泄漏。</li>
-<li><strong>泄漏的对象：</strong> LeakCanary 会向你显示哪些对象被保存在内存中以及引用链中，帮助你识别导致泄漏的对象以及它仍被保留的原因。</li>
-<li><strong>通知：</strong> 每当 LeakCanary 发现内存泄漏时，它都会在应用的调试版本中通知你。你可以快速访问报告并开始解决问题。</li>
-</ol>
-
-
-<p>LeakCanary 自动检测以下对象的泄漏：</p>
-
-<ul>
-<li>销毁的 Activity 实例</li>
-<li>销毁的 Fragment 实例</li>
-<li>销毁的 fragment View 实例</li>
-<li>清除的 ViewModel 实例</li>
-<li>销毁的 Service 实例</li>
-</ul>
-
-
-<h3>如何将 LeakCanary 集成到 Android 项目中？</h3>
-
-<p>要将 LeakCanary 集成到 Android 项目中，请按照以下步骤操作：</p>
-
-<ul>
-<li><strong>添加 LeakCanary 依赖项：</strong> 在 build.gradle 文件（应用程序级别）中，添加以下内容：</li>
-</ul>
-
-
-<pre><code class="Groovy">dependencies {
-    debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.9.1'
-}
-</code></pre>
-
-<ul>
-<li><strong>初始化 LeakCanary：</strong> LeakCanary 在调试构建类型中自动初始化。但是，你可以在 Application 类中手动初始化它：</li>
-</ul>
-
-
-<pre><code class="Java">public class MyApplication extends Application {
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        if (LeakCanary.isInAnalyzerProcess(this)) {
-            return; // LeakCanary is in heap analysis process
-        }
-        LeakCanary.install(this); // Initialize LeakCanary
-    }
-}
-</code></pre>
-
-<ul>
-<li><strong>在调试模式下运行应用程序</strong>，LeakCanary 将在开发阶段检测内存泄漏。</li>
-</ul>
-
-
-<h3>如何在生产版本中使用 LeakCanary？</h3>
-
-<p>虽然 LeakCanary 专为调试和开发而设计，但在生产环境中使用它时应谨慎。它可能会影响应用性能，并可能不必要地暴露与内存相关的数据。但是，如果你出于某种原因需要在生产环境中启用它，则可以有条件地仅在某些构建版本中添加 LeakCanary：</p>
-
-<pre><code class="Groovy">dependencies {
-    releaseImplementation 'com.squareup.leakcanary:leakcanary-android-no-op:2.9.1' // No-op for release
-    debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.9.1'
-}
-</code></pre>
-
-<p>这样，LeakCanary 仅在调试版本中处于活动状态，而无操作版本则用于生产。</p>
-
-<h3>你将采取什么步骤来修复 LeakCanary 报告的内存泄漏？</h3>
-
-<p>当 LeakCanary 报告内存泄漏时，请按照以下步骤解决：</p>
-
-<ol>
-<li><p><strong>分析泄漏报告：</strong> LeakCanary 提供一份详细的报告，其中包含一个对象引用链，显示泄漏发生的位置。</p></li>
-<li><p><strong>识别泄漏对象：</strong> 查找意外保存在内存中的对象（如 Activity、Fragment 或 Context）。</p></li>
-<li><p><strong>修复泄漏：</strong></p>
-
-<ul>
-<li>避免将 Activity 或 Context 引用存储在静态变量或长寿命对象中。</li>
-<li>确保关闭 Cursor、Stream 等资源。</li>
-<li>在不再需要时删除侦听器和回调。</li>
-</ul>
-</li>
-<li><strong>测试修复：</strong> 进行更改后，重新运行你的应用以确认内存泄漏已解决。</li>
-</ol>
-
-
-<h3>LeakCanary 有哪些局限性？</h3>
-
-<p>虽然 LeakCanary 是一款出色的工具，但它也有一些局限性：</p>
-
-<ul>
-<li><strong>并非所有泄漏都能被检测到：</strong> LeakCanary 专注于 Java 堆内存泄漏，但它可能无法检测本机内存泄漏或低级问题。</li>
-<li><strong>对性能的影响：</strong> 由于堆分析过程，在开发过程中运行 LeakCanary 可能会稍微减慢你的应用速度。</li>
-<li><strong>不能取代良好的内存管理：</strong> 虽然 LeakCanary 有助于检测泄漏，但开发人员仍应遵循内存管理的最佳实践，以防止泄漏发生。</li>
-</ul>
-
-
-<h2>结论</h2>
-
-<p>内存管理对于确保 Android 应用高效运行至关重要。LeakCanary 是一款功能强大的工具，可帮助你在内存泄漏影响应用性能之前检测并解决内存泄漏问题。通过遵循最佳实践并将 LeakCanary 集成到你的开发过程中，你可以确保你的应用保持优化状态并且不会出现与内存相关的问题。</p>
-
-<p>检查你是否已在 Android 应用程序中完成以下所有操作：</p>
-
-<ol>
-<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#rel-unused">释放未使用的资源。</a></li>
-<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#unreg">不再需要时取消注册监听器。</a></li>
-<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#cancel-tasks">不需要时取消任务。</a></li>
-<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#fwd-lifecyc">发生命周期方法以释放资源。</a></li>
-<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices#latest-versions">使用最新版本的 SDK。</a></li>
-</ol>
-
-
-<h2>参考</h2>
-
-<ul>
-<li><a href="https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices">https://developers.google.com/maps/documentation/places/android-sdk/memory-best-practices</a></li>
-<li><a href="https://square.github.io/leakcanary/">https://square.github.io/leakcanary/</a></li>
-</ul>
-
 ]]></content>
   </entry>
   

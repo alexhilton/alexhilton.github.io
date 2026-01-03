@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2025-12-31T11:30:07+00:00</updated>
+  <updated>2026-01-03T12:44:18+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,192 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[务实的模块化：连接模块(wiring Modules)的妙用]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/01/03/pragmatic-modularization/"/>
+    <updated>2026-01-03T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/01/03/pragmatic-modularization</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Pragmatic Modularization: The Case for Wiring Modules」，原文链接<a href="https://proandroiddev.com/pragmatic-modularization-the-case-for-wiring-modules-c936d3af3611">https://proandroiddev.com/pragmatic-modularization-the-case-for-wiring-modules-c936d3af3611</a>，由Alex Krafts发布于2025年11月22日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/01/03/pragmatic-modularization/"><img src="https://miro.medium.com/v2/resize:fit:1400/0*9waVavO74e0cqQg6" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>如果你正在经历漫长的模块化之旅，你应该已经阅读过官方的<a href="https://developer.android.com/topic/modularization">Google 开发者指南</a>。你可能已经见过关于提供依赖项的这种具体建议：</p>
+
+<blockquote><p>“……app 模块通常是添加依赖项的好地方。要提供实现，请将其指定为所选构建变体或测试源集的依赖项。”</p></blockquote>
+
+<p>下图展示了这种模式的一个常见示例，其中 <code>:app</code> 模块使用 <code>:database:impl:room</code> 作为其 <code>main</code> 源集，并使用 <code>:database:impl:mock</code> 作为 <code>androidTest</code> 源集。这是一种强大且正确的测试依赖项管理方法。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1304/0*Q3MP_6C6i4qhNhQr.png" alt="图 1. App 模块提供实际实现。" /></p>
+
+<p>但这种模式存在一个<strong>微妙之处</strong>。当这种逻辑应用于大型项目中所有功能实现时，可能会<strong>无意中造成构建速度瓶颈</strong>，尤其是在处理遗留应用模块时。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// :app/build.gradle.kts</span>
+</span><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:database:api&quot;</span><span class="p">))</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:database:impl:room&quot;</span><span class="p">))</span> <span class="c1">// &lt;--- This is the trap for incremental builds</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>代码是模块化的，但你的 <code>:app</code> 模块现在与 <code>:database:impl:room</code> 模块<strong>构建耦合</strong>。这意味着任何<strong>资源更改</strong>（例如添加字符串）或对<strong>实现自身的公共接口</strong>的任何更改（例如在 <code>:impl</code> 内部添加一个不属于官方 <code>:api</code> 模块的新的 <code>public</code> 辅助类）都会破坏编译避免机制，并强制整个 <code>:app</code> 模块重新编译，从而抵消模块化带来的主要速度优势。</p>
+
+<blockquote><p>即使启用了非传递 R 类等优化，直接依赖关系通常也会强制构建系统验证使用者是否与生产者的新资源符号匹配。布线模块充当防火墙，防止频繁的资源检查影响到庞大的 App 模块。</p></blockquote>
+
+<h2>“精简应用”的理想状态与“臃肿应用”的现实</h2>
+
+<p>官方建议让 <code>:app</code> 模块提供实现，这非常有效，尤其是在 Google 指南中展示的场景下：为不同的构建版本（例如 <code>main</code> 和 <code>androidTest</code>）替换依赖项。</p>
+
+<p>但是，如果将此模式误用作所有功能实现的<em>通用规则</em>，尤其是在包含<strong>“臃肿应用”模块</strong>的项目中，就会出现一个微妙的陷阱。</p>
+
+<p>官方指南通常会隐含地假设一种架构理想：<strong>“精简应用”模块</strong>。“精简应用”只是一个轻量级的汇编器。它几乎不包含任何代码或资源。它<em>唯一</em>的任务是应用 <code>com.android.application</code> 插件并将所有功能模块打包成一个 APK 文件。如果你的 <code>:app</code> 模块很精简，重新编译它既快速又便宜，因此它依赖于 <code>:impl</code> 模块并无大碍。</p>
+
+<p>但对我们大多数人来说，现实情况是<strong>“厚应用”模块</strong>。它是最初的单体应用，仍然充斥着遗留代码、资源和半模块化的功能。</p>
+
+<p>当你的“厚应用”模块直接依赖于某个功能的 <code>:impl</code> 时，例如 <code>:app</code> -> &ldquo;:database:impl:room&rdquo;<code>，你就创建了一个会拖慢构建速度的瓶颈。你最大、最复杂的模块现在与该功能的内部细节**构建耦合**了。任何对</code>:impl<code>中资源或实现自身公共接口的更改都会破坏编译规避机制，并强制整个</code>:app` 模块重新编译。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1304/1*su8uLnwQsJMVWsUxrlVBSg.png" alt="图 2. “厚应用”瓶颈。由于庞大的 :app 模块直接依赖于实现，因此底层任何 ABI 更改都会触发顶层的完全重新编译。红色箭头展示了功能模块中的一个微小改动如何迫使资源密集型的 `:app` 模块重新构建，从而破坏了避免编译的策略。" /></p>
+
+<p>“现在，一个纯粹主义者可能会说：‘你应该更加自律，永远不要让你的 <code>:app</code> 模块从 <code>:impl</code> 导入任何东西，即使是公共的。’</p>
+
+<p>他们的说法没错。但是，在一个拥有数十位贡献者的‘厚应用’单体应用中，‘自律’是一种脆弱的防御手段。而连接模块模式<strong>在构建系统层面强制执行了这种自律。</strong>它使得开发者<em>不可能</em>意外地将 <code>:app</code> 模块与某个功能的实现细节耦合在一起，从而默认地保证了构建速度。”</p>
+
+<h2>“理想”方案 vs. “赋能”方案</h2>
+
+<p>这让团队面临两条道路：</p>
+
+<ol>
+<li>“理想”（但缓慢）方案：纯粹主义者的解决方案是将“臃肿的应用”模块重构为真正“精简”的模块……这才是正确的长期目标，但这需要数年时间，循序渐进。</li>
+<li>“赋能”（但快速）方案：这是“连接模块”模式。这种模式并非理想方案的替代方案，而是实现理想方案的催化剂。它提供了团队所需的构建速度和稳定性，使团队有时间和信心真正执行长期的增量重构。</li>
+</ol>
+
+
+<p>虽然这会增加“模块蔓延”，但它以架构的纯粹性换取了工程速度。在大型团队中，速度通常是更关键的指标。</p>
+
+<p>但这种观点将问题简单地二元化了。实际上，这种模式是一种<strong>务实的权衡</strong>。你是在<strong>有意识地做出权衡</strong>。你接受了新的、可控的成本（增加模块数量和配置），以解决一个令人头疼的日常问题（缓慢的增量构建）。这种新的、明确的“连接”债务通常远比“臃肿应用”的单体架构债务成本低得多，后者正在扼杀团队的开发速度。这种构建速度往往正是团队能够拥有时间和稳定性来进行更大规模、更长期的重构的关键所在。</p>
+
+<p>像 Slack、Spotify 和 Uber 这样的大型 Android 代码库都公开讨论过一些模式，这些模式大量依赖于将实现细节隐藏在稳定的 API 之后。这并非权宜之计；这是大型团队保持构建速度快和代码库可维护性的根本方法。</p>
+
+<h2>解决方案：“连接模块”模式</h2>
+
+<blockquote><p>这种模式有时被称为聚合模块，但我们更倾向于使用“连接”，因为它更能体现其在连接架构中的积极作用。</p></blockquote>
+
+<p>此解决方案引入了一个新的轻量级<strong>“连接模块”</strong>（例如，<code>:database:wiring</code>）。该模块充当“守门人”或该功能的稳定外观。</p>
+
+<p>其原理很简单：</p>
+
+<ol>
+<li><code>:app</code> 模块<em>仅</em>依赖于新的、稳定的 <code>:database:wiring</code> 模块。</li>
+<li>连接模块<em>是唯一</em>了解其自身内部 <code>:impl</code>（以及 <code>:ui</code>、<code>:domain</code> 等）模块的模块。</li>
+</ol>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// :app/build.gradle.kts (Corrected)</span>
+</span><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:database:wiring&quot;</span><span class="p">))</span> <span class="c1">// NOW it&#39;s decoupled!</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:feature:home&quot;</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// :database:wiring/build.gradle.kts (The new &quot;Wiring Module&quot;)</span>
+</span><span class='line'><span class="n">plugins</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">id</span><span class="p">(</span><span class="s">&quot;com.android.library&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">android</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">namespace</span> <span class="p">=</span> <span class="s">&quot;com.example.database.wiring&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Link the bindings internally without exposing the API transitively</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:database:api&quot;</span><span class="p">))</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Hide the implementation details from the :app module</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:database:impl:room&quot;</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这种模式并非免费。这是一个务实的步骤，它能实现你承诺的快速增量构建，赋予你的团队速度和稳定性，从而支持那些规模更大、周期更长的重构。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1304/1*H2gD-qUVVI2r7CsTtMSt6Q.png" alt="图 3. 使用 :impl:room 模块 ABI 更改后的增量构建仅触发轻量级 :wiring 模块重建" /></p>
+
+<p>现在，<code>:app</code> 模块仅依赖于稳定的 wiring 模块。</p>
+
+<p><strong>关于依赖注入的说明：</strong></p>
+
+<p>这个“wiring 模块”不仅仅是一个提升构建速度的技巧；它是你功能<strong>依赖注入绑定</strong>（例如 Dagger 或 Hilt 的 <code>@Module</code>）的理想存放位置。它的唯一职责就是将抽象的 <code>:api</code> 连接到具体的 <code>:impl</code>，这正是清晰依赖注入 (DI) 的精髓所在。</p>
+
+<p>这种模式能够确保良好的架构，而构建速度的提升则是这种清晰分离带来的一个绝佳附加效果。</p>
+
+<h2>为什么速度如此之快：理解编译避免</h2>
+
+<p>这种结构并非权宜之计；它是启用 Gradle 最强大的构建速度提升功能——<strong>编译避免</strong>——的<em>正确</em>方法。</p>
+
+<p>Gradle 团队在其精彩博文“<a href="https://blog.gradle.org/our-approach-to-faster-compilation">我们实现更快编译的方法</a>”中对此进行了解释。以下是关键要点：</p>
+
+<ol>
+<li><strong>Gradle 检查的是 ABI，而不是实现：</strong> 正如博文所述，Gradle 检查的是依赖项的<strong>应用程序二进制接口 (ABI)</strong>。ABI 是模块的“公共契约”或“公共结构”——即其公共类和方法签名。它<strong>不</strong>包含方法体等私有实现细节。</li>
+<li><strong>旧方法会破坏这一点：</strong> 当你的 <code>:app</code> 模块直接依赖于 <code>:database:impl:room</code> 时，你实际上是在强制 Gradle 将整个实现都视为应用构建的一部分。正如我们之前提到的，<code>:database:impl:room</code> 中任何<strong>资源更改</strong>或对实现本身的<strong>公共接口</strong>（例如新增的 <code>public</code> 辅助函数）的更改，对于 <code>:app</code> 来说都是 ABI 不兼容的更改，从而导致需要完全重新编译。</li>
+<li><p><strong>新方法可以解决这个问题：</strong> 使用我们的 <code>:database:wiring</code> 模块后：</p></li>
+<li><p>开发人员更改了 <code>:database:impl:room</code> 中的一个文件。</p></li>
+<li><code>:database:wiring</code> 模块重新编译（由于它很小，所以速度很快）。</li>
+<li><strong>至关重要的是</strong>，正如 Gradle 博客文章中所解释的，这是一个 <strong>ABI 兼容的更改</strong>。连接模块的<em>公共结构</em>（即其 <code>api</code> 依赖项）并未改变。</li>
+<li>Gradle 会检查 <code>:app</code>，发现其依赖项的 ABI 完全相同，因此<strong>完全跳过重新编译</strong> <code>:app</code>。</li>
+</ol>
+
+
+<p>这篇博文将此称为<strong>编译避免(Compilation Avoidance)</strong>（完全跳过模块的编译），并将其与<em>增量编译</em>（重新编译模块中的<em>某些</em>文件）区分开来。这种模式是实现主应用程序模块真正避免编译的最有效方法之一。</p>
+
+<h2>实际应用：效果如何</h2>
+
+<p>这并非纸上谈兵。我们在生产应用中使用 Gradle Profiler 来测试这种模式旨在解决的具体场景：在某个功能的 <code>:impl</code> 模块中进行破坏 ABI 的更改（例如，添加一个新的公共方法），然后运行增量 <code>:app:assembleDebug</code> 构建。</p>
+
+<p>我们对八个不同的功能模块重复了此操作，并在引入连接模块前后分别对每个功能模块进行了平均 10 次运行。在旧配置中，<code>:app</code> 直接依赖于 <code>:feature:impl</code>，这些增量构建平均耗时约 <strong>99 秒</strong>。引入连接模块后，<code>:app</code> 仅依赖于 <code>:feature:wiring</code>，相同场景下的平均耗时降至约 <strong>63 秒</strong>。</p>
+
+<p>在这八个功能模块中，速度提升幅度约为 <strong>29%</strong> 到 <strong>45%</strong>，在这种特定的增量构建场景下，平均提升幅度约为 <strong>36%</strong>。</p>
+
+<p>在进行此次重构时，我恰好在研究是否值得将我的 MacBook 升级到更新的 Apple Silicon 机型。这个对比让我恍然大悟：对于这种工作负载，此次连接模块的更改所带来的构建速度提升，与升级到性能更强劲的高端 MacBook 机型**的效果不相上下。区别在于，这种重构能够有效地让参与项目的每个开发者都感受到“新机器”般的体验——而这仅仅是通过一个小的、有针对性的 Gradle 修改实现的，而非硬件升级。</p>
+
+<h2>要点</h2>
+
+<p>官方文档的建议在理论上是正确的，但理解实践中的权衡取舍至关重要。</p>
+
+<p>对于任何实际的<strong>“厚应用”模块</strong>而言，直接依赖 <code>:impl</code> 模块通常会导致构建速度瓶颈，因为它将最大的模块与某个功能的内部变更耦合在一起。</p>
+
+<p>保护构建速度至关重要。“模块连接”模式是一种非常实用且低成本的重构方式，它能显著提升日常工作流程的构建速度，而成本通常仅为完整 <code>:app</code> 模块重构的一小部分。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack ViewModel内幕：内部机制与跨平台设计]]></title>
@@ -15537,959 +15723,6 @@ Anatolii Frolov发布于2025年11月20日。</p></blockquote>
 <p>想要随时了解最新动态？请务必<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/">在 Github 上关注 Unstyled</a>（链接:<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/%EF%BC%89%E3%80%82">https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/%EF%BC%89%E3%80%82</a></p>
 
 <p>想要评论这篇文章吗？<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106">在 GitHub 上讨论 →</a>（链接：<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106%EF%BC%89">https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106%EF%BC%89</a></p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[运行时着色器实战：实现元球（Metaballs）动效]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/09/06/metaballs-with-runtimeshaders/"/>
-    <updated>2025-09-06T15:19:16+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/09/06/metaballs-with-runtimeshaders</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Metaballs with Runtimeshaders」，原文链接<a href="https://medium.com/@off.mind.by/metaballs-with-runtimeshaders-bb7e5f6b27c2">https://medium.com/@off.mind.by/metaballs-with-runtimeshaders-bb7e5f6b27c2</a>，由Alex Volkov发布于2025810。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/09/06/metaballs-with-runtimeshaders/"><img src="https://miro.medium.com/v2/resize:fit:2000/1*fQOua40zD_PlbsejLeHBeg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>大家好！今天我想向大家介绍一种最简单却又出人意料地令人印象深刻的效果：元球。</p>
-
-<p>元球是一种看起来像有机体的形状，其特点是它们能够在近距离内融合在一起，形成单个连续的物体。</p>
-
-<p>使用 GLSL 着色器创建这种效果非常简单，只需几行代码即可。当然，你也可以在网上找到关于如何将其移植到 AGSL 并在 Compose 中使用的教程。然而，主要的问题是这种效果需要两个（或更多）物体。我找到的所有教程都只是在单个着色器中模拟两个组件。这种方法在视觉上很有效，但在实际项目中使用时会带来很多限制。因此，我开始以一种每个元素只扭曲自身的方式来构建这种效果——尽可能地让一切看起来公平、干净。</p>
-
-<p>好了，既然我们已经明白了为什么这不仅仅是一个metaball教程，而是一个全新的教程——那就开始吧！和往常一样，我把所有内容分解成几个部分：</p>
-
-<ul>
-<li>首先，我会快速解释一下这种效果在经典实现中的工作原理，然后我们会进行哪些不同的调整。</li>
-<li>然后，我会介绍一下Compose的简单设置，让它运行起来。</li>
-<li>最后，我们会更详细地介绍着色器本身。</li>
-</ul>
-
-
-<p>最终，我们应该得到如下所示的效果：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1192/1*2oZU3pJdUVUq1eR56tVTNw.gif" alt="这只是其中一个选项；这种效果是高度可定制的。" /></p>
-
-<blockquote><p>开始之前，先简单说明一下——我不会为我制作的每个效果都制作教程，但你可以在我的 <a href="https://github.com/AleksiejVolkov/runtimeshaders">GitHub</a> （链接：<a href="https://github.com/AleksiejVolkov/runtimeshaders%EF%BC%89%E4%B8%8A%E6%89%BE%E5%88%B0%E6%89%80%E6%9C%89%E6%95%99%E7%A8%8B%E3%80%82%E4%BD%A0%E8%BF%98%E5%8F%AF%E4%BB%A5%E5%9C%A8%E6%88%91%E7%9A%84">https://github.com/AleksiejVolkov/runtimeshaders%EF%BC%89%E4%B8%8A%E6%89%BE%E5%88%B0%E6%89%80%E6%9C%89%E6%95%99%E7%A8%8B%E3%80%82%E4%BD%A0%E8%BF%98%E5%8F%AF%E4%BB%A5%E5%9C%A8%E6%88%91%E7%9A%84</a> <a href="https://t.me/droidshaderworks">Telegram 频道</a> 上找到视频、新效果公告以及问题的解答。期待在那里见到你！</p></blockquote>
-
-<p>要创建元球效果，我们先来回顾一下基础知识。如何在着色器中绘制一个简单的圆圈？最简单的方法是定义一个中心和一个半径，然后使用 step 函数。如果像素比半径更靠近中心，则返回 1；如果像素比半径更远离中心，则返回 0。实际代码如下：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">float</span> <span class="n">ball</span><span class="p">(</span> <span class="k">vec2</span> <span class="n">p</span><span class="p">,</span> <span class="k">vec2</span> <span class="n">center</span><span class="p">,</span> <span class="k">float</span> <span class="n">radius</span> <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">step</span><span class="p">(</span><span class="n">length</span><span class="p">(</span><span class="n">p</span><span class="o">-</span><span class="n">center</span><span class="p">),</span> <span class="n">radius</span><span class="p">);</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">void</span> <span class="n">mainImage</span><span class="p">(</span> <span class="k">out</span> <span class="k">vec4</span> <span class="n">fragColor</span><span class="p">,</span> <span class="k">in</span> <span class="k">vec2</span> <span class="n">fragCoord</span> <span class="p">)</span>
-</span><span class='line'><span class="p">{</span>
-</span><span class='line'>    <span class="c1">// Normalized pixel coordinates (from -0.5 to 0.5)</span>
-</span><span class='line'>    <span class="k">vec2</span> <span class="n">uv</span> <span class="o">=</span> <span class="n">fragCoord</span><span class="o">/</span><span class="n">iResolution</span><span class="p">.</span><span class="n">xy</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>    <span class="n">uv</span><span class="p">.</span><span class="n">x</span> <span class="o">*=</span> <span class="n">iResolution</span><span class="p">.</span><span class="n">x</span> <span class="o">/</span> <span class="n">iResolution</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">float</span> <span class="n">b1</span> <span class="o">=</span> <span class="n">ball</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span><span class="p">(</span><span class="mf">0.</span><span class="p">),</span> <span class="mf">0.2</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">vec3</span> <span class="n">color</span> <span class="o">=</span> <span class="n">b1</span><span class="o">*</span><span class="k">vec3</span><span class="p">(</span><span class="mf">1.</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">fragColor</span> <span class="o">=</span> <span class="k">vec4</span><span class="p">(</span><span class="n">color</span><span class="p">,</span><span class="mf">1.0</span><span class="p">);</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<blockquote><p>这段代码是用 GLSL 编写的，而不是 AGSL，你可以直接复制粘贴到 shadertoy.com 中。在本节中，所有代码都将采用相同的方法，让你无需运行 Android Studio 即可更轻松地测试和查看结果。</p></blockquote>
-
-<p><em>结果是一个最简单的圆圈。如果你对着色器稍有了解，这部分应该很容易理解。</em></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*PTHu_h9ayCxqi-EgVN2nVQ.png" alt="最简单的圆圈" /></p>
-
-<p>现在，让我们添加第二个圆圈，并将它们水平放置，使它们略微分开，而不是同时位于中心。这次，我们不再使用步长函数来定义边缘，而是使用反距离。我们仍然会得到两个圆圈，但边缘不再是锐利的，而是平滑的渐变，使圆圈看起来更像发光的点。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">float</span> <span class="n">ball</span><span class="p">(</span><span class="k">vec2</span> <span class="n">p</span><span class="p">,</span> <span class="k">vec2</span> <span class="n">center</span><span class="p">,</span> <span class="k">float</span> <span class="n">radius</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">dist</span> <span class="o">=</span> <span class="n">length</span><span class="p">(</span><span class="n">p</span> <span class="o">-</span> <span class="n">center</span><span class="p">);</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">radius</span> <span class="o">/</span> <span class="n">dist</span><span class="p">;</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">void</span> <span class="n">mainImage</span><span class="p">(</span> <span class="k">out</span> <span class="k">vec4</span> <span class="n">fragColor</span><span class="p">,</span> <span class="k">in</span> <span class="k">vec2</span> <span class="n">fragCoord</span> <span class="p">)</span>
-</span><span class='line'><span class="p">{</span>
-</span><span class='line'>   <span class="c1">// Normalized pixel coordinates (from -0.5 to 0.5)</span>
-</span><span class='line'>    <span class="k">vec2</span> <span class="n">uv</span> <span class="o">=</span> <span class="n">fragCoord</span><span class="o">/</span><span class="n">iResolution</span><span class="p">.</span><span class="n">xy</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>    <span class="n">uv</span><span class="p">.</span><span class="n">x</span> <span class="o">*=</span> <span class="n">iResolution</span><span class="p">.</span><span class="n">x</span> <span class="o">/</span> <span class="n">iResolution</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">float</span> <span class="n">b1</span> <span class="o">=</span> <span class="n">ball</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span><span class="p">(</span><span class="o">-</span><span class="mf">0.4</span><span class="p">,</span><span class="mf">0.</span><span class="p">),</span> <span class="mf">0.1</span><span class="p">);</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">b2</span> <span class="o">=</span> <span class="n">ball</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span><span class="p">(</span><span class="mf">0.4</span><span class="p">,</span><span class="mf">0.</span><span class="p">),</span> <span class="mf">0.1</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">float</span> <span class="n">circles</span> <span class="o">=</span> <span class="n">b1</span> <span class="o">+</span> <span class="n">b2</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">vec3</span> <span class="n">color</span> <span class="o">=</span> <span class="n">circles</span><span class="o">*</span><span class="k">vec3</span><span class="p">(</span><span class="mf">1.</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">fragColor</span> <span class="o">=</span> <span class="k">vec4</span><span class="p">(</span><span class="n">color</span><span class="p">,</span><span class="mf">1.0</span><span class="p">);</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>最终效果如下：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*rXfBtvZOlpnK98XEy7HyUA.png" alt="" /></p>
-
-<p>如你所见，在最终图像中，我们将两个圆的值相加。即使现在，如果你将它们移近，你也会看到它们开始合并。基本上，效果已经存在——剩下的就是对最终值应用一些函数，或者再次使用 step 函数截断低于特定阈值的所有内容，保留其内部内容。就这样——元球效果完成了！</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">float</span> <span class="n">ball</span><span class="p">(</span><span class="k">vec2</span> <span class="n">p</span><span class="p">,</span> <span class="k">vec2</span> <span class="n">center</span><span class="p">,</span> <span class="k">float</span> <span class="n">radius</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">dist</span> <span class="o">=</span> <span class="n">length</span><span class="p">(</span><span class="n">p</span> <span class="o">-</span> <span class="n">center</span><span class="p">);</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">radius</span> <span class="o">/</span> <span class="n">dist</span><span class="p">;</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">void</span> <span class="n">mainImage</span><span class="p">(</span> <span class="k">out</span> <span class="k">vec4</span> <span class="n">fragColor</span><span class="p">,</span> <span class="k">in</span> <span class="k">vec2</span> <span class="n">fragCoord</span> <span class="p">)</span>
-</span><span class='line'><span class="p">{</span>
-</span><span class='line'>    <span class="c1">// Normalized pixel coordinates (from -0.5 to 0.5)   </span>
-</span><span class='line'>    <span class="k">vec2</span> <span class="n">uv</span> <span class="o">=</span> <span class="n">fragCoord</span><span class="o">/</span><span class="n">iResolution</span><span class="p">.</span><span class="n">xy</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>    <span class="n">uv</span><span class="p">.</span><span class="n">x</span> <span class="o">*=</span> <span class="n">iResolution</span><span class="p">.</span><span class="n">x</span> <span class="o">/</span> <span class="n">iResolution</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// make circles moving slightly along horizontal direction</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">horiz</span> <span class="o">=</span> <span class="p">(</span><span class="mf">0.5</span><span class="o">*</span><span class="n">sin</span><span class="p">(</span><span class="n">iTime</span><span class="p">)</span><span class="o">+</span><span class="mf">0.5</span><span class="p">)</span><span class="o">*</span><span class="mf">0.2</span><span class="p">;</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">b1</span> <span class="o">=</span> <span class="n">ball</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span><span class="p">(</span><span class="o">-</span><span class="mf">0.3</span><span class="o">+</span><span class="n">horiz</span><span class="p">,</span><span class="mf">0.</span><span class="p">),</span> <span class="mf">0.1</span><span class="p">);</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">b2</span> <span class="o">=</span> <span class="n">ball</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span><span class="p">(</span><span class="mf">0.3</span><span class="o">-</span><span class="n">horiz</span><span class="p">,</span><span class="mf">0.</span><span class="p">),</span> <span class="mf">0.1</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">float</span> <span class="n">circles</span> <span class="o">=</span> <span class="n">b1</span> <span class="o">+</span> <span class="n">b2</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">float</span> <span class="n">threshold</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">;</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">alpha</span> <span class="o">=</span> <span class="n">step</span><span class="p">(</span><span class="n">threshold</span><span class="p">,</span> <span class="n">circles</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">vec3</span> <span class="n">color</span> <span class="o">=</span> <span class="n">alpha</span><span class="o">*</span><span class="k">vec3</span><span class="p">(</span><span class="mf">1.</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">fragColor</span> <span class="o">=</span> <span class="k">vec4</span><span class="p">(</span><span class="n">color</span><span class="p">,</span><span class="mf">1.0</span><span class="p">);</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*rIVQla9lc5qbYGaCMVmI4g.gif" alt="最简单的元球效果" /></p>
-
-<p>当然，除了阶跃函数，你还可以使用 SmoothStep，添加距离的平方反比，或者尝试不同的公式，调整系数等等。所有这些都是可能的，并且都会改变最终的外观，但核心思想保持不变：我们用平滑衰减公式定义圆，将结果相加，并在某个阈值处进行截断。这样，当形状接近时，它们的场之和会超过阈值，从而合并成一个形状——而当它们相距较远时，则不会合并。</p>
-
-<p>现在我们已经了解了如何创建元球效果，看起来我们只需打开 Android Studio 就可以开始构建了！然而，我们很快就会遇到两个问题：</p>
-
-<ul>
-<li>目前，所有按钮都像圆形一样工作——这是意料之中的。但如果我们希望合并按钮具有其他形状，则需要使用例如 SDF 方法。即便如此，形状仍然在着色器内部定义，这意味着我们不能简单地在 Compose 视图中应用 RoundedCornerShape 并期望它能够正常工作。</li>
-<li>两个按钮必须在同一个着色器中定义。如果有三个按钮，则三个按钮都必须位于同一个着色器中。最重要的是——我们如何处理这些按钮的点击？</li>
-</ul>
-
-
-<p>如果你查找有关此效果的文章，你会发现这两个问题通常被忽略。然而，对我来说，它们至关重要——这正是我决定撰写本教程的原因。我建议采用一种不同的方法来解决这两个问题。</p>
-
-<p>首先，我们不会在着色器内部定义形状。相反，我们将变形坐标系本身，从而解决不同形状的问题。</p>
-
-<p>其次，效果中的每个元素都会获得自己的着色器实例，但我们也会将相邻元素的坐标传递给它。这解决了点击处理问题，因为现在每个元素都是一个独立的可组合元素，拥有自己的属性和 lambda 表达式。下图所示：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*7yVd3iok98-pQNLWIhP1mQ.png" alt="绿色表示可组合元素。粉色表示着色器" /></p>
-
-<p>因此，我们的任务可以分为两个主要的子任务。一旦解决了这两个子任务，我们就能得到最终的效果。首先，我们需要学习如何变形画布以获得与元球相同的视觉效果。然后，我们将收集容器中每个子元素的位置数据，并将其传递给其他着色器。让我们先从第一部分开始。</p>
-
-<p>让我们从使用着色器所需的最简单的设置开始。下面是可组合部分——你可以直接复制粘贴到你的项目中，它应该可以立即运行。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">MetaballShaderScreen</span><span class="p">(</span><span class="n">paddingValues</span><span class="p">:</span> <span class="n">PaddingValues</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">shader</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">RuntimeShader</span><span class="p">(</span><span class="n">metaballShader</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">paddingValues</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF171717</span><span class="p">)),</span>
-</span><span class='line'>        <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">ShadedButton</span><span class="p">(</span><span class="n">shader</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">ShadedButton</span><span class="p">(</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">shader</span><span class="p">:</span> <span class="n">RuntimeShader</span><span class="p">,)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">boxSize</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">IntSize</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">50.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">onSizeChanged</span> <span class="p">{</span> <span class="n">boxSize</span> <span class="p">=</span> <span class="n">it</span> <span class="p">}</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">graphicsLayer</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span>
-</span><span class='line'>                        <span class="s">&quot;resolution&quot;</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">boxSize</span><span class="p">.</span><span class="n">width</span><span class="p">.</span><span class="n">toFloat</span><span class="p">(),</span>
-</span><span class='line'>                        <span class="n">boxSize</span><span class="p">.</span><span class="n">width</span><span class="p">.</span><span class="n">toFloat</span><span class="p">())</span>
-</span><span class='line'>                    <span class="k">this</span><span class="p">.</span><span class="n">renderEffect</span> <span class="p">=</span> <span class="n">RenderEffect</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">createRuntimeShaderEffect</span><span class="p">(</span><span class="n">shader</span><span class="p">,</span> <span class="s">&quot;image&quot;</span><span class="p">)</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">asComposeRenderEffect</span><span class="p">()</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFF6F6F6</span><span class="p">))</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="n">Icon</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">imageVector</span> <span class="p">=</span> <span class="n">Icons</span><span class="p">.</span><span class="n">Default</span><span class="p">.</span><span class="n">MoreVert</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;Expand Menu&quot;</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">tint</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>以下是着色器代码：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Language</span><span class="p">(</span><span class="s">&quot;AGSL&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">metaballShader</span> <span class="p">=</span> <span class="s">&quot;&quot;&quot;</span>
-</span><span class='line'>    <span class="n">uniform</span> <span class="n">vec2</span> <span class="n">resolution</span><span class="p">;</span>
-</span><span class='line'>    <span class="n">uniform</span> <span class="n">shader</span> <span class="n">image</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">vec2</span> <span class="n">NormalizeCoordinates</span><span class="p">(</span><span class="n">vec2</span> <span class="n">o</span><span class="p">,</span> <span class="n">vec2</span> <span class="n">r</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">float2</span> <span class="n">uv</span> <span class="p">=</span> <span class="n">o</span> <span class="p">/</span> <span class="n">r</span> <span class="p">-</span> <span class="m">0.5</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">r</span><span class="p">.</span><span class="n">x</span> <span class="p">&gt;=</span> <span class="n">r</span><span class="p">.</span><span class="n">y</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">uv</span><span class="p">.</span><span class="n">x</span> <span class="p">*=</span> <span class="n">r</span><span class="p">.</span><span class="n">x</span> <span class="p">/</span> <span class="n">r</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
-</span><span class='line'>        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">uv</span><span class="p">.</span><span class="n">y</span> <span class="p">*=</span> <span class="n">r</span><span class="p">.</span><span class="n">y</span> <span class="p">/</span> <span class="n">r</span><span class="p">.</span><span class="n">x</span><span class="p">;</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">return</span> <span class="n">uv</span><span class="p">;</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">vec4</span> <span class="n">GetImageTexture</span><span class="p">(</span><span class="n">vec2</span> <span class="n">p</span><span class="p">,</span> <span class="n">vec2</span> <span class="n">pivot</span><span class="p">,</span> <span class="n">vec2</span> <span class="n">r</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">r</span><span class="p">.</span><span class="n">x</span> <span class="p">&gt;</span> <span class="n">r</span><span class="p">.</span><span class="n">y</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">p</span><span class="p">.</span><span class="n">x</span> <span class="p">/=</span> <span class="n">r</span><span class="p">.</span><span class="n">x</span> <span class="p">/</span> <span class="n">r</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
-</span><span class='line'>        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">p</span><span class="p">.</span><span class="n">y</span> <span class="p">/=</span> <span class="n">r</span><span class="p">.</span><span class="n">y</span> <span class="p">/</span> <span class="n">r</span><span class="p">.</span><span class="n">x</span><span class="p">;</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">p</span> <span class="p">+=</span> <span class="n">pivot</span><span class="p">;</span>
-</span><span class='line'>        <span class="n">p</span> <span class="p">*=</span> <span class="n">r</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">return</span> <span class="n">image</span><span class="p">.</span><span class="n">eval</span><span class="p">(</span><span class="n">p</span><span class="p">);</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">vec4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">float2</span> <span class="n">uv</span> <span class="p">=</span> <span class="n">NormalizeCoordinates</span><span class="p">(</span><span class="n">fragCoord</span><span class="p">,</span> <span class="n">resolution</span><span class="p">);</span>
-</span><span class='line'>        <span class="n">vec4</span> <span class="k">final</span> <span class="p">=</span> <span class="n">GetImageTexture</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="n">vec2</span><span class="p">(</span><span class="m">0.5</span><span class="p">),</span> <span class="n">resolution</span><span class="p">);</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">vec4</span><span class="p">(</span><span class="k">final</span><span class="p">);</span>
-</span><span class='line'>    <span class="p">}</span><span class="s">&quot;&quot;&quot;.trimIndent()</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<blockquote><p>在着色器中，我已经包含了两个必要的方法：一个用于规范化，一个用于从输入纹理中获取颜色。我在之前的课程中介绍过这些方法，因此你可以简单地将它们视为必需的样板代码——它们不会影响效果的核心逻辑——或者查看我之前的教程，我在那里详细解释了它们。本课程已经相当丰富，甚至可能信息量过大，所以我在这里就不赘述了。</p></blockquote>
-
-<p>太好了！如果一切设置正确，我们将得到一个尚未添加任何内容的着色器——它只是绘制所有内容，就像着色器根本不存在一样。结果应该只是一个普通的按钮，没什么特别的：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*V_yEnqGelKeDKYaPwUklTg.png" alt="没什么特别的，只是一个按钮 :)" /></p>
-
-<p>在最终的代码中，变形将基于其他元素，但由于我们目前还没有这些元素，我只需添加一个虚拟点并将其绘制在画布上即可。这只是测试代码，我们稍后会将其移除。我还会将时间传递给着色器，并使该点水平移动。这将是我们的虚拟点，我们将使用它作为画布变形的参考：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">//...</span>
-</span><span class='line'> <span class="k">var</span> <span class="py">time</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'><span class="c1">//...</span>
-</span><span class='line'>  <span class="p">.</span><span class="n">graphicsLayer</span> <span class="p">{</span>
-</span><span class='line'>       <span class="c1">//...</span>
-</span><span class='line'>        <span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span><span class="s">&quot;time&quot;</span><span class="p">,</span> <span class="n">time</span><span class="p">)</span>
-</span><span class='line'><span class="c1">//...</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>在着色器代码中，我们必须添加时间统一函数：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">uniform</span> <span class="k">float</span> <span class="n">time</span><span class="p">;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>并添加虚拟圆：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'> <span class="k">float</span> <span class="n">getCircle</span><span class="p">(</span><span class="k">vec2</span> <span class="n">p</span><span class="p">,</span> <span class="k">vec2</span> <span class="n">pivot</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">step</span><span class="p">(</span><span class="n">length</span><span class="p">(</span><span class="n">pivot</span> <span class="o">-</span> <span class="n">p</span><span class="p">),</span> <span class="mf">0.1</span><span class="p">);</span>
-</span><span class='line'> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>同时将虚拟圆添加到最终输出中：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'> <span class="k">vec4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">//...</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">float</span> <span class="n">circleHorizontalPosition</span> <span class="o">=</span> <span class="n">sin</span><span class="p">(</span><span class="mf">0.5</span><span class="o">*</span><span class="n">time</span><span class="p">)</span><span class="o">*</span><span class="mf">2.</span><span class="p">;</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">helperCicrle</span> <span class="o">=</span> <span class="n">getCircle</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span><span class="p">(</span><span class="n">circleHorizontalPosition</span><span class="p">,</span> <span class="mf">0.</span><span class="p">));</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">final</span> <span class="o">=</span> <span class="n">mix</span><span class="p">(</span><span class="n">final</span><span class="p">,</span> <span class="n">helperCicrle</span><span class="o">*</span><span class="k">vec4</span><span class="p">(</span><span class="mf">1.</span><span class="p">,</span><span class="mf">0.</span><span class="p">,</span><span class="mf">0.</span><span class="p">,</span><span class="mf">1.</span><span class="p">),</span> <span class="n">helperCicrle</span><span class="p">);</span>
-</span><span class='line'>        <span class="k">return</span> <span class="k">vec4</span><span class="p">(</span><span class="n">final</span><span class="p">);</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这样，我们应该看到一个红色的参考点，我们将以此为基础来扭曲按钮。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*rikNEHT918EmDeWLzQsWbA.gif" alt="" /></p>
-
-<p>现在，让我们尝试计算控制点对按钮的影响，使用与计算元球完全相同的方法：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'> <span class="k">float</span> <span class="n">getInfluence</span><span class="p">(</span><span class="k">vec2</span> <span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span> <span class="n">controlPoint</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">dist</span> <span class="o">=</span> <span class="n">length</span><span class="p">(</span><span class="n">controlPoint</span><span class="o">-</span><span class="n">uv</span><span class="p">);</span>
-</span><span class='line'>        <span class="k">return</span> <span class="mf">1.</span><span class="o">/</span><span class="n">dist</span><span class="p">;</span>
-</span><span class='line'> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'> <span class="k">vec4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">float2</span> <span class="n">uv</span> <span class="o">=</span> <span class="n">NormalizeCoordinates</span><span class="p">(</span><span class="n">fragCoord</span><span class="p">,</span> <span class="n">resolution</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">float</span> <span class="n">circleHorizontalPosition</span> <span class="o">=</span> <span class="n">sin</span><span class="p">(</span><span class="mf">0.2</span><span class="o">*</span><span class="n">time</span><span class="p">)</span><span class="o">*</span><span class="mf">2.</span><span class="p">;</span>
-</span><span class='line'>        <span class="k">vec2</span> <span class="n">controlPointPos</span> <span class="o">=</span> <span class="k">vec2</span><span class="p">(</span><span class="n">circleHorizontalPosition</span><span class="p">,</span> <span class="mf">0.</span><span class="p">);</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">helperCicrle</span> <span class="o">=</span> <span class="n">getCircle</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="n">controlPointPos</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">float</span> <span class="n">influence</span> <span class="o">=</span> <span class="n">getInfluence</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="n">controlPointPos</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">uv</span> <span class="o">*=</span> <span class="mf">1.</span><span class="o">-</span><span class="n">influence</span><span class="p">;</span> <span class="c1">// why here is 1 - influence was explained in Deform the Canvas tutorial</span>
-</span><span class='line'>        <span class="k">vec4</span> <span class="n">final</span> <span class="o">=</span> <span class="n">GetImageTexture</span><span class="p">(</span><span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span><span class="p">(</span><span class="mf">0.5</span><span class="p">),</span> <span class="n">resolution</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">final</span> <span class="o">=</span> <span class="n">mix</span><span class="p">(</span><span class="n">final</span><span class="p">,</span><span class="n">helperCicrle</span><span class="o">*</span><span class="k">vec4</span><span class="p">(</span><span class="mf">1.</span><span class="p">,</span><span class="mf">0.</span><span class="p">,</span><span class="mf">0.</span><span class="p">,</span><span class="mf">1.</span><span class="p">),</span><span class="n">helperCicrle</span><span class="p">);</span>
-</span><span class='line'>        <span class="k">return</span> <span class="k">vec4</span><span class="p">(</span><span class="n">final</span><span class="p">);</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*ivjxpAXa4_O6hDtt.gif" alt="够搞笑的，但这不是我们想要的" /></p>
-
-<p>结果很搞笑，但不是我们的预期。内部的瑕疵（“洞”效果）可以通过将影响值限制在 0 到 1 之间轻松修复。然而，这仍然不是我们想要的结果——我们得到的是控制点周围的区域膨胀了，而我们需要的效果几乎是相反的。那么，我们该如何实现呢？</p>
-
-<p>答案很简单，也有点意思——虽然我花了一些时间才明白。这个想法是将坐标中心到控制点的距离与两个距离之和进行比较：从中心到当前点 (uv) 的距离，以及从当前点到控制点的距离。下图是按钮内部一个随机点的示意图。这个距离总是大于直接到中心的距离，而这个技巧就是让我们实现元球效果的关键！</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*n7kIFbwMCFNmhinMLfBP6g.png" alt="如果我们将绿色到红色的距离加上到中心的距离，那么绿色到红色的距离总是大于中心到红色的距离。" /></p>
-
-<p>所以，为了将我们现在的效果变成几乎完整的效果（除了强度设置和其他一些小的调整），我们实际上只需要将中心添加到距离计算中——就这样！</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'>  <span class="k">float</span> <span class="n">getInfluence</span><span class="p">(</span><span class="k">vec2</span> <span class="n">uv</span><span class="p">,</span> <span class="k">vec2</span> <span class="n">controlPoint</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// float dist = length(controlPoint-uv); - was like that</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">dist</span> <span class="o">=</span> <span class="n">length</span><span class="p">(</span><span class="n">controlPoint</span><span class="o">-</span><span class="n">uv</span><span class="p">)</span> <span class="o">+</span> <span class="n">length</span><span class="p">(</span><span class="n">uv</span><span class="p">);</span> <span class="c1">//added length(uv);</span>
-</span><span class='line'>        <span class="k">return</span> <span class="mf">1.</span><span class="o">/</span><span class="n">dist</span><span class="p">;</span>
-</span><span class='line'>  <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*ArDCdZxeCKBBmsfQ.gif" alt="我们已经得到了想要的结果" /></p>
-
-<blockquote><p><em>现在可以添加“mass”或除以距离的平方来加快淡出速度。但这些都是完善的细节，并非核心效果逻辑的一部分。我强烈建议你自己尝试一下 getInfluence 方法。</em></p></blockquote>
-
-<p>最后一步是传递另一个组件的坐标，而不是使用着色器内的控制点。听起来很简单，但这里有一些需要讨论的地方。对我来说，最难的部分是获取与着色器本身位于同一“系统”中的坐标。虽然控制点位于着色器内部，但我们使用 uv 创建了它，而 uv 已经根据视图的大小进行了归一化。但是，现在我们要获取相对于父容器的位置。那么，我们如何将所有这些结合起来呢？</p>
-
-<p>首先，让我们在容器中添加第二个按钮，并将所有必要的参数传递给着色器。之后，我们将深入着色器逻辑的核心——在我看来，这是最有趣的部分。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-<span class='line-number'>52</span>
-<span class='line-number'>53</span>
-<span class='line-number'>54</span>
-<span class='line-number'>55</span>
-<span class='line-number'>56</span>
-<span class='line-number'>57</span>
-<span class='line-number'>58</span>
-<span class='line-number'>59</span>
-<span class='line-number'>60</span>
-<span class='line-number'>61</span>
-<span class='line-number'>62</span>
-<span class='line-number'>63</span>
-<span class='line-number'>64</span>
-<span class='line-number'>65</span>
-<span class='line-number'>66</span>
-<span class='line-number'>67</span>
-<span class='line-number'>68</span>
-<span class='line-number'>69</span>
-<span class='line-number'>70</span>
-<span class='line-number'>71</span>
-<span class='line-number'>72</span>
-<span class='line-number'>73</span>
-<span class='line-number'>74</span>
-<span class='line-number'>75</span>
-<span class='line-number'>76</span>
-<span class='line-number'>77</span>
-<span class='line-number'>78</span>
-<span class='line-number'>79</span>
-<span class='line-number'>80</span>
-<span class='line-number'>81</span>
-<span class='line-number'>82</span>
-<span class='line-number'>83</span>
-<span class='line-number'>84</span>
-<span class='line-number'>85</span>
-<span class='line-number'>86</span>
-<span class='line-number'>87</span>
-<span class='line-number'>88</span>
-<span class='line-number'>89</span>
-<span class='line-number'>90</span>
-<span class='line-number'>91</span>
-<span class='line-number'>92</span>
-<span class='line-number'>93</span>
-<span class='line-number'>94</span>
-<span class='line-number'>95</span>
-<span class='line-number'>96</span>
-<span class='line-number'>97</span>
-<span class='line-number'>98</span>
-<span class='line-number'>99</span>
-<span class='line-number'>100</span>
-<span class='line-number'>101</span>
-<span class='line-number'>102</span>
-<span class='line-number'>103</span>
-<span class='line-number'>104</span>
-<span class='line-number'>105</span>
-<span class='line-number'>106</span>
-<span class='line-number'>107</span>
-<span class='line-number'>108</span>
-<span class='line-number'>109</span>
-<span class='line-number'>110</span>
-<span class='line-number'>111</span>
-<span class='line-number'>112</span>
-<span class='line-number'>113</span>
-<span class='line-number'>114</span>
-<span class='line-number'>115</span>
-<span class='line-number'>116</span>
-<span class='line-number'>117</span>
-<span class='line-number'>118</span>
-<span class='line-number'>119</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">TestShaderScreen</span><span class="p">(</span><span class="n">paddingValues</span><span class="p">:</span> <span class="n">PaddingValues</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">shader</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">RuntimeShader</span><span class="p">(</span><span class="n">metaballShader</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">parentBoxSize</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">IntSize</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">firstButtonPosition</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">Offset</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">secondButtonPosition</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">Offset</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">paddingValues</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF171717</span><span class="p">))</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">onSizeChanged</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">parentBoxSize</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">it</span>
-</span><span class='line'>            <span class="p">},</span>
-</span><span class='line'>        <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">ShadedButton</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">start</span> <span class="p">=</span> <span class="m">70.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">50.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">onGloballyPositioned</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">firstButtonPosition</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">positionInParent</span><span class="p">()</span> <span class="p">+</span>
-</span><span class='line'>                            <span class="n">Offset</span><span class="p">(</span>
-</span><span class='line'>                                <span class="n">x</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">*</span> <span class="m">0.5f</span><span class="p">,</span>
-</span><span class='line'>                                <span class="n">y</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">*</span> <span class="m">0.5f</span>
-</span><span class='line'>                            <span class="p">)</span>
-</span><span class='line'>                <span class="p">},</span>
-</span><span class='line'>            <span class="n">icon</span> <span class="p">=</span> <span class="n">Icons</span><span class="p">.</span><span class="n">Filled</span><span class="p">.</span><span class="n">Favorite</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">shader</span> <span class="p">=</span> <span class="n">shader</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">parentBoxSize</span> <span class="p">=</span> <span class="n">parentBoxSize</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">otherViewPosition</span> <span class="p">=</span> <span class="n">secondButtonPosition</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">myPosition</span> <span class="p">=</span> <span class="n">firstButtonPosition</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>        <span class="n">ShadedButton</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">end</span> <span class="p">=</span> <span class="m">70.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">50.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">onGloballyPositioned</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">secondButtonPosition</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">positionInParent</span><span class="p">()</span> <span class="p">+</span>
-</span><span class='line'>                            <span class="n">Offset</span><span class="p">(</span>
-</span><span class='line'>                                <span class="n">x</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">width</span> <span class="p">*</span> <span class="m">0.5f</span><span class="p">,</span>
-</span><span class='line'>                                <span class="n">y</span> <span class="p">=</span> <span class="n">it</span><span class="p">.</span><span class="n">size</span><span class="p">.</span><span class="n">height</span> <span class="p">*</span> <span class="m">0.5f</span>
-</span><span class='line'>                            <span class="p">)</span>
-</span><span class='line'>                <span class="p">},</span>
-</span><span class='line'>            <span class="n">icon</span> <span class="p">=</span> <span class="n">Icons</span><span class="p">.</span><span class="n">Filled</span><span class="p">.</span><span class="n">Star</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">shader</span> <span class="p">=</span> <span class="n">shader</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">parentBoxSize</span> <span class="p">=</span> <span class="n">parentBoxSize</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">otherViewPosition</span> <span class="p">=</span> <span class="n">firstButtonPosition</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">myPosition</span> <span class="p">=</span> <span class="n">secondButtonPosition</span><span class="p">.</span><span class="n">value</span><span class="p">,</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">ShadedButton</span><span class="p">(</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">icon</span><span class="p">:</span> <span class="n">ImageVector</span><span class="p">,</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">shader</span><span class="p">:</span> <span class="n">RuntimeShader</span><span class="p">,</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">parentBoxSize</span><span class="p">:</span> <span class="n">IntSize</span><span class="p">,</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">myPosition</span><span class="p">:</span> <span class="n">Offset</span><span class="p">,</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">otherViewPosition</span><span class="p">:</span> <span class="n">Offset</span><span class="p">,)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">boxSize</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="n">IntSize</span><span class="p">.</span><span class="n">Zero</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">onSizeChanged</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">boxSize</span> <span class="p">=</span> <span class="n">it</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">graphicsLayer</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span>
-</span><span class='line'>                        <span class="s">&quot;resolution&quot;</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">boxSize</span><span class="p">.</span><span class="n">width</span><span class="p">.</span><span class="n">toFloat</span><span class="p">(),</span>
-</span><span class='line'>                        <span class="n">boxSize</span><span class="p">.</span><span class="n">width</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                    <span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span>
-</span><span class='line'>                        <span class="s">&quot;parentBoxSize&quot;</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">parentBoxSize</span><span class="p">.</span><span class="n">width</span><span class="p">.</span><span class="n">toFloat</span><span class="p">(),</span>
-</span><span class='line'>                        <span class="n">parentBoxSize</span><span class="p">.</span><span class="n">height</span><span class="p">.</span><span class="n">toFloat</span><span class="p">()</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                    <span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span>
-</span><span class='line'>                        <span class="s">&quot;otherViewPosition&quot;</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">otherViewPosition</span><span class="p">.</span><span class="n">x</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">otherViewPosition</span><span class="p">.</span><span class="n">y</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                    <span class="n">shader</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span>
-</span><span class='line'>                        <span class="s">&quot;positionInParent&quot;</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">myPosition</span><span class="p">.</span><span class="n">x</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">myPosition</span><span class="p">.</span><span class="n">y</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                    <span class="k">this</span><span class="p">.</span><span class="n">renderEffect</span> <span class="p">=</span> <span class="n">RenderEffect</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">createRuntimeShaderEffect</span><span class="p">(</span><span class="n">shader</span><span class="p">,</span> <span class="s">&quot;image&quot;</span><span class="p">)</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">asComposeRenderEffect</span><span class="p">()</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">fillMaxSize</span><span class="p">()</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">10.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFF6F6F6</span><span class="p">))</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="n">Icon</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">imageVector</span> <span class="p">=</span> <span class="n">icon</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;Expand Menu&quot;</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">tint</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>基本上，我们添加的只是传递父容器的大小和相邻视图的中心坐标。请记住，由于 Compose 回调返回的位置是左上角，因此我们需要在传递之前对其进行一些调整。另外，请记住，第一个组件应该在 otherViewPosition 参数中接收第二个组件，第二个组件也应该接收第一个组件。最重要的是不要混淆它们 :)</p>
-
-<p>让我们继续讨论着色器。我们将从添加必要的 uniform 开始。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'> <span class="k">uniform</span> <span class="n">float2</span> <span class="n">otherViewPosition</span><span class="p">;</span>
-</span><span class='line'> <span class="k">uniform</span> <span class="n">float2</span> <span class="n">parentBoxSize</span><span class="p">;</span>
-</span><span class='line'> <span class="k">uniform</span> <span class="n">float2</span> <span class="n">positionInParent</span><span class="p">;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>现在到了有趣的部分：之前的控制点现在需要根据两个参数来计算——父级的大小以及第二个视图相对于父级的坐标。</p>
-
-<p>首先，我们来获取容器大小与按钮大小的比率。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'>  <span class="k">float</span> <span class="n">parentRatio</span> <span class="o">=</span> <span class="n">parentBoxSize</span><span class="p">.</span><span class="n">x</span> <span class="o">/</span> <span class="n">resolution</span><span class="p">.</span><span class="n">x</span><span class="p">;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>现在我们只需要稍微修改一下 getInfluence 方法，就能将所有内容整合到一个坐标系中：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">float</span> <span class="n">getInfluence</span><span class="p">(</span><span class="k">vec2</span> <span class="n">uv</span><span class="p">,</span> <span class="k">float</span> <span class="n">ratio</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">float2</span> <span class="n">posInParentNormalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">positionInParent</span><span class="o">/</span><span class="n">parentBoxSize</span><span class="p">)</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>        <span class="n">float2</span> <span class="n">controlPoint</span> <span class="o">=</span> <span class="n">otherViewPosition</span> <span class="o">/</span> <span class="n">parentBoxSize</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>        <span class="n">controlPoint</span><span class="p">.</span><span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="n">controlPoint</span><span class="p">.</span><span class="n">x</span><span class="o">-</span><span class="n">posInParentNormalized</span><span class="p">.</span><span class="n">x</span><span class="p">)</span> <span class="o">*</span> <span class="n">ratio</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">float</span> <span class="n">dist</span> <span class="o">=</span> <span class="n">max</span><span class="p">(</span><span class="mf">1.</span><span class="p">,</span> <span class="n">length</span><span class="p">(</span><span class="n">controlPoint</span><span class="o">-</span><span class="n">uv</span><span class="p">)</span> <span class="o">+</span> <span class="n">length</span><span class="p">(</span><span class="n">uv</span><span class="p">));</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">influence</span> <span class="o">=</span> <span class="n">smoothstep</span><span class="p">(</span><span class="mf">0.</span><span class="p">,</span><span class="mf">1.</span><span class="p">,</span> <span class="mf">1.</span><span class="o">/</span><span class="n">pow</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span><span class="mf">2.</span><span class="p">));</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">influence</span><span class="p">;</span>
-</span><span class='line'>    <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>听起来很简单，但实际上，过程中出现了一些不太明显的计算。而且这些计算并非一眼就能轻易掌握。所以我尽量把它解释得清晰易懂。所以，从整体上看，我们得到的是这样的：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*ttaLU6zCxuP0vuHWmtkgGA.png" alt="左边是我们的“活动”视图。想象一下，我们始终处于视图着色器的“内部”。" /></p>
-
-<p>好的，我们有父容器、它的大小、我们视图相对于父容器的位置，以及相邻视图（我们之前示例中的控制点）的位置。我们的任务是将这个控制点放到我们的UV坐标系中。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*S6fLIECuZWm-UYymAuwPbg.png" alt="从上到下的整个过程" /></p>
-
-<p>我尝试自上而下地解释了整个过程。现在让我们再看一下代码，并逐步讲解一下。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'>  <span class="n">float2</span> <span class="n">posInParentNormalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">positionInParent</span><span class="o">/</span><span class="n">parentBoxSize</span><span class="p">)</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>  <span class="n">float2</span> <span class="n">controlPoint</span> <span class="o">=</span> <span class="n">otherViewPosition</span> <span class="o">/</span> <span class="n">parentBoxSize</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>  <span class="k">float</span> <span class="n">parentRatio</span> <span class="o">=</span> <span class="n">parentBoxSize</span><span class="p">.</span><span class="n">x</span> <span class="o">/</span> <span class="n">resolution</span><span class="p">.</span><span class="n">x</span><span class="p">;</span>
-</span><span class='line'>  <span class="n">controlPoint</span><span class="p">.</span><span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="n">controlPoint</span><span class="p">.</span><span class="n">x</span><span class="o">-</span><span class="n">posInParentNormalized</span><span class="p">.</span><span class="n">x</span><span class="p">)</span> <span class="o">*</span> <span class="n">parentRatio</span><span class="p">;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>假设父容器的宽度为 500。我们在其中的位置为 100，相邻视图的位置为 400。首先，我们获取两个视图相对于父容器的标准化坐标（偏移 -0.5）。在本例中，我们的位置为 -0.3，相邻视图的位置为 0.2。因此，它们之间的距离为 0.5——即父容器宽度的一半。但请记住，我们位于附加到自身视图的着色器内部，因此必须将这个值乘以父容器大小与我们视图大小的比值。这是关键的一步：我们现在得到的不是 0.5，而是另一个值，但它位于我们视图的坐标系中。由此，我们可以计算距离，并执行之前对虚拟控制点执行的所有操作！</p>
-
-<blockquote><p>_这里我将所有内容简化为水平坐标，但同样的逻辑也适用于垂直坐标。我只是不想让本来就很复杂的解释更加难以理解。</p></blockquote>
-
-<p>最终，我们得到了：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*OWQ-vSnQ3yAiPloRXBRXQw.png" alt="静态看起来有点奇怪，但很明显两个视图是相互影响的。" /></p>
-
-<p>最后一步是用数组替换这两个视图，这样我们就可以添加第三个、第四个甚至第五个按钮。</p>
-
-<p>在着色器中，不能使用动态数组，所以我们需要设置一个上限——我选择了 10 个元素。我们还需要一个单独的计数器来记录实际有多少个元素。由于数组不能留空，在 Compose 中，我们会自动用零位置填充未使用的槽位，但计数器会确保这不会影响最终结果。</p>
-
-<p>因此，在着色器中，uniform 变量看起来如下：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'> <span class="k">uniform</span> <span class="k">int</span> <span class="n">count</span><span class="p">;</span>
-</span><span class='line'> <span class="k">uniform</span> <span class="n">float2</span> <span class="n">positions</span><span class="p">[</span><span class="mi">10</span><span class="p">];</span>
-</span><span class='line'> <span class="k">uniform</span> <span class="n">float2</span> <span class="n">parentResolution</span><span class="p">;</span>
-</span><span class='line'> <span class="k">uniform</span> <span class="n">float2</span> <span class="n">positionInParent</span><span class="p">;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果多个相邻元素同时影响视图，getInfluence 方法将循环遍历所有元素并累积影响。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">float</span> <span class="n">getInfluence</span><span class="p">(</span><span class="n">float2</span> <span class="n">uv</span><span class="p">,</span> <span class="k">float</span> <span class="n">ratio</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">float</span> <span class="n">influence</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">;</span>
-</span><span class='line'>    <span class="k">for</span> <span class="p">(</span><span class="k">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mo">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">10</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">posInParentNormalized</span> <span class="o">=</span> <span class="p">(</span><span class="n">positionInParent</span><span class="o">/</span><span class="n">parentBoxSize</span><span class="p">)</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>        <span class="n">float2</span> <span class="n">controlPoint</span> <span class="o">=</span> <span class="n">positions</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">/</span> <span class="n">parentBoxSize</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">;</span>
-</span><span class='line'>        <span class="n">controlPoint</span><span class="p">.</span><span class="n">x</span> <span class="o">=</span> <span class="p">(</span><span class="n">controlPoint</span><span class="p">.</span><span class="n">x</span><span class="o">-</span><span class="n">posInParentNormalized</span><span class="p">)</span> <span class="o">*</span> <span class="n">r</span><span class="p">;</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">dist</span> <span class="o">=</span> <span class="n">max</span><span class="p">(</span><span class="mf">1.</span><span class="p">,</span><span class="n">length</span><span class="p">(</span><span class="n">controlPoint</span><span class="o">-</span><span class="n">uv</span><span class="p">)</span> <span class="o">+</span> <span class="n">length</span><span class="p">(</span><span class="n">uv</span><span class="p">));</span>
-</span><span class='line'>        <span class="k">float</span> <span class="n">rawScale</span> <span class="o">=</span> <span class="mf">1.</span><span class="o">/</span><span class="n">pow</span><span class="p">(</span><span class="n">dist</span><span class="p">,</span><span class="mf">2.</span><span class="p">);</span>
-</span><span class='line'>        <span class="n">influence</span> <span class="o">+=</span> <span class="n">smoothstep</span><span class="p">(</span><span class="mf">0.</span><span class="p">,</span> <span class="mf">1.</span><span class="p">,</span> <span class="n">rawScale</span><span class="p">);</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">if</span><span class="p">(</span><span class="n">i</span><span class="o">==</span><span class="n">count</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="k">break</span><span class="p">;</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">clamp</span><span class="p">(</span><span class="n">influence</span><span class="p">,</span><span class="mf">0.</span><span class="p">,</span><span class="mf">1.</span><span class="p">);</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>在 Compose 中，我们需要添加一个列表并仔细传递所有值。你也可以添加动画和其他效果，但这会使 Compose 代码过载，在本课中更难理解。本教程已经相当丰富，所以我只演示如何将值传递到数组中——其余的实验留给你自己 :) 记住，你可以随时查看我的代码库以获取完整版本。</p>
-
-<p>下面是我编写的一个扩展方法，用于方便地向着色器添加列表。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">RuntimeShader</span><span class="p">.</span><span class="n">setVec2ArrayUniform</span><span class="p">(</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">values</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Pair</span><span class="p">&lt;</span><span class="n">Float</span><span class="p">,</span> <span class="n">Float</span><span class="p">&gt;&gt;,</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">maxSize</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">10</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">require</span><span class="p">(</span><span class="n">values</span><span class="p">.</span><span class="n">size</span> <span class="p">&lt;=</span> <span class="n">maxSize</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="s">&quot;Too many elements for uniform &#39;$name&#39;. Maximum allowed is $maxSize, but got ${values.size}&quot;</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">val</span> <span class="py">padded</span> <span class="p">=</span> <span class="n">values</span> <span class="p">+</span> <span class="n">List</span><span class="p">(</span><span class="n">maxSize</span> <span class="p">-</span> <span class="n">values</span><span class="p">.</span><span class="n">size</span><span class="p">)</span> <span class="p">{</span> <span class="m">0f</span> <span class="n">to</span> <span class="m">0f</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">floatArray</span> <span class="p">=</span> <span class="n">padded</span><span class="p">.</span><span class="n">flatMap</span> <span class="p">{</span> <span class="n">listOf</span><span class="p">(</span><span class="n">it</span><span class="p">.</span><span class="n">first</span><span class="p">,</span> <span class="n">it</span><span class="p">.</span><span class="n">second</span><span class="p">)</span> <span class="p">}.</span><span class="n">toFloatArray</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">this</span><span class="p">.</span><span class="n">setFloatUniform</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">floatArray</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>用法：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'>  <span class="n">shader</span><span class="p">.</span><span class="n">setVec2ArrayUniform</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">values</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>现在你可以添加不同的元素，并观察它们在动画过程中平滑地合并或分离：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*s01C-TPOXIfOwZDg.gif" alt="以下是三个不同形状的视图" /></p>
-
-<p>感谢你的阅读！如果你觉得我的实验有趣且我的解释对你有帮助，欢迎加入我的<a href="https://t.me/droidshaderworks">Telegram频道</a>或在<a href="https://x.com/KrowaNaMostku">Twitter (X)</a>上关注我。这个项目只是我的一个爱好，说实话，我的动力很大程度上取决于收到的反馈——所以我非常高兴在频道里见到你。如果你愿意，请在你的社交媒体上分享这篇文章，我将不胜感激。祝你撸码愉快！</p>
 ]]></content>
   </entry>
   
