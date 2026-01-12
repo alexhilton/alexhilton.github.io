@@ -1,0 +1,537 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Jetpack Compose内部的不同节点类型 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="本文将带你深入了解Jetpack Compose的渲染原理，了解Compose编译时，可组合函数中生成具有层级结构的不同的节点（Node）。">
+  <meta name="keywords" content="Jetpack Compose, Android, Node">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Jetpack Compose内部的不同节点类型</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-01-12'><span class='date'><span class='date-month'>Jan</span> <span class='date-day'>12</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「The Different Node Types in Jetpack Compose」，原文链接<a href="https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/">https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/</a>，由Wolfram Rittmeyer发布于2025年12月30日。</p></blockquote>
+
+<p><a href="/blog/2026/01/12/node-types-in-jetpack-compose/"><img src="https://www.grokkingandroid.com/wordpress/wp-content/uploads/2025/12/ComposeUiNode-700x389.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>如果你仔细观察 Compose，你会发现它很奇怪。你会发现很多函数都没有返回值。然而，<a href="https://developer.android.com/develop/ui/compose/mental-model">Android 文档</a>却说：</p>
+
+<blockquote><p>可组合函数会生成 UI 层级结构。</p></blockquote>
+
+<p>这到底是什么意思呢？从函数式编程的角度来看，你那些看似无害的无状态可组合函数实际上会产生大量的<em>副作用[1]</em>。其中就包括创建节点。</p>
+
+<p>有时你可能会创建一些可组合函数来自己创建节点。但更多时候，你会直接委托给其他可组合函数来<em>创建节点[2]</em>。</p>
+
+<p>那么，让我们来看看有哪些节点，它们的创建位置以及它们的用途：</p>
+
+<ul>
+<li>ComposeUiNode</li>
+<li>LayoutNode</li>
+<li>Modifier.Node</li>
+<li>SemanticsNode</li>
+</ul>
+
+
+<h2>ComposeUiNode</h2>
+
+<p>当你深入研究<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/layout/package-summary#Layout(androidx.compose.ui.Modifier,androidx.compose.ui.layout.MeasurePolicy)"><code>Layout</code></a>可组合对象时，你会发现它调用了<code>ReusableComposeNode[3]</code>:</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="n">@UiComposable</span>
+</span><span class='line'><span class="n">inline</span> <span class="k">fun</span> <span class="nf">Layout</span><span class="p">(</span><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span> <span class="n">measurePolicy</span><span class="p">:</span> <span class="n">MeasurePolicy</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">compositeKeyHash</span> <span class="p">=</span> <span class="n">currentCompositeKeyHash</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">materialized</span> <span class="p">=</span> <span class="n">currentComposer</span><span class="p">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">modifier</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">localMap</span> <span class="p">=</span> <span class="n">currentComposer</span><span class="p">.</span><span class="n">currentCompositionLocalMap</span>
+</span><span class='line'>    <span class="n">ReusableComposeNode</span><span class="p">&lt;</span><span class="n">ComposeUiNode</span><span class="p">,</span> <span class="n">Applier</span><span class="p">&gt;(</span>
+</span><span class='line'>        <span class="n">factory</span> <span class="p">=</span> <span class="n">ComposeUiNode</span><span class="p">.</span><span class="n">Constructor</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">update</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">measurePolicy</span><span class="p">,</span> <span class="n">SetMeasurePolicy</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">localMap</span><span class="p">,</span> <span class="n">SetResolvedCompositionLocals</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">materialized</span><span class="p">,</span> <span class="n">SetModifier</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">compositeKeyHash</span><span class="p">,</span> <span class="n">SetCompositeKeyHash</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">},</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong><code>ReusableComposeNode</code>本身并不是一个节点。</strong> 上面的代码中并没有构造函数调用，而是对另一个可组合对象的调用。第八行的工厂参数看似无关紧要，但实际上非常重要。因为最终会创建节点的就是这个函数。它会创建一个 <code>ComposeUiNode</code>。</p>
+
+<p><code>ReusableComposeNode</code> Composable 与 Compose 运行时紧密相关。这段代码告诉 Composer 应该启动一个 <code>GroupKind.ReusableNode</code> 类型的新组，然后代码会创建一个新节点，或者在重新组合时重用现有节点。最后，当使用 update 函数参数时，它会设置节点的内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="n">inline</span> <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">T</span> <span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="k">reified</span> <span class="n">E</span> <span class="p">:</span> <span class="n">Applier</span><span class="p">&gt;</span> <span class="n">ReusableComposeNode</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">noinline</span> <span class="n">factory</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">T</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">update</span><span class="p">:</span> <span class="n">@DisallowComposableCalls</span> <span class="n">Updater</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">currentComposer</span><span class="p">.</span><span class="n">applier</span> <span class="p">!</span><span class="k">is</span> <span class="n">E</span><span class="p">)</span> <span class="n">invalidApplier</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">currentComposer</span><span class="p">.</span><span class="n">startReusableNode</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">currentComposer</span><span class="p">.</span><span class="n">inserting</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">currentComposer</span><span class="p">.</span><span class="n">createNode</span><span class="p">(</span><span class="n">factory</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">currentComposer</span><span class="p">.</span><span class="n">useNode</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">Updater</span><span class="p">(</span><span class="n">currentComposer</span><span class="p">).</span><span class="n">update</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">currentComposer</span><span class="p">.</span><span class="n">endNode</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我们看到工厂被传递给了 <code>createNode()</code> 调用。此调用会安排在所有插入操作处理完毕后创建节点。Compose 运行时内部会延迟执行许多操作以实现优化。这里我们并不关心具体何时发生，只需知道它<em>将会</em>发生即可。当它发生时，工厂将被调用。</p>
+
+<p>现在让我们更仔细地看一下工厂本身：<code>ComposeUiNode.Constructor</code> 看起来像是 <code>ComposeUiNode</code> 的构造函数。但事实并非如此。实际上，<code>ComposeUiNode</code> 是一个接口，它本身并不执行任何操作。它实际上是 <code>LayoutNode</code> 使用的基接口。至于这个接口和构造函数的用途，在接口声明上方的注释中已经给出：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="cm">/** Interface extracted from LayoutNode to not mark the whole LayoutNode class as @PublishedApi. */</span>
+</span><span class='line'><span class="n">@PublishedApi</span>
+</span><span class='line'><span class="k">internal</span> <span class="n">interface</span> <span class="n">ComposeUiNode</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>    <span class="cm">/** Object of pre-allocated lambdas used to make use with ComposeNode allocation-less. */</span>
+</span><span class='line'>    <span class="n">companion</span> <span class="k">object</span> <span class="err">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">Constructor</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">ComposeUiNode</span> <span class="p">=</span> <span class="n">LayoutNode</span><span class="p">.</span><span class="n">Constructor</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">VirtualConstructor</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">ComposeUiNode</span> <span class="p">=</span> <span class="p">{</span> <span class="n">LayoutNode</span><span class="p">(</span><span class="n">isVirtual</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>所以 <code>ComposeUiNode</code> 只是 <code>LayoutNode</code> 的一个抽象。</strong></p>
+
+<h2>布局节点（LayoutNode）</h2>
+
+<p>在上一节中，我们已经了解了 <code>LayoutNode</code> 的实际创建时间。基本上，每当调用 <code>Layout</code> 可组合组件时，都会创建 <code>LayoutNode</code>。<code>LayoutNode</code> 是树状结构中的元素，代表屏幕上的内容。它需要被测量，可以在其边界内放置子元素，也可以绘制内容。</p>
+
+<p>每个 <code>LayoutNode</code> 都知道它的子元素和父元素。因此，<code>LayoutNode</code> 构成了一个节点树，代表了已发出的内容。需要明确的是：Compose 创建的树状结构与其他 UI 框架一样——但 Google 更倾向于使用一些更高级的命名方式。<strong>因此，每当你听到/读到有关可组合组件发出内容时，请将其理解为一个 LayoutNode 被创建并插入到树中。</strong></p>
+
+<p><code>LayoutNode</code> 类实际上非常有趣，因此值得单独撰写一篇博文，我将在其中更详细地介绍它的一些方面。</p>
+
+<p>这里有两点值得一提：</p>
+
+<ul>
+<li><code>Applier</code> 是调用 <code>LayoutNode</code> 相应树状结构处理方法的实例。 - <code>LayoutNode</code> 持有对 <code>Owner</code> 的引用。</li>
+</ul>
+
+
+<p>由于 <code>Applier</code> 和 <code>Owner</code> 在 Compose 中都是非常重要的概念，我将在单独的博文中分别介绍它们。</p>
+
+<h3>LayoutNode 的用途</h3>
+
+<p><code>LayoutNode</code> 构成 UI 树，并跟踪其父节点和子节点。UI 树本身的管理由 <code>Applier</code> 完成，我将在另一篇文章中介绍它。</p>
+
+<p>另外，需要记住的一点是，<code>LayoutNode</code> 存储在 <code>SlotTable[4]</code> 中。因此，在重新组合时，如果运行时认为树的这一部分不需要更改，则可以重用现有的 <code>LayoutNode</code>。</p>
+
+<p><code>LayoutNode</code> 还会保存其修饰符（参见下一节），并委托这些修饰符来决定该 <code>LayoutNode</code> 需要多少空间（测量）、在屏幕上放置元素的位置（布局）以及最终在屏幕上显示什么内容（绘制）。</p>
+
+<p>还有更多内容——但正如我提到的，那是另一篇文章的一部分。</p>
+
+<h2>Modifier.Node</h2>
+
+<p>修饰符在内部由 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node"><code>Modifier.Node</code></a> 对象表示。<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node">根据文档</a>，它是“为应用于 androidx.compose.ui.layout.Layout 的每个 Modifier.Element 创建的生命周期更长的对象”。</p>
+
+<p>这个“生命周期更长”很有意思。基本上，只要 <code>Modifier.Node</code> 属于 <code>LayoutNode</code> 的修饰符链，它就会一直存在。 <code>LayoutNode</code> 持有一个 <code>NodeChain</code> 类型的对象，该对象内部维护着一个修饰符列表，并检查该列表是否发生更改，以及 <code>Modifier.Node</code> 的生命周期方法（例如 <code>onAttach()</code>）是否被调用。</p>
+
+<p><code>Modifier.Node</code> 有许多现有的子类型，例如 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode"><code>LayoutModifierNode</code></a>（见下文）或 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/DrawModifierNode?hl=en"><code>DrawModifierNode</code></a>。后者负责实际在屏幕上绘制内容，我计划在另一篇文章中详细介绍。</p>
+
+<p>由于 <code>LayoutNode</code> 是 <code>SlotTable</code> 的一部分，因此附加到 <code>LayoutNode</code> 的 <code>NodeChain</code> 对象的 <code>Modifier.Node</code> 显然也是 <code>SlotTable</code> 的一部分。</p>
+
+<h3>特殊子类型：<code>LayoutModifierNode</code></h3>
+
+<p><code>LayoutModifierNode</code>（<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C">https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C</a><code>LayoutModifierNode</code> 会改变其包裹内容的测量和布局方式。”。因此，在测量和布局过程中，每当遍历 <code>ModifierNode</code> 链时，这些节点实际上都会开始进行测量。</p>
+
+<p>因此，所有想要改变其子元素位置或对整个 Composable 元素大小产生任何影响的修饰符都需要实现 <code>LayoutModifierNode</code> 接口。例如，<code>SizeNode</code> 就是一个实现 <code>LayoutModifierNode</code> 接口的例子，它是 <code>height()</code>、<code>width()</code> 或 <code>size()</code> 等修饰符实际使用的节点。</p>
+
+<h2>SemanticsNode</h2>
+
+<p>当你想要向设备的<em>辅助功能服务[5]</em>传递一些信息时，你可以使用 Compose 中的 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#(androidx.compose.ui.Modifier).semantics(kotlin.Boolean,kotlin.Function1)"><code>semantics</code></a> 修饰符来告知系统要向用户传达哪些语义属性。</p>
+
+<p>但是辅助功能服务并不了解 Compose。在其他平台上，这一点显而易见，但考虑到 Compose 向后兼容（而且它并非 Android 框架的组成部分），在 Android 上也是如此。</p>
+
+<p>对于辅助功能，前面提到的 <code>Owner</code> 再次发挥作用。它持有一个 <code>SemanticsOwner</code>，该 <code>SemanticsOwner</code> 充当了与相应平台语义框架之间的桥梁。</p>
+
+<p>为此，<code>SemanticsOwner</code> 维护着一个 <code>SemanticNode</code> 对象树，用于向辅助功能服务的用户描述屏幕内容。这也是我未来会更详细介绍的内容之一。</p>
+
+<p>敬请期待更多关于 Compose 内部运作机制的见解。祝你编码愉快！</p>
+
+<h2>脚注</h2>
+
+<ul>
+<li>[1] 我在本段中使用“副作用”一词，是因为它在<a href="https://en.wikipedia.org/wiki/Side_effect_(computer_science)">计算机科学和函数式编程</a>中由来已久。我这里指的并非官方 Compose 文档中提到的<a href="https://developer.android.com/develop/ui/compose/side-effects">副作用</a>。Compose 文档至少在过去有时会提及副作用的这种用法——尽管实际上 Compose 函数并非纯函数。</li>
+<li>[2] 如果在 Compose Compiler 插件完成工作后查看 Composable，你会发现它不仅创建了节点，而且你的函数还会进行大量调用，从而改变应用程序的全局状态。但这些调用并不会实际绘制任何内容。它们最多只会创建一些绘制操作，这些操作会被记录下来，并在系统认为需要绘制时，于未来的某个时间点被调用。我将在以后的两篇文章中分别介绍绘制过程以及编译器对代码所做的更改。</li>
+<li>[3] 实际上，布局可组合对象共有三个。但它们最终都会调用 <code>ReusableComposeNode</code>。其他变体的示例也与之非常相似。</li>
+<li>[4] 本系列文章中我可能不会介绍 SlotTable。我推荐 Richard Leland 的这篇关于 compose 的文章（<a href="https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A">https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A</a> Mohit Sarveiya 的关于 slotTable 的视频（<a href="https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8">https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8</a> slotTable。</li>
+<li>[5] 设备上的辅助功能服务在 Android 系统中是 AccessibilityService 的实现，但在 iOS、桌面或 Web 端则有所不同，因此我在本文中使用“辅助功能服务”这个通用术语。</li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-01-12'><span class='date'><span class='date-month'>Jan</span> <span class='date-day'>12</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/01/03/pragmatic-modularization/" title="Previous Post: 务实的模块化：连接模块(wiring modules)的妙用">&laquo; 务实的模块化：连接模块(wiring modules)的妙用</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

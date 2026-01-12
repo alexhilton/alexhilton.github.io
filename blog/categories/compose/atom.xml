@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-01-03T12:44:18+00:00</updated>
+  <updated>2026-01-12T12:53:23+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,166 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack Compose内部的不同节点类型]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose/"/>
+    <updated>2026-01-12T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「The Different Node Types in Jetpack Compose」，原文链接<a href="https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/">https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/</a>，由Wolfram Rittmeyer发布于2025年12月30日。</p></blockquote>
+
+<p><a href=""><img src="https://www.grokkingandroid.com/wordpress/wp-content/uploads/2025/12/ComposeUiNode-700x389.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>如果你仔细观察 Compose，你会发现它很奇怪。你会发现很多函数都没有返回值。然而，<a href="https://developer.android.com/develop/ui/compose/mental-model">Android 文档</a>却说：</p>
+
+<blockquote><p>可组合函数会生成 UI 层级结构。</p></blockquote>
+
+<p>这到底是什么意思呢？从函数式编程的角度来看，你那些看似无害的无状态可组合函数实际上会产生大量的<em>副作用[1]</em>。其中就包括创建节点。</p>
+
+<p>有时你可能会创建一些可组合函数来自己创建节点。但更多时候，你会直接委托给其他可组合函数来<em>创建节点[2]</em>。</p>
+
+<p>那么，让我们来看看有哪些节点，它们的创建位置以及它们的用途：</p>
+
+<ul>
+<li>ComposeUiNode</li>
+<li>LayoutNode</li>
+<li>Modifier.Node</li>
+<li>SemanticsNode</li>
+</ul>
+
+
+<h2>ComposeUiNode</h2>
+
+<p>当你深入研究<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/layout/package-summary#Layout(androidx.compose.ui.Modifier,androidx.compose.ui.layout.MeasurePolicy)"><code>Layout</code></a>可组合对象时，你会发现它调用了<code>ReusableComposeNode[3]</code>:</p>
+
+<pre><code class="kotlin">@Composable
+@UiComposable
+inline fun Layout(modifier: Modifier = Modifier, measurePolicy: MeasurePolicy) {
+    val compositeKeyHash = currentCompositeKeyHash
+    val materialized = currentComposer.materialize(modifier)
+    val localMap = currentComposer.currentCompositionLocalMap
+    ReusableComposeNode&lt;ComposeUiNode, Applier&gt;(
+        factory = ComposeUiNode.Constructor,
+        update = {
+            set(measurePolicy, SetMeasurePolicy)
+            set(localMap, SetResolvedCompositionLocals)
+            set(materialized, SetModifier)
+            set(compositeKeyHash, SetCompositeKeyHash)
+        },
+    )
+}
+</code></pre>
+
+<p><strong><code>ReusableComposeNode</code>本身并不是一个节点。</strong> 上面的代码中并没有构造函数调用，而是对另一个可组合对象的调用。第八行的工厂参数看似无关紧要，但实际上非常重要。因为最终会创建节点的就是这个函数。它会创建一个 <code>ComposeUiNode</code>。</p>
+
+<p><code>ReusableComposeNode</code> Composable 与 Compose 运行时紧密相关。这段代码告诉 Composer 应该启动一个 <code>GroupKind.ReusableNode</code> 类型的新组，然后代码会创建一个新节点，或者在重新组合时重用现有节点。最后，当使用 update 函数参数时，它会设置节点的内容：</p>
+
+<pre><code class="kotlin">@Composable
+inline fun &lt;T : Any, reified E : Applier&gt; ReusableComposeNode(
+    noinline factory: () -&gt; T,
+    update: @DisallowComposableCalls Updater.() -&gt; Unit
+) {
+    if (currentComposer.applier !is E) invalidApplier()
+    currentComposer.startReusableNode()
+    if (currentComposer.inserting) {
+        currentComposer.createNode(factory)
+    } else {
+        currentComposer.useNode()
+    }
+    Updater(currentComposer).update()
+    currentComposer.endNode()
+}
+</code></pre>
+
+<p>我们看到工厂被传递给了 <code>createNode()</code> 调用。此调用会安排在所有插入操作处理完毕后创建节点。Compose 运行时内部会延迟执行许多操作以实现优化。这里我们并不关心具体何时发生，只需知道它<em>将会</em>发生即可。当它发生时，工厂将被调用。</p>
+
+<p>现在让我们更仔细地看一下工厂本身：<code>ComposeUiNode.Constructor</code> 看起来像是 <code>ComposeUiNode</code> 的构造函数。但事实并非如此。实际上，<code>ComposeUiNode</code> 是一个接口，它本身并不执行任何操作。它实际上是 <code>LayoutNode</code> 使用的基接口。至于这个接口和构造函数的用途，在接口声明上方的注释中已经给出：</p>
+
+<pre><code class="kotlin">/** Interface extracted from LayoutNode to not mark the whole LayoutNode class as @PublishedApi. */
+@PublishedApi
+internal interface ComposeUiNode {
+    // ...
+    /** Object of pre-allocated lambdas used to make use with ComposeNode allocation-less. */
+    companion object {
+        val Constructor: () -&gt; ComposeUiNode = LayoutNode.Constructor
+        val VirtualConstructor: () -&gt; ComposeUiNode = { LayoutNode(isVirtual = true) }
+        // ...
+    }
+}
+</code></pre>
+
+<p><strong>所以 <code>ComposeUiNode</code> 只是 <code>LayoutNode</code> 的一个抽象。</strong></p>
+
+<h2>布局节点（LayoutNode）</h2>
+
+<p>在上一节中，我们已经了解了 <code>LayoutNode</code> 的实际创建时间。基本上，每当调用 <code>Layout</code> 可组合组件时，都会创建 <code>LayoutNode</code>。<code>LayoutNode</code> 是树状结构中的元素，代表屏幕上的内容。它需要被测量，可以在其边界内放置子元素，也可以绘制内容。</p>
+
+<p>每个 <code>LayoutNode</code> 都知道它的子元素和父元素。因此，<code>LayoutNode</code> 构成了一个节点树，代表了已发出的内容。需要明确的是：Compose 创建的树状结构与其他 UI 框架一样——但 Google 更倾向于使用一些更高级的命名方式。<strong>因此，每当你听到/读到有关可组合组件发出内容时，请将其理解为一个 LayoutNode 被创建并插入到树中。</strong></p>
+
+<p><code>LayoutNode</code> 类实际上非常有趣，因此值得单独撰写一篇博文，我将在其中更详细地介绍它的一些方面。</p>
+
+<p>这里有两点值得一提：</p>
+
+<ul>
+<li><code>Applier</code> 是调用 <code>LayoutNode</code> 相应树状结构处理方法的实例。 - <code>LayoutNode</code> 持有对 <code>Owner</code> 的引用。</li>
+</ul>
+
+
+<p>由于 <code>Applier</code> 和 <code>Owner</code> 在 Compose 中都是非常重要的概念，我将在单独的博文中分别介绍它们。</p>
+
+<h3>LayoutNode 的用途</h3>
+
+<p><code>LayoutNode</code> 构成 UI 树，并跟踪其父节点和子节点。UI 树本身的管理由 <code>Applier</code> 完成，我将在另一篇文章中介绍它。</p>
+
+<p>另外，需要记住的一点是，<code>LayoutNode</code> 存储在 <code>SlotTable[4]</code> 中。因此，在重新组合时，如果运行时认为树的这一部分不需要更改，则可以重用现有的 <code>LayoutNode</code>。</p>
+
+<p><code>LayoutNode</code> 还会保存其修饰符（参见下一节），并委托这些修饰符来决定该 <code>LayoutNode</code> 需要多少空间（测量）、在屏幕上放置元素的位置（布局）以及最终在屏幕上显示什么内容（绘制）。</p>
+
+<p>还有更多内容——但正如我提到的，那是另一篇文章的一部分。</p>
+
+<h2>Modifier.Node</h2>
+
+<p>修饰符在内部由 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node"><code>Modifier.Node</code></a> 对象表示。<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node">根据文档</a>，它是“为应用于 androidx.compose.ui.layout.Layout 的每个 Modifier.Element 创建的生命周期更长的对象”。</p>
+
+<p>这个“生命周期更长”很有意思。基本上，只要 <code>Modifier.Node</code> 属于 <code>LayoutNode</code> 的修饰符链，它就会一直存在。 <code>LayoutNode</code> 持有一个 <code>NodeChain</code> 类型的对象，该对象内部维护着一个修饰符列表，并检查该列表是否发生更改，以及 <code>Modifier.Node</code> 的生命周期方法（例如 <code>onAttach()</code>）是否被调用。</p>
+
+<p><code>Modifier.Node</code> 有许多现有的子类型，例如 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode"><code>LayoutModifierNode</code></a>（见下文）或 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/DrawModifierNode?hl=en"><code>DrawModifierNode</code></a>。后者负责实际在屏幕上绘制内容，我计划在另一篇文章中详细介绍。</p>
+
+<p>由于 <code>LayoutNode</code> 是 <code>SlotTable</code> 的一部分，因此附加到 <code>LayoutNode</code> 的 <code>NodeChain</code> 对象的 <code>Modifier.Node</code> 显然也是 <code>SlotTable</code> 的一部分。</p>
+
+<h3>特殊子类型：<code>LayoutModifierNode</code></h3>
+
+<p><code>LayoutModifierNode</code>（<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C">https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C</a><code>LayoutModifierNode</code> 会改变其包裹内容的测量和布局方式。”。因此，在测量和布局过程中，每当遍历 <code>ModifierNode</code> 链时，这些节点实际上都会开始进行测量。</p>
+
+<p>因此，所有想要改变其子元素位置或对整个 Composable 元素大小产生任何影响的修饰符都需要实现 <code>LayoutModifierNode</code> 接口。例如，<code>SizeNode</code> 就是一个实现 <code>LayoutModifierNode</code> 接口的例子，它是 <code>height()</code>、<code>width()</code> 或 <code>size()</code> 等修饰符实际使用的节点。</p>
+
+<h2>SemanticsNode</h2>
+
+<p>当你想要向设备的<em>辅助功能服务[5]</em>传递一些信息时，你可以使用 Compose 中的 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#(androidx.compose.ui.Modifier).semantics(kotlin.Boolean,kotlin.Function1)"><code>semantics</code></a> 修饰符来告知系统要向用户传达哪些语义属性。</p>
+
+<p>但是辅助功能服务并不了解 Compose。在其他平台上，这一点显而易见，但考虑到 Compose 向后兼容（而且它并非 Android 框架的组成部分），在 Android 上也是如此。</p>
+
+<p>对于辅助功能，前面提到的 <code>Owner</code> 再次发挥作用。它持有一个 <code>SemanticsOwner</code>，该 <code>SemanticsOwner</code> 充当了与相应平台语义框架之间的桥梁。</p>
+
+<p>为此，<code>SemanticsOwner</code> 维护着一个 <code>SemanticNode</code> 对象树，用于向辅助功能服务的用户描述屏幕内容。这也是我未来会更详细介绍的内容之一。</p>
+
+<p>敬请期待更多关于 Compose 内部运作机制的见解。祝你编码愉快！</p>
+
+<h2>脚注</h2>
+
+<ul>
+<li>[1] 我在本段中使用“副作用”一词，是因为它在<a href="https://en.wikipedia.org/wiki/Side_effect_(computer_science)">计算机科学和函数式编程</a>中由来已久。我这里指的并非官方 Compose 文档中提到的<a href="https://developer.android.com/develop/ui/compose/side-effects">副作用</a>。Compose 文档至少在过去有时会提及副作用的这种用法——尽管实际上 Compose 函数并非纯函数。</li>
+<li>[2] 如果在 Compose Compiler 插件完成工作后查看 Composable，你会发现它不仅创建了节点，而且你的函数还会进行大量调用，从而改变应用程序的全局状态。但这些调用并不会实际绘制任何内容。它们最多只会创建一些绘制操作，这些操作会被记录下来，并在系统认为需要绘制时，于未来的某个时间点被调用。我将在以后的两篇文章中分别介绍绘制过程以及编译器对代码所做的更改。</li>
+<li>[3] 实际上，布局可组合对象共有三个。但它们最终都会调用 <code>ReusableComposeNode</code>。其他变体的示例也与之非常相似。</li>
+<li>[4] 本系列文章中我可能不会介绍 SlotTable。我推荐 Richard Leland 的这篇关于 compose 的文章（<a href="https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A">https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A</a> Mohit Sarveiya 的关于 slotTable 的视频（<a href="https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8">https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8</a> slotTable。</li>
+<li>[5] 设备上的辅助功能服务在 Android 系统中是 AccessibilityService 的实现，但在 iOS、桌面或 Web 端则有所不同，因此我在本文中使用“辅助功能服务”这个通用术语。</li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[学会在Jetpack Compose中加载Lottie动画资源]]></title>
@@ -1642,291 +1802,6 @@ navController.addOnDestinationChangedListener { _, destination, arguments -&gt;
 <p>如果你觉得这篇文章有趣，欢迎关注我，获取更多关于 Android 开发和 Jetpack Compose 的精彩内容。我会定期发布相关主题的文章。欢迎随时分享你的评论，或通过 <a href="https://bsky.app/profile/stefanoq21.bsky.social"><strong>Bluesky</strong></a> 或 <a href="http://www.linkedin.com/in/stefano-natali-q21"><strong>LinkedIn</strong></a> 与我联系，进行更深入的讨论。</p>
 
 <p>祝你开心，编程快乐！</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[在Jetpack Compose中创建CRT屏幕效果]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/11/12/crt-effects/"/>
-    <updated>2025-11-12T13:42:48+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/11/12/crt-effects</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Creating a CRT Screen Effect in Jetpack Compose」，原文链接<a href="https://www.sinasamaki.com/creating-a-crt-screen-effect-in-jetpack-compose/">https://www.sinasamaki.com/creating-a-crt-screen-effect-in-jetpack-compose/</a>，由sinasamaki发布于2025年11月7日。</p></blockquote>
-
-<p><a href=""><img src="https://www.sinasamaki.com/content/images/size/w2000/2025/11/CRT.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>CRT 显示器具有独特而怀旧的外观：模糊的边缘、扫描线和轻微的色彩溢出。让我们尝试使用 <code>GraphicsLayer</code> 和一些巧妙的图层技巧在 Jetpack Compose 中重现这种效果。</p>
-
-<h2>GraphicsLayer</h2>
-
-<p>与上一篇文章一样，此效果的基础是 <code>GraphicsLayer</code>。它允许我们将内容绘制一次到屏幕外缓冲区。然后，我们可以以极低的性能开销多次使用不同的效果重新绘制它。</p>
-
-<pre><code class="kotlin">val graphicsLayer = rememberGraphicsLayer()
-
-Box(Modifier.drawWithContent {
-    graphicsLayer.record { 
-        this@drawWithContent.drawContent() 
-    }
-}) {
-    content()
-}
-</code></pre>
-
-<p>一旦我们将内容记录到 <code>graphicsLayer</code> 中，就可以使用 <code>drawLayer(graphicsLayer)</code> 根据需要多次绘制它。</p>
-
-<p>我喜欢在黑色背景上绘制色彩鲜艳、饱和度高的内容，并运用这种效果。以下是我们将应用此效果的基础可组合对象。</p>
-
-<p><img src="https://www.sinasamaki.com/content/images/2025/11/Screenshot-2025-11-07-at-09.39.28.png" alt="" /></p>
-
-<h2>添加扫描线</h2>
-
-<p>为了模拟 CRT 显示器上的水平扫描线，我们将使用重复渐变。让我们将其放入一个扩展函数中，如下所示：</p>
-
-<pre><code class="kotlin">private fun DrawScope.drawScanLines(alpha: Float, blendMode: BlendMode) {
-    val color = Colors.Black.copy(alpha = alpha)
-    drawRect(
-        brush = Brush.verticalGradient(
-            0f to color,
-            0.4f to color,
-            0.4f to Colors.Transparent,
-            1f to Colors.Transparent,
-            tileMode = TileMode.Repeated,
-            startY = 0f,
-            endY = 10f,
-        ),
-        blendMode = blendMode
-    )
-    drawRect(
-        brush = Brush.horizontalGradient(
-            0f to color,
-            0.1f to color,
-            0.1f to Colors.Transparent,
-            1f to Colors.Transparent,
-            tileMode = TileMode.Repeated,
-            startX = 0f,
-            endX = 10f,
-        ),
-        blendMode = blendMode
-    )
-}
-</code></pre>
-
-<p>我们手动定义颜色停止点，以便在颜色之间形成清晰的边缘，然后将 <code>tileMode</code> 设置为 <code>Repeated</code>。这样，再加上较短的起点和终点，就能得到许多重复的平行线。</p>
-
-<p>扩展函数还会接收我们所需的透明度和 <code>BlendMode</code> 参数。</p>
-
-<p>然后，我们可以使用此函数在 <code>graphicsLayer</code> 上绘制扫描线。</p>
-
-<pre><code class="kotlin">.drawBehind {
-    layer {
-        drawLayer(graphicsLayer)
-        drawScanLines(alpha = 1f, blendMode = BlendMode.DstOut)
-    }
-}
-</code></pre>
-
-<p>将混合模式设置为 <code>DstOut</code> 会从绘制的内容中“减去”我们的渐变，从而产生这种效果。</p>
-
-<p><img src="https://www.sinasamaki.com/content/images/2025/11/Screenshot-2025-11-07-at-09.39.55.png" alt="" /></p>
-
-<h2>构建模糊图层</h2>
-
-<p>为了实现 CRT 屏幕常见的发光效果，我们将多次绘制 <code>graphicsLayer</code> 图层，每次绘制时分别设置不同的模糊半径、透明度和缩放比例。</p>
-
-<pre><code class="kotlin">val blurLayers = remember {
-    listOf(
-        Triple(1.dp, 0.2f, 1.02f to 1.03f),
-        Triple(0.dp, .2f, 1f to 1f),
-        Triple(1.dp, 0.9f, 1f to 1f),
-        Triple(10.dp, 1f, 1f to 1f),
-        Triple(40.dp, 1f, 1f to 1f),
-    )
-}
-</code></pre>
-
-<p>我们将使用一个 <code>Triple</code> 列表来存储每个图层的数据。该列表的顺序也定义了它们的绘制顺序。我建议你尝试调整这些值和顺序，以获得所需的效果。但这是我目前使用的方法。</p>
-
-<pre><code class="kotlin">blurLayers.forEach { (blur, alpha, scale) -&gt;  
-    Box(  
-        Modifier  
-            .matchParentSize()  
-            .blur(blur, BlurredEdgeTreatment.Unbounded)  
-            .graphicsLayer {  
-                scaleX = scale.first  
-                scaleY = scale.second  
-                this.alpha = alpha  
-            }  
-            .drawBehind {  
-                layer {  
-                    drawLayer(graphicsLayer)  
-                    drawScanLines(alpha = 1f, blendMode = BlendMode.DstOut)  
-                }  
-            }    
-    )  
-}
-</code></pre>
-
-<p>然后，我们使用列表中的值绘制每个图层。在 <code>drawBehind</code> 修改器上方，我们将图层大小设置为与父图层匹配，并应用模糊、缩放和透明度。请记住将模糊设置为 <code>Unbounded</code>，使其超出包含它的可组合对象的边界。</p>
-
-<p><img src="https://www.sinasamaki.com/content/images/2025/11/Screenshot-2025-11-07-at-08.33.20.png" alt="" /></p>
-
-<h2>屏幕抖动</h2>
-
-<p>最后，我们来添加屏幕抖动效果，以模拟 CRT 显示器特有的抖动。我们可以通过创建一个 <code>Offset</code> 对象，并用 -1 到 1 之间的随机浮点值来更新它。</p>
-
-<pre><code class="kotlin">var shake by remember { mutableStateOf(Offset.Zero) }
-
-LaunchedEffect(Unit) {
-    while (true) {
-        shake = Offset(
-            Random.nextInt(-1, 1) * Random.nextFloat(),
-            Random.nextInt(-1, 1) * Random.nextFloat(),
-        )
-        delay(32)
-    }
-}
-</code></pre>
-
-<p>这里只需在一个 while 循环中即可完成。可以调整延迟时间来控制闪烁的间隔频率。</p>
-
-<pre><code class="kotlin">modifier = modifier  
-    .graphicsLayer {  
-        translationX = shake.x  
-        translationY = shake.y  
-    }
-</code></pre>
-
-<p>然后可以使用修饰符来应用此偏移量。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/crt_opt.gif" alt="" /></p>
-
-<h2>整合所有功能</h2>
-
-<p>让我们将所有这些功能组合成一个可轻松使用的组合。它会接收 <code>content</code> 参数以及 <code>flickerDelay</code> 参数，后者用于控制闪烁频率。</p>
-
-<pre><code class="kotlin">@Composable  
-fun CRTBox(  
-    modifier: Modifier = Modifier,  
-    flickerDelay: Int = 32,  
-    content: @Composable () -&gt; Unit,  
-) {  
-    var shake by remember { mutableStateOf(Offset.Zero) }  
-
-    LaunchedEffect(Unit) {  
-        while (flickerDelay &gt; 0) {  
-            shake = Offset(  
-                Random.nextInt(-1, 1) * Random.nextFloat(),  
-                Random.nextInt(-1, 1) * Random.nextFloat(),  
-            )  
-            delay(flickerDelay.toLong())  
-        }  
-    }  
-
-    val graphicsLayer = rememberGraphicsLayer()  
-
-    Box(  
-        modifier = modifier  
-            .graphicsLayer {  
-                translationX = shake.x  
-                translationY = shake.y  
-            }  
-    ) {  
-        Box(Modifier.drawWithContent {  
-            graphicsLayer.record { this@drawWithContent.drawContent() }  
-        }) {  
-            content()  
-        }  
-
-        val blurLayers = remember {  
-            listOf(  
-                Triple(5.dp, .3f, 1.02f to 1.03f),  
-                Triple(0.dp, .8f, 1f to 1f),  
-                Triple(1.dp, .9f, 1f to 1f),  
-                Triple(10.dp, .6f, 1.001f to 1f),  
-                Triple(40.dp, .7f, 1f to 1f),  
-            )  
-        }  
-
-        blurLayers.forEach { (blur, alpha, scale) -&gt;  
-            Box(  
-                Modifier  
-                    .matchParentSize()  
-                    .blur(blur, BlurredEdgeTreatment.Unbounded)  
-                    .graphicsLayer {  
-                        scaleX = scale.first  
-                        scaleY = scale.second  
-                        this.alpha = alpha  
-                    }  
-                    .drawBehind {  
-                        layer {  
-                            drawLayer(graphicsLayer)  
-                            drawScanLines(alpha = 1f, blendMode = BlendMode.DstOut)  
-                        }  
-                    }            
-            )  
-        }  
-    }}  
-
-private fun DrawScope.layer(  
-    bounds: Rect = size.toRect(),  
-    block: DrawScope.() -&gt; Unit  
-) =  
-    drawIntoCanvas { canvas -&gt;  
-        canvas.withSaveLayer(  
-            bounds = bounds,  
-            paint = Paint(),  
-        ) { block() }  
-    }  
-
-private fun DrawScope.drawScanLines(alpha: Float, blendMode: BlendMode) {  
-    val color = Colors.Black.copy(alpha = alpha)  
-    drawRect(  
-        brush = Brush.verticalGradient(  
-            0f to color,  
-            0.4f to color,  
-            0.4f to Colors.Transparent,  
-            1f to Colors.Transparent,  
-            tileMode = TileMode.Repeated,  
-            startY = 0f,  
-            endY = 10f,  
-        ),  
-        blendMode = blendMode  
-    )  
-    drawRect(  
-        brush = Brush.horizontalGradient(  
-            0f to color,  
-            0.1f to color,  
-            0.1f to Colors.Transparent,  
-            1f to Colors.Transparent,  
-            tileMode = TileMode.Repeated,  
-            startX = 0f,  
-            endX = 10f,  
-        ),  
-        blendMode = blendMode  
-    )  
-}
-</code></pre>
-
-<p>然后，你可以像使用其他可组合组件一样使用它：</p>
-
-<pre><code class="kotlin">CRTBox {
-    Text("GAME OVER")
-}
-</code></pre>
-
-<h2>Sweeper 更新</h2>
-
-<p>如果你想查看实际效果，请查看最新的 Sweeper 更新，该更新使用 CRT 效果创建了一个令人毛骨悚然的万圣节主题。</p>
-
-<p><img src="https://www.sinasamaki.com/content/images/2025/11/IMG_9612-Edited-copy.jpeg" alt="" /></p>
-
-<p><a href="https://play.google.com/store/apps/details?id=com.sinasamaki.chroma.sweeper&amp;ref=sinasamaki.com">https://play.google.com/store/apps/details?id=com.sinasamaki.chroma.sweeper</a></p>
-
-<p><a href="https://apps.apple.com/us/app/sweeper-by-sinasamaki/id6752220495?ref=sinasamaki.com">https://apps.apple.com/us/app/sweeper-by-sinasamaki/id6752220495</a></p>
-
-<p>感谢阅读，祝你好运！</p>
 ]]></content>
   </entry>
   

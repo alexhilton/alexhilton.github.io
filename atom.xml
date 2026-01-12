@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-01-03T12:44:18+00:00</updated>
+  <updated>2026-01-12T12:53:23+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,211 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack Compose内部的不同节点类型]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose/"/>
+    <updated>2026-01-12T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「The Different Node Types in Jetpack Compose」，原文链接<a href="https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/">https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/</a>，由Wolfram Rittmeyer发布于2025年12月30日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose/"><img src="https://www.grokkingandroid.com/wordpress/wp-content/uploads/2025/12/ComposeUiNode-700x389.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>如果你仔细观察 Compose，你会发现它很奇怪。你会发现很多函数都没有返回值。然而，<a href="https://developer.android.com/develop/ui/compose/mental-model">Android 文档</a>却说：</p>
+
+<blockquote><p>可组合函数会生成 UI 层级结构。</p></blockquote>
+
+<p>这到底是什么意思呢？从函数式编程的角度来看，你那些看似无害的无状态可组合函数实际上会产生大量的<em>副作用[1]</em>。其中就包括创建节点。</p>
+
+<p>有时你可能会创建一些可组合函数来自己创建节点。但更多时候，你会直接委托给其他可组合函数来<em>创建节点[2]</em>。</p>
+
+<p>那么，让我们来看看有哪些节点，它们的创建位置以及它们的用途：</p>
+
+<ul>
+<li>ComposeUiNode</li>
+<li>LayoutNode</li>
+<li>Modifier.Node</li>
+<li>SemanticsNode</li>
+</ul>
+
+
+<h2>ComposeUiNode</h2>
+
+<p>当你深入研究<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/layout/package-summary#Layout(androidx.compose.ui.Modifier,androidx.compose.ui.layout.MeasurePolicy)"><code>Layout</code></a>可组合对象时，你会发现它调用了<code>ReusableComposeNode[3]</code>:</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="n">@UiComposable</span>
+</span><span class='line'><span class="n">inline</span> <span class="k">fun</span> <span class="nf">Layout</span><span class="p">(</span><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span> <span class="n">measurePolicy</span><span class="p">:</span> <span class="n">MeasurePolicy</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">compositeKeyHash</span> <span class="p">=</span> <span class="n">currentCompositeKeyHash</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">materialized</span> <span class="p">=</span> <span class="n">currentComposer</span><span class="p">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">modifier</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">localMap</span> <span class="p">=</span> <span class="n">currentComposer</span><span class="p">.</span><span class="n">currentCompositionLocalMap</span>
+</span><span class='line'>    <span class="n">ReusableComposeNode</span><span class="p">&lt;</span><span class="n">ComposeUiNode</span><span class="p">,</span> <span class="n">Applier</span><span class="p">&gt;(</span>
+</span><span class='line'>        <span class="n">factory</span> <span class="p">=</span> <span class="n">ComposeUiNode</span><span class="p">.</span><span class="n">Constructor</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">update</span> <span class="p">=</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">measurePolicy</span><span class="p">,</span> <span class="n">SetMeasurePolicy</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">localMap</span><span class="p">,</span> <span class="n">SetResolvedCompositionLocals</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">materialized</span><span class="p">,</span> <span class="n">SetModifier</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">compositeKeyHash</span><span class="p">,</span> <span class="n">SetCompositeKeyHash</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">},</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong><code>ReusableComposeNode</code>本身并不是一个节点。</strong> 上面的代码中并没有构造函数调用，而是对另一个可组合对象的调用。第八行的工厂参数看似无关紧要，但实际上非常重要。因为最终会创建节点的就是这个函数。它会创建一个 <code>ComposeUiNode</code>。</p>
+
+<p><code>ReusableComposeNode</code> Composable 与 Compose 运行时紧密相关。这段代码告诉 Composer 应该启动一个 <code>GroupKind.ReusableNode</code> 类型的新组，然后代码会创建一个新节点，或者在重新组合时重用现有节点。最后，当使用 update 函数参数时，它会设置节点的内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="n">inline</span> <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">T</span> <span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="k">reified</span> <span class="n">E</span> <span class="p">:</span> <span class="n">Applier</span><span class="p">&gt;</span> <span class="n">ReusableComposeNode</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">noinline</span> <span class="n">factory</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">T</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">update</span><span class="p">:</span> <span class="n">@DisallowComposableCalls</span> <span class="n">Updater</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">currentComposer</span><span class="p">.</span><span class="n">applier</span> <span class="p">!</span><span class="k">is</span> <span class="n">E</span><span class="p">)</span> <span class="n">invalidApplier</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">currentComposer</span><span class="p">.</span><span class="n">startReusableNode</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">currentComposer</span><span class="p">.</span><span class="n">inserting</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">currentComposer</span><span class="p">.</span><span class="n">createNode</span><span class="p">(</span><span class="n">factory</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">currentComposer</span><span class="p">.</span><span class="n">useNode</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">Updater</span><span class="p">(</span><span class="n">currentComposer</span><span class="p">).</span><span class="n">update</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">currentComposer</span><span class="p">.</span><span class="n">endNode</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我们看到工厂被传递给了 <code>createNode()</code> 调用。此调用会安排在所有插入操作处理完毕后创建节点。Compose 运行时内部会延迟执行许多操作以实现优化。这里我们并不关心具体何时发生，只需知道它<em>将会</em>发生即可。当它发生时，工厂将被调用。</p>
+
+<p>现在让我们更仔细地看一下工厂本身：<code>ComposeUiNode.Constructor</code> 看起来像是 <code>ComposeUiNode</code> 的构造函数。但事实并非如此。实际上，<code>ComposeUiNode</code> 是一个接口，它本身并不执行任何操作。它实际上是 <code>LayoutNode</code> 使用的基接口。至于这个接口和构造函数的用途，在接口声明上方的注释中已经给出：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="cm">/** Interface extracted from LayoutNode to not mark the whole LayoutNode class as @PublishedApi. */</span>
+</span><span class='line'><span class="n">@PublishedApi</span>
+</span><span class='line'><span class="k">internal</span> <span class="n">interface</span> <span class="n">ComposeUiNode</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'>    <span class="cm">/** Object of pre-allocated lambdas used to make use with ComposeNode allocation-less. */</span>
+</span><span class='line'>    <span class="n">companion</span> <span class="k">object</span> <span class="err">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">Constructor</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">ComposeUiNode</span> <span class="p">=</span> <span class="n">LayoutNode</span><span class="p">.</span><span class="n">Constructor</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">VirtualConstructor</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">ComposeUiNode</span> <span class="p">=</span> <span class="p">{</span> <span class="n">LayoutNode</span><span class="p">(</span><span class="n">isVirtual</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>所以 <code>ComposeUiNode</code> 只是 <code>LayoutNode</code> 的一个抽象。</strong></p>
+
+<h2>布局节点（LayoutNode）</h2>
+
+<p>在上一节中，我们已经了解了 <code>LayoutNode</code> 的实际创建时间。基本上，每当调用 <code>Layout</code> 可组合组件时，都会创建 <code>LayoutNode</code>。<code>LayoutNode</code> 是树状结构中的元素，代表屏幕上的内容。它需要被测量，可以在其边界内放置子元素，也可以绘制内容。</p>
+
+<p>每个 <code>LayoutNode</code> 都知道它的子元素和父元素。因此，<code>LayoutNode</code> 构成了一个节点树，代表了已发出的内容。需要明确的是：Compose 创建的树状结构与其他 UI 框架一样——但 Google 更倾向于使用一些更高级的命名方式。<strong>因此，每当你听到/读到有关可组合组件发出内容时，请将其理解为一个 LayoutNode 被创建并插入到树中。</strong></p>
+
+<p><code>LayoutNode</code> 类实际上非常有趣，因此值得单独撰写一篇博文，我将在其中更详细地介绍它的一些方面。</p>
+
+<p>这里有两点值得一提：</p>
+
+<ul>
+<li><code>Applier</code> 是调用 <code>LayoutNode</code> 相应树状结构处理方法的实例。 - <code>LayoutNode</code> 持有对 <code>Owner</code> 的引用。</li>
+</ul>
+
+
+<p>由于 <code>Applier</code> 和 <code>Owner</code> 在 Compose 中都是非常重要的概念，我将在单独的博文中分别介绍它们。</p>
+
+<h3>LayoutNode 的用途</h3>
+
+<p><code>LayoutNode</code> 构成 UI 树，并跟踪其父节点和子节点。UI 树本身的管理由 <code>Applier</code> 完成，我将在另一篇文章中介绍它。</p>
+
+<p>另外，需要记住的一点是，<code>LayoutNode</code> 存储在 <code>SlotTable[4]</code> 中。因此，在重新组合时，如果运行时认为树的这一部分不需要更改，则可以重用现有的 <code>LayoutNode</code>。</p>
+
+<p><code>LayoutNode</code> 还会保存其修饰符（参见下一节），并委托这些修饰符来决定该 <code>LayoutNode</code> 需要多少空间（测量）、在屏幕上放置元素的位置（布局）以及最终在屏幕上显示什么内容（绘制）。</p>
+
+<p>还有更多内容——但正如我提到的，那是另一篇文章的一部分。</p>
+
+<h2>Modifier.Node</h2>
+
+<p>修饰符在内部由 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node"><code>Modifier.Node</code></a> 对象表示。<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node">根据文档</a>，它是“为应用于 androidx.compose.ui.layout.Layout 的每个 Modifier.Element 创建的生命周期更长的对象”。</p>
+
+<p>这个“生命周期更长”很有意思。基本上，只要 <code>Modifier.Node</code> 属于 <code>LayoutNode</code> 的修饰符链，它就会一直存在。 <code>LayoutNode</code> 持有一个 <code>NodeChain</code> 类型的对象，该对象内部维护着一个修饰符列表，并检查该列表是否发生更改，以及 <code>Modifier.Node</code> 的生命周期方法（例如 <code>onAttach()</code>）是否被调用。</p>
+
+<p><code>Modifier.Node</code> 有许多现有的子类型，例如 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode"><code>LayoutModifierNode</code></a>（见下文）或 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/DrawModifierNode?hl=en"><code>DrawModifierNode</code></a>。后者负责实际在屏幕上绘制内容，我计划在另一篇文章中详细介绍。</p>
+
+<p>由于 <code>LayoutNode</code> 是 <code>SlotTable</code> 的一部分，因此附加到 <code>LayoutNode</code> 的 <code>NodeChain</code> 对象的 <code>Modifier.Node</code> 显然也是 <code>SlotTable</code> 的一部分。</p>
+
+<h3>特殊子类型：<code>LayoutModifierNode</code></h3>
+
+<p><code>LayoutModifierNode</code>（<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C">https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C</a><code>LayoutModifierNode</code> 会改变其包裹内容的测量和布局方式。”。因此，在测量和布局过程中，每当遍历 <code>ModifierNode</code> 链时，这些节点实际上都会开始进行测量。</p>
+
+<p>因此，所有想要改变其子元素位置或对整个 Composable 元素大小产生任何影响的修饰符都需要实现 <code>LayoutModifierNode</code> 接口。例如，<code>SizeNode</code> 就是一个实现 <code>LayoutModifierNode</code> 接口的例子，它是 <code>height()</code>、<code>width()</code> 或 <code>size()</code> 等修饰符实际使用的节点。</p>
+
+<h2>SemanticsNode</h2>
+
+<p>当你想要向设备的<em>辅助功能服务[5]</em>传递一些信息时，你可以使用 Compose 中的 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#(androidx.compose.ui.Modifier).semantics(kotlin.Boolean,kotlin.Function1)"><code>semantics</code></a> 修饰符来告知系统要向用户传达哪些语义属性。</p>
+
+<p>但是辅助功能服务并不了解 Compose。在其他平台上，这一点显而易见，但考虑到 Compose 向后兼容（而且它并非 Android 框架的组成部分），在 Android 上也是如此。</p>
+
+<p>对于辅助功能，前面提到的 <code>Owner</code> 再次发挥作用。它持有一个 <code>SemanticsOwner</code>，该 <code>SemanticsOwner</code> 充当了与相应平台语义框架之间的桥梁。</p>
+
+<p>为此，<code>SemanticsOwner</code> 维护着一个 <code>SemanticNode</code> 对象树，用于向辅助功能服务的用户描述屏幕内容。这也是我未来会更详细介绍的内容之一。</p>
+
+<p>敬请期待更多关于 Compose 内部运作机制的见解。祝你编码愉快！</p>
+
+<h2>脚注</h2>
+
+<ul>
+<li>[1] 我在本段中使用“副作用”一词，是因为它在<a href="https://en.wikipedia.org/wiki/Side_effect_(computer_science)">计算机科学和函数式编程</a>中由来已久。我这里指的并非官方 Compose 文档中提到的<a href="https://developer.android.com/develop/ui/compose/side-effects">副作用</a>。Compose 文档至少在过去有时会提及副作用的这种用法——尽管实际上 Compose 函数并非纯函数。</li>
+<li>[2] 如果在 Compose Compiler 插件完成工作后查看 Composable，你会发现它不仅创建了节点，而且你的函数还会进行大量调用，从而改变应用程序的全局状态。但这些调用并不会实际绘制任何内容。它们最多只会创建一些绘制操作，这些操作会被记录下来，并在系统认为需要绘制时，于未来的某个时间点被调用。我将在以后的两篇文章中分别介绍绘制过程以及编译器对代码所做的更改。</li>
+<li>[3] 实际上，布局可组合对象共有三个。但它们最终都会调用 <code>ReusableComposeNode</code>。其他变体的示例也与之非常相似。</li>
+<li>[4] 本系列文章中我可能不会介绍 SlotTable。我推荐 Richard Leland 的这篇关于 compose 的文章（<a href="https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A">https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A</a> Mohit Sarveiya 的关于 slotTable 的视频（<a href="https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8">https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8</a> slotTable。</li>
+<li>[5] 设备上的辅助功能服务在 Android 系统中是 AccessibilityService 的实现，但在 iOS、桌面或 Web 端则有所不同，因此我在本文中使用“辅助功能服务”这个通用术语。</li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[务实的模块化：连接模块(wiring Modules)的妙用]]></title>
@@ -14997,732 +15202,6 @@ Anatolii Frolov发布于2025年11月20日。</p></blockquote>
 <p>FlickSlate 尚未升级到功能组。这毫无意义，因为共享层还无法拆分为功能组。该应用没有盈利功能，所以只能对节目进行分组，不过目前共享层已经完美地实现了这一点。</p>
 
 <p>这篇文章主要源于我对互联网上关于何时以及如何模块化的建议一概而论的不满：要么建议不加区分地进行模块化，要么有人对任何进行模块化的人大喊“过度工程”。我希望这篇文章能帮助你在何时以及如何进行模块化方面做出更明智的决定。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Compose Unstyled：Compose UI中失传​​的设计系统层]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/09/10/compose-unstyled/"/>
-    <updated>2025-09-10T16:17:33+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/09/10/compose-unstyled</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Compose Unstyled: The missing Design System layer for Compose UI」，原文链接<a href="https://composables.com/blog/introducing-compose-unstyled">https://composables.com/blog/introducing-compose-unstyled</a>，由Alex Styl发布于2025年8月7日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/09/10/compose-unstyled/"><img src="https://composables.com/og_unstyled.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>使用 Compose UI 构建应用的最大问题是 Material Compose 的灵活性不足。Material Compose 的可定制性不足以让你在其上构建自己的设计系统，因此你最终只能对其组件进行修改。另一方面，Compose Foundation 又过于“原始”——它有行和列，但没有按钮或底部表单。而且，由于主题设置与 Material 绑定，如果不完全遵循 Material 的设计决策，你甚至无法为你的应用设置主题。</p>
-
-<p>你可以从头开始构建所有内容，但谁有时间这样做呢？考虑到不同的状态、可访问性和边缘情况，像底部表单这样的单个组件可能需要 3-4 周才能完成。这个问题在 Compose Multiplatform 中变得更加严重——Material 在 iOS 上看起来笨拙，在桌面上显得不成比例。</p>
-
-<p>我需要一个灵活的解决方案，可以在任何平台上使用，而不受 Material 的限制。于是我撸起袖子，自己动手构建了一个：</p>
-
-<p><strong><a href="https://composables.com/docs/com.composables/core">Compose Unstyled</a> 是基于 Compose Foundation 的 API，可轻松构建任何设计系统</strong> （链接：<a href="https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82%E5%AE%83%E6%8F%90%E4%BE%9B%E6%97%A0%E6%A0%B7%E5%BC%8F%E3%80%81%E5%8F%AF%E8%AE%BF%E9%97%AE%E7%9A%84%E7%BB%84%E4%BB%B6%EF%BC%8C%E5%B9%B6%E9%85%8D%E6%9C%89%E7%81%B5%E6%B4%BB%E7%9A%84%E4%B8%BB%E9%A2%98">https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82%E5%AE%83%E6%8F%90%E4%BE%9B%E6%97%A0%E6%A0%B7%E5%BC%8F%E3%80%81%E5%8F%AF%E8%AE%BF%E9%97%AE%E7%9A%84%E7%BB%84%E4%BB%B6%EF%BC%8C%E5%B9%B6%E9%85%8D%E6%9C%89%E7%81%B5%E6%B4%BB%E7%9A%84%E4%B8%BB%E9%A2%98</a> API——所有关于用户体验和可访问性的繁琐工作都已为你处理。</p>
-
-<p>Unstyled 中的组件完全无需渲染，默认情况下不会在屏幕上显示任何内容。你可以将它们视为“组件模式”，它们将“底部表单”或“进度条”的概念引入你的应用，而无需你担心用户体验、键盘导航或可访问性实现。只需添加样式即可。</p>
-
-<h2>简洁的 API，提供你所需的样式</h2>
-
-<p>Compose Unstyled 不提供任何特殊的样式 API。所有操作都通过 <code>Modifier</code> 完成。如果你知道如何设置 <code>Box()</code> 的样式，那么你就知道如何设置 Compose Unstyled 中每个组件的样式。</p>
-
-<p>下面是一个使用 Compose Unstyled 构建模态底部表单的简单示例，其中包含自定义定位点（表单在屏幕上“停留”的位置）以及你选择的样式：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">Peek</span> <span class="p">=</span> <span class="n">SheetDetent</span><span class="p">(</span><span class="s">&quot;peek&quot;</span><span class="p">)</span> <span class="p">{</span> <span class="n">containerHeight</span><span class="p">,</span> <span class="n">sheetHeight</span> <span class="p">-&gt;</span>
-</span><span class='line'>    <span class="n">containerHeight</span> <span class="p">*</span> <span class="m">0.6f</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'><span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">().</span><span class="n">background</span><span class="p">(</span><span class="n">Brush</span><span class="p">.</span><span class="n">linearGradient</span><span class="p">(</span><span class="n">listOf</span><span class="p">(</span><span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF800080</span><span class="p">),</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFDA70D6</span><span class="p">)))))</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">modalSheetState</span> <span class="p">=</span> <span class="n">rememberModalBottomSheetState</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">initialDetent</span> <span class="p">=</span> <span class="n">Hidden</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">detents</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">Hidden</span><span class="p">,</span> <span class="n">Peek</span><span class="p">,</span> <span class="n">FullyExpanded</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">50</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">modalSheetState</span><span class="p">.</span><span class="n">targetDetent</span> <span class="p">=</span> <span class="n">Peek</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">modalSheetState</span><span class="p">.</span><span class="n">targetDetent</span> <span class="p">=</span> <span class="n">Peek</span> <span class="p">},</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">align</span><span class="p">(</span><span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">).</span><span class="n">padding</span><span class="p">(</span><span class="n">WindowInsets</span><span class="p">.</span><span class="n">navigationBars</span><span class="p">.</span><span class="n">only</span><span class="p">(</span><span class="n">WindowInsetsSides</span><span class="p">.</span><span class="n">Horizontal</span><span class="p">).</span><span class="n">asPaddingValues</span><span class="p">()),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">6.</span><span class="n">dp</span><span class="p">),</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">14.</span><span class="n">dp</span><span class="p">,</span> <span class="n">vertical</span> <span class="p">=</span> <span class="m">10.</span><span class="n">dp</span><span class="p">),</span> <span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Show Sheet&quot;</span><span class="p">,</span> <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">(</span><span class="m">500</span><span class="p">))</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">isCompact</span> <span class="p">=</span> <span class="n">maxWidth</span> <span class="p">&lt;</span> <span class="m">600.</span><span class="n">dp</span>
-</span><span class='line'>    <span class="n">ModalBottomSheet</span><span class="p">(</span><span class="n">state</span> <span class="p">=</span> <span class="n">modalSheetState</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Scrim</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">scrimColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="m">0.3f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">enter</span> <span class="p">=</span> <span class="n">fadeIn</span><span class="p">(),</span>
-</span><span class='line'>            <span class="n">exit</span> <span class="p">=</span> <span class="n">fadeOut</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>        <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">().</span><span class="n">padding</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="m">12.</span><span class="n">dp</span><span class="p">).</span><span class="n">let</span> <span class="p">{</span> <span class="k">if</span> <span class="p">(</span><span class="n">isCompact</span><span class="p">)</span> <span class="n">it</span> <span class="k">else</span> <span class="n">it</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">56.</span><span class="n">dp</span><span class="p">)</span> <span class="p">}.</span><span class="n">displayCutoutPadding</span><span class="p">().</span><span class="n">statusBarsPadding</span><span class="p">().</span><span class="n">padding</span><span class="p">(</span><span class="n">WindowInsets</span><span class="p">.</span><span class="n">navigationBars</span><span class="p">.</span><span class="n">only</span><span class="p">(</span><span class="n">WindowInsetsSides</span><span class="p">.</span><span class="n">Horizontal</span><span class="p">).</span><span class="n">asPaddingValues</span><span class="p">()))</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Sheet</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">shadow</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">,</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="n">topStart</span> <span class="p">=</span> <span class="m">28.</span><span class="n">dp</span><span class="p">,</span> <span class="n">topEnd</span> <span class="p">=</span> <span class="m">28.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">widthIn</span><span class="p">(</span><span class="n">max</span> <span class="p">=</span> <span class="m">640.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                    <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(),</span>
-</span><span class='line'>                <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="n">topStart</span> <span class="p">=</span> <span class="m">28.</span><span class="n">dp</span><span class="p">,</span> <span class="n">topEnd</span> <span class="p">=</span> <span class="m">28.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">contentColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span>
-</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">().</span><span class="n">height</span><span class="p">(</span><span class="m">600.</span><span class="n">dp</span><span class="p">),</span> <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">TopCenter</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">DragIndication</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">top</span> <span class="p">=</span> <span class="m">22.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="m">0.4f</span><span class="p">),</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">100</span><span class="p">)).</span><span class="n">width</span><span class="p">(</span><span class="m">32.</span><span class="n">dp</span><span class="p">).</span><span class="n">height</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>现在，我知道你可能会想。“Alex！这 API 真奇怪。为什么我需要一个 <code>ModalBottomSheet</code> 和一个 <code>Sheet</code>？为什么不直接用 Slots 呢？”</p>
-
-<p>这个设计选择是经过深思熟虑的：</p>
-
-<h2>设计理念</h2>
-
-<p>Compose Unstyled 不会替你做出任何设计决策，而是让你完全掌控布局。事实上，如果你被迫使用无法根据需求更改的样式，则会被视为错误（请提交 GitHub 问题，以便我进行调查）。</p>
-
-<p>例如，你可能希望将底部表单放置在屏幕的左侧或右侧。当你想要求开发者提供一个在布局上具有严格位置的组件时，基于插槽的 API 非常实用。</p>
-
-<p>在这种情况下，你可以将 <code>ModalBottomSheet</code> 组件视为表单可以移动的区域。<code>Sheet</code> 是用户可以与之交互的实际表单。通过提供这样的组件，它为开发者提供了清晰的 API，并清楚地说明了组件的功能。例如，<code>Scrim()</code> 组件具有 <em>enter</em> 和 <em>exit</em> 过渡参数。 Compose Unstyled 会在恰当的时机为纱幕添加和隐藏动画，以实现最佳用户体验。你只需指定“如何”实现即可。</p>
-
-<p>由于 Compose Unstyled 在外观方面非常开放，因此与原始的 Compose Foundation 组件相比，它没有任何平台限制。Foundation 中的“对话框”具有固定的最大尺寸，这使得它们在诸如全屏对话框等情况下难以工作。</p>
-
-<p>Compose Unstyled 中的所有组件在所有平台上的工作方式完全相同。这是有意为之，因为此类决策应该属于设计系统层的一部分。尽管这会给开发者带来更多负担，但由于没有“陷阱”，它大大缩短了开发时间。组件的样式与你描述的完全一致。</p>
-
-<p>这不会使 Compose Unstyled 与底层平台脱节。在使用对话框和模态底部菜单等模态窗口时，设置系统窗口的样式是 Android 样式设置的重要组成部分。在这种情况下，Compose Unstyled 提供了一个 <code>LocalModalWindow</code> 组合本地接口，允许你访问渲染模态窗口的 <code>Window</code>。请注意，此类 API 仅适用于 Android 目标平台，不属于通用目标平台 API。</p>
-
-<p>最后，每个组件的代码都包含在其自己的文件中，即使你不是 Compose 专家，也能轻松理解。你无需担心任何限制。如果你现在需要更改某些内容，并且迫不及待地想要提交错误并在库级别修复它，你只需将组件的单个文件复制粘贴到你的代码库中即可。这为你节省了通常需要你自己完成的 4 周工作时间。</p>
-
-<h2>滑块</h2>
-
-<p>以下是如何构建一个具有你所选样式的滑块。</p>
-
-<p>它与 Compose 的“InteractionState”集成，以便你可以按照自己想要的方式完善组件。键盘交互功能开箱即用，用户可以通过按下键盘上的“向上”或“向下”键来增加或减少值：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose-style-1.png" alt="" /></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">().</span><span class="n">background</span><span class="p">(</span><span class="n">Brush</span><span class="p">.</span><span class="n">linearGradient</span><span class="p">(</span><span class="n">listOf</span><span class="p">(</span><span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFED213A</span><span class="p">),</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF93291E</span><span class="p">)))),</span>   <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">interactionSource</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">MutableInteractionSource</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">isFocused</span> <span class="k">by</span> <span class="n">interactionSource</span><span class="p">.</span><span class="n">collectIsFocusedAsState</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">isPressed</span> <span class="k">by</span> <span class="n">interactionSource</span><span class="p">.</span><span class="n">collectIsPressedAsState</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">state</span> <span class="p">=</span> <span class="n">rememberSliderState</span><span class="p">(</span><span class="n">initialValue</span> <span class="p">=</span> <span class="m">0.7f</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">Row</span><span class="p">(</span><span class="n">verticalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterVertically</span><span class="p">,</span> <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">12.</span><span class="n">dp</span><span class="p">),</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span><span class="p">).</span><span class="n">widthIn</span><span class="p">(</span><span class="n">max</span> <span class="p">=</span> <span class="m">480.</span><span class="n">dp</span><span class="p">).</span><span class="n">fillMaxWidth</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">state</span><span class="p">.</span><span class="n">value</span> <span class="p">-=</span> <span class="m">0.1f</span> <span class="p">},</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">shadow</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">,</span> <span class="n">CircleShape</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">CircleShape</span><span class="p">,</span> <span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Icon</span><span class="p">(</span><span class="n">VolumeDown</span><span class="p">,</span> <span class="s">&quot;Decrease&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="n">Slider</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">interactionSource</span> <span class="p">=</span> <span class="n">interactionSource</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">state</span> <span class="p">=</span> <span class="n">state</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">1f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">track</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">().</span><span class="n">height</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">).</span><span class="n">padding</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span><span class="p">).</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">100.</span><span class="n">dp</span><span class="p">)))</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="c1">// the &#39;not yet completed&#39; part of the track</span>
-</span><span class='line'>                    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxHeight</span><span class="p">().</span><span class="n">fillMaxWidth</span><span class="p">().</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF93291E</span><span class="p">)))</span>
-</span><span class='line'>                    <span class="c1">// the &#39;completed&#39; part of the track</span>
-</span><span class='line'>                    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxHeight</span><span class="p">().</span><span class="n">fillMaxWidth</span><span class="p">(</span><span class="n">state</span><span class="p">.</span><span class="n">value</span><span class="p">).</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">))</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">},</span>
-</span><span class='line'>            <span class="n">thumb</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">thumbSize</span> <span class="k">by</span> <span class="n">animateDpAsState</span><span class="p">(</span><span class="n">targetValue</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">isPressed</span><span class="p">)</span> <span class="m">22.</span><span class="n">dp</span> <span class="k">else</span> <span class="m">18.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">thumbInteractionSource</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">MutableInteractionSource</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">isHovered</span> <span class="k">by</span> <span class="n">thumbInteractionSource</span><span class="p">.</span><span class="n">collectIsHoveredAsState</span><span class="p">()</span>
-</span><span class='line'>                <span class="k">val</span> <span class="py">glowColor</span> <span class="k">by</span> <span class="n">animateColorAsState</span><span class="p">(</span>
-</span><span class='line'>                    <span class="k">if</span> <span class="p">(</span><span class="n">isFocused</span> <span class="p">||</span> <span class="n">isHovered</span><span class="p">)</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="m">0.33f</span><span class="p">)</span> <span class="k">else</span> <span class="n">Color</span><span class="p">.</span><span class="n">Transparent</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>                <span class="c1">// keep the size fixed to ensure that the resizing animation is always centered</span>
-</span><span class='line'>                <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">36.</span><span class="n">dp</span><span class="p">).</span><span class="n">clip</span><span class="p">(</span><span class="n">CircleShape</span><span class="p">).</span><span class="n">background</span><span class="p">(</span><span class="n">glowColor</span><span class="p">),</span>
-</span><span class='line'>                    <span class="n">contentAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span>
-</span><span class='line'>                <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">Thumb</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="n">thumbSize</span><span class="p">).</span><span class="n">shadow</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">,</span> <span class="n">CircleShape</span><span class="p">).</span><span class="n">hoverable</span><span class="p">(</span><span class="n">thumbInteractionSource</span><span class="p">),</span>
-</span><span class='line'>                        <span class="n">shape</span> <span class="p">=</span> <span class="n">CircleShape</span><span class="p">,</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>        <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">state</span><span class="p">.</span><span class="n">value</span> <span class="p">+=</span> <span class="m">0.1f</span> <span class="p">},</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">shadow</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">,</span> <span class="n">CircleShape</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">CircleShape</span><span class="p">,</span> <span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Icon</span><span class="p">(</span><span class="n">VolumeUp</span><span class="p">,</span> <span class="s">&quot;Increase&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>下拉菜单</h2>
-
-<p>下拉菜单的正确实现非常复杂，尤其是在键盘导航和焦点管理方面。</p>
-
-<p>要充分体验此组件，请在桌面上试用：点击“Options”按钮以聚焦演示，然后使用键盘的上下箭头键进行导航：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose-style-2.png" alt="" /></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">DropdownOption</span><span class="p">(</span><span class="k">val</span> <span class="py">text</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="k">val</span> <span class="py">icon</span><span class="p">:</span> <span class="n">ImageVector</span><span class="p">,</span> <span class="k">val</span> <span class="py">enabled</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">true</span><span class="p">,</span> <span class="k">val</span> <span class="py">dangerous</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">false</span><span class="p">)</span>
-</span><span class='line'><span class="k">val</span> <span class="py">options</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">DropdownOption</span><span class="p">(</span><span class="s">&quot;Select All&quot;</span><span class="p">,</span> <span class="n">Maximize</span><span class="p">),</span>
-</span><span class='line'>    <span class="n">DropdownOption</span><span class="p">(</span><span class="s">&quot;Copy&quot;</span><span class="p">,</span> <span class="n">Copy</span><span class="p">),</span>
-</span><span class='line'>    <span class="n">DropdownOption</span><span class="p">(</span><span class="s">&quot;Cut&quot;</span><span class="p">,</span> <span class="n">Scissors</span><span class="p">,</span> <span class="n">enabled</span> <span class="p">=</span> <span class="k">false</span><span class="p">),</span>
-</span><span class='line'>    <span class="n">DropdownOption</span><span class="p">(</span><span class="s">&quot;Paste&quot;</span><span class="p">,</span> <span class="n">Clipboard</span><span class="p">),</span>
-</span><span class='line'>    <span class="n">DropdownOption</span><span class="p">(</span><span class="s">&quot;Delete&quot;</span><span class="p">,</span> <span class="n">Trash2</span><span class="p">,</span> <span class="n">dangerous</span> <span class="p">=</span> <span class="k">true</span><span class="p">),</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'><span class="k">var</span> <span class="py">expanded</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="k">true</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'><span class="n">DropdownMenu</span><span class="p">(</span><span class="n">onExpandRequest</span> <span class="p">=</span> <span class="p">{</span> <span class="n">expanded</span> <span class="p">=</span> <span class="k">true</span> <span class="p">})</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Button</span><span class="p">(</span><span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">6.</span><span class="n">dp</span><span class="p">),</span> <span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span> <span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">expanded</span> <span class="p">=</span> <span class="k">true</span> <span class="p">},</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">14.</span><span class="n">dp</span><span class="p">,</span> <span class="n">vertical</span> <span class="p">=</span> <span class="m">10.</span><span class="n">dp</span><span class="p">),)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Options&quot;</span><span class="p">,</span> <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">(</span><span class="m">500</span><span class="p">))</span>
-</span><span class='line'>        <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">width</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>        <span class="n">Icon</span><span class="p">(</span><span class="n">ChevronDown</span><span class="p">,</span> <span class="k">null</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="n">DropdownMenuPanel</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">expanded</span> <span class="p">=</span> <span class="n">expanded</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">onDismissRequest</span> <span class="p">=</span> <span class="p">{</span> <span class="n">expanded</span> <span class="p">=</span> <span class="k">false</span> <span class="p">},</span>
-</span><span class='line'>        <span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">vertical</span> <span class="p">=</span> <span class="m">4.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">width</span><span class="p">(</span><span class="m">240.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">shadow</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">,</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">)),</span>
-</span><span class='line'>        <span class="n">enter</span> <span class="p">=</span> <span class="n">scaleIn</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">animationSpec</span> <span class="p">=</span> <span class="n">tween</span><span class="p">(</span><span class="n">durationMillis</span> <span class="p">=</span> <span class="m">120</span><span class="p">,</span> <span class="n">easing</span> <span class="p">=</span> <span class="n">LinearOutSlowInEasing</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">initialScale</span> <span class="p">=</span> <span class="m">0.8f</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">transformOrigin</span> <span class="p">=</span> <span class="n">TransformOrigin</span><span class="p">(</span><span class="m">0f</span><span class="p">,</span> <span class="m">0f</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">+</span> <span class="n">fadeIn</span><span class="p">(</span><span class="n">tween</span><span class="p">(</span><span class="n">durationMillis</span> <span class="p">=</span> <span class="m">30</span><span class="p">)),</span>
-</span><span class='line'>        <span class="n">exit</span> <span class="p">=</span> <span class="n">scaleOut</span><span class="p">(</span><span class="n">animationSpec</span> <span class="p">=</span> <span class="n">tween</span><span class="p">(</span><span class="n">durationMillis</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span> <span class="n">delayMillis</span> <span class="p">=</span> <span class="m">75</span><span class="p">),</span> <span class="n">targetScale</span> <span class="p">=</span> <span class="m">1f</span><span class="p">)</span> <span class="p">+</span> <span class="n">fadeOut</span><span class="p">(</span><span class="n">tween</span><span class="p">(</span><span class="n">durationMillis</span> <span class="p">=</span> <span class="m">75</span><span class="p">))</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">options</span><span class="p">.</span><span class="n">forEachIndexed</span> <span class="p">{</span> <span class="n">index</span><span class="p">,</span> <span class="n">option</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">index</span> <span class="p">==</span> <span class="m">1</span> <span class="p">||</span> <span class="n">index</span> <span class="p">==</span> <span class="n">options</span><span class="p">.</span><span class="n">lastIndex</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">Separator</span><span class="p">(</span><span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFBDBDBD</span><span class="p">))</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>            <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">expanded</span> <span class="p">=</span> <span class="k">false</span> <span class="p">},</span> <span class="n">enabled</span> <span class="p">=</span> <span class="n">option</span><span class="p">.</span><span class="n">enabled</span><span class="p">,</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">),</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">,</span> <span class="n">vertical</span> <span class="p">=</span> <span class="m">2.</span><span class="n">dp</span><span class="p">),</span> <span class="n">contentColor</span> <span class="p">=</span> <span class="p">(</span><span class="k">if</span> <span class="p">(</span><span class="n">option</span><span class="p">.</span><span class="n">dangerous</span><span class="p">)</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFC62828</span><span class="p">)</span> <span class="k">else</span> <span class="n">LocalContentColor</span><span class="p">.</span><span class="n">current</span><span class="p">).</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">option</span><span class="p">.</span><span class="n">enabled</span><span class="p">)</span> <span class="m">1f</span> <span class="k">else</span> <span class="m">0.5f</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">Icon</span><span class="p">(</span><span class="n">option</span><span class="p">.</span><span class="n">icon</span><span class="p">,</span> <span class="k">null</span><span class="p">)</span>
-</span><span class='line'>                <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">width</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">option</span><span class="p">.</span><span class="n">text</span><span class="p">,</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">().</span><span class="n">padding</span><span class="p">(</span><span class="n">vertical</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">,</span> <span class="n">horizontal</span> <span class="p">=</span> <span class="m">4.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>以及更多未样式化的组件，例如：</p>
-
-<ul>
-<li><a href="https://composables.com/docs/com.composables/core/textfield">TextField</a>，全面支持屏幕阅读器的无障碍功能</li>
-<li><a href="https://composables.com/docs/com.composables/core/button">Button</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/dialog">Dialog</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/radiogroup">Radio Group</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/tabgroup">TabGroup</a>，用于构建标签式导航，例如底部应用栏或顶部标签桌面</li>
-<li><a href="https://composables.com/docs/com.composables/core/checkbox">复选框</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/tristatecheckbox">三态复选框</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/toggleswitch">切换开关</a></li>
-<li><a href="https://composables.com/docs/com.composables/core/scrollarea">滚动条</a>（没错，就是滚动条。）</li>
-</ul>
-
-
-<p>每个组件在构建时都充分考虑了可访问性，包括合理的语义和完整的键盘导航支持。</p>
-
-<p>你可以<a href="https://composables.com/docs/com.composables/core">在文档中找到完整的组件列表 -></a>（链接：<a href="https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82">https://composables.com/docs/com.composables/core%EF%BC%89%E3%80%82</a></p>
-
-<h2>使用你的设计令牌自定义 Compose 主题</h2>
-
-<p>Compose Unstyled 包含一个灵活的主题系统，可与任何设计系统令牌兼容。</p>
-
-<p>以下是如何使用你选择的设计令牌创建完全自定义的主题：</p>
-
-<p>以下是创建 Compose Theme 函数的示例：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-<span class='line-number'>52</span>
-<span class='line-number'>53</span>
-<span class='line-number'>54</span>
-<span class='line-number'>55</span>
-<span class='line-number'>56</span>
-<span class='line-number'>57</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// define your theme properties</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">colors</span> <span class="p">=</span> <span class="n">ThemeProperty</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;colors&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">typography</span> <span class="p">=</span> <span class="n">ThemeProperty</span><span class="p">&lt;</span><span class="n">TextStyle</span><span class="p">&gt;(</span><span class="s">&quot;typography&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">shapes</span> <span class="p">=</span> <span class="n">ThemeProperty</span><span class="p">&lt;</span><span class="n">Shape</span><span class="p">&gt;(</span><span class="s">&quot;shapes&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">elevation</span> <span class="p">=</span> <span class="n">ThemeProperty</span><span class="p">&lt;</span><span class="n">Dp</span><span class="p">&gt;(</span><span class="s">&quot;elevation&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="c1">// define your theme tokens.</span>
-</span><span class='line'><span class="c1">// those are the potential values of your theme properties</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">background</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;background&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">card</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;surface&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">onCard</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;onCard&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">outline</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;outline&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">accent</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;accent&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">primary</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;primary&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">onPrimary</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;onPrimary&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">onSecondary</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;onSecondary&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">secondary</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Color</span><span class="p">&gt;(</span><span class="s">&quot;secondary&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">subtle</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Dp</span><span class="p">&gt;(</span><span class="s">&quot;subtle&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">titleMedium</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">TextStyle</span><span class="p">&gt;(</span><span class="s">&quot;titleMedium&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">bodyMedium</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">TextStyle</span><span class="p">&gt;(</span><span class="s">&quot;bodyMedium&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">cardShape</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Shape</span><span class="p">&gt;(</span><span class="s">&quot;cardShape&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">albumCoverShape</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Shape</span><span class="p">&gt;(</span><span class="s">&quot;albumCoverShape&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">buttonShape</span> <span class="p">=</span> <span class="n">ThemeToken</span><span class="p">&lt;</span><span class="n">Shape</span><span class="p">&gt;(</span><span class="s">&quot;buttonShape&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="c1">// create your Compose Theme and assign values to each token</span>
-</span><span class='line'><span class="k">private</span> <span class="k">val</span> <span class="py">LightTheme</span> <span class="p">=</span> <span class="n">buildTheme</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">name</span> <span class="p">=</span> <span class="s">&quot;LightTheme&quot;</span>
-</span><span class='line'>    <span class="n">properties</span><span class="p">[</span><span class="n">colors</span><span class="p">]</span> <span class="p">=</span> <span class="n">mapOf</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">accent</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF3B82F6</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">card</span> <span class="n">to</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">onCard</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF1E293B</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">outline</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFE2E8F0</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">primary</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF2563EB</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">onPrimary</span> <span class="n">to</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">secondary</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFE2E8F0</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">onSecondary</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF64748B</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">background</span> <span class="n">to</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFF8F9FA</span><span class="p">),</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>    <span class="n">properties</span><span class="p">[</span><span class="n">typography</span><span class="p">]</span> <span class="p">=</span> <span class="n">mapOf</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">titleMedium</span> <span class="n">to</span> <span class="n">TextStyle</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">fontSize</span> <span class="p">=</span> <span class="m">18.</span><span class="n">sp</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">SemiBold</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">fontFamily</span> <span class="p">=</span> <span class="n">loadInterFont</span><span class="p">(),</span>
-</span><span class='line'>        <span class="p">),</span>
-</span><span class='line'>        <span class="n">bodyMedium</span> <span class="n">to</span> <span class="n">TextStyle</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">fontSize</span> <span class="p">=</span> <span class="m">14.</span><span class="n">sp</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">Normal</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">fontFamily</span> <span class="p">=</span> <span class="n">loadInterFont</span><span class="p">(),</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>    <span class="n">properties</span><span class="p">[</span><span class="n">shapes</span><span class="p">]</span> <span class="p">=</span> <span class="n">mapOf</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">cardShape</span> <span class="n">to</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">albumCoverShape</span> <span class="n">to</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">12.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">buttonShape</span> <span class="n">to</span> <span class="n">CircleShape</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>    <span class="n">properties</span><span class="p">[</span><span class="n">elevation</span><span class="p">]</span> <span class="p">=</span> <span class="n">mapOf</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">subtle</span> <span class="n">to</span> <span class="m">8.</span><span class="n">dp</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后，你可以使用新的主题函数包装你的应用：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">MusicPlayerApp</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">LightTheme</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">MusicPlayerCard</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>然后，它会使用 <code>Theme</code> 对象授予其子组件对主题的访问权限：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-<span class='line-number'>52</span>
-<span class='line-number'>53</span>
-<span class='line-number'>54</span>
-<span class='line-number'>55</span>
-<span class='line-number'>56</span>
-<span class='line-number'>57</span>
-<span class='line-number'>58</span>
-<span class='line-number'>59</span>
-<span class='line-number'>60</span>
-<span class='line-number'>61</span>
-<span class='line-number'>62</span>
-<span class='line-number'>63</span>
-<span class='line-number'>64</span>
-<span class='line-number'>65</span>
-<span class='line-number'>66</span>
-<span class='line-number'>67</span>
-<span class='line-number'>68</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">MusicPlayerCard</span><span class="p">(</span><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">sliderState</span> <span class="p">=</span> <span class="n">rememberSliderState</span><span class="p">(</span><span class="n">initialValue</span> <span class="p">=</span> <span class="m">0.3f</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">outline</span><span class="p">(</span><span class="m">1.</span><span class="n">dp</span><span class="p">,</span> <span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">outline</span><span class="p">],</span> <span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">cardShape</span><span class="p">])</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">shadow</span><span class="p">(</span><span class="n">Theme</span><span class="p">[</span><span class="n">elevation</span><span class="p">][</span><span class="n">subtle</span><span class="p">],</span> <span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">cardShape</span><span class="p">])</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">card</span><span class="p">],</span> <span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">cardShape</span><span class="p">])</span>
-</span><span class='line'>            <span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">24.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">ProvideContentColor</span><span class="p">(</span><span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">onCard</span><span class="p">])</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Column</span><span class="p">(</span><span class="n">verticalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">Row</span><span class="p">(</span><span class="n">verticalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterVertically</span><span class="p">,</span> <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">Image</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">painter</span> <span class="p">=</span> <span class="n">painterResource</span><span class="p">(</span><span class="n">Res</span><span class="p">.</span><span class="n">drawable</span><span class="p">.</span><span class="n">just_hoist_it_cover</span><span class="p">),</span>
-</span><span class='line'>                        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                            <span class="p">.</span><span class="n">clip</span><span class="p">(</span><span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">albumCoverShape</span><span class="p">])</span>
-</span><span class='line'>                            <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">primary</span><span class="p">])</span>
-</span><span class='line'>                            <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">80.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>                        <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;Album Cover&quot;</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">contentScale</span> <span class="p">=</span> <span class="n">ContentScale</span><span class="p">.</span><span class="n">Crop</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                    <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">1f</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Just hoist it!&quot;</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">typography</span><span class="p">][</span><span class="n">titleMedium</span><span class="p">])</span>
-</span><span class='line'>                        <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                        <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>                            <span class="s">&quot;The Deprecated&quot;</span><span class="p">,</span>
-</span><span class='line'>                            <span class="n">style</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">typography</span><span class="p">][</span><span class="n">bodyMedium</span><span class="p">],</span>
-</span><span class='line'>                            <span class="n">color</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">onSecondary</span><span class="p">]</span>
-</span><span class='line'>                        <span class="p">)</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>                <span class="n">Slider</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">state</span> <span class="p">=</span> <span class="n">sliderState</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(),</span>
-</span><span class='line'>                    <span class="n">track</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">().</span><span class="n">height</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">).</span><span class="n">clip</span><span class="p">(</span><span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">2.</span><span class="n">dp</span><span class="p">)))</span> <span class="p">{</span>
-</span><span class='line'>                            <span class="c1">// the empty part of the track</span>
-</span><span class='line'>                            <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">().</span><span class="n">background</span><span class="p">(</span><span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">secondary</span><span class="p">]))</span>
-</span><span class='line'>                            <span class="c1">// the filled part of the track</span>
-</span><span class='line'>                            <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>                                <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(</span><span class="n">sliderState</span><span class="p">.</span><span class="n">value</span><span class="p">).</span><span class="n">fillMaxSize</span><span class="p">().</span><span class="n">background</span><span class="p">(</span><span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">accent</span><span class="p">])</span>
-</span><span class='line'>                            <span class="p">)</span>
-</span><span class='line'>                        <span class="p">}</span>
-</span><span class='line'>                    <span class="p">},</span>
-</span><span class='line'>                    <span class="n">thumb</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">Thumb</span><span class="p">(</span>
-</span><span class='line'>                            <span class="n">color</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">accent</span><span class="p">],</span>
-</span><span class='line'>                            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>                            <span class="n">shape</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">buttonShape</span><span class="p">]</span>
-</span><span class='line'>                        <span class="p">)</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>                <span class="n">Row</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(),</span> <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">SpaceEvenly</span><span class="p">,</span> <span class="n">verticalAlignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">CenterVertically</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="p">},</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="m">12.</span><span class="n">dp</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">buttonShape</span><span class="p">])</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">Icon</span><span class="p">(</span><span class="n">imageVector</span> <span class="p">=</span> <span class="n">Lucide</span><span class="p">.</span><span class="n">SkipBack</span><span class="p">,</span> <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;Previous&quot;</span><span class="p">,</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                    <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="p">},</span> <span class="n">backgroundColor</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">primary</span><span class="p">],</span> <span class="n">contentColor</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">colors</span><span class="p">][</span><span class="n">onPrimary</span><span class="p">],</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">buttonShape</span><span class="p">])</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">Icon</span><span class="p">(</span><span class="n">imageVector</span> <span class="p">=</span> <span class="n">Lucide</span><span class="p">.</span><span class="n">Pause</span><span class="p">,</span> <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;Pause&quot;</span><span class="p">,</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">24.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                    <span class="n">Button</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="p">},</span> <span class="n">contentPadding</span> <span class="p">=</span> <span class="n">PaddingValues</span><span class="p">(</span><span class="m">12.</span><span class="n">dp</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">Theme</span><span class="p">[</span><span class="n">shapes</span><span class="p">][</span><span class="n">buttonShape</span><span class="p">])</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">Icon</span><span class="p">(</span><span class="n">imageVector</span> <span class="p">=</span> <span class="n">Lucide</span><span class="p">.</span><span class="n">SkipForward</span><span class="p">,</span> <span class="n">contentDescription</span> <span class="p">=</span> <span class="s">&quot;Next&quot;</span><span class="p">,</span> <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>轮廓修饰符</h2>
-
-<p>最后但同样重要的是，Compose Unstyled 引入了一些 Compose Foundation 中缺少的样式 <code>Modifier</code>，但这些修饰符对于构建视觉丰富的界面必不可少：</p>
-
-<h3>轮廓</h3>
-
-<p>与 Compose Foundation 的 <code>border()</code> 修饰符不同，此修饰符不会影响布局。它还会在组件周围而不是内部进行绘制。当你需要一个与阴影完美融合的半透明轮廓时，这个功能非常方便：</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/compose-style-3.png" alt="" /></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">SimpleButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">shape</span> <span class="p">=</span> <span class="n">RectangleShape</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">outline</span><span class="p">(</span><span class="m">2.</span><span class="n">dp</span><span class="p">,</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF3B82F6</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RectangleShape</span><span class="p">)</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'><span class="n">SimpleButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>  <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">outline</span><span class="p">(</span><span class="m">2.</span><span class="n">dp</span><span class="p">,</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF3B82F6</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'><span class="n">SimpleButton</span><span class="p">(</span>
-</span><span class='line'>  <span class="n">shape</span> <span class="p">=</span> <span class="n">CircleShape</span><span class="p">,</span>
-</span><span class='line'>  <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">outline</span><span class="p">(</span><span class="m">2.</span><span class="n">dp</span><span class="p">,</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF3B82F6</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">CircleShape</span><span class="p">)</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>焦点环</h3>
-
-<p>焦点环在处理键盘导航和焦点时非常重要。它们只有在获得焦点时才会渲染轮廓。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">interactionSource</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">MutableInteractionSource</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'><span class="n">SimpleButton</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">focusRing</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">interactionSource</span> <span class="p">=</span> <span class="n">interactionSource</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">width</span> <span class="p">=</span> <span class="m">2.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF3B82F6</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">offset</span> <span class="p">=</span> <span class="m">2.</span><span class="n">dp</span>
-</span><span class='line'>    <span class="p">),</span>
-</span><span class='line'>    <span class="n">interactionSource</span> <span class="p">=</span> <span class="n">interactionSource</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>然后呢？</h2>
-
-<p>即将推出的组件包括：</p>
-
-<ul>
-<li>侧边栏</li>
-<li>工具提示</li>
-<li>上下文菜单</li>
-</ul>
-
-
-<p>以及更多。</p>
-
-<p>如果你愿意为该项目提供资金支持，我们还提供<a href="https://composables.com/ui-kit">正在制作中的 UI Kit</a>（链接：<a href="https://composables.com/ui-kit%EF%BC%89%E3%80%82%E8%AF%A5">https://composables.com/ui-kit%EF%BC%89%E3%80%82%E8%AF%A5</a> UI Kit 是一套完整的设计系统，适用于触控和指针应用。</p>
-
-<p>为了使这些 API 完美无缺，我们投入了大量的工作和专业知识。通过资金支持该项目，你将在未来几年获得更多资源，而我则可以继续从事开源工作，同时支付房租。</p>
-
-<p>想要随时了解最新动态？请务必<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/">在 Github 上关注 Unstyled</a>（链接:<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/%EF%BC%89%E3%80%82">https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/%EF%BC%89%E3%80%82</a></p>
-
-<p>想要评论这篇文章吗？<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106">在 GitHub 上讨论 →</a>（链接：<a href="https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106%EF%BC%89">https://github.com/composablehorizo%E2%80%8B%E2%80%8Bns/compose-unstyled/discussions/106%EF%BC%89</a></p>
 ]]></content>
   </entry>
   
