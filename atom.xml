@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-01-12T12:53:23+00:00</updated>
+  <updated>2026-01-22T12:41:39+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,502 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Compose GPU加速特效：带缩放的故障效果]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/01/22/glitch-at-scale-effects/"/>
+    <updated>2026-01-22T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/01/22/glitch-at-scale-effects</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「GPU-Accelerated Effects: Glitch at Scale」，原文链接<a href="https://medium.com/@konstantinzolotov/gpu-accelerated-effects-glitch-at-scale-e59216afd1e8">https://medium.com/@konstantinzolotov/gpu-accelerated-effects-glitch-at-scale-e59216afd1e8</a>，由Konstantin Zolotov发布于2025年11月9日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/01/22/glitch-at-scale-effects/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*l67g57hjllhQ5gkwTLU2nA.gif" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>几周前，我看到了Sina Samaki撰写的一篇关于使用Jetpack Compose制作故障效果的<a href="https://www.sinasamaki.com/glitch-effect-in-jetpack-compose/">精彩文章</a>。作为一个喜欢钻研底层技术的人，我看到了使用Android AGSL着色器重现这种效果并比较两种实现方式的绝佳机会。</p>
+
+<p>在图形处理方面，选择合适的工具至关重要，因为很容易达到性能瓶颈，而扩展解决方案则变得困难。这里的情况是否如此呢？让我们一探究竟！</p>
+
+<p>做好准备，我们将深入底层。</p>
+
+<h2>着色器(Shader)的本质</h2>
+
+<p>那么，着色器究竟是什么？</p>
+
+<p>着色器是一种直接在 GPU 上执行的程序，并且可以并行执行。</p>
+
+<p>着色器通常使用一种特殊的类 C 语言编写，在 Android Compose 中，这种语言是 AGSL——Android 图形着色语言。</p>
+
+<p>我不会重复<a href="https://developer.android.com/develop/ui/views/graphics/agsl">官方指南</a>的内容，而是会简单介绍一下 GPU 以及一种新的着色器编程思维模型。</p>
+
+<p>那么，它与 CPU 有什么区别呢？ CPU 和 GPU 的主要区别基本上如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1250/1*nNt7dZ0re2yZI33o62kKtg.png" alt="https://developer.nvidia.com/blog/cuda-refresher-reviewing-the-origins-of-gpu-computing/" /></p>
+
+<p>CPU：</p>
+
+<ul>
+<li>更复杂</li>
+<li>专为执行大量不同任务的大型程序而设计</li>
+<li>MIMD（多指令多数据流）</li>
+</ul>
+
+
+<p>GPU：</p>
+
+<ul>
+<li>简单得多（没有分支预测，缓存更小）</li>
+<li>专为对各种数据执行完全相同操作的小型程序而设计</li>
+<li>更多核心 = 更高的并行性</li>
+<li>SIMD（单指令多数据流）</li>
+</ul>
+
+
+<p>当然，CPU 也有 SIMD 扩展，但规模远不及 GPU。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*T5jVrRJztzWADaqiAFNwzQ.png" alt="https://developer.nvidia.com/blog/cuda-refresher-reviewing-the-origins-of-gpu-computing/" /></p>
+
+<blockquote><p>GPU 非常适合对数百万像素执行相同的操作</p></blockquote>
+
+<p>这里存在一个非常重要的<strong>思维模型转变</strong>：以前你可以在画布的任意位置绘制，而现在你面对的是一幅图像，你可以对图像的任何部分进行采样（读取），但输出结果始终是一个像素。每个目标像素都会执行相同的着色器。这类似于一个纯函数，不会产生任何副作用，因此像素仅取决于其坐标和提供的 uniform 变量。</p>
+
+<p>让我们开始实现吧，但首先，分析<a href="https://www.sinasamaki.com/glitch-effect/">原始合成版本</a>中的关键点，并将这些想法转化为着色器思维模型。</p>
+
+<p>关键的动画驱动因素是步长。动画器会在 500 毫秒的周期内，将浮点数值从 10 递减到 0。步长状态为整数，由于浮点数会被转换为整数，因此共有 11 个步长。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">var</span> <span class="py">step</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">Animatable</span><span class="p">(</span><span class="m">10f</span><span class="p">)</span>
+</span><span class='line'>       <span class="p">.</span><span class="n">animateTo</span><span class="p">(</span>
+</span><span class='line'>           <span class="n">targetValue</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span>
+</span><span class='line'>           <span class="n">animationSpec</span> <span class="p">=</span> <span class="n">tween</span><span class="p">(</span>
+</span><span class='line'>               <span class="n">durationMillis</span> <span class="p">=</span> <span class="m">500</span><span class="p">,</span>
+</span><span class='line'>               <span class="n">easing</span> <span class="p">=</span> <span class="n">LinearEasing</span><span class="p">,</span>
+</span><span class='line'>           <span class="p">)</span>
+</span><span class='line'>       <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>           <span class="n">step</span> <span class="p">=</span> <span class="k">this</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">roundToInt</span><span class="p">()</span>
+</span><span class='line'>       <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>此外，还有一个名为强度的参数，它基于步长计算：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">intensity</span> <span class="p">=</span> <span class="n">step</span> <span class="p">/</span> <span class="m">10f</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>因此，强度是一个数值序列 [1.0, 0.9, …, 0.0]。</p>
+
+<p>下一个关键点是切片：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="k">in</span> <span class="m">0</span> <span class="n">until</span> <span class="n">slices</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">translate</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">left</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(</span><span class="m">5</span><span class="p">)</span> <span class="p">&lt;</span> <span class="n">step</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(-</span><span class="m">20.</span><span class="p">.</span><span class="m">20</span><span class="p">).</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">*</span> <span class="n">intensity</span>
+</span><span class='line'>        <span class="k">else</span>
+</span><span class='line'>            <span class="m">0f</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">scale</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">scaleY</span> <span class="p">=</span> <span class="m">1f</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">scaleX</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(</span><span class="m">10</span><span class="p">)</span> <span class="p">&lt;</span> <span class="n">step</span><span class="p">)</span>
+</span><span class='line'>                <span class="m">1f</span> <span class="p">+</span> <span class="p">(</span><span class="m">1f</span> <span class="p">*</span> <span class="n">Random</span><span class="p">.</span><span class="n">nextFloat</span><span class="p">()</span> <span class="p">*</span> <span class="n">intensity</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">else</span>
+</span><span class='line'>                <span class="m">1f</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">clipRect</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">top</span> <span class="p">=</span> <span class="p">(</span><span class="n">i</span> <span class="p">/</span> <span class="n">slices</span><span class="p">.</span><span class="n">toFloat</span><span class="p">())</span> <span class="p">*</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">bottom</span> <span class="p">=</span> <span class="p">(((</span><span class="n">i</span> <span class="p">+</span> <span class="m">1</span><span class="p">)</span> <span class="p">/</span> <span class="n">slices</span><span class="p">.</span><span class="n">toFloat</span><span class="p">())</span> <span class="p">*</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">)</span> <span class="p">+</span> <span class="m">1f</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">layer</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">drawLayer</span><span class="p">(</span><span class="n">graphicsLayer</span><span class="p">)</span>
+</span><span class='line'>                    <span class="k">if</span> <span class="p">(</span><span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(</span><span class="m">5</span><span class="p">,</span> <span class="m">30</span><span class="p">)</span> <span class="p">&lt;</span> <span class="n">step</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">drawRect</span><span class="p">(</span>
+</span><span class='line'>                            <span class="n">color</span> <span class="p">=</span> <span class="n">glitchColors</span><span class="p">.</span><span class="n">random</span><span class="p">(),</span>
+</span><span class='line'>                            <span class="n">blendMode</span> <span class="p">=</span> <span class="n">BlendMode</span><span class="p">.</span><span class="n">SrcAtop</span><span class="p">,</span>
+</span><span class='line'>                        <span class="p">)</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于每个切片，都会应用以下变换：</p>
+
+<p><strong>1. 平移</strong></p>
+
+<ul>
+<li>在步骤 10 到 5 期间，每个切片会随机移动 -20 到 20 范围内的像素。请注意，每一步操作都会使该范围缩小，因为它会乘以强度。</li>
+<li>在步骤 4 到 0 中也会发生类似的情况，但并非每个切片都会移动，有些切片不会被移动。</li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*LBlZyvahPz-Si5eR3IWjvw.gif" alt="" /></p>
+
+<p><strong>2. 水平缩放</strong> 每个切片都会根据强度乘以 1.0 到 2.0 范围内的随机数进行缩放，每一步操作都会降低缩放的概率和大小。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*5Q2onueDpzVVChVXfV_QOg.gif" alt="" /></p>
+
+<p><strong>3.彩色条纹</strong></p>
+
+<ul>
+<li>在步骤 10 到 5 中，在每个切片上绘制一条随机彩色条纹，初始概率为 0.2，到步骤 5 时降至 0。</li>
+<li>步骤 5 之后不再绘制条纹。</li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*l67g57hjllhQ5gkwTLU2nA.gif" alt="" /></p>
+
+<p>因此，总体而言，动画在前几个步骤中最具表现力，并在后半部分逐渐趋于稳定。</p>
+
+<p>对于着色器而言，强度应该足以驱动动画，而无需使用步骤。在 Kotlin 代码中，我仍然会使用步骤 + 强度，仅仅是为了尽可能地复现动画效果，并用于未来的性能测试。</p>
+
+<p><strong>思维模型转变：</strong> 着色器是逐像素执行的，但动画会将相同的变换应用于像素组（在本例中为切片）。为了在着色器中实现这一点，我们需要对整个切片进行完全相同的计算。还记得纯函数的相似性吗？它在这里非常有用，因为要得到相同的结果，我们只需要应用相同的参数！</p>
+
+<p>具有相同变换的像素组就是一个切片：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">uniform</span> <span class="n">shader</span> <span class="n">image</span><span class="p">;</span>
+</span><span class='line'><span class="k">uniform</span> <span class="n">float2</span> <span class="n">imageSize</span><span class="p">;</span> <span class="c1">// Shader area size in pixels</span>
+</span><span class='line'><span class="k">uniform</span> <span class="k">float</span> <span class="n">intensity</span><span class="p">;</span>
+</span><span class='line'><span class="k">uniform</span> <span class="k">int</span> <span class="n">slices</span><span class="p">;</span><span class="c1">// fragCoord — pixel coordinates</span>
+</span><span class='line'><span class="n">half4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Create horizontal slices</span>
+</span><span class='line'>    <span class="k">float</span> <span class="n">sliceHeight</span> <span class="o">=</span> <span class="n">imageSize</span><span class="p">.</span><span class="n">y</span> <span class="o">/</span> <span class="k">float</span><span class="p">(</span><span class="n">slices</span><span class="p">);</span> <span class="c1">// Height of each slice in pixels</span>
+</span><span class='line'>    <span class="k">float</span> <span class="n">sliceY</span> <span class="o">=</span> <span class="n">floor</span><span class="p">(</span><span class="n">fragCoord</span><span class="p">.</span><span class="n">y</span> <span class="o">/</span> <span class="n">sliceHeight</span><span class="p">)</span> <span class="o">*</span> <span class="n">sliceHeight</span><span class="p">;</span> <span class="c1">// Start coordinates for each slice</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>让我们一步一步来，从平移开始。</p>
+
+<h2>平移</h2>
+
+<p>步骤 10 到 5 等价于强度从 1.0 到 0.5，每次递减 0.1。因此，我们将以此为基础来移动切片：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="c1">// Simple random functions</span>
+</span><span class='line'><span class="k">float</span> <span class="n">random</span><span class="p">(</span><span class="k">float</span> <span class="n">seed</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="k">return</span> <span class="n">fract</span><span class="p">(</span><span class="n">sin</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span> <span class="o">*</span> <span class="mf">100000.0</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">float</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span> <span class="n">st</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">fract</span><span class="p">(</span><span class="n">sin</span><span class="p">(</span><span class="n">dot</span><span class="p">(</span><span class="n">st</span><span class="p">.</span><span class="n">xy</span><span class="p">,</span> <span class="n">float2</span><span class="p">(</span><span class="mf">12.9898</span><span class="p">,</span> <span class="mf">78.233</span><span class="p">)))</span> <span class="o">*</span> <span class="mf">43758.5453123</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Determine how much this slice should be displaced</span>
+</span><span class='line'><span class="k">float</span> <span class="n">displace</span><span class="p">(</span><span class="k">float</span> <span class="n">sliceY</span><span class="p">,</span> <span class="k">float</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">sliceY</span><span class="p">,</span> <span class="n">intensity</span><span class="p">));</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">float</span> <span class="n">shouldDisplace</span><span class="p">;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">intensity</span> <span class="o">&lt;</span> <span class="mf">0.5</span> <span class="o">&amp;&amp;</span> <span class="n">intensity</span> <span class="o">&gt;</span> <span class="n">rnd</span> <span class="o">*</span> <span class="mf">0.4</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">shouldDisplace</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">;</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">shouldDisplace</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">;</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">return</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">*</span> <span class="mf">40.0</span> <span class="o">*</span> <span class="n">intensity</span> <span class="o">*</span> <span class="n">shouldDisplace</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里发生了什么？</p>
+
+<p>首先，是随机性。由于着色器本身没有随机性，因此通常使用一些函数来模拟随机性。这两个函数都会返回一个介于 0（含）和 1（不含）之间的浮点值。在这种情况下，“随机”值对于每个切片-帧组合都是唯一的。对于给定帧，均匀强度对于所有调用（= 输出像素）都是相同的，同一组像素的切片坐标也相同。结合切片起始坐标，这个值对于每一帧的每个切片都是不同的。</p>
+
+<p>接下来，如果强度超过 0.5，<code>shouldDisplace</code> 因子会立即设置为 1.0，这意味着切片需要进行位移。否则，<code>intensity &gt; rnd * 0.4</code> 会导致执行位移的概率下降，类似于原始实现中的 <code>Random.nextInt(5) &lt; step</code>。</p>
+
+<p>最后一行只是简单的算术运算。这里我将 0 到 1 的伪随机值转换为 -20 到 20，然后像原始实现一样乘以强度，并在发生位移时应用该因子。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*LBlZyvahPz-Si5eR3IWjvw.gif" alt="" /></p>
+
+<h2>缩放</h2>
+
+<p>屏幕空间缩放本质上是指相对于枢轴点（本例中为水平中心）调整像素采样坐标。由于我们是从源图像读取数据，因此实际上是移动了采样视口。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="n">float2</span> <span class="n">scale</span><span class="p">(</span><span class="n">float2</span> <span class="n">coord</span><span class="p">,</span> <span class="k">float</span> <span class="n">yMin</span><span class="p">,</span> <span class="k">float</span> <span class="n">yMax</span><span class="p">,</span> <span class="k">float</span> <span class="n">screenWidth</span><span class="p">,</span> <span class="k">float</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">yMin</span><span class="p">,</span> <span class="n">intensity</span><span class="p">));</span>
+</span><span class='line'>
+</span><span class='line'>   <span class="k">if</span> <span class="p">(</span><span class="n">coord</span><span class="p">.</span><span class="n">y</span> <span class="o">&gt;=</span> <span class="n">yMin</span> <span class="o">&amp;&amp;</span> <span class="n">coord</span><span class="p">.</span><span class="n">y</span> <span class="o">&lt;=</span> <span class="n">yMax</span> <span class="o">&amp;&amp;</span> <span class="n">rnd</span> <span class="o">&lt;</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">float</span> <span class="n">centerX</span> <span class="o">=</span> <span class="n">screenWidth</span> <span class="o">*</span> <span class="mf">0.5</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>       <span class="k">float</span> <span class="n">localX</span> <span class="o">=</span> <span class="n">coord</span><span class="p">.</span><span class="n">x</span> <span class="o">-</span> <span class="n">centerX</span><span class="p">;</span>
+</span><span class='line'>       <span class="k">float</span> <span class="n">scaleFactor</span> <span class="o">=</span> <span class="mi">1</span><span class="n">f</span> <span class="o">+</span> <span class="p">(</span><span class="n">intensity</span> <span class="o">*</span> <span class="n">rnd</span><span class="p">);</span>
+</span><span class='line'>       <span class="n">localX</span> <span class="o">/=</span> <span class="n">scaleFactor</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>       <span class="k">float</span> <span class="n">scaledX</span> <span class="o">=</span> <span class="n">localX</span> <span class="o">+</span> <span class="n">centerX</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>       <span class="k">return</span> <span class="n">float2</span><span class="p">(</span><span class="n">scaledX</span><span class="p">,</span> <span class="n">coord</span><span class="p">.</span><span class="n">y</span><span class="p">);</span>
+</span><span class='line'>   <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>   <span class="k">return</span> <span class="n">coord</span><span class="p">;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p>附注：为了演示，我尽量简化了逻辑。生产环境中的着色器代码通常会使用更高级的技术来避免分支，因为像上面示例中那样的不平衡分支会迫使 GPU 串行执行两条路径，从而破坏并行性。要以优化的方式实现缩放函数并非易事，所以我采用了一种简单的方法。</p></blockquote>
+
+<p>再次强调，对于每一帧的每个切片，随机数都是唯一的，这意味着特定切片中的每个像素都会获得相同的值。因此，<code>rnd &lt; intensity</code> 会降低概率，类似于 <code>Random.nextInt(10) &lt; step</code>。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*5Q2onueDpzVVChVXfV_QOg.gif" alt="" /></p>
+
+<h2>彩色条纹</h2>
+
+<p>最简单的部分。类似地，如果应用了色带，则创建相同的概率，然后选择 3 种颜色中的一种。可以使用非硬编码值，但这需要一些额外的工作，因此 Compose 版本在这方面更灵活。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">intensity</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">));</span>
+</span><span class='line'><span class="k">if</span> <span class="p">((</span><span class="n">rnd</span> <span class="o">*</span> <span class="mf">2.5</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.67</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">return</span> <span class="n">yellow</span><span class="p">;</span>
+</span><span class='line'>   <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.33</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">return</span> <span class="n">red</span><span class="p">;</span>
+</span><span class='line'>   <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">return</span> <span class="n">cyan</span><span class="p">;</span>
+</span><span class='line'>   <span class="p">}</span>
+</span><span class='line'><span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">float2</span> <span class="n">scaled</span> <span class="o">=</span> <span class="n">scale</span><span class="p">(</span><span class="n">displaced</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">,</span> <span class="n">sliceY</span> <span class="o">+</span> <span class="n">sliceHeight</span><span class="p">,</span> <span class="n">imageSize</span><span class="p">.</span><span class="n">y</span><span class="p">,</span> <span class="n">intensity</span><span class="p">);</span>
+</span><span class='line'>   <span class="k">return</span> <span class="n">image</span><span class="p">.</span><span class="n">eval</span><span class="p">(</span><span class="n">scaled</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>将所有内容组合在一起后，结果如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*OPPsJbjpmUd94xsp4vfG9A.gif" alt="" /></p>
+
+<p>存在一个明显的问题：叠加层的颜色始终为青色。这是因为伪随机函数对相同的输入返回相同的值——这是设计上的确定性行为。解决方案：在 Kotlin 端生成真正的随机数，并将其作为 uniform 变量传递。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="o">-</span><span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">intensity</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">));</span>
+</span><span class='line'><span class="o">+</span><span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">intensity</span> <span class="o">*</span> <span class="n">realRandom</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">));</span>
+</span><span class='line'> <span class="k">if</span> <span class="p">((</span><span class="n">rnd</span> <span class="o">*</span> <span class="mf">2.5</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="o">-</span><span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.67</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="o">+</span><span class="k">if</span> <span class="p">(</span><span class="n">realRandom</span> <span class="o">&gt;</span> <span class="mf">0.67</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>         <span class="k">return</span> <span class="n">yellow</span><span class="p">;</span>
+</span><span class='line'><span class="o">-</span><span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.33</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="o">+</span><span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">realRandom</span> <span class="o">&gt;</span> <span class="mf">0.33</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>         <span class="k">return</span> <span class="n">red</span><span class="p">;</span>
+</span><span class='line'>     <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>         <span class="k">return</span> <span class="n">cyan</span><span class="p">;</span>
+</span><span class='line'>     <span class="p">}</span>
+</span><span class='line'><span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">float2</span> <span class="n">scaled</span> <span class="o">=</span> <span class="n">scale</span><span class="p">(</span><span class="n">displaced</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">,</span> <span class="n">sliceY</span> <span class="o">+</span> <span class="n">sliceHeight</span><span class="p">,</span> <span class="n">imageSize</span><span class="p">.</span><span class="n">y</span><span class="p">,</span> <span class="n">intensity</span><span class="p">);</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">image</span><span class="p">.</span><span class="n">eval</span><span class="p">(</span><span class="n">scaled</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>应用适当的随机性后，整个过程与原始行为非常接近：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:640/1*YMfnRYhOSI-v84eR04hHaw.gif" alt="你能猜出哪个是 compose，哪个是 AGSL 吗？" /></p>
+
+<p>完整代码发布于<a href="https://gist.github.com/MightySeal/97687eaaf5eeeb1322a9f6f837dc5c35">此处</a>。</p>
+
+<p>当然，在进行图形编程时，至少需要进行一些粗略的性能观察。为此，我将使用我的 Pixel 7，<a href="https://developer.android.com/topic/performance/rendering/inspect-gpu-rendering">启用 HWUI 渲染图表</a>，并稍作修改代码：使用 <a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/package-summary#infiniteRepeatable(androidx.compose.animation.core.DurationBasedAnimationSpec,androidx.compose.animation.core.RepeatMode,androidx.compose.animation.core.StartOffset)">infiniteRepeatable</a> 规范实现循环动画，并使用发布版本。Pixel 7 实际上非常适合这项任务，因为它并非高端设备，如果它在 Pixel 7 上有效，那么在性能更高的设备上也应该有效。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*MVOJpYGsNIPWI6n8scBolQ.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*yybZA5FCXvybv6LXD9Uh5Q.gif" alt="" /></p>
+
+<p>左侧为着色器，右侧为Compose</p>
+
+<p>乍一看，这两个图表似乎很相似，但实际上存在一个问题：当前的实现方式隐式地限制了帧速率。动画会将浮点数值从 10 递减到 0，但状态更新时会使用四舍五入为整数的值。这意味着在 500 毫秒内只有 11 帧动画。这对于故障着色器来说非常方便，因为较低的帧速率也会增强故障效果。要消除这个限制，我们只需要将步长类型从整数 (Int) 更改为浮点数 (Float)，并使用不进行四舍五入的可动画值即可。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">-</span><span class="k">var</span> <span class="py">step</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">+</span><span class="k">var</span> <span class="py">step</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableFloatStateOf</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">Animatable</span><span class="p">(</span><span class="m">10f</span><span class="p">)</span>
+</span><span class='line'>       <span class="p">.</span><span class="n">animateTo</span><span class="p">(</span>
+</span><span class='line'>           <span class="n">targetValue</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span>
+</span><span class='line'>           <span class="n">animationSpec</span> <span class="p">=</span> <span class="n">tween</span><span class="p">(</span>
+</span><span class='line'>               <span class="n">durationMillis</span> <span class="p">=</span> <span class="m">500</span><span class="p">,</span>
+</span><span class='line'>               <span class="n">easing</span> <span class="p">=</span> <span class="n">LinearEasing</span><span class="p">,</span>
+</span><span class='line'>           <span class="p">)</span>
+</span><span class='line'>       <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="p">-</span>          <span class="n">step</span> <span class="p">=</span> <span class="k">this</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">roundToInt</span><span class="p">()</span>
+</span><span class='line'><span class="p">+</span>          <span class="n">step</span> <span class="p">=</span> <span class="k">this</span><span class="p">.</span><span class="n">value</span>
+</span><span class='line'>       <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*J7Y6FenkNZAPglmKtyvNNA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*a7xb39t8tXR5APsArXk5aw.gif" alt="" /></p>
+
+<p>左侧为着色器，右侧为Compose，无帧数限制</p>
+
+<p>移除帧数限制后，性能提升已经非常明显。我们来做个压力测试。如果将动画应用于整个列表会发生什么？或者切片数量增加会发生什么？让我们拭目以待！</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*6PkVLOndrbCYVaV8ApJtzA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*DdiLlkVWT4BMY6sY2mVxVg.gif" alt="" /></p>
+
+<p>左侧着色器，右侧Compose，无帧数限制，应用于整个列表</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*Gv-vtC5MNtcQ4bmYB__4rA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*BcyPMHcnOc9HvPELpVoF9g.gif" alt="" /></p>
+
+<p>左侧着色器，右侧Compose，无帧数限制，应用于整个列表100 个切片</p>
+
+<h2>结论</h2>
+
+<p>Compose 非常适合用于复杂动画的原型设计，因为它可以使用熟悉的工具轻松实现。此外，值得一提的是，它适用于所有设备。</p>
+
+<p>另一方面，着色器提供了性能更高、更稳定的渲染。在这种情况下，使用的切片数量无关紧要——无论是 20 个还是 500 个，计算量都没有区别，而纯 Compose 版本对此非常敏感，并且会随着切片数量的增加而线性增长。</p>
+
+<p>此外，由于 AGSL 着色器只是在运行时临时编译的文本，因此理论上可以从后端更新这些动画。</p>
+
+<p>但是，还有一个很大的问题：着色器从 Android 13 开始可用，因此根据 Android Studio 操作系统的发行情况，大约一半的设备将能够支持这种方法。当然，这种情况会随着时间的推移而改变，我希望我们能够利用着色器充分发挥图形编程的强大功能！</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1232/1*Eh3q8fmkEx9BdA5FNR11CA.jpeg" alt="" /></p>
+
+<p>这是我的<a href="https://bento.me/mightyseal">bento</a>，如果你想联系我、聊天或讨论，欢迎来找我！</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack Compose内部的不同节点类型]]></title>
@@ -14957,251 +15453,6 @@ Anatolii Frolov发布于2025年11月20日。</p></blockquote>
 <p>该架构成功地为 iOS 和 Android 平台上的 <a href="https://wallhub.app/">WallHub</a> 提供了支持，证明了其在现实世界中的“可行性”以及跨平台适应性（如果可以这么说的话）。</p>
 
 <p>继续潜水，直到下一篇文章……</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android应用的架构演进]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/09/13/architectual-evolution-of-an-android-app/"/>
-    <updated>2025-09-13T12:34:01+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/09/13/architectual-evolution-of-an-android-app</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Architectural Evolution of and Android app」，原文链接<a href="https://herrbert74.github.io/posts/architectural-evolution-of-an-app/">https://herrbert74.github.io/posts/architectural-evolution-of-an-app/</a>，由Zsolt Bertalan发布于20258月19日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/09/13/architectual-evolution-of-an-android-app/"><img src="https://herrbert74.github.io/assets/img/posts/20250818_arch_evolution.jpg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>本文将解释 Android 应用在发展过程中可能经历的各个阶段。不同的架构可能看起来截然不同（更不用说对细节的不同看法），但其背后的理念是相同的。我将通过整洁架构 (Clean Architecture) 和我的 <a href="https://github.com/herrbert74/FlickSlate">FlickSlate</a> 代码库（链接：<a href="https://github.com/herrbert74/FlickSlate%EF%BC%89%E6%9D%A5%E8%A7%A3%E9%87%8A%E8%BF%99%E4%B8%80%E7%82%B9%E3%80%82">https://github.com/herrbert74/FlickSlate%EF%BC%89%E6%9D%A5%E8%A7%A3%E9%87%8A%E8%BF%99%E4%B8%80%E7%82%B9%E3%80%82</a></p>
-
-<p>我还想介绍一下大型应用中的常见模式：<strong>超级层</strong> 和 <strong>功能组</strong>。每当我开发的应用达到一定规模时，都会用到这些模式，但我从未制定过相关的基本规则。我希望把它们写下来，能让我和其他人更容易理解。</p>
-
-<h3>超级层</h3>
-
-<p>你可能还记得我之前的文章，我的应用有一个独立的<strong>领域层</strong>，<strong>数据层和展现层（从现在开始是UI层）</strong>都依赖于它。这些是基本的水平层。包含它们的垂直层也称为功能层。</p>
-
-<p>我创造了 <strong>“超级层”</strong> 这个术语，是为了在基本水平层之上引入一个更广泛的层次结构。我们需要它们，因为水平层的范围可能有所不同，这意味着它们不仅可以涵盖功能层，还可以涵盖更广泛的范围。我将定义<strong>功能层</strong>、<strong>功能组</strong>、<strong>应用级（共享）</strong>和<strong>多应用级（基础）</strong> 超级层。</p>
-
-<p>请参阅下图。</p>
-
-<p><img src="file:///Users/alexhilton/Downloads/arch-envolve-1.png" alt="" /></p>
-
-<p>在我上面解释的基本情况下，我们有<strong>功能层</strong>，其中整洁架构层仅在功能层内部可见。</p>
-
-<p>接下来，<strong>功能组</strong>层是介于应用范围层和功能范围层之间的中间层。由于它是对超级层的最后且最不明显的补充，我将在稍后详细讨论。</p>
-
-<p><strong>共享、通用或应用范围层</strong>通常包含与业务相关或整个应用独有的类。这是可以添加领域、数据和 UI 模块的最低层。</p>
-
-<p><strong>基础层、基础设施层或基础结构层</strong>可以跨多个应用使用。它不包含领域、数据或 UI 层，但包含这些层之间通用的类。我通常有一个<strong>Kotlin 模块和一个 Android 基础模块</strong>。我创建了 <a href="https://bitbucket.org/babestudios/babestudiosbase/src/master/">BaBeStudios-Base</a> 库项目（<a href="https://bitbucket.org/babestudios/babestudiosbase/src/master/%EF%BC%89%EF%BC%8C%E4%BB%A5%E4%BE%BF%E5%9C%A8%E5%A4%9A%E4%B8%AA%E5%BA%94%E7%94%A8%E4%B8%AD%E5%A4%8D%E7%94%A8%E8%BF%99%E4%BA%9B%E6%A8%A1%E5%9D%97%EF%BC%8C%E4%BD%86%E6%88%91%E7%9A%84%E5%BA%94%E7%94%A8%E4%B8%AD%E4%B9%9F%E6%9C%89%E4%B8%80%E4%BA%9B%E5%9F%BA%E7%A1%80%E6%A8%A1%E5%9D%97%EF%BC%8C%E7%94%A8%E4%BA%8E%E5%B0%9A%E6%9C%AA%E5%8C%85%E5%90%AB%E5%9C%A8%E8%AF%A5%E5%BA%93%E9%A1%B9%E7%9B%AE%E4%B8%AD%E7%9A%84%E4%BB%A3%E7%A0%81%E3%80%82">https://bitbucket.org/babestudios/babestudiosbase/src/master/%EF%BC%89%EF%BC%8C%E4%BB%A5%E4%BE%BF%E5%9C%A8%E5%A4%9A%E4%B8%AA%E5%BA%94%E7%94%A8%E4%B8%AD%E5%A4%8D%E7%94%A8%E8%BF%99%E4%BA%9B%E6%A8%A1%E5%9D%97%EF%BC%8C%E4%BD%86%E6%88%91%E7%9A%84%E5%BA%94%E7%94%A8%E4%B8%AD%E4%B9%9F%E6%9C%89%E4%B8%80%E4%BA%9B%E5%9F%BA%E7%A1%80%E6%A8%A1%E5%9D%97%EF%BC%8C%E7%94%A8%E4%BA%8E%E5%B0%9A%E6%9C%AA%E5%8C%85%E5%90%AB%E5%9C%A8%E8%AF%A5%E5%BA%93%E9%A1%B9%E7%9B%AE%E4%B8%AD%E7%9A%84%E4%BB%A3%E7%A0%81%E3%80%82</a> BaBeStudios-Base 也可从 <a href="https://mvnrepository.com/artifact/io.bitbucket.babestudios">MavenCentral</a> 获取，但目前尚无相关文档。</p>
-
-<p>随着应用程序规模的扩大和模块的引入，你需要引入上述各层。</p>
-
-<p>接下来，让我们看看随着应用程序规模的扩大，我通常采取的模块化步骤。</p>
-
-<h3>步骤 1：单模块</h3>
-
-<p>当你确定应用程序规模不会超过<strong>最大规模</strong>，或者时间紧迫时，你可以选择单模块应用程序或单体应用。我不确定单模块应用程序的最大规模是多少。这可能因人而异。</p>
-
-<p>此最大规模也不同于<strong>阈值规模，你应该从该阈值开始模块化应用程序</strong>，或者更通俗地说，你应该从该阈值切换到流程的下一步。我认为阈值大小远小于单模块应用程序的最大大小，这意味着你应该在达到该限制之前就开始模块化。</p>
-
-<p>对于大多数应用程序，我甚至建议<strong>从模块化开始</strong>，而不是从单个模块开始，因为与接近限制（比如 10 或 20 kLOC）时才开始模块化相比，这样做的开销和干扰程度要小得多。</p>
-
-<p>这是一个单模块应用程序的包树示例。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>├── data
-</span><span class='line'>│   ├── database
-</span><span class='line'>│   ├── <span class="nb">local</span>
-</span><span class='line'>│   ├── repository
-</span><span class='line'>│   └── remote
-</span><span class='line'>├── domain
-</span><span class='line'>│   ├── api
-</span><span class='line'>│   ├── model
-</span><span class='line'>│   └── usecase
-</span><span class='line'>├── presentation
-</span><span class='line'>│   ├── master
-</span><span class='line'>│   └── detail
-</span><span class='line'>└── shared
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>上面图中的叶子节点代表包，它们可以包含此处未显示的其他包。下面我将展示一个类似的模块结构，其中以冒号开头的名称代表模块，双冒号代表根模块。</p>
-
-<h3>步骤 2：简单模块化</h3>
-
-<p>对于<strong>小型应用程序</strong>，我使用简单模块化，而不是下一章的完全模块化。这里我们只介绍<strong>每个功能的模块</strong>。每个功能将包含一个领域模块，以及依赖于领域模块的数据和呈现模块（在我的例子中）。</p>
-
-<p>我们还引入了一个<strong>共享模块</strong>，其中包含所有功能模块的通用代码。</p>
-
-<p>应用程序的超层由一条<strong>水平线</strong>分隔。每个层都依赖于其下方的所有层。数据和呈现依赖于领域模块，但这并未在图中显示。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>::feature:Feature A
-</span><span class='line'>
-</span><span class='line'>├── :feature/:featurea/:data
-</span><span class='line'>├── :feature/:featurea/:domain
-</span><span class='line'>└── :feature/:featurea/:presentation
-</span><span class='line'>
-</span><span class='line'>::feature:Feature B
-</span><span class='line'>
-</span><span class='line'>├── :feature/:featureb/:data
-</span><span class='line'>├── :feature/:featureb/:domain
-</span><span class='line'>└── :feature/:featureb/:presentation
-</span><span class='line'>
-</span><span class='line'> ::feature:Feature C
-</span><span class='line'>
-</span><span class='line'>├── :feature/:featurec/:data
-</span><span class='line'>├── :feature/:featurec/:domain
-</span><span class='line'>└── :feature/:featurec/:presentation
-</span><span class='line'>
-</span><span class='line'>
-</span><span class='line'>::shared:data
-</span><span class='line'>
-</span><span class='line'>├── database
-</span><span class='line'>├── <span class="nb">local</span>
-</span><span class='line'>├── repository
-</span><span class='line'>└── remote
-</span><span class='line'>
-</span><span class='line'>::shared:domain
-</span><span class='line'>
-</span><span class='line'>├── api
-</span><span class='line'>├── model
-</span><span class='line'>└── usecase
-</span><span class='line'>
-</span><span class='line'>::shared:presentation
-</span><span class='line'>
-</span><span class='line'>├── compose
-</span><span class='line'>├── design
-</span><span class='line'>└── util
-</span><span class='line'>
-</span><span class='line'>
-</span><span class='line'>::base:kotlin
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>步骤 4：功能组</h3>
-
-<p>当你的应用完全模块化后，共享层会逐渐成为单体应用，并成为构建过程中的<strong>瓶颈</strong>。</p>
-
-<p>我经常在超过一定规模的应用（大约 50 到 80 kLOC）时遇到这种情况。你需要共享太多内容，因此你的<strong>共享领域模块和展示模块</strong>变得过大。你开始注意到，在所有垂直模块之间共享代码也是一种浪费，因为你只想在两个或最多三个或四个模块之间共享代码。你会发现越来越多的新代码被添加到这些模块中，而<strong>增量缓存</strong>的效率越来越低，因为你频繁地修改代码，导致它们失效。</p>
-
-<p>你可能会说，可以通过适当地重构和构建应用程序，或者复制一些代码来避免这种情况，但这可能比你想象的要难。我发现这些建议并没有起到什么帮助作用。或者你可能手头有一个遗留应用，没有时间完美地重构所有内容。</p>
-
-<p>我目前解决这个问题的方法是识别<strong>功能组</strong>，即一组具有大量公共依赖项的功能。这样，你就可以通过创建<strong>更具凝聚力</strong>的模块，水平拆分共享层中的部分代码。</p>
-
-<p>我最近开发的所有大型应用中都有两个不同的功能组。</p>
-
-<p>第一个功能组与<strong>核心业务</strong>功能相关：例如，一个模块围绕产品列表，另一个模块围绕产品详情，第三个模块围绕收藏产品。因此，我们可以将这个功能组命名为<strong>产品</strong>。另一个功能组围绕<strong>支付、广告或订阅</strong>，或者有时是这些功能的组合。这关系到应用的盈利方式。因此，我们可以将功能组命名为<strong>“支付”</strong>。</p>
-
-<p>大型应用中可能会有五个或更多功能组。每个功能组将包含领域模块、数据模块和演示模块（如果需要）。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>feature/Feature A
-</span><span class='line'>
-</span><span class='line'>feature/Feature B
-</span><span class='line'>
-</span><span class='line'>feature/Feature C
-</span><span class='line'>
-</span><span class='line'>feature/Feature D
-</span><span class='line'>
-</span><span class='line'>feature/Feature E
-</span><span class='line'>
-</span><span class='line'>feature/Feature F
-</span><span class='line'>
-</span><span class='line'>
-</span><span class='line'>:data
-</span><span class='line'>
-</span><span class='line'>:domain
-</span><span class='line'>
-</span><span class='line'>:presentation
-</span><span class='line'>
-</span><span class='line'>
-</span><span class='line'>:kotlin-base
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>何时使用哪一步？</h3>
-
-<p>你肯定希望将单体应用用于永远不会投入生产或一次性使用的应用程序。这些应用程序可以是<strong>概念验证</strong> (PoC, Proof of Concept) 应用程序、用于第三方错误的<strong>最小可复现示例</strong> (MRE, Minimum Reproducible Example) 应用程序，或用于求职申请的<strong>测试挑战</strong>应用程序。</p>
-
-<p>对于所有其他情况，我建议先从部分或完全模块化开始，然后根据需要升级到下一步，或者尽可能提前升级，以减少以后的麻烦。</p>
-
-<p>你可以在我的 <a href="https://github.com/herrbert74/FlickSlate">FlickSlate</a> 代码库（链接：<a href="https://github.com/herrbert74/FlickSlate%EF%BC%89%E4%B8%AD%E6%89%BE%E5%88%B0%E4%B8%8A%E8%BF%B0%EF%BC%88%E5%A4%A7%E9%83%A8%E5%88%86%EF%BC%89%E5%86%85%E5%AE%B9%E7%9A%84%E6%9C%89%E6%95%88%E7%A4%BA%E4%BE%8B%EF%BC%8C%E6%88%91%E6%9C%80%E8%BF%91%E5%B0%86%E5%85%B6%E6%9B%B4%E6%96%B0%E5%88%B0%E4%BA%86%E5%AE%8C%E5%85%A8%E6%A8%A1%E5%9D%97%E5%8C%96%E9%98%B6%E6%AE%B5%E3%80%82%E8%99%BD%E7%84%B6%E4%B8%BA%E6%97%B6%E8%BF%87%E6%97%A9%EF%BC%8C%E4%BD%86%E6%9C%89%E5%8A%A9%E4%BA%8E%E6%BC%94%E7%A4%BA%E8%BF%99%E4%BA%9B%E5%8E%9F%E5%88%99%E3%80%82%E5%BD%93%E7%84%B6%EF%BC%8C%E4%B9%9F%E5%8F%AF%E4%BB%A5%E9%81%BF%E5%85%8D%E4%BB%A5%E5%90%8E%E7%9A%84%E9%BA%BB%E7%83%A6%E3%80%82">https://github.com/herrbert74/FlickSlate%EF%BC%89%E4%B8%AD%E6%89%BE%E5%88%B0%E4%B8%8A%E8%BF%B0%EF%BC%88%E5%A4%A7%E9%83%A8%E5%88%86%EF%BC%89%E5%86%85%E5%AE%B9%E7%9A%84%E6%9C%89%E6%95%88%E7%A4%BA%E4%BE%8B%EF%BC%8C%E6%88%91%E6%9C%80%E8%BF%91%E5%B0%86%E5%85%B6%E6%9B%B4%E6%96%B0%E5%88%B0%E4%BA%86%E5%AE%8C%E5%85%A8%E6%A8%A1%E5%9D%97%E5%8C%96%E9%98%B6%E6%AE%B5%E3%80%82%E8%99%BD%E7%84%B6%E4%B8%BA%E6%97%B6%E8%BF%87%E6%97%A9%EF%BC%8C%E4%BD%86%E6%9C%89%E5%8A%A9%E4%BA%8E%E6%BC%94%E7%A4%BA%E8%BF%99%E4%BA%9B%E5%8E%9F%E5%88%99%E3%80%82%E5%BD%93%E7%84%B6%EF%BC%8C%E4%B9%9F%E5%8F%AF%E4%BB%A5%E9%81%BF%E5%85%8D%E4%BB%A5%E5%90%8E%E7%9A%84%E9%BA%BB%E7%83%A6%E3%80%82</a></p>
-
-<p>FlickSlate 尚未升级到功能组。这毫无意义，因为共享层还无法拆分为功能组。该应用没有盈利功能，所以只能对节目进行分组，不过目前共享层已经完美地实现了这一点。</p>
-
-<p>这篇文章主要源于我对互联网上关于何时以及如何模块化的建议一概而论的不满：要么建议不加区分地进行模块化，要么有人对任何进行模块化的人大喊“过度工程”。我希望这篇文章能帮助你在何时以及如何进行模块化方面做出更明智的决定。</p>
 ]]></content>
   </entry>
   

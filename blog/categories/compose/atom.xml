@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-01-12T12:53:23+00:00</updated>
+  <updated>2026-01-22T12:41:39+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,354 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Compose GPU加速特效：带缩放的故障效果]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/01/22/glitch-at-scale-effects/"/>
+    <updated>2026-01-22T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/01/22/glitch-at-scale-effects</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「GPU-Accelerated Effects: Glitch at Scale」，原文链接<a href="https://medium.com/@konstantinzolotov/gpu-accelerated-effects-glitch-at-scale-e59216afd1e8">https://medium.com/@konstantinzolotov/gpu-accelerated-effects-glitch-at-scale-e59216afd1e8</a>，由Konstantin Zolotov发布于2025年11月9日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*l67g57hjllhQ5gkwTLU2nA.gif" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>几周前，我看到了Sina Samaki撰写的一篇关于使用Jetpack Compose制作故障效果的<a href="https://www.sinasamaki.com/glitch-effect-in-jetpack-compose/">精彩文章</a>。作为一个喜欢钻研底层技术的人，我看到了使用Android AGSL着色器重现这种效果并比较两种实现方式的绝佳机会。</p>
+
+<p>在图形处理方面，选择合适的工具至关重要，因为很容易达到性能瓶颈，而扩展解决方案则变得困难。这里的情况是否如此呢？让我们一探究竟！</p>
+
+<p>做好准备，我们将深入底层。</p>
+
+<h2>着色器(Shader)的本质</h2>
+
+<p>那么，着色器究竟是什么？</p>
+
+<p>着色器是一种直接在 GPU 上执行的程序，并且可以并行执行。</p>
+
+<p>着色器通常使用一种特殊的类 C 语言编写，在 Android Compose 中，这种语言是 AGSL——Android 图形着色语言。</p>
+
+<p>我不会重复<a href="https://developer.android.com/develop/ui/views/graphics/agsl">官方指南</a>的内容，而是会简单介绍一下 GPU 以及一种新的着色器编程思维模型。</p>
+
+<p>那么，它与 CPU 有什么区别呢？ CPU 和 GPU 的主要区别基本上如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1250/1*nNt7dZ0re2yZI33o62kKtg.png" alt="https://developer.nvidia.com/blog/cuda-refresher-reviewing-the-origins-of-gpu-computing/" /></p>
+
+<p>CPU：</p>
+
+<ul>
+<li>更复杂</li>
+<li>专为执行大量不同任务的大型程序而设计</li>
+<li>MIMD（多指令多数据流）</li>
+</ul>
+
+
+<p>GPU：</p>
+
+<ul>
+<li>简单得多（没有分支预测，缓存更小）</li>
+<li>专为对各种数据执行完全相同操作的小型程序而设计</li>
+<li>更多核心 = 更高的并行性</li>
+<li>SIMD（单指令多数据流）</li>
+</ul>
+
+
+<p>当然，CPU 也有 SIMD 扩展，但规模远不及 GPU。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*T5jVrRJztzWADaqiAFNwzQ.png" alt="https://developer.nvidia.com/blog/cuda-refresher-reviewing-the-origins-of-gpu-computing/" /></p>
+
+<blockquote><p>GPU 非常适合对数百万像素执行相同的操作</p></blockquote>
+
+<p>这里存在一个非常重要的<strong>思维模型转变</strong>：以前你可以在画布的任意位置绘制，而现在你面对的是一幅图像，你可以对图像的任何部分进行采样（读取），但输出结果始终是一个像素。每个目标像素都会执行相同的着色器。这类似于一个纯函数，不会产生任何副作用，因此像素仅取决于其坐标和提供的 uniform 变量。</p>
+
+<p>让我们开始实现吧，但首先，分析<a href="https://www.sinasamaki.com/glitch-effect/">原始合成版本</a>中的关键点，并将这些想法转化为着色器思维模型。</p>
+
+<p>关键的动画驱动因素是步长。动画器会在 500 毫秒的周期内，将浮点数值从 10 递减到 0。步长状态为整数，由于浮点数会被转换为整数，因此共有 11 个步长。</p>
+
+<pre><code class="kotlin">var step by remember { mutableStateOf(0) }
+LaunchedEffect(key) {
+   Animatable(10f)
+       .animateTo(
+           targetValue = 0f,
+           animationSpec = tween(
+               durationMillis = 500,
+               easing = LinearEasing,
+           )
+       ) {
+           step = this.value.roundToInt()
+       }
+}
+</code></pre>
+
+<p>此外，还有一个名为强度的参数，它基于步长计算：</p>
+
+<pre><code class="kotlin">val intensity = step / 10f
+</code></pre>
+
+<p>因此，强度是一个数值序列 [1.0, 0.9, …, 0.0]。</p>
+
+<p>下一个关键点是切片：</p>
+
+<pre><code class="kotlin">for (i in 0 until slices) {
+    translate(
+        left = if (Random.nextInt(5) &lt; step)
+            Random.nextInt(-20..20).toFloat() * intensity
+        else
+            0f,
+    ) {
+        scale(
+            scaleY = 1f,
+            scaleX = if (Random.nextInt(10) &lt; step)
+                1f + (1f * Random.nextFloat() * intensity)
+            else
+                1f,
+        ) {
+            clipRect(
+                top = (i / slices.toFloat()) * size.height,
+                bottom = (((i + 1) / slices.toFloat()) * size.height) + 1f,
+            ) {
+                layer {
+                    drawLayer(graphicsLayer)
+                    if (Random.nextInt(5, 30) &lt; step) {
+                        drawRect(
+                            color = glitchColors.random(),
+                            blendMode = BlendMode.SrcAtop,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>对于每个切片，都会应用以下变换：</p>
+
+<p><strong>1. 平移</strong></p>
+
+<ul>
+<li>在步骤 10 到 5 期间，每个切片会随机移动 -20 到 20 范围内的像素。请注意，每一步操作都会使该范围缩小，因为它会乘以强度。</li>
+<li>在步骤 4 到 0 中也会发生类似的情况，但并非每个切片都会移动，有些切片不会被移动。</li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*LBlZyvahPz-Si5eR3IWjvw.gif" alt="" /></p>
+
+<p><strong>2. 水平缩放</strong> 每个切片都会根据强度乘以 1.0 到 2.0 范围内的随机数进行缩放，每一步操作都会降低缩放的概率和大小。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*5Q2onueDpzVVChVXfV_QOg.gif" alt="" /></p>
+
+<p><strong>3.彩色条纹</strong></p>
+
+<ul>
+<li>在步骤 10 到 5 中，在每个切片上绘制一条随机彩色条纹，初始概率为 0.2，到步骤 5 时降至 0。</li>
+<li>步骤 5 之后不再绘制条纹。</li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*l67g57hjllhQ5gkwTLU2nA.gif" alt="" /></p>
+
+<p>因此，总体而言，动画在前几个步骤中最具表现力，并在后半部分逐渐趋于稳定。</p>
+
+<p>对于着色器而言，强度应该足以驱动动画，而无需使用步骤。在 Kotlin 代码中，我仍然会使用步骤 + 强度，仅仅是为了尽可能地复现动画效果，并用于未来的性能测试。</p>
+
+<p><strong>思维模型转变：</strong> 着色器是逐像素执行的，但动画会将相同的变换应用于像素组（在本例中为切片）。为了在着色器中实现这一点，我们需要对整个切片进行完全相同的计算。还记得纯函数的相似性吗？它在这里非常有用，因为要得到相同的结果，我们只需要应用相同的参数！</p>
+
+<p>具有相同变换的像素组就是一个切片：</p>
+
+<pre><code class="glsl">uniform shader image;
+uniform float2 imageSize; // Shader area size in pixels
+uniform float intensity;
+uniform int slices;// fragCoord — pixel coordinates
+half4 main(float2 fragCoord) {
+    // Create horizontal slices
+    float sliceHeight = imageSize.y / float(slices); // Height of each slice in pixels
+    float sliceY = floor(fragCoord.y / sliceHeight) * sliceHeight; // Start coordinates for each slice
+
+    // ...
+}
+</code></pre>
+
+<p>让我们一步一步来，从平移开始。</p>
+
+<h2>平移</h2>
+
+<p>步骤 10 到 5 等价于强度从 1.0 到 0.5，每次递减 0.1。因此，我们将以此为基础来移动切片：</p>
+
+<pre><code class="glsl">// Simple random functions
+float random(float seed) {
+  return fract(sin(seed) * 100000.0);
+}
+
+float random(float2 st) {
+    return fract(sin(dot(st.xy, float2(12.9898, 78.233))) * 43758.5453123);
+}
+
+// Determine how much this slice should be displaced
+float displace(float sliceY, float intensity) {
+    float rnd = random(float2(sliceY, intensity));
+
+    float shouldDisplace;
+    if (intensity &lt; 0.5 &amp;&amp; intensity &gt; rnd * 0.4) {
+        shouldDisplace = 0.0;
+    } else {
+        shouldDisplace = 1.0;
+    }
+
+    return (rnd - 0.5) * 40.0 * intensity * shouldDisplace
+}
+</code></pre>
+
+<p>这里发生了什么？</p>
+
+<p>首先，是随机性。由于着色器本身没有随机性，因此通常使用一些函数来模拟随机性。这两个函数都会返回一个介于 0（含）和 1（不含）之间的浮点值。在这种情况下，“随机”值对于每个切片-帧组合都是唯一的。对于给定帧，均匀强度对于所有调用（= 输出像素）都是相同的，同一组像素的切片坐标也相同。结合切片起始坐标，这个值对于每一帧的每个切片都是不同的。</p>
+
+<p>接下来，如果强度超过 0.5，<code>shouldDisplace</code> 因子会立即设置为 1.0，这意味着切片需要进行位移。否则，<code>intensity &gt; rnd * 0.4</code> 会导致执行位移的概率下降，类似于原始实现中的 <code>Random.nextInt(5) &lt; step</code>。</p>
+
+<p>最后一行只是简单的算术运算。这里我将 0 到 1 的伪随机值转换为 -20 到 20，然后像原始实现一样乘以强度，并在发生位移时应用该因子。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*LBlZyvahPz-Si5eR3IWjvw.gif" alt="" /></p>
+
+<h2>缩放</h2>
+
+<p>屏幕空间缩放本质上是指相对于枢轴点（本例中为水平中心）调整像素采样坐标。由于我们是从源图像读取数据，因此实际上是移动了采样视口。</p>
+
+<pre><code class="glsl">float2 scale(float2 coord, float yMin, float yMax, float screenWidth, float intensity) {
+   float rnd = random(float2(yMin, intensity));
+
+   if (coord.y &gt;= yMin &amp;&amp; coord.y &lt;= yMax &amp;&amp; rnd &lt; intensity) {
+       float centerX = screenWidth * 0.5;
+
+       float localX = coord.x - centerX;
+       float scaleFactor = 1f + (intensity * rnd);
+       localX /= scaleFactor;
+
+       float scaledX = localX + centerX;
+
+       return float2(scaledX, coord.y);
+   }
+
+   return coord;
+}
+</code></pre>
+
+<blockquote><p>附注：为了演示，我尽量简化了逻辑。生产环境中的着色器代码通常会使用更高级的技术来避免分支，因为像上面示例中那样的不平衡分支会迫使 GPU 串行执行两条路径，从而破坏并行性。要以优化的方式实现缩放函数并非易事，所以我采用了一种简单的方法。</p></blockquote>
+
+<p>再次强调，对于每一帧的每个切片，随机数都是唯一的，这意味着特定切片中的每个像素都会获得相同的值。因此，<code>rnd &lt; intensity</code> 会降低概率，类似于 <code>Random.nextInt(10) &lt; step</code>。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*5Q2onueDpzVVChVXfV_QOg.gif" alt="" /></p>
+
+<h2>彩色条纹</h2>
+
+<p>最简单的部分。类似地，如果应用了色带，则创建相同的概率，然后选择 3 种颜色中的一种。可以使用非硬编码值，但这需要一些额外的工作，因此 Compose 版本在这方面更灵活。</p>
+
+<pre><code class="glsl">float rnd = random(float2(intensity, sliceY));
+if ((rnd * 2.5 + 0.5) &lt; intensity) {
+   if (rnd &gt; 0.67) {
+       return yellow;
+   } else if (rnd &gt; 0.33) {
+       return red;
+   } else {
+       return cyan;
+   }
+} else {
+   float2 scaled = scale(displaced, sliceY, sliceY + sliceHeight, imageSize.y, intensity);
+   return image.eval(scaled);
+}
+</code></pre>
+
+<p>将所有内容组合在一起后，结果如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*OPPsJbjpmUd94xsp4vfG9A.gif" alt="" /></p>
+
+<p>存在一个明显的问题：叠加层的颜色始终为青色。这是因为伪随机函数对相同的输入返回相同的值——这是设计上的确定性行为。解决方案：在 Kotlin 端生成真正的随机数，并将其作为 uniform 变量传递。</p>
+
+<pre><code class="glsl">-float rnd = random(float2(intensity, sliceY));
++float rnd = random(float2(intensity * realRandom, sliceY));
+ if ((rnd * 2.5 + 0.5) &lt; intensity) {
+-if (rnd &gt; 0.67) {
++if (realRandom &gt; 0.67) {
+         return yellow;
+-} else if (rnd &gt; 0.33) {
++} else if (realRandom &gt; 0.33) {
+         return red;
+     } else {
+         return cyan;
+     }
+} else {
+    float2 scaled = scale(displaced, sliceY, sliceY + sliceHeight, imageSize.y, intensity);
+    return image.eval(scaled);
+}
+</code></pre>
+
+<p>应用适当的随机性后，整个过程与原始行为非常接近：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:640/1*YMfnRYhOSI-v84eR04hHaw.gif" alt="你能猜出哪个是 compose，哪个是 AGSL 吗？" /></p>
+
+<p>完整代码发布于<a href="https://gist.github.com/MightySeal/97687eaaf5eeeb1322a9f6f837dc5c35">此处</a>。</p>
+
+<p>当然，在进行图形编程时，至少需要进行一些粗略的性能观察。为此，我将使用我的 Pixel 7，<a href="https://developer.android.com/topic/performance/rendering/inspect-gpu-rendering">启用 HWUI 渲染图表</a>，并稍作修改代码：使用 <a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/package-summary#infiniteRepeatable(androidx.compose.animation.core.DurationBasedAnimationSpec,androidx.compose.animation.core.RepeatMode,androidx.compose.animation.core.StartOffset)">infiniteRepeatable</a> 规范实现循环动画，并使用发布版本。Pixel 7 实际上非常适合这项任务，因为它并非高端设备，如果它在 Pixel 7 上有效，那么在性能更高的设备上也应该有效。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*MVOJpYGsNIPWI6n8scBolQ.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*yybZA5FCXvybv6LXD9Uh5Q.gif" alt="" /></p>
+
+<p>左侧为着色器，右侧为Compose</p>
+
+<p>乍一看，这两个图表似乎很相似，但实际上存在一个问题：当前的实现方式隐式地限制了帧速率。动画会将浮点数值从 10 递减到 0，但状态更新时会使用四舍五入为整数的值。这意味着在 500 毫秒内只有 11 帧动画。这对于故障着色器来说非常方便，因为较低的帧速率也会增强故障效果。要消除这个限制，我们只需要将步长类型从整数 (Int) 更改为浮点数 (Float)，并使用不进行四舍五入的可动画值即可。</p>
+
+<pre><code class="kotlin">-var step by remember { mutableStateOf(0) }
++var step by remember { mutableFloatStateOf(0f) }
+LaunchedEffect(key) {
+   Animatable(10f)
+       .animateTo(
+           targetValue = 0f,
+           animationSpec = tween(
+               durationMillis = 500,
+               easing = LinearEasing,
+           )
+       ) {
+-          step = this.value.roundToInt()
++          step = this.value
+       }
+}
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*J7Y6FenkNZAPglmKtyvNNA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*a7xb39t8tXR5APsArXk5aw.gif" alt="" /></p>
+
+<p>左侧为着色器，右侧为Compose，无帧数限制</p>
+
+<p>移除帧数限制后，性能提升已经非常明显。我们来做个压力测试。如果将动画应用于整个列表会发生什么？或者切片数量增加会发生什么？让我们拭目以待！</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*6PkVLOndrbCYVaV8ApJtzA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*DdiLlkVWT4BMY6sY2mVxVg.gif" alt="" /></p>
+
+<p>左侧着色器，右侧Compose，无帧数限制，应用于整个列表</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*Gv-vtC5MNtcQ4bmYB__4rA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*BcyPMHcnOc9HvPELpVoF9g.gif" alt="" /></p>
+
+<p>左侧着色器，右侧Compose，无帧数限制，应用于整个列表100 个切片</p>
+
+<h2>结论</h2>
+
+<p>Compose 非常适合用于复杂动画的原型设计，因为它可以使用熟悉的工具轻松实现。此外，值得一提的是，它适用于所有设备。</p>
+
+<p>另一方面，着色器提供了性能更高、更稳定的渲染。在这种情况下，使用的切片数量无关紧要——无论是 20 个还是 500 个，计算量都没有区别，而纯 Compose 版本对此非常敏感，并且会随着切片数量的增加而线性增长。</p>
+
+<p>此外，由于 AGSL 着色器只是在运行时临时编译的文本，因此理论上可以从后端更新这些动画。</p>
+
+<p>但是，还有一个很大的问题：着色器从 Android 13 开始可用，因此根据 Android Studio 操作系统的发行情况，大约一半的设备将能够支持这种方法。当然，这种情况会随着时间的推移而改变，我希望我们能够利用着色器充分发挥图形编程的强大功能！</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1232/1*Eh3q8fmkEx9BdA5FNR11CA.jpeg" alt="" /></p>
+
+<p>这是我的<a href="https://bento.me/mightyseal">bento</a>，如果你想联系我、聊天或讨论，欢迎来找我！</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack Compose内部的不同节点类型]]></title>
@@ -1588,220 +1936,6 @@ navController.addOnDestinationChangedListener { _, destination, arguments -&gt;
 <p>无论你是构建需要频繁更新布局的内容密集型应用、需要快速 A/B 测试的电子商务平台，还是需要快速迭代的企业级工具，RemoteCompose 都能为真正动态的 UI 提供架构基础。该框架处理了序列化、传输和渲染的复杂性，因此你可以专注于设计卓越的用户体验。</p>
 
 <p>你可以观看他们最近关于<a href="https://speakerdeck.com/camaelon/introducing-remotecompose-break-your-ui-out-of-the-app-sandbox">RemoteCompose 简介：将你的 UI 从应用程序沙盒中解放出来</a>的演讲。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Jetpack Compose中的阴影艺术]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/11/24/the-art-of-shadows-in-jetpack-compose/"/>
-    <updated>2025-11-24T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/11/24/the-art-of-shadows-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「The Art of Shadows in Jetpack Compose」，原文链接<a href="https://medium.com/proandroiddev/the-art-of-shadows-in-jetpack-compose-63a75070882f">https://medium.com/proandroiddev/the-art-of-shadows-in-jetpack-compose-63a75070882f</a>，由Stefano Natali发布于2025年10月4日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*UjyqMyVg002OIDJ1Hdee8Q.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>UI 中的阴影发挥着至关重要的作用：它们在视觉上<strong>提升</strong>元素，指示着<strong>交互性</strong>，并提供用户操作的即时<strong>反馈</strong>。多年来，我们一直依赖于<strong>高度</strong>属性，但 Jetpack Compose 现在提供了一套强大的工具，可以对<strong>阴影渲染</strong>进行精细控制。</p>
-
-<p>Google 最近新增了一个<a href="https://developer.android.com/develop/ui/compose/graphics/draw/shadows">文档页面</a>，其中包含一系列有趣的用例。本文将探索 Compose 中的主要阴影修改器，并深入讲解创建渐变和炫酷特效等高级技巧，从而提升应用的风格。</p>
-
-<p>本文讨论的所有技巧的完整代码示例都可以在我的 GitHub 仓库 <a href="https://github.com/stefanoq21/ComposePlayground"><strong>Compose Playground</strong></a> 中找到。</p>
-
-<h2>阴影修改器（Shadow Modifiers）</h2>
-
-<p>添加阴影最简单但自定义程度最低的方法是使用 <strong>Modifier.shadow()</strong>。与以往一样，它的行为依赖于<strong>基于高度的阴影</strong>，模拟来自上方的光源，阴影深度直接取决于你提供的高度值。其主要限制在于阴影始终被裁剪到可合成对象的形状内，并且你无法自定义扩展、颜色色调或偏移等属性。</p>
-
-<pre><code class="kotlin">Box(
-    Modifier
-        .size(100.dp)
-        .shadow(
-            elevation = 10.dp, 
-            shape = RectangleShape
-        )
-        .background(Color.White)
-)
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:704/1*7Nkm6z8Ls4FyvDqCcKToDw.png" alt="" /></p>
-
-<p>让我们从一些新功能开始，这些功能赋予我们更强大的力量。使用 <strong>dropShadow()</strong>，我们可以在内容后面创建自定义阴影。这个修饰符是创建复杂阴影的关键，它允许对内容后面的阴影进行精细控制，使元素看起来像是被抬升了一样。</p>
-
-<pre><code class="kotlin"> .dropShadow(
-    shape = RoundedCornerShape(20.dp), shadow = Shadow(
-            radius = 6.dp,
-            spread = 2.dp,
-            color = Color.Black.copy(alpha = 0.3f),
-            offset = DpOffset(2.dp, 2.dp)
-              )
-            )
- .background(
-    color = Color.White, shape = RoundedCornerShape(20.dp)
-            )
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:990/1*kENF6x3L985dO65DSY0Zng.png" alt="" /></p>
-
-<p>它使用 <strong>Shadow</strong> 参数，可以精确控制视觉效果。这个参数允许你使用几个关键属性来塑造阴影。 <strong>半径</strong> 决定了边缘的柔和度和扩散（模糊）程度。<strong>扩散</strong> 值控制阴影几何形状相对于可组合元素大小的扩展或收缩。最后，<strong>偏移</strong> 沿 <strong>X 轴和 Y 轴</strong>定位阴影，从而确定光源的视觉方向。结合阴影的<strong>颜色</strong>，这些属性可以实现完全自定义。</p>
-
-<p>💡 <strong>顺序很重要：</strong>在修改器链中，<strong>dropShadow()</strong> 修改器必须出现在 <strong>background()</strong> 修改器<strong>之前</strong>，因为阴影先绘制，背景绘制在其上方。</p>
-
-<p><strong>innerShadow()</strong> 修改器是 <strong>dropShadow()</strong> 的逆操作，它在可组合元素边界的<strong>内部</strong>创建阴影，从而实现元素凹陷或压入表面的视觉效果。与它的对应项一样，它也使用可自定义的<strong>Shadow</strong>对象，允许你使用<strong>半径</strong>、<strong>颜色</strong>、<strong>偏移</strong>和<strong>扩散</strong>来微调效果。</p>
-
-<pre><code class="kotlin">.background(
-    Color.White, shape = RoundedCornerShape(20.dp)
-)
-.innerShadow(
-    shape = RoundedCornerShape(20.dp), shadow = Shadow(
-        radius = 6.dp,
-        spread = 2.dp,
-        color = Color.Black.copy(alpha = 0.3f),
-        offset = DpOffset(2.dp, 2.dp)
-    )
-)
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1108/1*a7KFFaTXCk4KC-sm9AYUoQ.png" alt="" /></p>
-
-<p>💡<strong>再次强调，顺序很重要：</strong><strong>innerShadow()</strong>修改器<strong>必须</strong>放在<strong>background()</strong>修改器<strong>之后</strong>。如果将其放在背景之前，内容将绘制在阴影之上，完全遮盖阴影。</p>
-
-<p>这些修改器的真正强大之处在于它们的自定义和组合。通过叠加<strong>innerShadow()</strong>和<strong>dropShadow()</strong>，你可以创建复杂而逼真的视觉效果。我们来看一些高级用例。</p>
-
-<h2>高级技巧：组合和自定义阴影</h2>
-
-<h3>自定义阴影</h3>
-
-<p>当你在 <strong>dropShadow()</strong> 函数中将 <strong>Brush</strong> 对象而非纯色传递给 <strong>Shadow</strong> 对象时，自定义的强大功能便显而易见。此功能允许你使用 <strong>Brush.sweepGradient</strong> 创建渐变效果。此外，无论你使用标准形状还是完全自定义的几何体，阴影始终会贴合可组合对象的形状。</p>
-
-<pre><code class="kotlin">.dropShadow(
-    shape = MaterialShapes.Cookie12Sided.toShape(), shadow = Shadow(
-        radius = 10.dp,
-        spread = 6.dp,
-        brush = Brush.sweepGradient(
-            listOf(Color.Green, Color.Blue, Color.Yellow, Color.Green)
-        ),
-        offset = DpOffset(2.dp, 2.dp)
-    )
-)
-.background(
-    color = Color.White,
-    shape = MaterialShapes.Cookie12Sided.toShape(),
-)
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1122/1*a8xMvXOb3hS6icdGU0p1gg.png" alt="" /></p>
-
-<h3>新粗犷主义阴影</h3>
-
-<p>这种风格完美地展现了 <strong>dropShadow()</strong> 修改器在实现极致高对比度效果方面的强大功能。要实现新粗犷主义（Neobrutalism）那种粗犷、棱角分明的视觉效果，你必须使用 <code>dropShadow()</code> 函数，并设置模糊度为零，偏移量要明显，通常还要配合粗边框。具体来说，你需要同时设置 <code>radius = 0.dp</code> 和 <code>spread = 0.dp</code> 来消除扩散，然后应用鲜艳的色彩，并设置一个明显的偏移量，从而创建出标志性的锐利轮廓。</p>
-
-<pre><code class="kotlin"> .dropShadow(
-     shape = RoundedCornerShape(0.dp),
-     shadow = Shadow(
-        radius = 0.dp,
-        spread = 0.dp,
-        color = dropShadowColor,
-        offset = DpOffset(x = 8.dp, 8.dp)
-                    )
-        )
- .border(
-    8.dp, borderColor
-        )
- .background(
-    color = Color.White,
-    shape = RoundedCornerShape(0.dp)
-        )
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*bdPpm0XYPfTXMuoNrVQuZw.png" alt="" /></p>
-
-<h3>具有动效的阴影</h3>
-
-<p>阴影并非只是静态的；它们可以制作成动画，从而提供即时的用户反馈。我们将要探索的最后一个高级技巧是创建交互式阴影，使其在特定操作（例如点击或按下）时平滑过渡。这项技术对于模拟物理交互至关重要，它能直观地确认元素的抬升或状态发生了变化。</p>
-
-<pre><code class="kotlin"> Box(Modifier.fillMaxSize()) {
-        val interactionSource = remember { MutableInteractionSource() }
-        val isPressed by interactionSource.collectIsPressedAsState()
-
-        // Create transition with pressed state
-        val transition = updateTransition(
-            targetState = isPressed, label = "button_press_transition"
-        )
-
-        fun &lt;T&gt; buttonPressAnimation() = tween&lt;T&gt;(
-            durationMillis = 400, easing = Ease
-        )
-
-        // Animate all properties using the transition
-        val shadowAlpha by transition.animateFloat(
-            label = "shadow_alpha", transitionSpec = { buttonPressAnimation() }) { pressed -&gt;
-            if (pressed) 0f else 1f
-        }
-
-        //to animate the color
-        val colorDropShadow by transition.animateColor(
-            label = "shadow_color", transitionSpec = { buttonPressAnimation() }) { pressed -&gt;
-            if (pressed) Color.Transparent else Color.Green.copy(alpha = (0.5f))
-        }
-        val innerShadowAlpha by transition.animateFloat(
-            label = "inner_shadow_alpha", transitionSpec = { buttonPressAnimation() }) { pressed -&gt;
-            if (!pressed) 0f else 1f
-        }
-
-        Box(
-            Modifier
-                .clickable(
-                    interactionSource, indication = null
-                ) {
-                    //...
-                }
-                .width(300.dp)
-                .height(200.dp)
-                .align(Alignment.Center)
-                .dropShadow(
-                    shape = RoundedCornerShape(70.dp), shadow = Shadow(
-                        radius = 10.dp,
-                        spread = 0.dp,
-                        color = Color.Green.copy(alpha = (0.5f)),
-                        offset = DpOffset(x = 0.dp, 0.dp),
-                        alpha = shadowAlpha
-                    )
-                )
-                // note that the background needs to be defined before defining the inner shadow
-                .background(
-                    color = Color(0xFFFFFFFF), shape = RoundedCornerShape(70.dp)
-                )
-                .innerShadow(
-                    shape = RoundedCornerShape(70.dp), shadow = Shadow(
-                        radius = 8.dp,
-                        spread = 4.dp,
-                        color = Color.Green.copy(alpha = (0.5f)),
-                        alpha = innerShadowAlpha,
-                        offset = DpOffset(x = 0.dp, 0.dp)
-                    )
-                )
-        ) {
-            //...
-        }
-    }
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*idzAQ4lII7JweFZdCyfNqg.gif" alt="" /></p>
-
-<p>好的，我们已经了解了如何使用 <strong>updateTransition</strong> API 来创建流畅的交互反馈。它首先使用 <strong>MutableInteractionSource</strong> 跟踪按下状态。该状态会驱动一个 <strong>400 毫秒的过渡动画</strong>，同时为两个方向相反的阴影添加动画效果。外部的 <strong>dropShadow</strong> 在按下时会淡出，而内部的 <strong>innerShadow</strong> 则会淡入。这种双阴影动画使组件从 <strong>抬升</strong> 状态平滑过渡到 <strong>凹陷</strong> 状态，从而在用户交互时提供清晰且动态的反馈。</p>
-
-<h2>结论</h2>
-
-<p>Compose 全新的阴影 API 标志着对传统 <strong>elevation</strong> 属性局限性的重大突破。它将核心概念拆分为 <strong>dropShadow()</strong> 和 <strong>innerShadow()</strong>，并赋予我们对 <strong>Shadow</strong> 对象属性的完全控制权。</p>
-
-<p>无论你是打造简单的渐变效果、模拟物理深度，还是实现新粗野主义的高对比度视觉冲击，这种全新的自定义程度都意味着你的 <strong>UI 终于可以充分展现你设计的艺术愿景</strong>。</p>
-
-<p>不妨尝试这些修饰符，为你的 Jetpack Compose 应用注入全新的创意维度！</p>
-
-<p>如果你觉得这篇文章有趣，欢迎关注我，获取更多关于 Android 开发和 Jetpack Compose 的精彩内容。我会定期发布相关主题的文章。欢迎随时分享你的评论，或通过 <a href="https://bsky.app/profile/stefanoq21.bsky.social"><strong>Bluesky</strong></a> 或 <a href="http://www.linkedin.com/in/stefano-natali-q21"><strong>LinkedIn</strong></a> 与我联系，进行更深入的讨论。</p>
-
-<p>祝你开心，编程快乐！</p>
 ]]></content>
   </entry>
   

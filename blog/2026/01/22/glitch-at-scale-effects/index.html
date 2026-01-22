@@ -1,0 +1,828 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Compose GPU加速特效：带缩放的故障效果 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="非常详细地讲解如何使用Shader (AGSL)来实现一个带缩放的故障动画效果，并比较了它与Compose实现方式性能差异。">
+  <meta name="keywords" content="Shader, AGSL, Jetpack Compose">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/01/22/glitch-at-scale-effects">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Compose GPU加速特效：带缩放的故障效果</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-01-22'><span class='date'><span class='date-month'>Jan</span> <span class='date-day'>22</span><span class='date-suffix'>nd</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「GPU-Accelerated Effects: Glitch at Scale」，原文链接<a href="https://medium.com/@konstantinzolotov/gpu-accelerated-effects-glitch-at-scale-e59216afd1e8">https://medium.com/@konstantinzolotov/gpu-accelerated-effects-glitch-at-scale-e59216afd1e8</a>，由Konstantin Zolotov发布于2025年11月9日。</p></blockquote>
+
+<p><a href="/blog/2026/01/22/glitch-at-scale-effects/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*l67g57hjllhQ5gkwTLU2nA.gif" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>几周前，我看到了Sina Samaki撰写的一篇关于使用Jetpack Compose制作故障效果的<a href="https://www.sinasamaki.com/glitch-effect-in-jetpack-compose/">精彩文章</a>。作为一个喜欢钻研底层技术的人，我看到了使用Android AGSL着色器重现这种效果并比较两种实现方式的绝佳机会。</p>
+
+<p>在图形处理方面，选择合适的工具至关重要，因为很容易达到性能瓶颈，而扩展解决方案则变得困难。这里的情况是否如此呢？让我们一探究竟！</p>
+
+<p>做好准备，我们将深入底层。</p>
+
+<h2>着色器(Shader)的本质</h2>
+
+<p>那么，着色器究竟是什么？</p>
+
+<p>着色器是一种直接在 GPU 上执行的程序，并且可以并行执行。</p>
+
+<p>着色器通常使用一种特殊的类 C 语言编写，在 Android Compose 中，这种语言是 AGSL——Android 图形着色语言。</p>
+
+<p>我不会重复<a href="https://developer.android.com/develop/ui/views/graphics/agsl">官方指南</a>的内容，而是会简单介绍一下 GPU 以及一种新的着色器编程思维模型。</p>
+
+<p>那么，它与 CPU 有什么区别呢？ CPU 和 GPU 的主要区别基本上如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1250/1*nNt7dZ0re2yZI33o62kKtg.png" alt="https://developer.nvidia.com/blog/cuda-refresher-reviewing-the-origins-of-gpu-computing/" /></p>
+
+<p>CPU：</p>
+
+<ul>
+<li>更复杂</li>
+<li>专为执行大量不同任务的大型程序而设计</li>
+<li>MIMD（多指令多数据流）</li>
+</ul>
+
+
+<p>GPU：</p>
+
+<ul>
+<li>简单得多（没有分支预测，缓存更小）</li>
+<li>专为对各种数据执行完全相同操作的小型程序而设计</li>
+<li>更多核心 = 更高的并行性</li>
+<li>SIMD（单指令多数据流）</li>
+</ul>
+
+
+<p>当然，CPU 也有 SIMD 扩展，但规模远不及 GPU。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*T5jVrRJztzWADaqiAFNwzQ.png" alt="https://developer.nvidia.com/blog/cuda-refresher-reviewing-the-origins-of-gpu-computing/" /></p>
+
+<blockquote><p>GPU 非常适合对数百万像素执行相同的操作</p></blockquote>
+
+<p>这里存在一个非常重要的<strong>思维模型转变</strong>：以前你可以在画布的任意位置绘制，而现在你面对的是一幅图像，你可以对图像的任何部分进行采样（读取），但输出结果始终是一个像素。每个目标像素都会执行相同的着色器。这类似于一个纯函数，不会产生任何副作用，因此像素仅取决于其坐标和提供的 uniform 变量。</p>
+
+<p>让我们开始实现吧，但首先，分析<a href="https://www.sinasamaki.com/glitch-effect/">原始合成版本</a>中的关键点，并将这些想法转化为着色器思维模型。</p>
+
+<p>关键的动画驱动因素是步长。动画器会在 500 毫秒的周期内，将浮点数值从 10 递减到 0。步长状态为整数，由于浮点数会被转换为整数，因此共有 11 个步长。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">var</span> <span class="py">step</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">Animatable</span><span class="p">(</span><span class="m">10f</span><span class="p">)</span>
+</span><span class='line'>       <span class="p">.</span><span class="n">animateTo</span><span class="p">(</span>
+</span><span class='line'>           <span class="n">targetValue</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span>
+</span><span class='line'>           <span class="n">animationSpec</span> <span class="p">=</span> <span class="n">tween</span><span class="p">(</span>
+</span><span class='line'>               <span class="n">durationMillis</span> <span class="p">=</span> <span class="m">500</span><span class="p">,</span>
+</span><span class='line'>               <span class="n">easing</span> <span class="p">=</span> <span class="n">LinearEasing</span><span class="p">,</span>
+</span><span class='line'>           <span class="p">)</span>
+</span><span class='line'>       <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>           <span class="n">step</span> <span class="p">=</span> <span class="k">this</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">roundToInt</span><span class="p">()</span>
+</span><span class='line'>       <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>此外，还有一个名为强度的参数，它基于步长计算：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">intensity</span> <span class="p">=</span> <span class="n">step</span> <span class="p">/</span> <span class="m">10f</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>因此，强度是一个数值序列 [1.0, 0.9, …, 0.0]。</p>
+
+<p>下一个关键点是切片：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">for</span> <span class="p">(</span><span class="n">i</span> <span class="k">in</span> <span class="m">0</span> <span class="n">until</span> <span class="n">slices</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">translate</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">left</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(</span><span class="m">5</span><span class="p">)</span> <span class="p">&lt;</span> <span class="n">step</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(-</span><span class="m">20.</span><span class="p">.</span><span class="m">20</span><span class="p">).</span><span class="n">toFloat</span><span class="p">()</span> <span class="p">*</span> <span class="n">intensity</span>
+</span><span class='line'>        <span class="k">else</span>
+</span><span class='line'>            <span class="m">0f</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">scale</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">scaleY</span> <span class="p">=</span> <span class="m">1f</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">scaleX</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(</span><span class="m">10</span><span class="p">)</span> <span class="p">&lt;</span> <span class="n">step</span><span class="p">)</span>
+</span><span class='line'>                <span class="m">1f</span> <span class="p">+</span> <span class="p">(</span><span class="m">1f</span> <span class="p">*</span> <span class="n">Random</span><span class="p">.</span><span class="n">nextFloat</span><span class="p">()</span> <span class="p">*</span> <span class="n">intensity</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">else</span>
+</span><span class='line'>                <span class="m">1f</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">clipRect</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">top</span> <span class="p">=</span> <span class="p">(</span><span class="n">i</span> <span class="p">/</span> <span class="n">slices</span><span class="p">.</span><span class="n">toFloat</span><span class="p">())</span> <span class="p">*</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">bottom</span> <span class="p">=</span> <span class="p">(((</span><span class="n">i</span> <span class="p">+</span> <span class="m">1</span><span class="p">)</span> <span class="p">/</span> <span class="n">slices</span><span class="p">.</span><span class="n">toFloat</span><span class="p">())</span> <span class="p">*</span> <span class="n">size</span><span class="p">.</span><span class="n">height</span><span class="p">)</span> <span class="p">+</span> <span class="m">1f</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">layer</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">drawLayer</span><span class="p">(</span><span class="n">graphicsLayer</span><span class="p">)</span>
+</span><span class='line'>                    <span class="k">if</span> <span class="p">(</span><span class="n">Random</span><span class="p">.</span><span class="n">nextInt</span><span class="p">(</span><span class="m">5</span><span class="p">,</span> <span class="m">30</span><span class="p">)</span> <span class="p">&lt;</span> <span class="n">step</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">drawRect</span><span class="p">(</span>
+</span><span class='line'>                            <span class="n">color</span> <span class="p">=</span> <span class="n">glitchColors</span><span class="p">.</span><span class="n">random</span><span class="p">(),</span>
+</span><span class='line'>                            <span class="n">blendMode</span> <span class="p">=</span> <span class="n">BlendMode</span><span class="p">.</span><span class="n">SrcAtop</span><span class="p">,</span>
+</span><span class='line'>                        <span class="p">)</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于每个切片，都会应用以下变换：</p>
+
+<p><strong>1. 平移</strong></p>
+
+<ul>
+<li>在步骤 10 到 5 期间，每个切片会随机移动 -20 到 20 范围内的像素。请注意，每一步操作都会使该范围缩小，因为它会乘以强度。</li>
+<li>在步骤 4 到 0 中也会发生类似的情况，但并非每个切片都会移动，有些切片不会被移动。</li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*LBlZyvahPz-Si5eR3IWjvw.gif" alt="" /></p>
+
+<p><strong>2. 水平缩放</strong> 每个切片都会根据强度乘以 1.0 到 2.0 范围内的随机数进行缩放，每一步操作都会降低缩放的概率和大小。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*5Q2onueDpzVVChVXfV_QOg.gif" alt="" /></p>
+
+<p><strong>3.彩色条纹</strong></p>
+
+<ul>
+<li>在步骤 10 到 5 中，在每个切片上绘制一条随机彩色条纹，初始概率为 0.2，到步骤 5 时降至 0。</li>
+<li>步骤 5 之后不再绘制条纹。</li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*l67g57hjllhQ5gkwTLU2nA.gif" alt="" /></p>
+
+<p>因此，总体而言，动画在前几个步骤中最具表现力，并在后半部分逐渐趋于稳定。</p>
+
+<p>对于着色器而言，强度应该足以驱动动画，而无需使用步骤。在 Kotlin 代码中，我仍然会使用步骤 + 强度，仅仅是为了尽可能地复现动画效果，并用于未来的性能测试。</p>
+
+<p><strong>思维模型转变：</strong> 着色器是逐像素执行的，但动画会将相同的变换应用于像素组（在本例中为切片）。为了在着色器中实现这一点，我们需要对整个切片进行完全相同的计算。还记得纯函数的相似性吗？它在这里非常有用，因为要得到相同的结果，我们只需要应用相同的参数！</p>
+
+<p>具有相同变换的像素组就是一个切片：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">uniform</span> <span class="n">shader</span> <span class="n">image</span><span class="p">;</span>
+</span><span class='line'><span class="k">uniform</span> <span class="n">float2</span> <span class="n">imageSize</span><span class="p">;</span> <span class="c1">// Shader area size in pixels</span>
+</span><span class='line'><span class="k">uniform</span> <span class="k">float</span> <span class="n">intensity</span><span class="p">;</span>
+</span><span class='line'><span class="k">uniform</span> <span class="k">int</span> <span class="n">slices</span><span class="p">;</span><span class="c1">// fragCoord — pixel coordinates</span>
+</span><span class='line'><span class="n">half4</span> <span class="n">main</span><span class="p">(</span><span class="n">float2</span> <span class="n">fragCoord</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Create horizontal slices</span>
+</span><span class='line'>    <span class="k">float</span> <span class="n">sliceHeight</span> <span class="o">=</span> <span class="n">imageSize</span><span class="p">.</span><span class="n">y</span> <span class="o">/</span> <span class="k">float</span><span class="p">(</span><span class="n">slices</span><span class="p">);</span> <span class="c1">// Height of each slice in pixels</span>
+</span><span class='line'>    <span class="k">float</span> <span class="n">sliceY</span> <span class="o">=</span> <span class="n">floor</span><span class="p">(</span><span class="n">fragCoord</span><span class="p">.</span><span class="n">y</span> <span class="o">/</span> <span class="n">sliceHeight</span><span class="p">)</span> <span class="o">*</span> <span class="n">sliceHeight</span><span class="p">;</span> <span class="c1">// Start coordinates for each slice</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// ...</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>让我们一步一步来，从平移开始。</p>
+
+<h2>平移</h2>
+
+<p>步骤 10 到 5 等价于强度从 1.0 到 0.5，每次递减 0.1。因此，我们将以此为基础来移动切片：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="c1">// Simple random functions</span>
+</span><span class='line'><span class="k">float</span> <span class="n">random</span><span class="p">(</span><span class="k">float</span> <span class="n">seed</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="k">return</span> <span class="n">fract</span><span class="p">(</span><span class="n">sin</span><span class="p">(</span><span class="n">seed</span><span class="p">)</span> <span class="o">*</span> <span class="mf">100000.0</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">float</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span> <span class="n">st</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">fract</span><span class="p">(</span><span class="n">sin</span><span class="p">(</span><span class="n">dot</span><span class="p">(</span><span class="n">st</span><span class="p">.</span><span class="n">xy</span><span class="p">,</span> <span class="n">float2</span><span class="p">(</span><span class="mf">12.9898</span><span class="p">,</span> <span class="mf">78.233</span><span class="p">)))</span> <span class="o">*</span> <span class="mf">43758.5453123</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// Determine how much this slice should be displaced</span>
+</span><span class='line'><span class="k">float</span> <span class="n">displace</span><span class="p">(</span><span class="k">float</span> <span class="n">sliceY</span><span class="p">,</span> <span class="k">float</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">sliceY</span><span class="p">,</span> <span class="n">intensity</span><span class="p">));</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">float</span> <span class="n">shouldDisplace</span><span class="p">;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">intensity</span> <span class="o">&lt;</span> <span class="mf">0.5</span> <span class="o">&amp;&amp;</span> <span class="n">intensity</span> <span class="o">&gt;</span> <span class="n">rnd</span> <span class="o">*</span> <span class="mf">0.4</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">shouldDisplace</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">;</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">shouldDisplace</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">;</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">return</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">*</span> <span class="mf">40.0</span> <span class="o">*</span> <span class="n">intensity</span> <span class="o">*</span> <span class="n">shouldDisplace</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里发生了什么？</p>
+
+<p>首先，是随机性。由于着色器本身没有随机性，因此通常使用一些函数来模拟随机性。这两个函数都会返回一个介于 0（含）和 1（不含）之间的浮点值。在这种情况下，“随机”值对于每个切片-帧组合都是唯一的。对于给定帧，均匀强度对于所有调用（= 输出像素）都是相同的，同一组像素的切片坐标也相同。结合切片起始坐标，这个值对于每一帧的每个切片都是不同的。</p>
+
+<p>接下来，如果强度超过 0.5，<code>shouldDisplace</code> 因子会立即设置为 1.0，这意味着切片需要进行位移。否则，<code>intensity &gt; rnd * 0.4</code> 会导致执行位移的概率下降，类似于原始实现中的 <code>Random.nextInt(5) &lt; step</code>。</p>
+
+<p>最后一行只是简单的算术运算。这里我将 0 到 1 的伪随机值转换为 -20 到 20，然后像原始实现一样乘以强度，并在发生位移时应用该因子。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*LBlZyvahPz-Si5eR3IWjvw.gif" alt="" /></p>
+
+<h2>缩放</h2>
+
+<p>屏幕空间缩放本质上是指相对于枢轴点（本例中为水平中心）调整像素采样坐标。由于我们是从源图像读取数据，因此实际上是移动了采样视口。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="n">float2</span> <span class="n">scale</span><span class="p">(</span><span class="n">float2</span> <span class="n">coord</span><span class="p">,</span> <span class="k">float</span> <span class="n">yMin</span><span class="p">,</span> <span class="k">float</span> <span class="n">yMax</span><span class="p">,</span> <span class="k">float</span> <span class="n">screenWidth</span><span class="p">,</span> <span class="k">float</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">yMin</span><span class="p">,</span> <span class="n">intensity</span><span class="p">));</span>
+</span><span class='line'>
+</span><span class='line'>   <span class="k">if</span> <span class="p">(</span><span class="n">coord</span><span class="p">.</span><span class="n">y</span> <span class="o">&gt;=</span> <span class="n">yMin</span> <span class="o">&amp;&amp;</span> <span class="n">coord</span><span class="p">.</span><span class="n">y</span> <span class="o">&lt;=</span> <span class="n">yMax</span> <span class="o">&amp;&amp;</span> <span class="n">rnd</span> <span class="o">&lt;</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">float</span> <span class="n">centerX</span> <span class="o">=</span> <span class="n">screenWidth</span> <span class="o">*</span> <span class="mf">0.5</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>       <span class="k">float</span> <span class="n">localX</span> <span class="o">=</span> <span class="n">coord</span><span class="p">.</span><span class="n">x</span> <span class="o">-</span> <span class="n">centerX</span><span class="p">;</span>
+</span><span class='line'>       <span class="k">float</span> <span class="n">scaleFactor</span> <span class="o">=</span> <span class="mi">1</span><span class="n">f</span> <span class="o">+</span> <span class="p">(</span><span class="n">intensity</span> <span class="o">*</span> <span class="n">rnd</span><span class="p">);</span>
+</span><span class='line'>       <span class="n">localX</span> <span class="o">/=</span> <span class="n">scaleFactor</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>       <span class="k">float</span> <span class="n">scaledX</span> <span class="o">=</span> <span class="n">localX</span> <span class="o">+</span> <span class="n">centerX</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>       <span class="k">return</span> <span class="n">float2</span><span class="p">(</span><span class="n">scaledX</span><span class="p">,</span> <span class="n">coord</span><span class="p">.</span><span class="n">y</span><span class="p">);</span>
+</span><span class='line'>   <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>   <span class="k">return</span> <span class="n">coord</span><span class="p">;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p>附注：为了演示，我尽量简化了逻辑。生产环境中的着色器代码通常会使用更高级的技术来避免分支，因为像上面示例中那样的不平衡分支会迫使 GPU 串行执行两条路径，从而破坏并行性。要以优化的方式实现缩放函数并非易事，所以我采用了一种简单的方法。</p></blockquote>
+
+<p>再次强调，对于每一帧的每个切片，随机数都是唯一的，这意味着特定切片中的每个像素都会获得相同的值。因此，<code>rnd &lt; intensity</code> 会降低概率，类似于 <code>Random.nextInt(10) &lt; step</code>。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*5Q2onueDpzVVChVXfV_QOg.gif" alt="" /></p>
+
+<h2>彩色条纹</h2>
+
+<p>最简单的部分。类似地，如果应用了色带，则创建相同的概率，然后选择 3 种颜色中的一种。可以使用非硬编码值，但这需要一些额外的工作，因此 Compose 版本在这方面更灵活。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">intensity</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">));</span>
+</span><span class='line'><span class="k">if</span> <span class="p">((</span><span class="n">rnd</span> <span class="o">*</span> <span class="mf">2.5</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.67</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">return</span> <span class="n">yellow</span><span class="p">;</span>
+</span><span class='line'>   <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.33</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">return</span> <span class="n">red</span><span class="p">;</span>
+</span><span class='line'>   <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">return</span> <span class="n">cyan</span><span class="p">;</span>
+</span><span class='line'>   <span class="p">}</span>
+</span><span class='line'><span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">float2</span> <span class="n">scaled</span> <span class="o">=</span> <span class="n">scale</span><span class="p">(</span><span class="n">displaced</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">,</span> <span class="n">sliceY</span> <span class="o">+</span> <span class="n">sliceHeight</span><span class="p">,</span> <span class="n">imageSize</span><span class="p">.</span><span class="n">y</span><span class="p">,</span> <span class="n">intensity</span><span class="p">);</span>
+</span><span class='line'>   <span class="k">return</span> <span class="n">image</span><span class="p">.</span><span class="n">eval</span><span class="p">(</span><span class="n">scaled</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>将所有内容组合在一起后，结果如下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*OPPsJbjpmUd94xsp4vfG9A.gif" alt="" /></p>
+
+<p>存在一个明显的问题：叠加层的颜色始终为青色。这是因为伪随机函数对相同的输入返回相同的值——这是设计上的确定性行为。解决方案：在 Kotlin 端生成真正的随机数，并将其作为 uniform 变量传递。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='glsl'><span class='line'><span class="o">-</span><span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">intensity</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">));</span>
+</span><span class='line'><span class="o">+</span><span class="k">float</span> <span class="n">rnd</span> <span class="o">=</span> <span class="n">random</span><span class="p">(</span><span class="n">float2</span><span class="p">(</span><span class="n">intensity</span> <span class="o">*</span> <span class="n">realRandom</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">));</span>
+</span><span class='line'> <span class="k">if</span> <span class="p">((</span><span class="n">rnd</span> <span class="o">*</span> <span class="mf">2.5</span> <span class="o">+</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">intensity</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="o">-</span><span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.67</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="o">+</span><span class="k">if</span> <span class="p">(</span><span class="n">realRandom</span> <span class="o">&gt;</span> <span class="mf">0.67</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>         <span class="k">return</span> <span class="n">yellow</span><span class="p">;</span>
+</span><span class='line'><span class="o">-</span><span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">rnd</span> <span class="o">&gt;</span> <span class="mf">0.33</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="o">+</span><span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">realRandom</span> <span class="o">&gt;</span> <span class="mf">0.33</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>         <span class="k">return</span> <span class="n">red</span><span class="p">;</span>
+</span><span class='line'>     <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>         <span class="k">return</span> <span class="n">cyan</span><span class="p">;</span>
+</span><span class='line'>     <span class="p">}</span>
+</span><span class='line'><span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">float2</span> <span class="n">scaled</span> <span class="o">=</span> <span class="n">scale</span><span class="p">(</span><span class="n">displaced</span><span class="p">,</span> <span class="n">sliceY</span><span class="p">,</span> <span class="n">sliceY</span> <span class="o">+</span> <span class="n">sliceHeight</span><span class="p">,</span> <span class="n">imageSize</span><span class="p">.</span><span class="n">y</span><span class="p">,</span> <span class="n">intensity</span><span class="p">);</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">image</span><span class="p">.</span><span class="n">eval</span><span class="p">(</span><span class="n">scaled</span><span class="p">);</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>应用适当的随机性后，整个过程与原始行为非常接近：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:640/1*YMfnRYhOSI-v84eR04hHaw.gif" alt="你能猜出哪个是 compose，哪个是 AGSL 吗？" /></p>
+
+<p>完整代码发布于<a href="https://gist.github.com/MightySeal/97687eaaf5eeeb1322a9f6f837dc5c35">此处</a>。</p>
+
+<p>当然，在进行图形编程时，至少需要进行一些粗略的性能观察。为此，我将使用我的 Pixel 7，<a href="https://developer.android.com/topic/performance/rendering/inspect-gpu-rendering">启用 HWUI 渲染图表</a>，并稍作修改代码：使用 <a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/core/package-summary#infiniteRepeatable(androidx.compose.animation.core.DurationBasedAnimationSpec,androidx.compose.animation.core.RepeatMode,androidx.compose.animation.core.StartOffset)">infiniteRepeatable</a> 规范实现循环动画，并使用发布版本。Pixel 7 实际上非常适合这项任务，因为它并非高端设备，如果它在 Pixel 7 上有效，那么在性能更高的设备上也应该有效。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*MVOJpYGsNIPWI6n8scBolQ.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*yybZA5FCXvybv6LXD9Uh5Q.gif" alt="" /></p>
+
+<p>左侧为着色器，右侧为Compose</p>
+
+<p>乍一看，这两个图表似乎很相似，但实际上存在一个问题：当前的实现方式隐式地限制了帧速率。动画会将浮点数值从 10 递减到 0，但状态更新时会使用四舍五入为整数的值。这意味着在 500 毫秒内只有 11 帧动画。这对于故障着色器来说非常方便，因为较低的帧速率也会增强故障效果。要消除这个限制，我们只需要将步长类型从整数 (Int) 更改为浮点数 (Float)，并使用不进行四舍五入的可动画值即可。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">-</span><span class="k">var</span> <span class="py">step</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="p">+</span><span class="k">var</span> <span class="py">step</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableFloatStateOf</span><span class="p">(</span><span class="m">0f</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="n">Animatable</span><span class="p">(</span><span class="m">10f</span><span class="p">)</span>
+</span><span class='line'>       <span class="p">.</span><span class="n">animateTo</span><span class="p">(</span>
+</span><span class='line'>           <span class="n">targetValue</span> <span class="p">=</span> <span class="m">0f</span><span class="p">,</span>
+</span><span class='line'>           <span class="n">animationSpec</span> <span class="p">=</span> <span class="n">tween</span><span class="p">(</span>
+</span><span class='line'>               <span class="n">durationMillis</span> <span class="p">=</span> <span class="m">500</span><span class="p">,</span>
+</span><span class='line'>               <span class="n">easing</span> <span class="p">=</span> <span class="n">LinearEasing</span><span class="p">,</span>
+</span><span class='line'>           <span class="p">)</span>
+</span><span class='line'>       <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'><span class="p">-</span>          <span class="n">step</span> <span class="p">=</span> <span class="k">this</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">roundToInt</span><span class="p">()</span>
+</span><span class='line'><span class="p">+</span>          <span class="n">step</span> <span class="p">=</span> <span class="k">this</span><span class="p">.</span><span class="n">value</span>
+</span><span class='line'>       <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*J7Y6FenkNZAPglmKtyvNNA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:960/1*a7xb39t8tXR5APsArXk5aw.gif" alt="" /></p>
+
+<p>左侧为着色器，右侧为Compose，无帧数限制</p>
+
+<p>移除帧数限制后，性能提升已经非常明显。我们来做个压力测试。如果将动画应用于整个列表会发生什么？或者切片数量增加会发生什么？让我们拭目以待！</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*6PkVLOndrbCYVaV8ApJtzA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*DdiLlkVWT4BMY6sY2mVxVg.gif" alt="" /></p>
+
+<p>左侧着色器，右侧Compose，无帧数限制，应用于整个列表</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*Gv-vtC5MNtcQ4bmYB__4rA.gif" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:800/1*BcyPMHcnOc9HvPELpVoF9g.gif" alt="" /></p>
+
+<p>左侧着色器，右侧Compose，无帧数限制，应用于整个列表100 个切片</p>
+
+<h2>结论</h2>
+
+<p>Compose 非常适合用于复杂动画的原型设计，因为它可以使用熟悉的工具轻松实现。此外，值得一提的是，它适用于所有设备。</p>
+
+<p>另一方面，着色器提供了性能更高、更稳定的渲染。在这种情况下，使用的切片数量无关紧要——无论是 20 个还是 500 个，计算量都没有区别，而纯 Compose 版本对此非常敏感，并且会随着切片数量的增加而线性增长。</p>
+
+<p>此外，由于 AGSL 着色器只是在运行时临时编译的文本，因此理论上可以从后端更新这些动画。</p>
+
+<p>但是，还有一个很大的问题：着色器从 Android 13 开始可用，因此根据 Android Studio 操作系统的发行情况，大约一半的设备将能够支持这种方法。当然，这种情况会随着时间的推移而改变，我希望我们能够利用着色器充分发挥图形编程的强大功能！</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1232/1*Eh3q8fmkEx9BdA5FNR11CA.jpeg" alt="" /></p>
+
+<p>这是我的<a href="https://bento.me/mightyseal">bento</a>，如果你想联系我、聊天或讨论，欢迎来找我！</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-01-22'><span class='date'><span class='date-month'>Jan</span> <span class='date-day'>22</span><span class='date-suffix'>nd</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/01/12/node-types-in-jetpack-compose/" title="Previous Post: Jetpack Compose内部的不同节点类型">&laquo; Jetpack Compose内部的不同节点类型</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
