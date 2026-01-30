@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-01-22T12:41:39+00:00</updated>
+  <updated>2026-01-30T12:59:19+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,668 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack Compose重组稳定性分析器]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/01/30/compose-stability-analyzer/"/>
+    <updated>2026-01-30T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/01/30/compose-stability-analyzer</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Compose Stability Analyzer: Real-Time Stability Insights for Jetpack Compose」，原文链接<a href="https://medium.com/proandroiddev/compose-stability-analyzer-real-time-stability-insights-for-jetpack-compose-1399924a0a64">https://medium.com/proandroiddev/compose-stability-analyzer-real-time-stability-insights-for-jetpack-compose-1399924a0a64</a>，由Jaewoong Eum发布于2025年11月10日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/0*uLjBHnzVq5vM002Z" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>Jetpack Compose 以其声明式编程范式革新了 Android UI 开发，但这种简洁性背后却隐藏着复杂性：理解重组合行为。当一个可组合元素不必要地进行重组合时，就会造成性能损失，CPU 周期会浪费在重新渲染实际上并未改变的 UI 上。挑战不仅在于识别这些问题，更在于理解它们发生的<strong>原因</strong>。</p>
+
+<p>Compose 编译器一直在后台执行稳定性分析，确定哪些可组合元素在输入未发生变化时可以跳过重组合。但这种分析是在编译时静默进行的，开发者无法得知他们的可组合元素是否得到了优化。你可能编写出看似完美稳定的代码，但之后却发现类中一个 <code>var</code> 属性就足以导致整个代码不稳定，并波及整个 UI 树。</p>
+
+<p><a href="https://github.com/skydoves/compose-stability-analyzer">Compose Stability Analyzer</a> 将这种隐藏的分析揭示出来。它是一套全面的工具集，可在 IDE 中提供实时可视化反馈，通过注解进行运行时代码重组追踪，并在 CI 流水线中进行稳定性验证。无需等到性能问题在生产环境中出现，你就能在编码过程中获得即时反馈，使稳定性分析自然而然地融入你的开发工作流程。</p>
+
+<p>本文将探讨 Compose 稳定性分析器的工作原理，包括：IntelliJ 插件（为你的 IDE 提供可视化的稳定性指示器）、编译器插件（启用运行时重组跟踪）以及稳定性验证系统（防止回归问题影响生产环境）。</p>
+
+<h2>理解稳定性问题：为什么可组合函数会重组</h2>
+
+<p>在深入工具之前，值得了解 Compose 编译器实际上分析的内容。编译器会对每个可组合函数执行稳定性推断，回答两个问题：</p>
+
+<p><strong>1. 这个可组合函数可以跳过吗？</strong></p>
+
+<p>当编译器能够证明使用相同的输入重新组合该函数会产生相同的结果时，该可组合函数就是可跳过的。如果所有参数都是稳定的并且没有发生变化，可组合函数可以完全跳过重新组合，这是一个显著的性能优化。</p>
+
+<p><strong>2. 该可组合项是否可重启？</strong></p>
+
+<p>当一个可组合项可以独立重新组合而无需重新组合其父项时，该可组合项是可重启的。这使得重新组合更加细粒度。大多数可组合项都是可重启的，但带有某些修饰符的可组合项可能不是。</p>
+
+<p>这里的关键概念是<strong>参数稳定性</strong>。当 Compose 编译器能够可靠地检测到参数值是否发生变化时，该参数是稳定的。规则非常复杂，如果你想深入了解这些规则，可以参考稳定性研究<a href="https://github.com/skydoves/compose-stability-inference">Compose 稳定性推断</a>。</p>
+
+<h2>在 Android Studio 中进行可视化稳定性分析</h2>
+
+<p>Compose Stability Analyzer IntelliJ 插件可将稳定性分析直接集成到 Android Studio 和 IntelliJ IDEA 中，在你编写代码时提供四层可视化反馈。</p>
+
+<h3>安装和设置</h3>
+
+<p>安装插件非常简单：</p>
+
+<ol>
+<li><p>打开 <strong>Android Studio</strong> → <strong>设置</strong> → <strong>插件</strong> → <strong>应用市场</strong>。</p></li>
+<li><p>搜索“Compose Stability Analyzer”。</p></li>
+<li><p>点击 <strong>安装</strong> 并重启 IDE。</p></li>
+</ol>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*ukPWg_I6mOo9Drk0.png" alt="图1" /></p>
+
+<p>安装完成后，插件会立即开始分析你的代码。无需任何配置，它可与任何 Compose 项目开箱即用。</p>
+
+<h3>边栏图标：即时视觉反馈</h3>
+
+<p>最直观的功能是边栏图标，即出现在可组合函数左侧边栏的彩色圆点：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*r3BFUwBTNNRfa2Y7.png" alt="图2" /></p>
+
+<ul>
+<li><p><strong>绿点</strong>：此可组合函数可跳过。所有参数均稳定，编译器可以优化重新组合。</p></li>
+<li><p><strong>黄点</strong>：此可组合函数可重启，但不可跳过。它会在其父函数重新组合时重新组合。</p></li>
+<li><p><strong>红点</strong>：此可组合函数的参数不稳定，无法进行优化。</p></li>
+</ul>
+
+
+<p>这种即时视觉反馈是快速发现 Jetpack Compose 性能问题的最佳方法。只需快速浏览左侧边栏，即可了解哪些可组合函数需要关注。如果屏幕上布满红点，则说明需要进行一些优化工作。</p>
+
+<p>边栏图标的计算基于 Compose 编译器执行的相同稳定性分析。该插件会接入编译器的分析阶段并提取稳定性信息，然后在编辑器中以可视化的方式呈现。</p>
+
+<p>但请注意，目前<a href="https://developer.android.com/develop/ui/compose/performance/stability/strongskipping">强跳过模式</a>默认大多已启用，因此所有可组合函数默认都可以跳过。你可以在插件配置中启用或禁用强跳过模式检查（工具 > Compose 稳定性分析器），该功能自 0.5.0 版本起也默认启用。如果你希望更加关注稳定性问题，可以根据实际情况将其关闭。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*UGJB2Jx_JKIv3_l0xrMCoQ.png" alt="图3" /></p>
+
+<h3>悬停提示：了解原因</h3>
+
+<p>边栏图标告诉你<strong>哪里</strong>出了问题，而悬停提示则告诉你<strong>为什么</strong>。当你将鼠标悬停在可组合函数名称上时，会显示详细的提示信息：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*s_KwLNlhbLEsoBko.png" alt="图4" /></p>
+
+<p>提示信息显示：</p>
+
+<ul>
+<li><p>可组合函数是否可跳过和可重启</p></li>
+<li><p>稳定参数与不稳定参数的总数</p></li>
+<li><p>每个参数的详细稳定性信息</p></li>
+<li><p>接收器稳定性（针对扩展函数）</p></li>
+</ul>
+
+
+<p>这种细致的反馈对于调试至关重要。你无需猜测哪个参数导致了不稳定，而是可以准确地看到哪些参数存在问题。</p>
+
+<h3>内联参数提示：精细化可见性</h3>
+
+<p>工具提示会在鼠标悬停时提供详细信息，而内联参数提示则无需任何交互即可提供持续可见性：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*g1f1L5ZuagOSKrA8.png" alt="图5" /></p>
+
+<p>函数签名中每个参数类型旁边都会显示小徽章，指示该参数是稳定还是不稳定。这是最详细的反馈级别；每个参数的稳定性一目了然。</p>
+
+<p>对于参数众多的函数，这有助于你快速浏览并识别有问题的参数，而无需打开工具提示。颜色编码与稳定性状态相对应：</p>
+
+<ul>
+<li><p>绿色徽章：参数稳定</p></li>
+<li><p>红色徽章：参数不稳定</p></li>
+<li><p>黄色徽章：稳定性将在运行时决定（因此可能稳定也可能不稳定）</p></li>
+</ul>
+
+
+<h3>代码检查：自动建议</h3>
+
+<p>第四层反馈是主动代码检查。当插件检测到不稳定的组合体时，它可以：</p>
+
+<ol>
+<li><p><strong>用警告下划线突出显示问题</strong>。</p></li>
+<li><p><strong>通过 Alt+Enter 菜单提供快速修复建议</strong>。</p></li>
+<li><p><strong>提供添加注解（例如 <code>@TraceRecomposition</code>）</strong>以进行调试。</p></li>
+<li><p><strong>提供抑制选项</strong>（如果不稳定是故意的）。</p></li>
+</ol>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*o9_zJzFKaKfyLp_hiXCvoA.png" alt="图6" /></p>
+
+<p>插件在此开始主动出击。它不仅会指出问题，还会提供解决方案。在不稳定的组合体上按下 Alt+Enter，你可能会看到如下选项：</p>
+
+<ul>
+<li><p>添加 <code>@TraceRecomposition</code> 以监控重新组合。</p></li>
+<li><p>使用 <code>@Stable</code> 注解进行标记（请谨慎使用）。</p></li>
+<li><p>抑制此函数的稳定性警告。</p></li>
+</ul>
+
+
+<h3>稳定性浏览器：包级分析</h3>
+
+<p>除了单个函数分析之外，稳定性浏览器还提供整个代码库稳定性的概览：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*xPe6l50SxP3DQHEP.png" alt="图7" /></p>
+
+<p>启用方法：</p>
+
+<ol>
+<li><p>安装 Compose Stability Analyzer Gradle 插件（下一节将介绍）。</p></li>
+<li><p>转到“视图”→“工具窗口”→“Compose Stability Analyzer”。</p></li>
+<li><p>构建项目并单击刷新按钮。</p></li>
+</ol>
+
+
+<p>浏览器以树状视图显示包结构，每个可组合函数都带有其稳定性状态的注解。你可以快速深入查找整个代码库中不稳定的函数，从而轻松地确定优化工作的优先级。</p>
+
+<p>这在大型项目中尤其有用，因为手动检查每个可组合组件是不切实际的。该工具会为你的应用程序提供一份稳定性“成绩单”，显示哪些包存在最多的稳定性问题。</p>
+
+<h3>自定义配置</h3>
+
+<p>该插件具有高度可定制性。你可以调整颜色、启用或禁用特定的视觉指示器，并配置分析行为以满足你的偏好。</p>
+
+<p>前往“设置”→“工具”→“Compose Stability Analyzer”（组合稳定性分析器）访问配置选项：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*l2CoGtjreY7XNdyK.png" alt="图8" /></p>
+
+<p>你可以：</p>
+
+<ul>
+<li><p>更改边栏图标颜色以匹配你的 IDE 主题</p></li>
+<li><p>分别启用或禁用内联提示、警告和边栏图标</p></li>
+<li><p>配置强跳过模式分析</p></li>
+<li><p>添加忽略类型模式以从分析中排除某些类</p></li>
+<li><p>在测试源集中启用分析</p></li>
+<li><p>设置自定义稳定性配置文件</p></li>
+</ul>
+
+
+<p>这种灵活性确保插件能够自然地融入你现有的工作流程，无论你偏好最小的视觉干扰还是最大的信息密度。</p>
+
+<h2>Gradle 插件：运行时重组追踪</h2>
+
+<p>IntelliJ 插件提供编译时可见性，而 Gradle 插件则支持<strong>运行时分析</strong>，能够精确追踪可组合组件在运行中的重组时间和原因。这是通过 <code>@TraceRecomposition</code> 注解实现的，该注解是一个编译器插件，它会在可组合组件中添加日志代码。</p>
+
+<h3>安装和设置</h3>
+
+<p>将以下依赖项添加到 <code>libs.versions.toml</code> 文件中：</p>
+
+<pre><code class="toml">stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version = "0.5.0" }
+</code></pre>
+
+<p>接下来，将插件应用到根目录下的 <code>build.gradle.kts</code> 文件中，如下所示：</p>
+
+<pre><code class="kotlin">alias(libs.plugins.stability.analyzer)
+</code></pre>
+
+<p>完成！该插件会自动将编译器插件应用到项目中的所有 Kotlin 编译任务。基本用法无需额外配置。</p>
+
+<h3>Kotlin 版本兼容性</h3>
+
+<p>该插件与 Kotlin 编译器紧密耦合，因此版本一致性至关重要。截至撰写本文时，<strong>你至少应使用 Kotlin 2.2.21 版本</strong>。使用不匹配的版本可能会导致编译错误。请始终使用与你的稳定性分析器版本完全匹配的 Kotlin 版本。你可以参考 Kotlin 版本映射表（<a href="https://github.com/skydoves/compose-stability-analyzer?tab=readme-ov-file#kotlin-version-mapping%EF%BC%89%E8%8E%B7%E5%8F%96%E7%9B%B8%E5%85%B3%E4%BF%A1%E6%81%AF%E3%80%82">https://github.com/skydoves/compose-stability-analyzer?tab=readme-ov-file#kotlin-version-mapping%EF%BC%89%E8%8E%B7%E5%8F%96%E7%9B%B8%E5%85%B3%E4%BF%A1%E6%81%AF%E3%80%82</a></p>
+
+<h3>@TraceRecomposition 注解</h3>
+
+<p>安装插件后，你可以使用 <code>@TraceRecomposition</code> 注解任何可组合组件，以跟踪其重组行为：</p>
+
+<pre><code class="kotlin">@TraceRecomposition
+@Composable
+fun ProductCard(
+    product: Product,
+    onClick: () -&gt; Unit
+) {
+    Card(onClick = onClick) {
+        Text(product.name)
+        Text("$${product.price}")
+    }
+}
+</code></pre>
+
+<p>当此可组合组件重组时，你将在 Logcat 中看到详细的日志：</p>
+
+<pre><code class="bash">D/Recomposition: [Recomposition #1] ProductCard  
+D/Recomposition:   ├─ product: Product stable (Product@abc123)  
+D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)  
+D/Recomposition: [Recomposition #2] ProductCard  
+D/Recomposition:   ├─ product: Product changed (Product@abc123 → Product@def456)  
+D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)
+</code></pre>
+
+<p>日志显示：</p>
+
+<ul>
+<li><p><strong>重组次数</strong>：此实例已重组的次数</p></li>
+<li><p><strong>参数稳定性</strong>：每个参数是稳定还是不稳定</p></li>
+<li><p><strong>变更检测</strong>：哪些参数发生了更改，显示新旧值</p></li>
+<li><p><strong>身份跟踪</strong>：每个参数值的哈希码</p></li>
+</ul>
+
+
+<p>这些细粒度的信息对于调试至关重要。你可以准确地看到是哪个参数的更改触发了重组，从而帮助你了解应用程序的重组模式。</p>
+
+<h3>使用标签参数进行过滤</h3>
+
+<p>对于包含大量跟踪可组合组件的大型应用程序，日志可能会变得非常庞大。 <code>tag</code> 参数可以帮助你组织和筛选日志：</p>
+
+<pre><code class="kotlin">@TraceRecomposition(tag = "product-list")
+@Composable
+fun ProductCard(product: Product, onClick: () -&gt; Unit) {
+    // ...
+}
+
+@TraceRecomposition(tag = "user-profile")
+@Composable
+fun ProfileHeader(user: User) {
+    // ...
+}
+</code></pre>
+
+<p>现在日志包含以下标签：</p>
+
+<pre><code class="bash">D/Recomposition: [Recomposition #1] ProductCard (tag: product-list)
+D/Recomposition: [Recomposition #1] ProfileHeader (tag: user-profile)
+</code></pre>
+
+<p>你可以筛选 Logcat 以仅显示特定标签：</p>
+
+<ul>
+<li><p>按 <code>tag: product-list</code> 筛选，仅查看与产品相关的重组日志。</p></li>
+<li><p>按 <code>tag: user-profile</code> 筛选，仅查看与用户个人资料相关的重组日志。</p></li>
+</ul>
+
+
+<p>这在与自定义日志记录器（将在下文介绍）结合使用时尤其有用，因为你可能只想将某些标签发送到分析服务。</p>
+
+<h3>设置阈值以减少噪音</h3>
+
+<p>大多数可组合组件在初始设置期间会重新组合 1-2 次，这是预期行为，<strong>并非性能问题</strong>。<code>threshold</code> 参数可以过滤掉这些噪音：</p>
+
+<pre><code class="kotlin">@TraceRecomposition(threshold = 3)
+@Composable
+fun FrequentlyRecomposingScreen() {
+    // Logs will only appear after the 3rd recomposition
+}
+</code></pre>
+
+<p>这样可以将注意力集中在真正的问题上：用户交互期间不断重新组合的可组合组件，而不仅仅是初始设置。</p>
+
+<p>一个实际用例：设置一个较高的阈值，并在超过该阈值时发送分析事件：</p>
+
+<pre><code class="kotlin">@TraceRecomposition(tag = "checkout", threshold = 10)
+@Composable
+fun CheckoutScreen() {
+    // If this recomposes 10+ times, something is wrong
+}
+</code></pre>
+
+<p>然后在你的自定义日志记录器（参见下一节）中，你可以在超过阈值时发送 Firebase 事件，从而监控生产环境中的性能问题。</p>
+
+<h3>配置日志系统</h3>
+
+<p>默认情况下，<code>@TraceRecomposition</code> 不会记录任何日志，你需要在 <code>Application</code> 类中启用日志记录：</p>
+
+<pre><code class="kotlin">class MyApp : Application() {
+    override fun onCreate() {
+        super.onCreate()
+
+        // Enable only in debug builds
+        ComposeStabilityAnalyzer.setEnabled(BuildConfig.DEBUG)
+    }
+}
+</code></pre>
+
+<p>这一点非常重要，如果你没有自定义日志记录器，<strong>务必使用</strong> <code>**BuildConfig.DEBUG**</code> 包裹，以避免生产构建中潜在的安全问题。</p>
+
+<p><strong>自定义日志记录器：Logcat 之外的选择</strong> 默认日志记录器使用 Logcat，但你可以提供自定义实现，将日志发送到你想要的任何位置：</p>
+
+<pre><code class="kotlin">ComposeStabilityAnalyzer.setLogger(object : RecompositionLogger {  
+    override fun log(event: RecompositionEvent) {  
+        // Send to Firebase, Crashlytics, custom analytics, etc.  
+        if (event.recompositionCount &gt;= 10) {  
+            FirebaseAnalytics.getInstance(this).logEvent("excessive\_recomposition") {  
+                param("composable", event.composableName)  
+                param("count", event.recompositionCount)  
+                param("unstable\_params", event.unstableParameters.joinToString())  
+            }  
+        }  
+    }  
+})
+</code></pre>
+
+<p>因此，你甚至可以根据调试模式或发布模式设置不同的日志记录器。<code>RecompositionEvent</code> 包含：</p>
+
+<ul>
+<li><p><code>composableName</code>：函数名称。</p></li>
+<li><p><code>tag</code>：来自 <code>@TraceRecomposition</code> 的标签。</p></li>
+<li><p><code>recompositionCount</code>：重新组合的次数。</p></li>
+<li><p><code>parameterChanges</code>：包含稳定性信息的参数变更列表。</p></li>
+<li><p><code>unstableParameters</code>：不稳定参数名称列表。</p></li>
+</ul>
+
+
+<p>这支持强大的监控模式。你可以：</p>
+
+<ul>
+<li><p>针对过度重组的组合对象发送分析事件</p></li>
+<li><p>在生产环境中跟踪性能指标（并采取适当的隐私保护措施）</p></li>
+<li><p>构建显示重组模式的自定义仪表板</p></li>
+<li><p>在测试环境中出现性能下降时发出警报</p></li>
+</ul>
+
+
+<p>以下是一个使用标签过滤日志内容的更贴近实际的示例：</p>
+
+<pre><code class="kotlin">val tagsToLog = setOf("checkout", "product-list", "search")
+ComposeStabilityAnalyzer.setLogger(object : RecompositionLogger {
+    override fun log(event: RecompositionEvent) {
+        if (BuildConfig.DEBUG) {
+            // In debug, log everything
+            Log.d("Recomposition", formatEvent(event))
+        } else {
+            // In release, only log tagged composables that exceed threshold
+            if (event.tag in tagsToLog &amp;&amp; event.recompositionCount &gt;= 5) {
+                // Send to analytics
+                FirebaseAnalytics.getInstance(this).logEvent("recomposition_issue", ...)
+            }
+        }
+    }
+})
+</code></pre>
+
+<h3>理解日志</h3>
+
+<p>让我们一起来了解如何解读日志。请看以下示例：</p>
+
+<pre><code class="bash">D/Recomposition: [Recomposition #1] UserCard  
+D/Recomposition:   ├─ user: User stable (User@abc123)  
+D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)
+</code></pre>
+
+<p><strong>这意味着：</strong></p>
+
+<ul>
+<li><p>这是此 <code>UserCard</code> 实例的首次重组。</p></li>
+<li><p>两个参数都稳定。</p></li>
+<li><p>这是初始重组的预期行为。</p></li>
+</ul>
+
+
+<pre><code class="bash">D/Recomposition: [Recomposition #2] UserCard  
+D/Recomposition:   ├─ user: User changed (User@abc123 → User@def456)  
+D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)
+</code></pre>
+
+<p><strong>这意味着：</strong></p>
+
+<ul>
+<li><p>第二次重组。</p></li>
+<li><p><code>user</code> 参数已更改（新实例）。</p></li>
+<li><p><code>onClick</code> 保持不变（相同的 lambda 实例）。</p></li>
+<li><p>这是正常现象，参数已更改，因此需要进行重组。</p></li>
+</ul>
+
+
+<pre><code class="bash">D/Recomposition: [Recomposition #3] UserCard (tag: user-profile)  
+D/Recomposition:   ├─ user: MutableUser unstable (MutableUser@xyz789)  
+D/Recomposition:   └─ Unstable parameters: [user]
+</code></pre>
+
+<p><strong>这意味着：</strong></p>
+
+<ul>
+<li><p>第三次重组。</p></li>
+<li><p><code>user</code> 参数<strong>不稳定</strong>（可能具有 <code>var</code> 属性）。</p></li>
+<li><p>即使 <code>user</code> 没有更改，此可组合对象也会在每次父级重组时重新组合。</p></li>
+<li><p><strong>需要采取的措施</strong>：将 <code>MutableUser</code> 类修复为不可变。</p></li>
+</ul>
+
+
+<h2>稳定性验证：防止 CI 中的性能退化</h2>
+
+<p>Compose 稳定性分析器最强大的功能并非可视化反馈或运行时跟踪，而是<strong>防止稳定性退化影响生产环境</strong>。稳定性验证系统的作用类似于 git diff，用于检查可组合组件的稳定性，如果稳定性下降，则 CI 构建失败。</p>
+
+<h3>问题：静默的性能退化</h3>
+
+<p>想象一下这样的场景：你花了数周时间优化你的应用。每个可组合组件都稳定、可跳过且运行速度快。然后，一位同事无意中修改了一个数据类：</p>
+
+<pre><code class="kotlin">// Before (stable)
+data class User(val name: String, val age: Int)
+
+// After (unstable)
+data class User(var name: String, var age: Int)
+</code></pre>
+
+<p>这一简单的更改会波及整个 UI 树。数十个原本可跳过的可组合组件变得不可跳过。性能退化了，但代码审查却未能发现，也没有任何明显的迹象表明出了问题。</p>
+
+<p>稳定性验证可以防止这种情况发生。它会跟踪你的可组合组件的稳定性随时间的变化，并在稳定性下降时自动构建失败，强制在合并之前解决问题。</p>
+
+<h3>工作原理：稳定性快照</h3>
+
+<p>验证系统通过两个 Gradle 任务运行：</p>
+
+<ul>
+<li><p><code>**stabilityDump**</code>：创建一个包含所有可组合组件稳定性状态的 <code>.stability</code> 文件。</p></li>
+<li><p><code>**stabilityCheck**</code>：将当前代码与基线进行比较，如果稳定性下降则构建失败。</p></li>
+</ul>
+
+
+<p>可以这样理解：</p>
+
+<ul>
+<li><p><code>stabilityDump</code> = &ldquo;保存当前状态&rdquo;</p></li>
+<li><p><code>stabilityCheck</code> = &ldquo;自上次保存以来是否有任何更改？&rdquo;</p></li>
+</ul>
+
+
+<h3>步骤 1：创建基线</h3>
+
+<p>编译项目后，运行：</p>
+
+<pre><code class="bash">./gradlew :app:compileDebugKotlin  
+./gradlew :app:stabilityDump
+</code></pre>
+
+<p>这将生成 <code>app/stability/app.stability</code> 文件：</p>
+
+<pre><code class="kotlin">@Composable  
+public fun com.example.UserCard(user: com.example.User): kotlin.Unit  
+  skippable: true  
+  restartable: true  
+  params:  
+    - user: STABLE (immutable data class)  
+
+@Composable  
+public fun com.example.ProductList(items: kotlin.collections.List&lt;com.example.Product\&gt;): kotlin.Unit  
+  skippable: true  
+  restartable: true  
+  params:  
+    - items: STABLE (immutable collection with stable elements)
+</code></pre>
+
+<p>此文件易于阅读，并准确显示了编译器对每个可组合组件的判断结果。它是应用程序稳定性状态的完整快照。</p>
+
+<p><strong>将此文件提交到 Git：</strong></p>
+
+<pre><code class="bash">git add app/stability/app.stability  
+git commit -m "Add stability baseline"  
+git push
+</code></pre>
+
+<p>现在，团队中的每个人都拥有相同的基线。</p>
+
+<h3>步骤 2：检查回归问题</h3>
+
+<p>在你的 CI 流水线中运行：</p>
+
+<pre><code class="bash">./gradlew :app:compileDebugKotlin  
+./gradlew :app:stabilityCheck
+</code></pre>
+
+<p>如果没有任何变化，任务成功：</p>
+
+<pre><code class="bash">✅ Stability check passed.
+</code></pre>
+
+<p>如果稳定性出现回归，任务失败：</p>
+
+<pre><code class="bash">❌ Stability check failed!  
+
+The following composables have changed stability:  
+
+~ com.example.UserCard(user): parameter 'user' changed from STABLE to UNSTABLE  
+
+If these changes are intentional, run './gradlew stabilityDump' to update the baseline.
+</code></pre>
+
+<p>构建失败，在问题修复或明确接受回归之前，拉取请求将无法合并。</p>
+
+<h3>检测到的变更类型</h3>
+
+<p>验证器会检测到四种类型的变更：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1374/1*IwkocOj8s1No8lIphL1JIQ.png" alt="图9" /></p>
+
+<p>这种全面的跟踪机制确保<strong>任何</strong>稳定性变更都清晰可见，并需要进行相应的决策。</p>
+
+<h3>CI/CD 集成</h3>
+
+<p>将稳定性验证添加到你的 GitHub Actions 工作流：</p>
+
+<pre><code class="bash">name: Android CI  
+
+on: [push, pull_request]  
+jobs:  
+  build:  
+    runs-on: ubuntu-latest  
+    steps:  
+      - uses: actions/checkout@v3  
+      - name: Set up JDK 17  
+        uses: actions/setup-java@v3  
+        with:  
+          java-version: '17'  
+          distribution: 'temurin'  
+      - name: Build project  
+        run: ./gradlew :app:compileDebugKotlin  
+  stability_check:  
+    name: Compose Stability Check  
+    runs-on: ubuntu-latest  
+    needs: build  
+    steps:  
+      - name: Check out code  
+        uses: actions/checkout@v5.0.0  
+      - name: Set up JDK  
+        uses: actions/setup-java@v5.0.0  
+        with:  
+          distribution: 'zulu'  
+          java-version: 21  
+      - name: Run stability check  
+        run: ./gradlew stabilityCheck
+</code></pre>
+
+<p>现在，每个拉取请求都会自动进行检查。如果稳定性下降，则拉取请求将无法合并。</p>
+
+<h3>配置选项</h3>
+
+<p>你可以自定义要跟踪的内容：</p>
+
+<pre><code class="kotlin">// In your build.gradle.kts
+composeStabilityAnalyzer {
+    stabilityValidation {
+        enabled.set(true)
+        outputDir.set(layout.projectDirectory.dir("stability"))
+        includeTests.set(false) // Exclude test code
+
+        // Ignore specific packages
+        ignoredPackages.set(listOf("com.example.internal"))
+        // Ignore specific classes (e.g., previews)
+        ignoredClasses.set(listOf("PreviewComposables"))
+        // Ignore entire modules
+        ignoredProjects.set(listOf("benchmarks", "examples"))
+    }
+}
+</code></pre>
+
+<p>这对于排除不需要稳定性跟踪的代码非常有用，例如预览组合或调试屏幕。</p>
+
+<h3>排除特定组合</h3>
+
+<p>使用 <code>@IgnoreStabilityReport</code> 从验证中排除单个组合：</p>
+
+<pre><code class="kotlin">@IgnoreStabilityReport
+@Preview
+@Composable
+fun UserCardPreview() {
+    UserCard(user = User("John", 30))
+}
+</code></pre>
+
+<p>预览组合不会出现在生产版本中，因此它们的稳定性无关紧要。排除它们可以减少稳定性报告中的噪音。</p>
+
+<h3>多模块项目</h3>
+
+<p>对于包含多个模块的项目，每个模块都会有自己的 <code>.stability</code> 文件：</p>
+
+<pre><code class="bash">project/  
+├── app/stability/app.stability  
+├── feature-auth/stability/feature-auth.stability  
+└── feature-profile/stability/feature-profile.stability
+</code></pre>
+
+<p>在根目录运行 <code>stabilityCheck</code> 来检查所有模块：</p>
+
+<pre><code class="bash">./gradlew stabilityCheck
+</code></pre>
+
+<p>或者检查单个模块：</p>
+
+<pre><code class="bash">./gradlew :feature-auth:stabilityCheck
+</code></pre>
+
+<h3>接受有意为之的回归</h3>
+
+<p>有时稳定性回归是有意为之的，例如你正在重构代码并暂时接受较低的稳定性。在这种情况下，请更新基线：</p>
+
+<pre><code class="bash">./gradlew :app:stabilityDump  
+git add app/stability/app.stability  
+git commit -m "Accept stability regression for UserCard (refactoring in progress)"  
+git push
+</code></pre>
+
+<p>这会在 Git 历史记录中创建一个<strong>已记录的决策</strong>。回归不再是默默进行的，而是明确且可跟踪的。</p>
+
+<h2>性能考量和最佳实践</h2>
+
+<p>虽然这些工具功能强大，但仍有一些性能特性和最佳实践需要注意。有人问我是否需要让<em>每个</em>类型都稳定，答案绝对是“不需要”。</p>
+
+<p>由于现在有了强跳过模式，每个可组合函数都可以跳过，这本身就能优化稳定性。即使这个插件可能会提示“不稳定”或“运行时稳定性”，但你实际上并不需要为每个可组合函数都进行修复。我们来看一个简单的例子。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*4ZtAbwb8_5tRAR112kL1HA.png" alt="图10" /></p>
+
+<p>如果你查看 compose-material3 库中的 <code>Icon</code> 可组合函数，这个插件会提示它不稳定，因为它包含运行时参数。但是，<code>painter</code> 参数通常是通过 <code>painterResource</code> 函数初始化的，如下所示：</p>
+
+<pre><code class="kotlin">val painter = painterResource(R.drawable.)
+Icon(painter = painter, contentDescription = null)
+</code></pre>
+
+<p>如果你查看 <code>painterResource</code> 的内部逻辑，你会发现它本质上是稳定的。它内部使用 <code>remember</code> 将值缓存到内存中，所以你可以把它看作是一个小小的权衡：<em>“我会用一点内存来存储这个不稳定的实例，这样我就不必触发不必要的重新组合。”</em></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*sRvsZMkusaZuOMjGskhz0A.png" alt="图11" /></p>
+
+<p>关于不可变集合还有一个常见的误解——认为仅仅使用 <code>ImmutableList</code> 而不是普通的 <code>List</code> 就能提升性能。 <strong>并非总是如此。</strong></p>
+
+<p>不妨这样想：如果你有一个包含 1000 个大型对象的列表，然后你将其转换为不可变列表，那么你的可组合组件就变得可以忽略了。但是，每次重新组合时，Compose 都会对列表中的每个元素运行 <code>equals()</code> 函数，以检查新实例是否与之前的实例匹配。在某些情况下，这实际上会比重新渲染一个只显示其中五个元素的轻量级 UI 更<strong>影响性能</strong>。</p>
+
+<p>因此，<strong>稳定性会根据具体情况产生截然不同的影响</strong>，试图让整个 UI 保持稳定通常是不必要的，也是徒劳的。我希望这个插件不会加重你对稳定性的担忧，而是能够帮助你更有效地调试实际的性能问题，并做出更明智、更数据驱动的决策，而无需过度考虑稳定性。</p>
+
+<h2>结论</h2>
+
+<p>在本文中，我们探索了 Compose 稳定性分析器 (Compose Stability Analyzer) (<a href="https://github.com/skydoves/compose-stability-analyzer">https://github.com/skydoves/compose-stability-analyzer</a>)，了解了它如何通过三个互补的工具将 Compose 隐藏的稳定性分析可视化：IntelliJ 插件用于在开发过程中提供可视化反馈，Gradle 插件用于运行时重组追踪，以及稳定性验证系统用于防止持续集成 (CI) 中的回归。</p>
+
+<p>IntelliJ 插件将稳定性从一个不可见的编译时概念转化为可感知的事物，通过边栏图标、工具提示和内联提示，使稳定性问题一目了然。<code>@TraceRecomposition</code> 注解弥合了编译时分析和运行时行为之间的鸿沟，让你可以准确地了解可组合组件何时以及为何重新组合。稳定性验证系统则起到安全网的作用，确保你精心设计的优化不会随着代码库的演进而悄然失效。</p>
+
+<p>这些工具共同作用，使稳定性分析成为你开发工作流程中自然而然的一部分。你无需等待性能问题显现，即可在编码过程中立即发现它们。你无需猜测哪个参数导致了重新组合——日志会准确地告诉你哪些参数发生了变化。你也无需手动审查每个 PR 是否存在稳定性回归，CI 流水线会自动完成这项工作。</p>
+
+<p>理解稳定性是编写高性能 Compose 应用程序的基础。借助 Compose 稳定性分析器，这种理解变得轻松、直观、即时且有效。</p>
+
+<p>祝你编码愉快！</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Compose GPU加速特效：带缩放的故障效果]]></title>
@@ -941,1001 +1603,6 @@ funmyTest() = runTest(testDispatcher) {
 <h2>尽情创作</h2>
 
 <p>我们持续投入资源开发 Jetpack Compose，为你提供创建美观、丰富的用户界面所需的 API 和工具。我们重视你的反馈，请在我们的<a href="https://issuetracker.google.com/issues/new?component=612128">问题跟踪器</a>中分享你对这些更改的反馈，或你希望看到的后续功能。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[借助RemoteCompose开发动态化页面]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/12/11/intro-to-remotecompose/"/>
-    <updated>2025-12-11T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/12/11/intro-to-remotecompose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「RemoteCompose: Another Paradigm for Server-Driven UI in Jetpack Compose」，原文链接<a href="https://proandroiddev.com/remotecompose-another-paradigm-for-server-driven-ui-in-jetpack-compose-92186619ba8f">https://proandroiddev.com/remotecompose-another-paradigm-for-server-driven-ui-in-jetpack-compose-92186619ba8f</a>，由Jaewoong Eum发布于2025年11月29日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:2000/0*o9-kxXHKgJcB-Bvh" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>构建动态用户界面一直是 Android 开发中的一项根本性挑战。传统方法要求每次 UI 需要更改时都必须重新编译和重新部署整个应用程序，这给 A/B 测试、功能开关和实时内容更新带来了极大的不便。</p>
-
-<p>试想一下，你的营销团队想要测试一个新的结账按钮设计：在传统模式下，这种简单的更改需要开发人员花费时间、进行代码审查、QA 测试、提交到应用商店，以及等待数周才能获得用户采纳。RemoteCompose 的出现为解决这一问题提供了一个强大的方案，它使开发人员能够在运行时创建、传输和渲染 Jetpack Compose UI 布局，而无需重新编译。</p>
-
-<p>本文将探讨 RemoteCompose 的概念，理解其核心架构，并探索它如何为 Jetpack Compose 的动态页面设计带来诸多优势。本文并非库的使用教程，而是着重探讨它所代表的 Android UI 开发范式转变。</p>
-
-<h3><strong>集成与依赖</strong></h3>
-
-<p>在深入探讨概念之前，我们先来了解如何将 RemoteCompose 添加到你的项目中。对于运行在 JVM 上且不依赖 Android 的服务器和后端：</p>
-
-<pre><code class="groovy">// settings.gradle
-repositories {
-  maven {
-    url = uri("https://androidx.dev/snapshots/builds/14511716/artifacts/repository")
-  }
-}
-
-// JVM server - no Android dependencies
-dependencies {
-    implementation("androidx.compose.remote:remote-core:1.0.0-SNAPSHOT")
-    implementation("androidx.compose.remote:remote-creation-compose:1.0.0-SNAPSHOT")
-}
-
-// Compose-based app
-dependencies {
-    implementation("androidx.compose.remote:remote-player-compose:1.0.0-SNAPSHOT")
-    implementation("androidx.compose.remote:remote-tooling-preview:1.0.0-SNAPSHOT")
-}
-
-// View-based app
-dependencies {
-    implementation("androidx.compose.remote:remote-player-view:1.0.0-SNAPSHOT")
-}
-</code></pre>
-
-<p>请注意，RemoteCompose 仍在由 AndroidX 团队开发中，尚未正式发布；它仅可通过 AndroidX 快照 Maven 仓库获取。</p>
-
-<h3>理解核心抽象</h3>
-
-<p>RemoteCompose 的核心是一个框架，它支持 Compose UI 组件的远程渲染。它与传统 UI 方法的区别在于它遵循两个基本原则：声明式文档序列化和平台无关渲染。这些不仅仅是技术特性；这些架构决策从根本上改变了你对 UI 部署的思考方式。</p>
-
-<p><strong>声明式文档序列化</strong></p>
-
-<p>声明式文档序列化意味着你可以将任何 Jetpack Compose 布局捕获为紧凑的序列化格式。你可以把它想象成对 UI 进行“截图”，只不过你捕获的不是像素，而是实际的绘图指令。这个捕获的文档包含了重建 UI 所需的一切：形状、颜色、文本、图像、动画，甚至还有交互式触摸区域。</p>
-
-<pre><code class="kotlin">// On the server or creation side
-val document = captureRemoteDocument(
-    context = context,
-    creationDisplayInfo = displayInfo,
-    profile = profile
-) {
-    RemoteColumn(modifier = RemoteModifier.fillMaxSize()) {
-        RemoteText("Dynamic Content")
-        RemoteButton(onClick = { /* action */ }) {
-            RemoteText("Click Me")
-        }
-    }
-}
-</code></pre>
-
-<p>结果如何？一个可以通过网络发送的字节数组。这种方法的关键在于，创建端编写的是标准的 Compose 代码。无需学习新的 DSL，无需维护 JSON 模式，也无需掌握模板语言。只要可以用 Compose 编写，就可以用 RemoteCompose 捕获。</p>
-
-<p>你可以捕获一个普通的 Compose 代码，它会捕获绘制调用（这些调用非常静态）。更常见的情况是，你应该拥有镜像 Compose 的 Remote* 专用 API，这些 API 专为序列化和远程播放而设计，例如 <code>RemoteColumn</code>、<code>RemoteButton</code>、<code>RemoteText</code> 等。</p>
-
-<p><strong>平台无关渲染</strong></p>
-
-<p>平台无关渲染意味着捕获的文档可以通过网络传输，并在任何 Android 设备上渲染，而无需原始的 Compose 代码。客户端设备不需要你的可组合函数、视图模型或业务逻辑——它只需要文档字节和一个播放器。</p>
-
-<pre><code class="kotlin">// On the client or player side
-RemoteDocumentPlayer(
-    document = remoteDocument.document,
-    documentWidth = windowInfo.containerSize.width,
-    documentHeight = windowInfo.containerSize.height,
-    onAction = { actionId, value -&gt;
-        // Handle user interactions
-    }
-)
-</code></pre>
-
-<p>这些特性并非仅仅是为了方便；它们是架构约束，能够真正实现 UI 定义与部署的解耦。文档格式不仅包含静态布局，还包含状态、动画和交互，从而完整地呈现了 UI 体验。</p>
-
-<p><strong>​​方法比较：为什么不选择 JSON 或 WebView？</strong></p>
-
-<p>在深入探讨之前，我们有必要了解 RemoteCompose 为什么选择这种方法而不是其他方案。</p>
-
-<p>基于 JSON 的服务器端 UI，例如 Airbnb 的 Epoxy 或 Shopify 的方法，需要定义一个映射到原生组件的模式。这种方法适用于结构化内容，但难以处理复杂的动画和过渡效果、自定义绘图和图形、带有内联样式的富文本以及渐变和阴影等视觉效果。</p>
-
-<p>WebView 提供了全面的灵活性，但由于其独立的渲染过程，会带来性能开销；此外，Web 样式与原生设计在外观和体验上存在不一致；每个 WebView 都会占用大量资源，造成内存压力；触摸处理也较为复杂，容易出现手势冲突。</p>
-
-<p>RemoteCompose 另辟蹊径：捕获 Compose 实际执行的绘制操作。这意味着，你可以使用 Compose 构建的任何 UI，包括自定义 Canvas 绘制、复杂动画和 Material Design 组件，都可以被捕获并以原生性能远程重放。</p>
-
-<h3><strong>基于文档的架构：创建与回放</strong></h3>
-
-<p>RemoteCompose 的架构围绕着两个阶段的清晰分离而构建：文档创建和文档回放。理解这种分离是理解框架强大功能的关键。</p>
-
-<p><strong>文档创建：将 UI 作为数据捕获</strong></p>
-
-<p>创建阶段将 Compose UI 代码转换为序列化文档。这是通过捕获机制实现的，该机制会在 Canvas 层（Android 渲染管线的最底层）拦截绘制操作。</p>
-
-<pre><code class="kotlin">@Composable Content
-        ↓
-RemoteComposeCreationState (Tracks state and modifiers)
-        ↓
-CaptureComposeView (Virtual Display - no actual screen needed)
-        ↓
-RecordingCanvas (Intercepts every draw call)
-        ↓
-Operations (93+ operation types covering all drawing primitives)
-        ↓
-RemoteComposeBuffer (Efficient binary serialization)
-        ↓
-ByteArray (Network-ready, typically 10-100KB for complex UIs)
-</code></pre>
-
-<p>创建端提供了一个完整的 Compose 集成层。你只需编写标准的 <code>@Composable</code> 函数，框架即可捕获所有内容：布局层级、修饰符、文本样式、图像、动画，甚至触摸处理程序。</p>
-
-<p>其独特之处在于，捕获的文档是自包含的。它包含形状、颜色、渐变和阴影等视觉元素，以及带有字符串、字体、大小和样式的文本。图像可以嵌入为位图或 URL 以实现延迟加载。布局信息涵盖大小、位置、内边距和对齐方式。交互定义了触摸区域、点击处理程序和命名操作。状态变量可以在运行时更新，动画则通过基于时间的运动表达式来表达。</p>
-
-<p>接收方无需访问你的代码库，只需访问文档字节即可。这与其他服务器驱动的 UI 方法有着本质区别，在其他方法中，客户端需要理解架构或拥有预构建的组件。</p>
-
-<p><strong>文档播放：无需编译即可渲染</strong></p>
-
-<p>播放阶段接收序列化的文档并将其渲染到屏幕上。播放器会遍历一系列操作，对 Canvas 执行每个操作。其概念类似于视频播放器解码帧的方式，只不过我们解码的是绘图指令而不是像素。</p>
-
-<p>RemoteCompose 提供两种渲染后端以满足不同的架构需求。基于 Compose 的播放器推荐用于现代应用程序：</p>
-
-<pre><code class="kotlin">@Composable
-fun DynamicScreen(document: CoreDocument) {
-    RemoteDocumentPlayer(
-        document = document,
-        documentWidth = screenWidth,
-        documentHeight = screenHeight,
-        modifier = Modifier.fillMaxSize(),
-        onNamedAction = { name, value, stateUpdater -&gt;
-            // Handle named actions from the document
-            when (name) {
-                "addToCart" -&gt; cartManager.addItem(value)
-                "navigate" -&gt; navController.navigate(value)
-                "trackEvent" -&gt; analytics.logEvent(value)
-            }
-        },
-        bitmapLoader = rememberBitmapLoader()  // For lazy image loading
-    )
-}
-</code></pre>
-
-<p>基于 Compose 的播放器可以自然地与你现有的 Compose UI 集成。它是一个可组合的函数，你可以将其放置在组合层级结构中的任何位置，并像其他可组合函数一样对其应用修饰符和动画。</p>
-
-<p>为了与现有的 View 层级结构兼容，我们还提供了一个基于 View 的播放器：</p>
-
-<pre><code class="kotlin">class LegacyActivity : AppCompatActivity() {
-    private lateinit var player: RemoteComposePlayer
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        player = RemoteComposePlayer(this)
-        setContentView(player)
-
-        // Load document from network
-        lifecycleScope.launch {
-            val bytes = api.fetchDocument("home-screen")
-            player.setDocument(bytes)
-        }
-
-        player.onNamedAction { name, value, stateUpdater -&gt;
-            // Handle actions
-        }
-    }
-}
-</code></pre>
-
-<p>两种播放器提供相同的渲染保真度；选择哪种取决于你的应用程序架构。如果你完全使用 Compose，请使用可组合播放器。如果你是从 Views 迁移过来的，或者将其嵌入到 View 层级结构中，请使用基于 View 的播放器。</p>
-
-<h3><strong>操作模型：一套全面的绘图词汇表</strong></h3>
-
-<p>RemoteCompose 的优势在于其全面的操作模型。该框架定义了 93 种以上的不同操作，涵盖了 UI 渲染的方方面面。这并非随意设定的数字，而是表达任何 Canvas 绘图操作所需的完整词汇表。</p>
-
-<p><strong>操作的重要性</strong></p>
-
-<p>传统的服务器驱动型 UI 发送的是高级组件描述：“渲染一个带有文本‘提交’的按钮”。客户端必须解析这些描述并将其映射到原生组件。这导致服务器和客户端之间紧密耦合；双方必须就“按钮”的定义及其行为达成一致。</p>
-
-<p>RemoteCompose 则在更底层运行：它不发送“渲染一个按钮”这样的描述，而是发送实际的绘图指令：“在这些坐标处绘制一个带有这种颜色的圆角矩形，然后在这个位置绘制带有这种字体的文本‘提交’”。客户端无需了解“按钮”的定义；它只需执行绘图操作即可。</p>
-
-<p>这种底层方法意义深远。由于服务器和客户端无需就组件定义达成一致，因此无需进行模式同步。由于 Compose 中所有可能的视觉效果均可捕获，因此能够完整保留视觉保真度。由于新的视觉设计可在旧客户端上运行（它们只是不同的绘制操作），因此内置了向前兼容性。自定义组件无需注册即可自动运行。</p>
-
-<p><strong>绘制操作</strong></p>
-
-<p>绘制操作捕获 Canvas 绘制调用，这是 2D 图形的基本图元。这些图元包括：用于按钮、卡片和背景的矩形的 <code>DRAW_RECT</code>；用于带有圆角的 Material 曲面的 <code>DRAW_ROUND_RECT</code>；用于头像和指示器的 <code>DRAW_CIRCLE</code>；用于渲染带有完整样式的文本的 <code>DRAW_TEXT</code>；用于沿曲线绘制文本的 <code>DRAW_TEXT_ON_PATH</code>；以及用于图像的 <code>DRAW_BITMAP</code>。 <code>DRAW_TWEEN_PATH</code> 用于动画路径变形，等等。</p>
-
-<p>每个操作都包含执行它所需的所有信息：坐标、颜色、绘制样式以及对文档中其他位置存储的数据（例如文本字符串或位图）的引用。</p>
-
-<p><strong>布局操作</strong></p>
-
-<p>布局操作定义组件层次结构和空间关系。<code>Component</code> 操作声明一个布局组件，而 <code>Container</code> 操作创建一个类似于 <code>Column</code> 或 <code>Row</code> 的容器，<code>ContainerEnd</code> 操作则关闭它。<code>LoopOperation</code> 操作用于循环列表内容。<code>Modifier</code> 包括用于背景颜色和可绘制对象的 <code>BackgroundModifier</code>、用于边框样式的 <code>BorderModifier</code>、用于内部间距的 <code>PaddingModifier</code> 以及用于触摸处理的 <code>ClickModifier</code>。</p>
-
-<p>容器模型采用推送/弹出机制。当播放器遇到 <code>Container</code> 操作时，它会创建一个新的布局上下文。所有后续操作都将在该上下文中执行，直到 <code>ContainerEnd</code> 操作将其弹出。这与 Compose 的布局系统的工作方式类似。</p>
-
-<p><strong>状态和表达式操作</strong></p>
-
-<p>状态操作支持运行时可更改的动态值。<code>NamedVariable</code> 声明一个命名的状态变量。<code>ColorAttribute</code> 提供可自定义主题的颜色。<code>TimeAttribute</code> 引用动画时间。<code>FloatExpression</code> 和 <code>IntegerExpression</code> 每帧计算数学表达式。<code>ConditionalOp</code> 支持基于状态的条件渲染。</p>
-
-<p>表达式系统功能强大。你可以嵌入公式，而不是静态值：</p>
-
-<pre><code class="kotlin">// These expressions are evaluated every frame
-val opacity = FloatExpression("sin(time * 2) * 0.5 + 0.5")  // Pulsing effect
-val rotation = FloatExpression("time * 90 % 360")
-
-// Continuous rotation
-val position = FloatExpression("lerp(0, 100, time / 2)")
-
-// Linear interpolation
-</code></pre>
-
-<p>这使得完全在文档中定义丰富的动画成为可能——无需客户端动画代码。
-​​
-<strong>交互操作</strong></p>
-
-<p>交互操作处理用户输入。<code>TouchOperation</code> 定义触摸区域，而 <code>CLICK_AREA</code> 处理简单的点击操作。<code>ParticlesCreate</code> 初始化粒子系统，<code>ParticlesLoop</code> 驱动粒子动画。</p>
-
-<p>触摸操作注册带有命名操作的矩形区域。当用户点击某个区域时，播放器会触发相应的操作，宿主应用程序会通过回调函数来处理这些操作。这种设计既保持了文档格式的简洁性，又实现了丰富的交互功能。</p>
-
-<h3>动态屏幕设计的优势</h3>
-
-<p>现在，让我们通过常见应用场景中的真实案例，来探讨 RemoteCompose 为动态屏幕设计带来的切实优势。</p>
-
-<p><strong>服务器驱动 UI，性能毫不妥协</strong></p>
-
-<p>传统的服务器驱动 UI 方法需要权衡取舍。基于 JSON 的布局表达能力有限，无法实现复杂的动画或自定义绘制。WebView 会带来性能开销、外观不一致以及更高的内存占用。自定义 DSL 则会增加维护负担、学习曲线，并且对预定义组件有所限制。</p>
-
-<p>RemoteCompose 提供了第三条路径：从服务器定义的布局进行原生 Compose 渲染。你既能充分利用 Compose 渲染引擎的强大功能，又能享受服务器驱动内容的灵活性。</p>
-
-<p>例如，一个电商应用需要频繁更新产品卡片、添加新的徽章样式、促销叠加层或季节性主题。借助 RemoteCompose，服务器端允许营销团队无需发布应用即可更新卡片设计：</p>
-
-<pre><code class="kotlin">// Server-side: We can update card designs without app release
-@Composable
-fun ProductCard(product: Product) {
-    Card(
-        modifier = RemoteModifier
-            .fillMaxWidth()
-            .clickable { namedAction("viewProduct", product.id) }
-    ) {
-        Box {
-            // Product image with gradient overlay
-            AsyncImage(
-                url = product.imageUrl,
-                modifier = RemoteModifier.fillMaxWidth().aspectRatio(1.5f)
-            )
-
-            // Promotional badge - can be A/B tested server-side
-            if (product.hasPromotion) {
-                PromotionalBadge(
-                    text = product.promotionText,
-                    modifier = RemoteModifier.align(Alignment.TopEnd)
-                )
-            }
-
-            // Price with sale styling
-            PriceTag(
-                originalPrice = product.originalPrice,
-                salePrice = product.salePrice,
-                modifier = RemoteModifier.align(Alignment.BottomStart)
-            )
-        }
-    }
-}
-</code></pre>
-
-<p>客户端只需渲染服务器发送的内容：</p>
-
-<pre><code class="kotlin">// Client-side: Just renders whatever the server sends
-@Composable
-fun ProductGrid(viewModel: ProductViewModel) {
-    val documents by viewModel.productDocuments.collectAsState()
-
-    LazyVerticalGrid(columns = GridCells.Fixed(2)) {
-        items(documents) { document -&gt;
-            RemoteDocumentPlayer(
-                document = document,
-                onNamedAction = { name, value, _ -&gt;
-                    if (name == "viewProduct") {
-                        navController.navigate("product/$value")
-                    }
-                }
-            )
-        }
-    }
-}
-</code></pre>
-
-<p>现在，你的团队无需发布任何应用即可更新产品卡片设计，更改徽章颜色、添加动画和重新排列元素。由于它是原生应用，通过 Compose 的实际绘制管道渲染，因此 UI 的外观和体验与原生应用无异。</p>
-
-<h3>大规模 A/B 测试</h3>
-
-<p>传统的 A/B 测试 UI 变体需要在应用二进制文件中实现所有变体，为每个变体创建功能标志，发布包含所有变体的应用，然后等待用户采用后再衡量结果。从构思到获得数据，这个过程通常需要 2-4 周。</p>
-
-<p>借助 RemoteCompose，你无需部署任何客户端即可测试 UI 变体。假设一个电商团队想要测试单页结账流程是否比多步骤向导转化率更高：</p>
-
-<pre><code class="kotlin">// Server-side: Two completely different checkout experiences
-object CheckoutExperiments {
-
-    fun getCheckoutDocument(user: User, cart: Cart): ByteArray {
-        val variant = experimentService.getVariant(user.id, "checkout-flow")
-
-        return when (variant) {
-            "single-page" -&gt; captureSinglePageCheckout(cart)
-            "multi-step" -&gt; captureMultiStepCheckout(cart)
-            "express" -&gt; captureExpressCheckout(cart)  // New variant added without app update
-            else -&gt; captureSinglePageCheckout(cart)
-        }
-    }
-
-    private fun captureSinglePageCheckout(cart: Cart): ByteArray {
-        return captureRemoteDocument(context, displayInfo, profile) {
-            SinglePageCheckout(
-                cart = cart,
-                onPlaceOrder = { namedAction("placeOrder", cart.id) },
-                onUpdateQuantity = { itemId, qty -&gt;
-                    namedAction("updateQuantity", "$itemId:$qty")
-                }
-            )
-        }
-    }
-
-    private fun captureMultiStepCheckout(cart: Cart): ByteArray {
-        return captureRemoteDocument(context, displayInfo, profile) {
-            MultiStepCheckout(
-                cart = cart,
-                steps = listOf("Shipping", "Payment", "Review"),
-                onComplete = { namedAction("placeOrder", cart.id) }
-            )
-        }
-    }
-}
-</code></pre>
-
-<p>客户端完全不知道显示的是哪个版本：</p>
-
-<pre><code class="kotlin">// Client-side: Completely agnostic to which variant is shown
-@Composable
-fun CheckoutScreen(viewModel: CheckoutViewModel) {
-    val document by viewModel.checkoutDocument.collectAsState()
-
-    document?.let { doc -&gt;
-        RemoteDocumentPlayer(
-            document = doc,
-            onNamedAction = { name, value, stateUpdater -&gt;
-                when (name) {
-                    "placeOrder" -&gt; viewModel.placeOrder(value)
-                    "updateQuantity" -&gt; {
-                        val (itemId, qty) = value.split(":")
-                        viewModel.updateQuantity(itemId, qty.toInt())
-                    }
-                }
-            }
-        )
-    }
-}
-</code></pre>
-
-<p>结果即时且实时，这意味着无需等待应用商店审核或用户反馈。你甚至可以添加全新的版本，例如“快速结账”，而无需对客户端进行任何更改。实验会持续运行，直到获得统计学意义上的显著性，然后将获胜版本推广到所有用户，同样无需发布新应用。</p>
-
-<h3>实时内容更新</h3>
-
-<p>内容密集型应用常常需要在原生性能和内容新鲜度之间寻求平衡。以新闻应用为例：文章需要丰富的格式、嵌入式媒体和交互元素，但同时也需要随着新闻事件的进展实时更新。</p>
-
-<p>一家报道重大事件的新闻机构需要实时更新文章布局。编辑团队可以根据新闻事件的进展调整布局：</p>
-
-<pre><code class="kotlin">// Server-side: Editorial team can update layout as story develops
-class ArticleLayoutService {
-
-    fun getArticleDocument(article: Article): ByteArray {
-        return captureRemoteDocument(context, displayInfo, profile) {
-            ArticleLayout(article)
-        }
-    }
-
-    @Composable
-    private fun ArticleLayout(article: Article) {
-        Column(modifier = RemoteModifier.fillMaxSize().padding(16.dp)) {
-            // Breaking news banner - can be added/removed instantly
-            if (article.isBreaking) {
-                BreakingNewsBanner(
-                    modifier = RemoteModifier.fillMaxWidth()
-                )
-            }
-
-            // Headline with dynamic styling
-            Text(
-                text = article.headline,
-                style = if (article.isBreaking) {
-                    HeadlineStyle.Breaking
-                } else {
-                    HeadlineStyle.Standard
-                }
-            )
-
-            // Live updates indicator
-            if (article.hasLiveUpdates) {
-                LiveUpdatesIndicator(
-                    lastUpdate = article.lastUpdate,
-                    modifier = RemoteModifier.clickable {
-                        namedAction("refreshArticle", article.id)
-                    }
-                )
-            }
-
-            // Rich content blocks - can include any Compose UI
-            article.contentBlocks.forEach { block -&gt;
-                when (block) {
-                    is TextBlock -&gt; ArticleText(block)
-                    is ImageBlock -&gt; ArticleImage(block)
-                    is VideoBlock -&gt; VideoEmbed(block)
-                    is LiveBlogBlock -&gt; LiveBlogTimeline(block)
-                    is InteractiveChartBlock -&gt; DataVisualization(block)
-                    is PullQuoteBlock -&gt; PullQuote(block)
-                }
-            }
-
-            // Related articles - layout can be A/B tested
-            RelatedArticles(
-                articles = article.relatedArticles,
-                onArticleClick = { namedAction("openArticle", it.id) }
-            )
-        }
-    }
-}
-</code></pre>
-
-<p>客户端只需渲染服务器提供的任何布局：</p>
-
-<pre><code class="kotlin">// Client-side: Renders whatever layout the server sends
-@Composable
-fun ArticleScreen(articleId: String, viewModel: ArticleViewModel) {
-    val document by viewModel.articleDocument.collectAsState()
-    val refreshing by viewModel.isRefreshing.collectAsState()
-
-    SwipeRefresh(
-        state = rememberSwipeRefreshState(refreshing),
-        onRefresh = { viewModel.refresh() }
-    ) {
-        document?.let { doc -&gt;
-            RemoteDocumentPlayer(
-                document = doc,
-                onNamedAction = { name, value, _ -&gt;
-                    when (name) {
-                        "openArticle" -&gt; navController.navigate("article/$value")
-                        "refreshArticle" -&gt; viewModel.refresh()
-                        "playVideo" -&gt; videoPlayer.play(value)
-                    }
-                }
-            )
-        }
-    }
-}
-</code></pre>
-
-<p>你的团队无需修改应用即可更新文章布局，添加实时博客时间线、嵌入交互式图表和更改字体。当新闻事件有进展时，他们可以立即在所有相关文章上添加“突发新闻”横幅。</p>
-
-<h3>避免代码膨胀的功能标志</h3>
-
-<p>传统的功能标志需要将所有变体都包含在二进制文件中：</p>
-
-<pre><code class="kotlin">// Traditional approach - all code ships, even unused variations
-@Composable
-fun HomeScreen() {
-    when {
-        featureFlags.newHomeV3 -&gt; NewHomeLayoutV3()  // Ships always
-        featureFlags.newHomeV2 -&gt; NewHomeLayoutV2()  // Ships always
-        else -&gt; OldHomeLayout()
-
-        // Ships always
-    }
-}
-</code></pre>
-
-<p>这会带来几个问题。二进制文件会因为包含所有变体而增加应用程序的大小。即使未使用，也会包含无用代码。当功能标志配置错误时，可能会暴露未发布的功能，从而带来安全风险。随着时间的推移，旧的变体不断累积，导致技术债务不断增加。</p>
-
-<p>使用 RemoteCompose，只会传输当前激活的变体：</p>
-
-<pre><code class="kotlin">// Server-side: Only the active variation exists on the server
-class HomeScreenService {
-    fun getHomeDocument(user: User): ByteArray {
-        return when (featureFlags.getHomeVariant(user)) {
-            "v3" -&gt; captureHomeV3(user)
-            "v2" -&gt; captureHomeV2(user)
-            else -&gt; captureHomeDefault(user)
-        }
-    }
-}
-
-// Client-side: No conditional code, no dead code
-@Composable
-fun HomeScreen(document: CoreDocument) {
-    RemoteDocumentPlayer(document = document)
-    // That's it. No feature flags, no conditionals.
-}
-</code></pre>
-
-<p>这消除了二进制文件膨胀，因为不会传输旧的变体；由于只存在服务器端代码，因此消除了无用代码；并且由于配置错误只会显示不同的 UI 而不是未发布的代码，因此降低了安全风险。</p>
-
-<p>设想一个社交媒体应用正在逐步重新设计其信息流：</p>
-
-<pre><code class="kotlin">// Server-side: Complete control over who sees what
-class FeedLayoutService {
-
-    fun getFeedDocument(user: User, posts: List&lt;Post&gt;): ByteArray {
-        val variant = rolloutService.getFeedVariant(user)
-
-        return captureRemoteDocument(context, displayInfo, profile) {
-            when (variant) {
-                FeedVariant.NEW_DESIGN -&gt; NewFeedLayout(posts)
-                FeedVariant.NEW_DESIGN_COMPACT -&gt; NewFeedCompactLayout(posts)
-                FeedVariant.CLASSIC -&gt; ClassicFeedLayout(posts)
-            }
-        }
-    }
-}
-
-// Rollout service controls the percentage
-class RolloutService {
-    fun getFeedVariant(user: User): FeedVariant {
-        // 5% get new design, 5% get compact variant, 90% get classic
-        return when {
-            user.id.hashCode() % 100 &lt; 5 -&gt; FeedVariant.NEW_DESIGN
-            user.id.hashCode() % 100 &lt; 10 -&gt; FeedVariant.NEW_DESIGN_COMPACT
-            else -&gt; FeedVariant.CLASSIC
-        }
-    }
-
-    // Instant rollback if issues are detected
-    fun emergencyRollback() {
-        // All users immediately get classic layout
-        // No app update needed
-    }
-}
-</code></pre>
-
-<p>如果新设计导致问题（例如崩溃、用户互动度下降或用户投诉），可以立即回滚。只需更改服务器配置即可。无需紧急发布应用。</p>
-
-<h3>跨平台一致性</h3>
-
-<p>RemoteCompose 的文档格式与平台无关。同一文档可以在手机、平板电脑、折叠屏设备和 Wear OS 设备上渲染，并由相应的平台播放器负责渲染。</p>
-
-<pre><code class="bash">Creation (Server/Backend)  
-    ↓  
-RemoteComposeBuffer (Platform-independent binary format)  
-    ↓  
-┌─────────────────────────────────────────────────────────┐  
-│
-
-│
-↓
-
-↓
-
-↓
-
-↓
-Android Phone
-
-Android Tablet
-
-Foldable Device
-
-Wear OS
-(Compose Player) (Compose Player)  (Compose Player)   (Wear Player)
-</code></pre>
-
-<p>假设一款健身应用在手机和手表应用上都显示锻炼总结。相同的数据会针对不同的设备尺寸进行优化，呈现不同的内容：</p>
-
-<pre><code class="kotlin">// Server-side: Same data, different presentations
-class WorkoutSummaryService {
-
-    fun getPhoneDocument(workout: Workout): ByteArray {
-        return captureRemoteDocument(context, phoneDisplayInfo, profile) {
-            PhoneWorkoutSummary(workout)  // Full detailed view
-        }
-    }
-
-    fun getWatchDocument(workout: Workout): ByteArray {
-        return captureRemoteDocument(context, watchDisplayInfo, profile) {
-            WatchWorkoutSummary(workout)  // Glanceable summary
-        }
-    }
-
-    @Composable
-    private fun PhoneWorkoutSummary(workout: Workout) {
-        Column {
-            WorkoutHeader(workout)
-            HeartRateChart(workout.heartRateData)
-            PaceChart(workout.paceData)
-            SplitsTable(workout.splits)
-            MapView(workout.route)
-            ShareButton { namedAction("share", workout.id) }
-        }
-    }
-
-    @Composable
-    private fun WatchWorkoutSummary(workout: Workout) {
-        // Optimized for small screen
-        Column(modifier = RemoteModifier.fillMaxSize()) {
-            Text(workout.type, style = WatchTypography.Title)
-            Row {
-                StatBox("Duration", workout.duration)
-                StatBox("Distance", workout.distance)
-            }
-            MiniHeartRateIndicator(workout.avgHeartRate)
-        }
-    }
-}
-</code></pre>
-
-<p>两款设备都显示锻炼数据，但布局针对各自的设备尺寸进行了优化。任一布局的更新都会立即生效，无需在任一平台上更新应用。</p>
-
-<h3>缩短发布周期</h3>
-
-<p>最显著的优势在于运营层面：UI 更改不再需要发布应用。考虑一下简单 UI 调整的开发周期。</p>
-
-<p>传统方法大约需要两到四周。第一天和第二天是开发人员实现。第三天和第四天用于代码审查和修改。第五天到第七天用于质量保证测试。第八天和第九天处理发布准备和应用商店提交。第十天到第十四天：等待应用商店审核。第十五天到第三十天用户逐步采用，通常两周内会有 50% 到 70% 的用户更新。大多数用户在两到四周内不会看到变化。</p>
-
-<p>RemoteCompose 方法只需一到两天即可完成。第一天和第二天是开发人员在服务器端实现。部署只需几分钟。所有用户都能立即看到变化。</p>
-
-<p>这种速度优势对于节假日促销活动至关重要，你可以根据需要在当天部署季节性主题；对于服务中断的紧急消息，你可以即时更新 UI；对于快速迭代，你可以快速测试想法并快速失败；对于竞争响应，你可以以小时而不是几周的时间对市场变化做出反应。</p>
-
-<p>以一个准备迎接黑色星期五的电商应用为例：</p>
-
-<pre><code class="kotlin">// Traditional approach: Ship all variations weeks in advance
-// Problem: All promotional code ships weeks early
-// Risk: Date logic bugs could show promotions early
-@Composable
-fun HomeScreen() {
-    val today = LocalDate.now()
-    when {
-        today == BlackFriday -&gt; BlackFridayHome()
-
-        // Must ship by Oct 15
-        today in BlackFridayWeek -&gt; BlackFridayWeekHome()   // Must ship by Oct 15
-        today == CyberMonday -&gt; CyberMondayHome()
-
-        // Must ship by Oct 15
-        else -&gt; RegularHome()
-    }
-}
-
-// Remote approach: Deploy each promotion on the exact day
-// Benefit: Each promotion deploys on the exact minute needed
-// Flexibility: Can react to competitor moves in real-time
-class HomeScreenService {
-    fun getHomeDocument(user: User): ByteArray {
-        val promotion = promotionService.getCurrentPromotion()
-
-        return captureRemoteDocument(context, displayInfo, profile) {
-            when (promotion) {
-                is BlackFridayPromotion -&gt; BlackFridayHome(promotion)
-                is CyberMondayPromotion -&gt; CyberMondayHome(promotion)
-                is FlashSale -&gt; FlashSaleHome(promotion)  // Can add new types anytime
-                else -&gt; RegularHome()
-            }
-        }
-    }
-}
-</code></pre>
-
-<h3>状态管理：超越静态布局</h3>
-
-<p>RemoteCompose 不仅限于静态布局。该框架包含一个状态管理系统，可以实现交互式、动态的 UI。</p>
-
-<p><strong>远程状态变量</strong></p>
-
-<p>状态可以嵌入文档中，并由客户端更新。这使得表单、计数器、切换开关和其他交互元素成为可能：</p>
-
-<pre><code class="kotlin">// Creation side: Define interactive widget
-@Composable
-fun QuantitySelector(initialQuantity: Int) {
-    var quantity by rememberRemoteState("quantity", initialQuantity)
-
-    Row(
-        modifier = RemoteModifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        IconButton(
-            onClick = {
-                if (quantity &gt; 1) {
-                    quantity--
-                    namedAction("quantityChanged", quantity.toString())
-                }
-            }
-        ) {
-            Icon(Icons.Minus)
-        }
-
-        Text(
-            text = quantity.toString(),
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-        IconButton(
-            onClick = {
-                quantity++
-                namedAction("quantityChanged", quantity.toString())
-            }
-        ) {
-            Icon(Icons.Plus)
-        }
-    }
-}
-</code></pre>
-
-<p>播放器端通过操作回调处理状态更新：</p>
-
-<pre><code class="kotlin">// Player side: Handle state updates
-RemoteDocumentPlayer(
-    document = document,
-    onNamedAction = { name, value, stateUpdater -&gt;
-        when (name) {
-            "quantityChanged" -&gt; {
-                // Update cart
-                cartManager.setQuantity(itemId, value.toInt())
-
-                // Optionally update remote state directly
-                stateUpdater.updateState { state -&gt;
-                    state["quantity"] = RcInt(value.toInt())
-                }
-            }
-        }
-    }
-)
-</code></pre>
-
-<p><strong>动画时间跟踪</strong></p>
-
-<p>播放器跟踪动画时间并将其传递给文档，从而无需任何客户端动画代码即可实现基于时间的动画：</p>
-
-<pre><code class="kotlin">// Server side: Define animated elements
-@Composable
-fun PulsingNotificationBadge(count: Int) {
-    // Scale pulses between 0.9 and 1.1 over 1 second
-    val scale = FloatExpression("0.9 + 0.2 * sin(time * 6.28)")
-
-    // Opacity pulses between 0.7 and 1.0
-    val opacity = FloatExpression("0.7 + 0.3 * sin(time * 6.28)")
-
-    Box(
-        modifier = RemoteModifier
-            .scale(scale)
-            .alpha(opacity)
-            .background(Color.Red, CircleShape)
-            .size(24.dp)
-    ) {
-        Text(
-            text = count.toString(),
-            color = Color.White,
-            modifier = RemoteModifier.align(Alignment.Center)
-        )
-    }
-}
-
-// The player automatically:
-// 1. Tracks elapsed time since document load
-// 2. Evaluates expressions each frame
-// 3. Updates visual properties
-// No client animation code needed
-</code></pre>
-
-<p>这使得完全在文档格式中定义的流畅、高性能动画成为可能。表达式支持诸如 <code>sin</code>、<code>cos</code>、<code>lerp</code> 和 <code>clamp</code> 之类的数学函数，以及算术运算符和变量引用。</p>
-
-<p><strong>双向通信</strong></p>
-
-<p>操作系统支持文档与宿主应用之间的双向通信：</p>
-
-<pre><code class="kotlin">// Document triggers actions for various purposes
-@Composable
-fun ProductDetailPage(product: Product) {
-    Column {
-        // Analytics tracking
-        LaunchedEffect(Unit) {
-            namedAction("analytics", "product_viewed:${product.id}")
-        }
-
-        ProductImage(product.imageUrl)
-
-        // Navigation action
-        TextButton(onClick = { namedAction("navigate", "/reviews/${product.id}") }) {
-            Text("See all reviews")
-        }
-
-        // Cart action with data
-        Button(onClick = { namedAction("addToCart", product.id) }) {
-            Text("Add to Cart")
-        }
-
-        // State update action
-        var isFavorite by rememberRemoteState("favorite", product.isFavorite)
-        IconButton(
-            onClick = {
-                isFavorite = !isFavorite
-                namedAction("toggleFavorite", "${product.id}:$isFavorite")
-            }
-        ) {
-            Icon(if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.Favorite)
-        }
-    }
-}
-</code></pre>
-
-<p>宿主应用统一处理所有操作：</p>
-
-<pre><code class="kotlin">// Host app handles all actions uniformly
-RemoteDocumentPlayer(
-    document = document,
-    onNamedAction = { name, value, stateUpdater -&gt;
-        when (name) {
-            "analytics" -&gt; {
-                val (event, id) = value.split(":")
-                analytics.logEvent(event, mapOf("productId" to id))
-            }
-            "navigate" -&gt; navController.navigate(value)
-            "addToCart" -&gt; {
-                cartManager.add(value)
-                // Update UI to show confirmation
-                stateUpdater.updateState { state -&gt;
-                    state["cartCount"] = RcInt((state["cartCount"] as? RcInt)?.value?.plus(1) ?: 1)
-                }
-            }
-            "toggleFavorite" -&gt; {
-                val (id, isFavorite) = value.split(":")
-                favoritesManager.setFavorite(id, isFavorite.toBoolean())
-            }
-        }
-    }
-)
-</code></pre>
-
-<p>这种双向通信意味着远程文档可以完全集成到你应用的导航、分析、状态管理和业务逻辑中，而文档本身无需了解你的具体实现。</p>
-
-<h3><strong>实际应用架构模式</strong></h3>
-
-<p>让我们来探讨一下 RemoteCompose 如何融入实际应用架构。</p>
-
-<p><strong>模式 1：混合架构（推荐）</strong></p>
-
-<p>大多数应用都能从混合架构中获益：关键页面使用本地 Compose 代码构建，而动态内容区域则使用 RemoteCompose。</p>
-
-<pre><code class="kotlin">// Navigation: Local Compose (fast, reliable)
-@Composable
-fun AppNavigation() {
-    NavHost(navController, startDestination = "home") {
-        composable("home") { HomeScreen() }
-        composable("product/{id}") { ProductScreen(it.arguments?.getString("id")) }
-        composable("cart") { CartScreen() }
-        composable("checkout") { CheckoutScreen() }
-    }
-}
-
-// Home screen: Remote (marketing can update freely)
-@Composable
-fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
-    val document by viewModel.homeDocument.collectAsState()
-
-    when (val state = document) {
-        is Loading -&gt; LoadingIndicator()
-        is Success -&gt; RemoteDocumentPlayer(
-            document = state.document,
-            onNamedAction = { name, value, _ -&gt; handleAction(name, value) }
-        )
-        is Error -&gt; LocalFallbackHome()  // Graceful degradation
-    }
-}
-
-// Product screen: Hybrid (shell is local, content is remote)
-@Composable
-fun ProductScreen(productId: String, viewModel: ProductViewModel = hiltViewModel()) {
-    val product by viewModel.product.collectAsState()
-    val contentDocument by viewModel.contentDocument.collectAsState()
-
-    Scaffold(
-        topBar = { ProductTopBar(product) },  // Local: consistent navigation
-        bottomBar = { AddToCartBar(product) } // Local: critical purchase flow
-    ) { padding -&gt;
-        // Remote: Rich product content, can be A/B tested
-        contentDocument?.let { doc -&gt;
-            RemoteDocumentPlayer(
-                document = doc,
-                modifier = Modifier.padding(padding)
-            )
-        }
-    }
-}
-</code></pre>
-
-<p><strong>模式 2：文档缓存以实现离线支持</strong></p>
-
-<p>远程文档可以缓存以供离线访问：</p>
-
-<pre><code class="kotlin">class DocumentRepository @Inject constructor(
-    private val api: DocumentApi,
-    private val cache: DocumentCache,
-    private val connectivity: ConnectivityManager
-) {
-    suspend fun getDocument(key: String): CoreDocument {
-        // Try cache first
-        cache.get(key)?.let { cached -&gt;
-            // Return cached immediately, refresh in background
-            refreshInBackground(key)
-            return cached
-        }
-
-        // No cache, must fetch
-        return if (connectivity.isConnected) {
-            fetchAndCache(key)
-        } else {
-            throw OfflineException("No cached document and no connectivity")
-        }
-    }
-
-    private suspend fun fetchAndCache(key: String): CoreDocument {
-        val bytes = api.fetchDocument(key)
-        val document = RemoteComposeBuffer.deserialize(bytes)
-        cache.store(key, document, ttl = 1.hours)
-        return document
-    }
-
-    private fun refreshInBackground(key: String) {
-        scope.launch {
-            try {
-                fetchAndCache(key)
-            } catch (e: Exception) {
-                // Silent failure, cached version is still valid
-                Log.w(TAG, "Background refresh failed", e)
-            }
-        }
-    }
-}
-</code></pre>
-
-<p><strong>模式 3：文档预加载以实现流畅导航</strong></p>
-
-<p>预加载用户可能访问的页面的文档：</p>
-
-<pre><code class="kotlin">class DocumentPreloader @Inject constructor(
-    private val repository: DocumentRepository
-) {
-    // Preload when user enters a screen
-    fun preloadForScreen(screen: Screen) {
-        val keysToPreload = when (screen) {
-            is HomeScreen -&gt; listOf("featured", "categories", "promotions")
-            is CategoryScreen -&gt; screen.subcategories.map { "category_${it.id}" }
-            is ProductScreen -&gt; listOf("reviews_${screen.productId}", "related_${screen.productId}")
-            else -&gt; emptyList()
-        }
-
-        keysToPreload.forEach { key -&gt;
-            scope.launch {
-                try {
-                    repository.getDocument(key)  // Caches for later
-                } catch (e: Exception) {
-                    // Preload failure is not critical
-                }
-            }
-        }
-    }
-}
-
-// Usage in navigation
-navController.addOnDestinationChangedListener { _, destination, arguments -&gt;
-    preloader.preloadForScreen(destination.toScreen(arguments))
-}
-</code></pre>
-
-<h3><strong>结论</strong></h3>
-
-<p>RemoteCompose 代表了我们对 Android UI 开发思维方式的一次范式转变。通过将 Compose 布局转换为可移植文档格式，RemoteCompose 实现了服务器驱动的 UI、即时 A/B 测试、实时内容更新和跨平台一致性，同时保持了原生渲染性能。</p>
-
-<p>该框架拥有包含 93 种以上操作的全面操作模型，充分展现了 Compose 的表达能力，包括动画、状态和交互。创建和播放的分离使得部署架构更加灵活：在后端生成具有完整 Compose 表达能力的文档，通过现有基础架构分发，并在任何 Android 设备上进行原生渲染。</p>
-
-<p>关键在于找到合适的平衡点：对于动态、频繁变化的内容区域，使用 RemoteCompose；同时将关键流程保留在本地 Compose 代码中。这种混合方法在需要灵活性的地方提供服务器驱动 UI 的优势，在需要可靠性的地方提供编译代码的优势。</p>
-
-<p>无论你是构建需要频繁更新布局的内容密集型应用、需要快速 A/B 测试的电子商务平台，还是需要快速迭代的企业级工具，RemoteCompose 都能为真正动态的 UI 提供架构基础。该框架处理了序列化、传输和渲染的复杂性，因此你可以专注于设计卓越的用户体验。</p>
-
-<p>你可以观看他们最近关于<a href="https://speakerdeck.com/camaelon/introducing-remotecompose-break-your-ui-out-of-the-app-sandbox">RemoteCompose 简介：将你的 UI 从应用程序沙盒中解放出来</a>的演讲。</p>
 ]]></content>
   </entry>
   
