@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-01-30T12:59:19+00:00</updated>
+  <updated>2026-02-02T15:23:36+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,379 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Compose中的IntrinsicSize实战指南]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/02/02/mastering-intrisnicsize/"/>
+    <updated>2026-02-02T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/02/02/mastering-intrisnicsize</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Mastering IntrinsicSize in Jetpack Compose: A Real-World Guide」，原文链接<a href="https://proandroiddev.com/mastering-intrinsicsize-in-jetpack-compose-a-real-world-guide-a57ab90c6556">https://proandroiddev.com/mastering-intrinsicsize-in-jetpack-compose-a-real-world-guide-a57ab90c6556</a>，由Sehaj kahlon发布于2026年1月24日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*5575GBQlUI38hH2ThTnGBQ.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>如果你一直在使用 Jetpack Compose，你可能遇到过布局行为与预期不符的令人沮丧的情况。也许是 <code>Box</code> 中的 <code>weight()</code> 修饰符导致了奇怪的行为，或者你的分层 UI 元素大小不正确。</p>
+
+<p>这时 <strong><code>IntrinsicSize</code></strong> 就派上用场了——相信我，一旦你理解了它，它将成为你 Compose 工具箱中最强大的工具之一。</p>
+
+<h2>问题：一个真实的生产场景</h2>
+
+<p>最近，我正在为一个应用程序构建详情页面。设计要求：</p>
+
+<ol>
+<li><p>顶部放置一张<strong>标题图片</strong></p></li>
+<li><p>一张<strong>卡片</strong>，与标题图片重叠 56dp</p></li>
+<li><p>从标题图片到柔和灰色背景的<strong>平滑过渡</strong></p></li>
+</ol>
+
+
+<p>我们想要实现的效果如下：</p>
+
+<blockquote><p><strong><em>💡 设计目标：</em></strong> <em>创建一个卡片，使其优雅地与标题图片重叠，并实现无缝的背景过渡。</em></p></blockquote>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:904/1*7wqxO7TLyV_oaH9wQxz6pw.png" alt="" /></p>
+
+<h2>挑战</h2>
+
+<p>我需要创建一个包含两层的“盒子Box”：</p>
+
+<ul>
+<li><p><strong>图层 1（背景）：</strong> 顶部 56dp 的透明区域，然后是柔和的灰色背景</p></li>
+<li><p><strong>图层 2（卡片）：</strong> 绘制在顶部的实际卡片内容</p></li>
+</ul>
+
+
+<p>这是我的第一个作品尝试：</p>
+
+<pre><code class="kotlin">@Composable
+fun OverlappingCardContent(overlapHeight: Dp) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        // Layer 1: Background
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Spacer(modifier = Modifier.height(overlapHeight)) // 56dp transparent
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)  // Fill remaining space with soft background
+                    .background(color = Color.LightGray)
+            )
+        }
+
+        // Layer 2: Card
+        Card(modifier = Modifier.fillMaxWidth()) {
+            // Card content...
+        }
+    }
+}
+</code></pre>
+
+<p><strong>但是这行不通！</strong> 😩</p>
+
+<p><code>weight(1f)</code>修饰符导致了问题。布局要么意外地折叠，要么意外地展开。</p>
+
+<h2>了解根本原因</h2>
+
+<p>为了理解为什么会失败，我们先回顾一下 Compose 布局的工作原理。</p>
+
+<h3>Compose 布局：单遍系统</h3>
+
+<p>为了提高性能，Compose 布局采用<strong>单次遍历</strong>方式测量布局。每个可组合元素：</p>
+
+<ol>
+<li><p>从父元素接收约束</p></li>
+<li><p>测量其子元素</p></li>
+<li><p>确定自身大小</p></li>
+<li><p>放置其子元素</p></li>
+</ol>
+
+
+<p>问题在于：当像 <code>Box</code> 这样的父元素测量其子元素时，每个子元素都不知道其他子元素的大小。它们是独立测量的。</p>
+
+<h2>为什么 <code>weight(1f)</code> 会失败</h2>
+
+<p><code>weight()</code> 修饰符表示：“占据剩余空间的 X 倍。”</p>
+
+<p>但是剩余空间指的是<strong>什么</strong>？<code>Box</code> 元素尚未确定自身高度——它正在等待子元素告知其自身大小。这会造成循环依赖：</p>
+
+<pre><code class="bash">Box: "Children, how tall are you?"
+  ├─ Column: "I need 56dp + whatever weight(1f) gives me"
+  │
+
+  "But weight depends on your height, Box!"
+  └─ Card: "I need ~180dp for my content"  Box: "I'm confused..." 🤯
+</code></pre>
+
+<h2>引入 IntrinsicSize：打破循环依赖</h2>
+
+<p><code>IntrinsicSize</code> 是 Compose 在实际测量之前向子元素询问一个<strong>假设性问题</strong> 的方式：</p>
+
+<blockquote><p><strong><em>“如果我给你无限的空间，你需要的最小（或最大）高度是多少？”</em></strong></p></blockquote>
+
+<h2>IntrinsicSize.Min 与 IntrinsicSize.Max</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*IUoEVdIal11Nwn3WFG6w0A.png" alt="" /></p>
+
+<h2>修复</h2>
+
+<pre><code class="kotlin">Box(
+    modifier = Modifier
+        .fillMaxWidth()
+        .height(IntrinsicSize.Min)  // ← The magic line!
+) {
+    // Layer 1: Background
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Spacer(modifier = Modifier.height(56.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(color = Color.LightGray)
+        )
+    }
+
+    // Layer 2: Card
+    Card(modifier = Modifier.fillMaxWidth()) {
+        // Card content...
+    }
+}
+</code></pre>
+
+<p>现在布局正常了！原因如下：</p>
+
+<h2>IntrinsicSize.Min 如何解决冲突</h2>
+
+<p>当 <code>Box</code> 使用 <code>height(IntrinsicSize.Min)</code> 时，它会询问每个子元素：</p>
+
+<p><strong>列的最小固有高度：</strong></p>
+
+<pre><code class="bash">Spacer: 56dp (fixed)
+Weighted Box: 0dp (minimum, can shrink to nothing)
+Total: 56dp
+</code></pre>
+
+<p><strong>卡片的最小固有高度：</strong></p>
+
+<pre><code class="bash">Status row + Title + Subtitle + Button + Padding = ~180dp
+Total: ~180dp
+</code></pre>
+
+<p><strong>Box 选择：</strong> <code>max(56dp, 180dp)</code> = <strong>180dp</strong></p>
+
+<p>为什么是 <code>max()</code>？因为 Box 的高度需要足以容纳<strong>所有</strong>子元素！</p>
+
+<p>现在布局完全知道如何高度要合适，<code>weight(1f)</code> 可以正常工作：</p>
+
+<ul>
+<li><p>盒子高度：180dp</p></li>
+<li><p>间距：56dp</p></li>
+<li><p>加权背景盒子：180dp — 56dp = <strong>124dp</strong></p></li>
+</ul>
+
+
+<h2>完整解决方案：重叠卡片式 UI</h2>
+
+<p>以下是支持此 UI 的最终代码：</p>
+
+<pre><code class="kotlin">private val OVERLAP_HEIGHT = 56.dp
+</code></pre>
+
+<pre><code class="kotlin">@Composable
+fun HeaderWithOverlappingCard(imageHeight: Dp) {
+    LazyColumn {
+        // Create overlap: position content before header ends
+        item { 
+            Spacer(modifier = Modifier.height(imageHeight - OVERLAP_HEIGHT)) 
+        }
+
+        item {
+            OverlappingCardContent(overlapHeight = OVERLAP_HEIGHT)
+        }
+    }
+}
+</code></pre>
+
+<pre><code class="kotlin">@Composable
+fun OverlappingCardContent(overlapHeight: Dp) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+    ) {
+        // Layer 1: Background transition
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Spacer(modifier = Modifier.height(overlapHeight)) // Transparent over header
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(color = SoftGrayBackground)
+            )
+        }
+
+        // Layer 2: Card content (drawn on top)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                Text("✓ Success", color = Color.Green)
+                Text("₹100 Cashback", style = MaterialTheme.typography.h4)
+                Text("Transaction complete")
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = {}) { Text("View Details") }
+            }
+        }
+    }
+}
+</code></pre>
+
+<h2>可视化分解</h2>
+
+<pre><code class="kotlin">imageHeight = 200dp
+overlapHeight = 56dp
+</code></pre>
+
+<pre><code class="bash">LazyColumn positions:
+├─ Spacer: 144dp (200 - 56)
+└─ OverlappingCardContent starts at Y = 144dp
+</code></pre>
+
+<pre><code class="bash">Inside OverlappingCardContent (height = 180dp via IntrinsicSize.Min):
+├─ Column Layer:
+│   ├─ Spacer: 56dp (transparent, header shows through)
+│   └─ Background Box: 124dp (soft gray)
+└─ Card Layer: 180dp (drawn from top, overlaps header)
+</code></pre>
+
+<h2>IntrinsicSize 的常见用例</h2>
+
+<h3>1. 一行中高度相同的按钮</h3>
+
+<p><strong>问题：</strong> 文本长度不同的按钮最终高度也不同。</p>
+
+<p><strong>解决方案：</strong></p>
+
+<pre><code class="kotlin">Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+    Button(
+        modifier = Modifier.weight(1f).fillMaxHeight(),
+        onClick = {}
+    ) { Text("Short") }
+
+    Button(
+        modifier = Modifier.weight(1f).fillMaxHeight(),
+        onClick = {}
+    ) { Text("This is a much\nlonger button\nwith more text") }
+}
+</code></pre>
+
+<p><strong>结果：</strong> 两个按钮的高度都与最高的按钮高度相同。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*IubiRLP4sFk4rl-uvLwwKA.png" alt="" /></p>
+
+<h3>2. 分隔线与父元素高度匹配</h3>
+
+<p><strong>问题：</strong> 分隔线无法拉伸以匹配多行内容。</p>
+
+<p><strong>解决方案：</strong></p>
+
+<pre><code class="kotlin">Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+    Text("Left content\nwith multiple\nlines")
+
+    Divider(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(1.dp)
+    )
+
+    Text("Right")
+}
+</code></pre>
+
+<p><strong>结果：</strong> 分隔线可以拉伸以匹配多行文本的高度。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*nFJrnQVIaT7Kfh70JDofOA.png" alt="" /></p>
+
+<h3>3. 带有动态内容和固定覆盖层的卡片</h3>
+
+<p><strong>问题：</strong> 覆盖层需要与卡片宽度匹配，但卡片宽度是动态的。</p>
+
+<p><strong>解决方案：</strong></p>
+
+<pre><code class="kotlin">Box(modifier = Modifier.width(IntrinsicSize.Max)) {
+    Card {
+        Column {
+            Text("Dynamic content here...")
+            // More content
+        }
+    }
+
+    // Badge that should match card width
+    Badge(
+        modifier = Modifier
+            .align(Alignment.TopEnd)
+            .fillMaxWidth()
+    )
+}
+</code></pre>
+
+<h2>性能相关注意事项 ⚠️</h2>
+
+<p><code>IntrinsicSize</code> 会触发<strong>两遍测量</strong>：</p>
+
+<ol>
+<li><p>第一遍：查询固有尺寸</p></li>
+<li><p>第二遍：实际测量和布局</p></li>
+</ol>
+
+
+<p>这会带来一定的性能开销。谨慎使用：</p>
+
+<h2>✅ 适用场景</h2>
+
+<ul>
+<li><p>复杂的分层 UI（例如我们的重叠卡片）</p></li>
+<li><p>使同级元素大小一致</p></li>
+<li><p>使分隔符/分隔线与内容匹配</p></li>
+<li><p>需要子元素协调大小时</p></li>
+</ul>
+
+
+<h2>❌ 避免使用场景</h2>
+
+<ul>
+<li><p>在可能会重复数百次的 <code>LazyColumn</code>/<code>LazyRow</code> 元素中</p></li>
+<li><p>深度嵌套的固有尺寸</p></li>
+<li><p>当固定尺寸或 <code>wrapContentHeight()</code> 可以满足需求时</p></li>
+<li><p>在性能关键路径中</p></li>
+</ul>
+
+
+<h2>要点</h2>
+
+<ol>
+<li><p><strong><code>IntrinsicSize.Min</code></strong> = &ldquo;使用子元素所需的最小高度&rdquo;</p></li>
+<li><p><strong><code>IntrinsicSize.Max</code></strong> = &ldquo;使用子元素可能需要的最大高度&rdquo;</p></li>
+<li><p>它解决了父元素和子元素尺寸之间的循环依赖关系</p></li>
+<li><p>对于子元素使用 <code>weight()</code> 或 <code>fillMaxHeight()</code> 的分层 UI 至关重要</p></li>
+<li><p>会带来性能开销——请谨慎使用</p></li>
+</ol>
+
+
+<h2>结论</h2>
+
+<p><code>IntrinsicSize</code> 看似是一个小众的 API，但它对于在 Compose 中构建复杂的 UI 至关重要。我们构建的重叠卡片模式只是其中一个例子——当你需要协调同级元素的大小，或者当分层布局需要“统一”尺寸时，你会发现它非常实用。</p>
+
+<p>下次当你的 Compose 布局在使用 <code>weight()</code> 或 <code>fillMaxHeight()</code> 时出现异常行为时，请记住：<strong>IntrinsicSize 或许能帮你解决问题</strong>。</p>
+
+<p><em>如果你有任何疑问或发现了 IntrinsicSize 的其他创意用法，请在下方留言！</em></p>
+
+<p><strong>关注我，获取更多 Android 开发技巧。</strong></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack Compose重组稳定性分析器]]></title>
@@ -1414,195 +1787,6 @@ fun LottieAnimation(
 <p><img src="https://miro.medium.com/v2/resize:fit:600/1*AbjuxEFO34XUsPCAs-U-Kw.gif" alt="" /></p>
 
 <p>你可以在我的 GitHub 仓库的 <a href="https://github.com/KatieBarnett/Experiments/tree/main/jc-lottie">jc-lottie</a> 模块中找到上述示例代码。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Jetpack Compose 2025年12月版本新增功能]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/12/18/compose-december-2025/"/>
-    <updated>2025-12-18T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/12/18/compose-december-2025</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「What&rsquo;s new in the Jetpack Compose December &lsquo;25 release」，原文链接<a href="https://android-developers.googleblog.com/2025/12/whats-new-in-jetpack-compose-december.html">https://android-developers.googleblog.com/2025/12/whats-new-in-jetpack-compose-december.html</a>，由Nick Butcher发布于2025年12月3日。</p></blockquote>
-
-<p><a href=""><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjaOFQLkqCBaw0FA8C7XCI7gKe-Z79r2dYH9QUOnWyZq_Qevh-EoHqRs6zTENmzLjHwKk_ECQlN_2EePI8-JyjCVH3PL2rOsbRdfKNZ6T" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>现在，<a href="https://developer.android.com/jetpack/androidx/releases/compose">Jetpack Compose 2025年12月版本</a> 正式发布。该版本包含 Compose 核心模块 1.10 版和 Material 3 1.4 版（参见完整的 <a href="https://developer.android.com/develop/ui/compose/bom/bom-mapping">BOM 映射</a>），新增了多项功能并显著提升了性能。</p>
-
-<p>要使用最新的版本，请将 Compose BOM 版本升级到 2025.12.00：</p>
-
-<pre><code class="kotlin">implementation(platform("androidx.compose:compose-bom:2025.12.00"))
-</code></pre>
-
-<h2>性能改进</h2>
-
-<p>我们知道应用程序的运行时性能对你和你的用户至关重要，因此性能一直是 Compose 团队的首要任务。此版本带来了一系列改进——你只需升级到最新版本即可获得所有这些改进。我们的内部滚动性能基准测试表明，Compose 现在的性能与使用 Views 时的性能相当：</p>
-
-<p><img src="https://blogger.googleusercontent.com/img/a/AVvXsEhmNWZbGEVpwg-kdd6kw9Ay8TyOjGS226GxU1oNQQCI0IBJ1aj_Pze-SQ0z9LGywbdbzIROkIv6hxKKMIXJ0sBs-q5U_cv-yslsXFRzdRihM0MxWI3q2j-LURfcILGe7i9KodgjuGgUkAoeeZspHUa11iDkAiJTs295rxSDtgSWK0VSEofLt2MWburL7II" alt="滚动性能基准测试比较了 Views 和 Jetpack Compose 在不同 Compose 版本下的性能" /></p>
-
-<h3>延迟预取中的可暂停组合</h3>
-
-<p>延迟预取中的可暂停组合预取功能现已默认启用。这是 Compose 运行时调度机制的一项根本性变革，旨在显著减少高 UI 负载下的卡顿现象。</p>
-
-<p>此前，一旦合成开始，就必须运行至完成。如果合成较为复杂，则可能导致主线程阻塞超过一帧，从而造成 UI 卡顿。而现在，借助可暂停合成功能，运行时可以在时间不足时“暂停”其工作，并在下一帧恢复。当与延迟布局预取结合使用，提前准备帧时，此功能尤为有效。 Compose 1.9 中引入的 LazyLayout<a href="https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/package-summary#rememberLazyListState(androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow,kotlin.Int,kotlin.Int)">CacheWindow</a> API 可以很好地预取更多内容，并利用可暂停的合成功能来显著提升 UI 性能。</p>
-
-<p><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhaE5BKUo2mBxNKAmgD8nnrrbooEAbjCSxsGJbJx6DgTmMPx8BmTWsOg2I2_FXcOODSG8OAX31ueJfgipH2zdF1Y3v6CcIXGW3mWiWcHbemqnmVO-IYWKVJ-V6CiD9LDo_35nqyWrDgK3Y_HOdUDfL8StGnfgg34Ia6wda1bXoDT3xhMQb8w2hn_d2gLhQ/s16000/pausable.gif" alt="可暂停合成结合延迟预取有助于减少卡顿" /></p>
-
-<p>我们还优化了其他方面的性能，例如改进了 Modifier.onPlaced。 Modifier.onVisibilityChanged 和其他修饰符实现。我们将继续投入资源来提升 Compose 的性能。</p>
-
-<h2>新功能</h2>
-
-<h3>Retain</h3>
-
-<p>Compose 提供了一系列 API 来跨不同的生命周期保存和管理状态；例如，<code>remember</code> 可以在组合之间持久化状态，而 <code>rememberSavable</code>/<code>rememberSerializable</code> 可以在 Activity 或进程重建之间持久化状态。<code>retain</code> 是一个介于这些 API 之间的新 API，它允许你在配置更改时持久化值而无需序列化，但不会跨进程终止。由于 <code>retain</code> 不会序列化你的状态，因此你可以持久化诸如 lambda 表达式、流程以及位图等难以序列化的大型对象。例如，你可以使用 <code>retain</code> 来管理媒体播放器（例如 ExoPlayer），以确保媒体播放不会因配置更改而中断。</p>
-
-<pre><code class="kotlin">@Composable
-fun MediaPlayer() {
-    val applicationContext = LocalContext.current.applicationContext
-    val exoPlayer = retain { ExoPlayer.Builder(applicationContext).apply { ... }.build() }
-    ...
-}
-</code></pre>
-
-<p>我们要感谢 AndroidDev 社区（特别是 <a href="https://slackhq.github.io/circuit">Circuit</a> 团队），他们对该功能的设计产生了影响并做出了贡献。</p>
-
-<h3>Material 1.4</h3>
-
-<p>Material3 库的 1.4.0 版本新增了一些组件和增强功能：</p>
-
-<ul>
-<li><p>TextField 现在提供了一个基于 TextFieldState 的实验性版本，它提供了一种 <a href="https://developer.android.com/develop/ui/compose/text/user-input">更强大的</a> 方法来管理文本状态。此外，还新增了变体SecureTextField 和 OutlinedSecureTextField。Material Text 可组合元素现在支持自动调整大小功能（autoSize）。</p></li>
-<li><p>轮播组件现在提供了一个新的 <a href="https://developer.android.com/reference/kotlin/androidx/compose/material3/carousel/package-summary#Horizo%E2%80%8B%E2%80%8BntalCenteredHeroCarousel(androidx.compose.material3.carousel.CarouselState,androidx.compose.ui.Modifier,androidx.compose.ui.unit.Dp,androidx.compose.ui.unit.Dp,androidx.compose.foundation.gestures.TargetedFlingBehavior,kotlin.Boolean,androidx.compose.ui.unit.Dp,androidx.compose.ui.unit.Dp,androidx.compose.foundation.layout.PaddingValues,kotlin.Function2)">Horizo​​ntalCenteredHeroCarousel</a><a href="https://m3.material.io/components/carousel/specs">variant</a>。</p></li>
-<li><p><a href="https://developer.android.com/reference/kotlin/androidx/compose/material3/package-summary?_gl=1*1h4dj5y*_up*MQ..*_ga*NDE1MzI0NzAwLjE3NjQ2MTM1MzU.*_ga_6HH9YJMN9M*czE3NjQ2MTM1MzQkbzEkZzAkdDE3NjQ2MTM1MzQkajYwJGwwJGgxODIyOTM4OTMy#TimePicker(androidx.compose.material3.TimePickerState,androidx.compose.ui.Modifier,androidx.compose.material3.TimePickerColors,androidx.compose.material3.TimePickerLayoutType)">TimePicker</a> 现在支持在选择器模式和输入模式之间切换。</p></li>
-<li><p>垂直拖拽手柄（<a href="https://developer.android.com/reference/kotlin/androidx/compose/material3/package-summary#VerticalDragHandle(androidx.compose.ui.Modifier,androidx.compose.material3.DragHandleSizes,androidx.compose.material3.DragHandleColors,androidx.compose.material3.DragHandleShapes,androidx.compose.foundation.interaction.MutableInteractionSource)">VerticalDragHandle</a>）帮助用户更改自适应空格的大小或者位置。</p></li>
-</ul>
-
-
-<p><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhTrvNyW_IJgSIqBWYlzweN3mkoZ_Uc3IMNj2Pu0cC1VdVqnja4nHA6kSCO2nk44MBi2diWEPu_oe0ozm2Jxh5jjXyJ7uqHdrdkyTrDaCgIifMpHLK9q3stUhD79QuLc7q_V4EisrNR7t4I3SMAxSq57EVzk8PGqiouXPRc-wI9Pu03vbuDU3_rnrA4THc/s16000/centered-hero-carousel.gif" alt="Horizontal centered hero carousel" /></p>
-
-<p>请注意，<a href="https://m3.material.io/blog/building-with-m3-expressive">Material 3 Expressive</a> API 仍在 Material 3 库的 alpha 版本中持续开发。要了解更多信息，请观看<a href="https://www.youtube.com/embed/t9rrsqfB2tM">最近的演讲</a>。</p>
-
-<h2>新的动画功能</h2>
-
-<p>我们持续扩展动画 API，包括对自定义共享元素动画的更新。</p>
-
-<h3>动态共享元素</h3>
-
-<p>默认情况下，<code>sharedElement()</code> 和 <code>sharedBounds()</code> 动画会在目标状态中找到匹配的键时尝试为布局更改添加动画效果。但是，你可能希望根据某些条件（例如导航方向或当前 UI 状态）动态禁用​​此动画。</p>
-
-<p>要控制共享元素过渡是否发生，你现在可以自定义传递给 <code>rememberSharedContentState()</code> 的 <code>SharedContentConfig</code>。<code>isEnabled</code> 属性决定共享元素是否处于活动状态。</p>
-
-<pre><code class="kotlin">SharedTransitionLayout {
-    val transition = updateTransition(currentState)
-    transition.AnimatedContent { targetState -&gt;
-        // Create the configuration that depends on state changing.
-        fun animationConfig() : SharedTransitionScope.SharedContentConfig {
-            return object : SharedTransitionScope.SharedContentConfig {
-                override val SharedTransitionScope.SharedContentState.isEnabled: Boolean
-                        get() =
-                            // determine whether to perform a shared element transition
-                }
-            }
-}
-</code></pre>
-
-<p>更多信息，请参阅<a href="https://developer.android.com/develop/ui/compose/animation/shared-elements/customize#dynamic-enable-disable">文档</a>。</p>
-
-<h3>Modifier.skipToLookaheadPosition()</h3>
-
-<p>此版本新增了一个修饰符 <a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/SharedTransitionScope?hl=en#(androidx.compose.ui.Modifier).skipToLookaheadPosition(kotlin.Function0)">Modifier.skipToLookaheadPosition()</a>，用于在执行共享元素动画时保持可组合元素的最终位置。这使得可以执行类似“揭示”类型的过渡动画，例如 Androidify 示例中相机的渐进式揭示效果。更多信息，请参阅<a href="https://www.youtube.com/embed/0moEXBqNDZI">此处的视频提示</a>。</p>
-
-<h3>共享元素过渡中的初始速度</h3>
-
-<p>此版本新增了一个共享元素过渡 API：<code>prepareTransitionWithInitialVelocity</code>，允许你将初始速度（例如来自手势）传递给共享元素过渡：</p>
-
-<pre><code class="kotlin">Modifier.fillMaxSize()
-    .draggable2D(
-            rememberDraggable2DState{offset+=it},
-            onDragStopped = { velocity -&gt;
-                // Set up the initial velocity for the upcoming shared element
-                // transition.
-              sharedContentStateForDraggableCat?.prepareTransitionWithInitialVelocity(velocity)
-                showDetails = false
-            },
-)
-</code></pre>
-
-<p><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEi-XdYTEA7H5BokZRoo_npAvjuSLPP3cXifTSHtonoHiuQVtav1w9ZKhIqlxQJKeX9AxyQnR0HjSe3t1Sy02jdMYiWI_mg1VoJST55CAKgBtkvHpgRatXJobhPVoimLQCJ-F6dfLRDt75vJANi46D4MhobglqRG7rSFb3VqglLcE6rNLx3c02Vzqiqr6IY/w288-h640/fling-shared.gif" alt="一个以初始速度开始的共享元素过渡，该初始速度来自手势" /></p>
-
-<h3>面纱过渡动画</h3>
-
-<p><a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/EnterTransition">EnterTransition</a> 和 <a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/ExitTransition?_gl=1*1m00og2*_up*MQ..*_ga*MjU3NDMyNzc5LjE3NjQ2MTE4NjM.*_ga_6HH9YJMN9M*czE3NjQ2MTE4NjMkbzEkZzAkdDE3NjQ2MTE4NjMkajYwJGwwJGgxMTk2NzM1MDk0">ExitTransition</a> 定义了动画的执行方式。 <a href="https://developer.android.com/reference/kotlin/androidx/compose/animation/package-summary#AnimatedVisibility">AnimatedVisibility</a>/ <a href="https://developer.android.com/refe%20rence/kotlin/androidx/compose/animation/package-summary#AnimatedContent">AnimatedContent</a> 可组合元素出现或消失。新增的实验性遮罩选项允许你指定颜色来遮盖或修饰内容；例如，在内容上方淡入/淡出半透明黑色图层：</p>
-
-<p><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEhemyKNMNnK50HVISQJlCz4fXPkkckq-ZdOgB3f8dolMzDe6UgCGq3_nVQhdfNb8au6cL00LHR0EJIQqxOQnnCXNSs8284eIMGroEp1V_F48JHkIk_kzPiYAov-nI3LAIG0_XXNjVQUIXwDvgH_rdMgF9wn_u605WU8oOD-uW-MSVKUHzyekqYsnFrEqms/w304-h640/veil_2.gif" alt="带遮蔽的动画内容 – 注意在动画过程中覆盖在网格内容上的半透明遮蔽层（或幕布）动画" /></p>
-
-<pre><code class="kotlin">AnimatedContent(
-    targetState = page,
-    modifier = Modifier.fillMaxSize().weight(1f),
-    transitionSpec = {
-         if (targetState &gt; initialState) {
-            (slideInHorizontally { it } togetherWith
-                    slideOutHorizontally { -it / 2 } + veilOut(targetColor = veilColor))
-        } else {
-            slideInHorizontally { -it / 2 } +
-                        unveilIn(initialColor = veilColor) togetherWith slideOutHorizontally { it }
-        }
-    },
-) { targetPage -&gt;
-    ...
-}
-</code></pre>
-
-<h2>即将发生的变更</h2>
-
-<h3>弃用 Modifier.onFirstVisible</h3>
-
-<p>Compose 1.9 引入了 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#%28androidx.compose.ui.Modifier%29.onVisibilityChanged%28kotlin.Long,kotlin.Float,androidx.compose.ui.layout.LayoutBoundsHolder,kotlin.Function1%29">Modifier.onVisibilityChanged</a> 和 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#%28androidx.compose.ui.Modifier%29.onFirstVisible%28kotlin.Long,kotlin.Float,androidx.compose.ui.layout.LayoutBoundsHolder,kotlin.Function0%29">Modifier.onFirstVisible</a>。在审阅了你的反馈后，我们发现 <code>Modifier.onFirstVisible</code> 的约定无法确定性地执行；具体来说，就是无法确定某个元素何时首次可见。例如，Lazy 布局可能会释放滚动出视口的元素，然后在它们滚动回视口时重新组合它们。在这种情况下，<code>onFirstVisible</code> 回调会再次触发，因为它是一个新组合的元素。当导航回之前访问过的包含 <code>onFirstVisible</code> 的屏幕时，也会出现类似的行为。因此，我们决定在下一个 Compose 版本（1.11）中弃用此修饰符，并建议迁移到 <code>onVisibilityChanged</code>。有关更多信息，请参阅<a href="https://developer.android.com/develop/ui/compose/layouts/visibility-modifiers">文档</a>。</p>
-
-<h3>测试中的协程分发</h3>
-
-<p>我们计划更改测试中的协程分发，以改善测试的稳定性并捕获更多问题。目前，测试使用的是 UnconfinedTestDispatcher，这与生产环境的行为有所不同；例如，<a href="https://developer.android.com/develop/ui/compose/side-effects">副作用</a>可能会立即运行，而不是被放入队列。在未来的版本中，我们计划引入一个新的 API，默认使用 StandardTestDispatcher，以匹配生产环境的行为。你现在可以在 1.10 版本中尝试新的行为：</p>
-
-<pre><code class="kotlin">@get:Rule // also createAndroidComposeRule, createEmptyComposeRule
-val rule = createComposeRule(effectContext = StandardTestDispatcher())
-</code></pre>
-
-<p>使用 StandardTestDispatcher 会将任务放入队列，因此你必须使用同步机制，例如 composeTestRule.waitForIdle() 或 composeTestRule.runOnIdle()。如果你的测试使用了 runTest，则必须确保 runTest 和你的 Compose 规则共享同一个 StandardTestDispatcher 实例以进行同步。</p>
-
-<pre><code class="kotlin">// 1. Create a SINGLE dispatcher instance
-valtestDispatcher = StandardTestDispatcher()
-
-// 2. Pass it to your Compose rule
-@get:Rule
-valcomposeRule = createComposeRule(effectContext = testDispatcher)
-
-@Test
-// 3. Pass the *SAME INSTANCE* to runTest
-funmyTest() = runTest(testDispatcher) {
-    composeRule.setContent{/* ... */}
-}
-</code></pre>
-
-<h2>工具</h2>
-
-<p>优秀的 API 需要优秀的工具，<a href="http://d.android.com/studio">Android Studio</a> 为 Compose 开发者新增了多项功能：</p>
-
-<ul>
-<li><p><a href="https://developer.android.com/studio/preview/features#iterate-ui-agent">变换 UI</a>：右键单击 @Preview，选择“变换 UI”，然后用自然语言描述更改，即可迭代你的设计。</p></li>
-<li><p><a href="https://developer.android.com/studio/preview/features#ui-tools-setup">生成 @Preview</a>：右键单击可组合元素，然后选择 Gemini > 生成 [可组合元素名称] 预览。</p></li>
-<li><p><a href="https://developer.android.com/studio/preview/features#material-symbols-support">自定义 Material Symbols</a>：矢量资源向导新增了对图标变体的支持。</p></li>
-<li><p><a href="https://developer.android.com/studio/preview/features#screen-to-code-agent">从屏幕截图生成代码</a> 或让 Gemini <a href="https://developer.android.com/studio/preview/features#match-ui-agent">将你现有的 UI 与目标图像匹配</a>。这可以与远程 <a href="https://developer.android.com/studio/preview/features#remote-mcp">MCP 支持</a> 结合使用，例如连接到 Figma 文件并从设计生成 Compose UI。</p></li>
-<li><p><a href="https://developer.android.com/studio/preview/features#find-and-fix-ui-quality-issues">修复 UI 质量问题</a> 会审核你的 UI 是否存在常见问题，例如辅助功能问题，然后提出修复方案。</p></li>
-</ul>
-
-
-<p>要查看这些工具的实际应用，请观看此 <a href="https://www.youtube.com/embed/jTlW8JeCClA">最新演示</a>。</p>
-
-<h2>尽情创作</h2>
-
-<p>我们持续投入资源开发 Jetpack Compose，为你提供创建美观、丰富的用户界面所需的 API 和工具。我们重视你的反馈，请在我们的<a href="https://issuetracker.google.com/issues/new?component=612128">问题跟踪器</a>中分享你对这些更改的反馈，或你希望看到的后续功能。</p>
 ]]></content>
   </entry>
   
