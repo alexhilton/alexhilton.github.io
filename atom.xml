@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-02-02T15:23:36+00:00</updated>
+  <updated>2026-03-09T10:52:30+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,898 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[一个实用的Android Perfetto分析器]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/03/09/pefetto-analyzer/"/>
+    <updated>2026-03-09T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/03/09/pefetto-analyzer</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Building a Deterministic Perfetto Analyzer for Android」，原文链接<a href="https://proandroiddev.com/building-a-deterministic-perfetto-analyzer-for-android-95877b3e083e">https://proandroiddev.com/building-a-deterministic-perfetto-analyzer-for-android-95877b3e083e</a>，由Sumeet Singh Arora发布于2026年1月6日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/03/09/pefetto-analyzer/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*qr6R9rois09aHO5R-yZW6A.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>每个 Android 性能工程师都面临的问题</h2>
+
+<p>当你打开一个 <a href="https://perfetto.dev/">Perfetto</a> trace后。</p>
+
+<p>会有成千上万个切片（slice）。数十个线程。数百万个数据点。一条看起来像抽象艺术的时间线。</p>
+
+<p>而在这其中的某个地方——被层层系统噪声、框架回调和线程交错所掩盖——隐藏着一个简单问题的答案：<em>为什么我的应用运行缓慢？</em></p>
+
+<p>我花了数年时间大规模调试 Android 性能。模式总是千篇一律：</p>
+
+<ol>
+<li><p>用户抱怨启动卡顿/缓慢</p></li>
+<li><p>工程师捕获跟踪信息</p></li>
+<li><p>工程师打开 Perfetto 用户界面</p></li>
+<li><p>工程师花费 2 小时滚动、缩放、眯眼查看</p></li>
+<li><p>工程师<em>可能</em>找到了根本原因</p></li>
+</ol>
+
+
+<p>跟踪信息无法讲述故事。它们只是罗列事实——带有时间戳、层层嵌套、令人眼花缭乱。“拥有跟踪信息”和“理解性能”之间存在着巨大的鸿沟。</p>
+
+<p><strong>本文旨在通过编程方式弥合这一鸿沟。</strong></p>
+
+<p>在过去的几周里，我一直在构建一个<strong>Perfetto 跟踪分析器</strong>，它可以将原始跟踪信息转换为结构化的、易于理解的洞察。没有仪表盘。只有确定性分析，它反映了经验丰富的工程师实际思考性能问题的方式。</p>
+
+<p>读完本文，你将了解如何：</p>
+
+<ol>
+<li><p>使跟踪信息<strong>可读</strong>——启动时间、长时间任务、帧健康状况</p></li>
+<li><p>使跟踪信息<strong>可归属</strong>——进程、线程、组件所有权</p></li>
+<li><p>分离<strong>职责</strong>——应用程序、框架和系统</p></li>
+<li><p>使用<strong>时间窗口</strong>查找关键事件发生的时间点</p></li>
+<li><p>生成<strong>确定性嫌疑对象</strong>——用于调查的优先级信号</p></li>
+</ol>
+
+
+<h2>为什么 Perfetto 跟踪难以阅读</h2>
+
+<p>Perfetto 功能极其强大。它可以捕获：</p>
+
+<ul>
+<li><p>CPU 调度</p></li>
+<li><p>帧渲染</p></li>
+<li><p>Binder 事务</p></li>
+<li><p>应用自定义跟踪部分</p></li>
+<li><p>系统服务活动</p></li>
+</ul>
+
+
+<p>但强大的功能也带​​来了复杂性。一个典型的跟踪可能包含：</p>
+
+<ul>
+<li><p>超过 50,000 个切片</p></li>
+<li><p>超过 100 个不同的线程名称</p></li>
+<li><p>超过 10 层的嵌套层级结构</p></li>
+</ul>
+
+
+<p>当你调试卡顿的滚动或缓慢的启动问题时，你并不需要所有这些信息。你需要的是：</p>
+
+<ol>
+<li><p><strong>发生了什么</strong> — 启动时间、耗时较长的任务、帧健康状况</p></li>
+<li><p><strong>谁做的</strong> — 哪个进程、哪个线程</p></li>
+<li><p><strong>什么类型的工作</strong> — 应用代码、框架还是系统代码</p></li>
+</ol>
+
+
+<p>让我们逐一解决这些问题。</p>
+
+<h2>第一步：使跟踪更易读</h2>
+
+<p>首要目标是提取人们真正关心的高级指标。</p>
+
+<h3>启动时间</h3>
+
+<p><a href="https://github.com/singhsume123/perfetto-agent">分析器</a> 使用尽力而为的启发式方法来估算启动时间：<strong>从最早的切片到第一个 <code>Choreographer#doFrame</code></strong> 的时间。</p>
+
+<p>这种方法并不完美——它无法涵盖所有​​启动场景——但它提供了一个有用的基准进行比较。</p>
+
+<p>以下是 <a href="http://medium.com/r?url=https%3A%2F%2Fgithub.com%2Fsinghsume123%2FTraceToy">TraceToy</a> 测试跟踪的示例（TraceToy 是我专门构建的一个示例应用程序，用于生成有趣的测试跟踪——稍后会详细介绍）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;startup_ms&quot;</span><span class="p">:</span> <span class="mf">2910.15</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在生产环境中，对于优化良好的冷启动，你通常会看到 500–1500 毫秒的启动时间；而对于初始化繁重的应用程序，启动时间则可能达到 2000–5000 毫秒甚至更长。具体的数值并不重要，重要的是跟踪其随时间的变化——无论基线是 800 毫秒还是 3000 毫秒，20% 的性能下降就是 20% 的性能下降。</p>
+
+<p>生产环境的应用通常会更精确地检测启动过程——使用 <code>reportFullyDrawn()</code>、自定义跟踪标记（例如 <code>Startup#complete</code>）或 Jetpack App Startup 等库。当这些方法不可用时，分析器的启发式方法是一个合理的备选方案，但你可以（也应该）对其进行调整，使其与应用对“启动完成”的实际定义相匹配。</p>
+
+<p>一个数值。可立即用于性能下降检测。</p>
+
+<h3>UI 线程上的长任务</h3>
+
+<p>长任务是指超过阈值并阻塞主线程的任务片段。这些是导致卡顿和无响应的主要原因。</p>
+
+<p>分析器默认使用 <strong>50 毫秒的阈值</strong>（可通过 <code>--long-task-ms</code> 配置）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;ui_thread_long_tasks&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;threshold_ms&quot;</span><span class="p">:</span> <span class="mi">50</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;count&quot;</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;top&quot;</span><span class="p">:</span> <span class="p">[</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;internal slice&gt;&quot;</span><span class="p">,</span> <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">16572.1</span><span class="p">},</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;216&quot;</span><span class="p">,</span> <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">4103.2</span><span class="p">},</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Handler: android.view.View&quot;</span><span class="p">,</span> <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">312.5</span><span class="p">}</span>
+</span><span class='line'>    <span class="p">]</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>看出问题了吗？是数字 ID。内部切片。无上下文。无归属信息。</p>
+
+<p>技术上正确。实际应用价值有限。</p>
+
+<p>我们知道<em>某些东西</em>阻塞了主线程 16 秒。但我们不知道<em>是什么</em>，也不知道<em>是谁</em>造成的。这就是原始分析失效的地方——也是为什么步骤 2（归属信息）至关重要的原因。</p>
+
+<h3>帧健康状况</h3>
+
+<p>丢帧会导致明显的卡顿。分析器从 <code>Choreographer#doFrame</code> 切片中提取帧时间：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;frame_features&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;total_frames&quot;</span><span class="p">:</span> <span class="mi">888</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;janky_frames&quot;</span><span class="p">:</span> <span class="mi">37</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;p95_frame_ms&quot;</span><span class="p">:</span> <span class="mf">14.35</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在这里，百分位数比平均值更重要——即使大多数帧都很快，少数几个坏帧也会破坏流畅度。</p>
+
+<h3>局限性</h3>
+
+<p>此时，我们可以回答：<em>发生了什么？</em></p>
+
+<p>但我们无法回答：<em>谁该负责？</em></p>
+
+<h2>步骤 2：使跟踪数据可归因</h2>
+
+<p>归因是指将性能数据与所有权关联起来。在调试实际问题时，工程师会问：</p>
+
+<ul>
+<li><p><em>哪个</em> <strong><em>进程</em></strong> <em>执行了此操作？</em></p></li>
+<li><p><em>哪个</em> <strong><em>线程</em></strong><em>？</em></p></li>
+<li><p><em>是我的</em> <strong><em>应用</em></strong> <em>还是其他程序</em>？_</p></li>
+</ul>
+
+
+<h3>聚焦进程过滤</h3>
+
+<p>首先，我们需要过滤掉噪声。跟踪数据会捕获设备上的<em>所有</em>活动——系统服务、其他应用、内核活动。其中大部分都无关紧要。</p>
+
+<p>分析器支持聚焦模式：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>python3 -m perfetto_agent.cli analyze <span class="se">\</span>
+</span><span class='line'>  --trace tracetoy_trace.perfetto-trace <span class="se">\</span>
+</span><span class='line'>  --focus-process com.example.tracetoy <span class="se">\</span>
+</span><span class='line'>  --out analysis.json
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这会将输出从“设备上发生的一切”转移到“与<em>此</em>应用相关的内容”。这是一个小小的标志，却能极大地提高信噪比。</p>
+
+<h3>进程和线程识别</h3>
+
+<p>设置聚焦进程后，每个切片都会包含所有权数据。分析器会将 <code>pid</code> 和 <code>tid</code> 连接到进程名和线程名：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">267.29</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;pid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;tid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;thread_name&quot;</span><span class="p">:</span> <span class="s2">&quot;xample.tracetoy&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;process_name&quot;</span><span class="p">:</span> <span class="s2">&quot;com.example.tracetoy&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>将其与步骤 1 中无用的 <code>"name": "216"</code> 进行比较。现在我们知道：</p>
+
+<ul>
+<li><p>✅ 它来自我的应用程序 (<code>com.example.tracetoy</code>)</p></li>
+<li><p>✅ 它运行在主线程上 (tid == pid)</p></li>
+<li><p>✅ 这是一个应用程序定义的段（<code>BG#</code> 前缀）</p></li>
+</ul>
+
+
+<h3>主线程检测</h3>
+
+<p>这里有一个微妙但重要的细节：<strong>主线程在跟踪信息中并不总是标记为“main”</strong>。</p>
+
+<p>分析器采用尽力而为的启发式方法：</p>
+
+<ol>
+<li><p>如果应用进程存在名为 <code>"main"</code> 的线程 → 使用该线程</p></li>
+<li><p>否则，回退到 <code>tid == pid</code>（在 Android 中通常适用于主线程）</p></li>
+</ol>
+
+
+<p>这模拟了经验丰富的工程师在元数据不完整时的推理方式——为了透明起见，分析器会记录所使用的启发式方法。</p>
+
+<h3>应用自定义节成为一等公民</h3>
+
+<p>Android 的 <code>Trace.beginSection()</code> API 允许开发者标记自定义 span：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;UI#loadUserProfile&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="c1">// ... work ...</span>
+</span><span class='line'><span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>分析器会显式地提取并聚合这些信息：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;app_sections&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;top_by_total_ms&quot;</span><span class="p">:</span> <span class="p">[</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span> <span class="nt">&quot;total_ms&quot;</span><span class="p">:</span> <span class="mf">11811.05</span><span class="p">,</span> <span class="nt">&quot;count&quot;</span><span class="p">:</span> <span class="mi">194</span><span class="p">},</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;UI#stall_button_click&quot;</span><span class="p">,</span> <span class="nt">&quot;total_ms&quot;</span><span class="p">:</span> <span class="mf">818.05</span><span class="p">,</span> <span class="nt">&quot;count&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">}</span>
+</span><span class='line'>    <span class="p">]</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这回答了以下问题：<em>我的代码的哪些部分</em>主导了执行？_</p>
+
+<p>至此，我们已将匿名切片转换为具有属性的、可操作的数据。但我们仍然没有回答最重要的问题：<strong>究竟是谁的错——我的应用、框架还是系统？</strong></p>
+
+<h2>第三步：职责分离</h2>
+
+<p>关于移动性能，有一个令人不安的真相：</p>
+
+<p><strong>当你的应用运行缓慢时，并非所有问题都出在你身上。</strong></p>
+
+<p>各种数据混杂在一起：</p>
+
+<ul>
+<li><p>你的应用代码</p></li>
+<li><p>Android 框架内部代码</p></li>
+<li><p>系统和内核活动</p></li>
+</ul>
+
+
+<p>如果不将这些数据分离，很容易得出错误的结论，并优化错误的地方。</p>
+
+<h3>确定性分类</h3>
+
+<p>每个切片现在都被标记为以下类别之一：</p>
+
+<ul>
+<li><p>🟢 <strong>app</strong> — 焦点进程上的应用程序标记（例如，<code>UI#stall_button_click</code>）</p></li>
+<li><p>🔵 <strong>framework</strong> — 焦点进程上的框架标记（例如，<code>Choreographer#doFrame</code>）</p></li>
+<li><p>🔴 <strong>system</strong> — 非焦点进程 ID 或系统标记（例如，<code>binder transaction</code>）</p></li>
+<li><p>⚪ <strong>unknown</strong> — 无法确定分类（例如，数字 ID）</p></li>
+</ul>
+
+
+<p>分类器有意采用<strong>保守</strong>的分类方式：</p>
+
+<ul>
+<li><p>基于进程 ID 的所有权</p></li>
+<li><p>基于线程的所有权</p></li>
+<li><p>基于明确的名称标记规则</p></li>
+</ul>
+
+
+<p>如果一个切片无法明确归类，则会被标记为“unknown”。这并非错误，而是诚实。</p>
+
+<h3>带有责任标签的长任务</h3>
+
+<p>以下是一个已分类的长任务切片示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">267.29</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;pid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;tid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;thread_name&quot;</span><span class="p">:</span> <span class="s2">&quot;xample.tracetoy&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;process_name&quot;</span><span class="p">:</span> <span class="s2">&quot;com.example.tracetoy&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;category&quot;</span><span class="p">:</span> <span class="s2">&quot;app&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>以及一个框架密集型任务切片示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dequeueBuffer - VRI[MainActivity]#0(BLAST Consumer)0&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">180.4</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;pid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;tid&quot;</span><span class="p">:</span> <span class="mi">5688</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;thread_name&quot;</span><span class="p">:</span> <span class="s2">&quot;RenderThread&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;category&quot;</span><span class="p">:</span> <span class="s2">&quot;framework&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>相同的跟踪记录，但对优化方向的影响却截然不同。</p>
+
+<h3>聚合分解</h3>
+
+<p>分析器无需手动查看数百个切片，而是计算以下内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;work_breakdown&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;by_category_ms&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;app&quot;</span><span class="p">:</span> <span class="mf">12603.72</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;framework&quot;</span><span class="p">:</span> <span class="mf">305.77</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;system&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;unknown&quot;</span><span class="p">:</span> <span class="mf">5167.50</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这一个代码块回答了一个重要的问题：</p>
+
+<blockquote><p>此性能问题主要是应用程序本身的问题吗？</p></blockquote>
+
+<p>有时答案令人不安，有时却令人欣慰。无论如何，它都基于数据。</p>
+
+<h3>主线程阻塞：究竟是谁的责任？</h3>
+
+<p>分析器按类别分解主线程阻塞时间：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;main_thread_blocking&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;app_ms&quot;</span><span class="p">:</span> <span class="mf">12603.72</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;framework_ms&quot;</span><span class="p">:</span> <span class="mf">305.77</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;system_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;unknown_ms&quot;</span><span class="p">:</span> <span class="mf">2840.88</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>责任归属在此变得不可回避。</p>
+
+<p>如果主线程主要被应用程序工作阻塞（就像这个跟踪记录中显示的那样），<strong>你就能准确地知道应该把优化工作集中在哪些方面</strong>。</p>
+
+<h3>摘要块</h3>
+
+<p>所有内容都汇总成一个最简洁的摘要：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;summary&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;main_thread_found&quot;</span><span class="p">:</span> <span class="kc">true</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;top_app_sections&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span> <span class="s2">&quot;dequeueBuffer - VRI[MainActivity]#0...&quot;</span><span class="p">,</span> <span class="s2">&quot;UI#stall_button_click&quot;</span><span class="p">],</span>
+</span><span class='line'>    <span class="nt">&quot;top_long_slice_name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;dominant_work_category&quot;</span><span class="p">:</span> <span class="s2">&quot;app&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;main_thread_blocked_by&quot;</span><span class="p">:</span> <span class="s2">&quot;app&quot;</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这不是解释，而是一个<strong>信号</strong>——告诉你应该关注哪里，以及哪些地方不应该关注。</p>
+
+<h2>第四步：时间窗口和嫌疑对象</h2>
+
+<p>知道是谁执行了操作固然重要，但性能下降很少是全局性的——它们往往是<strong>暂时性的</strong>。</p>
+
+<p>典型的问题如下：</p>
+
+<ul>
+<li><p><em>为什么启动这么慢？</em></p></li>
+<li><p><em>为什么卡顿只在第一个屏幕之后才出现？</em></p></li>
+<li><p><em>为什么 UI 线程在交互过程中被阻塞，但在启动时却没有？</em></p></li>
+</ul>
+
+
+<p>缺乏时间上下文的归因分析仍然需要手动梳理时间线。第四步可以减轻这种认知负担。</p>
+
+<h3>时间窗口：明确“何时”⏱️</h3>
+
+<p>分析器不再将跟踪信息视为一条长长的时间线，而是将其划分为粗略的、确定性的窗口：</p>
+
+<ul>
+<li><p><strong>启动窗口</strong> — 从进程启动到启动结束</p></li>
+<li><p><strong>稳定状态窗口</strong> — 启动后的时间段（默认值：5 秒）</p></li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;time_windows&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;startup&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;start_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;end_ms&quot;</span><span class="p">:</span> <span class="mf">2910.15</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;method&quot;</span><span class="p">:</span> <span class="s2">&quot;startup_ms&quot;</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'>    <span class="nt">&quot;steady_state&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;start_ms&quot;</span><span class="p">:</span> <span class="mf">2910.15</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;end_ms&quot;</span><span class="p">:</span> <span class="mf">7910.15</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;method&quot;</span><span class="p">:</span> <span class="s2">&quot;startup_end + 5000ms&quot;</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>仅此一项就改变了你对跟踪信息的推理方式。</p>
+
+<h3>窗口分解：上下文中的责任归属 📊</h3>
+
+<p>对于每个窗口，分析器计算：</p>
+
+<ul>
+<li><p>按类别划分的总工作量（<code>app</code>、<code>framework</code>、<code>system</code>、<code>unknown</code>）</p></li>
+<li><p>按类别划分的主线程阻塞</p></li>
+</ul>
+
+
+<p>来自 TraceToy 跟踪：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;window_breakdown&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;startup&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;by_category_ms&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;app&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;framework&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;system&quot;</span><span class="p">:</span> <span class="mf">378.43</span><span class="p">,</span> <span class="nt">&quot;unknown&quot;</span><span class="p">:</span> <span class="mf">101.34</span><span class="p">},</span>
+</span><span class='line'>      <span class="nt">&quot;main_thread_blocking_ms&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;app_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;framework_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;system_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;unknown_ms&quot;</span><span class="p">:</span> <span class="mf">101.34</span><span class="p">}</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'>    <span class="nt">&quot;steady_state&quot;</span><span class="p">:</span> <span class="p">{</span> <span class="err">/*</span> <span class="err">...</span> <span class="err">*/</span> <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这可以确定性地回答以下问题：</p>
+
+<blockquote><p>启动阶段主要由系统工作主导。稳定阶段有大量未知工作阻塞了主线程。</p></blockquote>
+
+<p>无需猜测。</p>
+
+<h3>从数据到嫌疑人 🕵️</h3>
+
+<p>一旦掌握了归因、责任和时间窗口，就可以找出<strong>嫌疑人</strong>。</p>
+
+<p>嫌疑人<strong>并非解释</strong>，而是一个<em>优先级信号</em>。</p>
+
+<p>分析器生成一个确定性列表：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;suspects&quot;</span><span class="p">:</span> <span class="p">[</span>
+</span><span class='line'>    <span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Startup main thread dominated by unknown work&quot;</span><span class="p">,</span> <span class="nt">&quot;window&quot;</span><span class="p">:</span> <span class="s2">&quot;startup&quot;</span><span class="p">,</span> <span class="nt">&quot;evidence&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;unknown_ms&quot;</span><span class="p">:</span> <span class="mf">101.34</span><span class="p">}},</span>
+</span><span class='line'>    <span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Startup dominated by system work&quot;</span><span class="p">,</span> <span class="nt">&quot;window&quot;</span><span class="p">:</span> <span class="s2">&quot;startup&quot;</span><span class="p">,</span> <span class="nt">&quot;evidence&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;system_ms&quot;</span><span class="p">:</span> <span class="mf">378.43</span><span class="p">}}</span>
+</span><span class='line'>    <span class="err">//</span> <span class="err">...</span> <span class="err">more</span> <span class="err">suspects</span> <span class="err">for</span> <span class="err">steady_state</span>
+</span><span class='line'>  <span class="p">]</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这些标签是模板化的、可复现的，并且有证据支持。</p>
+
+<p>它们不解释问题，而是指明方向。</p>
+
+<h3>摘要现在更有意义了🧭</h3>
+
+<p>摘要块变得可操作：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;summary&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;startup_dominant_category&quot;</span><span class="p">:</span> <span class="s2">&quot;system&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;steady_state_dominant_category&quot;</span><span class="p">:</span> <span class="s2">&quot;unknown&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;top_suspect&quot;</span><span class="p">:</span> <span class="s2">&quot;Startup main thread dominated by unknown work&quot;</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果你只阅读此摘要，你就已经知道：</p>
+
+<ul>
+<li><p>从哪里开始调查</p></li>
+<li><p>应该查看哪种类型的工作</p></li>
+<li><p>哪个阶段最重要</p></li>
+</ul>
+
+
+<p>这与原始跟踪信息相比是一个巨大的转变。</p>
+
+<h2>整合所有步骤</h2>
+
+<p>以下是完整的工作流程：</p>
+
+<h3>1. 捕获跟踪</h3>
+
+<p>使用 Android Studio 的性能分析器或命令行：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>adb shell perfetto -o /data/misc/perfetto-traces/trace.perfetto-trace -t 10s <span class="se">\</span>
+</span><span class='line'>  sched freq idle am wm gfx view binder_driver hal dalvik camera input res memory
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 运行分析器</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>python3 -m perfetto_agent.cli analyze <span class="se">\</span>
+</span><span class='line'>  --trace trace.perfetto-trace <span class="se">\</span>
+</span><span class='line'>  --focus-process com.example.myapp <span class="se">\</span>
+</span><span class='line'>  --out analysis.json <span class="se">\</span>
+</span><span class='line'>  --long-task-ms <span class="m">50</span> <span class="se">\</span>
+</span><span class='line'>  --top-n 10
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3.阅读输出</h3>
+
+<p>首先查看 <code>summary</code> 块，了解主要类别和主要嫌疑人，然后深入查看具体信息：</p>
+
+<ul>
+<li><p><code>work_breakdown</code> 用于查看类别分布</p></li>
+<li><p><code>features.long_slices_attributed</code> 用于查看单个嫌疑人</p></li>
+<li><p><code>features.app_sections</code> 用于查看你的插桩代码</p></li>
+</ul>
+
+
+<h2>此功能无法实现的功能</h2>
+
+<p>让我们明确一下它的局限性：</p>
+
+<ul>
+<li><p>❌ <strong>不追究责任</strong> — 仅显示证据</p></li>
+<li><p>❌ <strong>不生成建议</strong> — 这需要理解意图</p></li>
+<li><p>❌ <strong>不声明因果关系</strong> — 相关性不等于因果关系</p></li>
+</ul>
+
+
+<p>该系统使责任<strong>可见</strong>。这就足够了。</p>
+
+<h2>使用 TraceToy 进行测试</h2>
+
+<p>我构建了一个名为 <strong>TraceToy</strong> 的示例应用程序，用于生成有趣的跟踪信息，以便测试分析器。</p>
+
+<p>它包含：</p>
+
+<ul>
+<li><p><strong>启动初始化</strong>（使用 <code>StartupInit</code> 标记）</p></li>
+<li><p><strong>UI 阻塞按钮</strong> — 使用 <code>UI#stall_button_click</code> 故意阻塞 UI 线程 200 毫秒</p></li>
+<li><p><strong>后台加载切换</strong> — 生成 <code>BG#churn</code> 标记</p></li>
+<li><p><strong>可滚动列表</strong> — 生成帧渲染事件</p></li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Kkwdpn2Wvc8hadZlx56COQ.png" alt="" /></p>
+
+<p>截图由作者从 Android TraceToys 示例应用中截取。</p>
+
+<h3>快速入门</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># Record a 20-second trace</span>
+</span><span class='line'>adb shell perfetto -o /data/misc/perfetto-traces/trace -t 20s sched gfx view dalvik
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># Interact with the app (tap UI Stall, scroll, toggle background load)# Pull and analyze</span>
+</span><span class='line'>adb pull /data/misc/perfetto-traces/trace tracetoy_trace.perfetto-trace
+</span><span class='line'>python3 -m perfetto_agent.cli analyze <span class="se">\</span>
+</span><span class='line'>  --trace tracetoy_trace.perfetto-trace <span class="se">\</span>
+</span><span class='line'>  --focus-process com.example.tracetoy <span class="se">\</span>
+</span><span class='line'>  --out analysis.json
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出应包含：</p>
+
+<ul>
+<li><p>已识别 TraceToy 进程（<code>com.example.tracetoy</code>，进程 ID 5664）</p></li>
+<li><p>应用部分中出现 <code>BG#churn</code>（194 次，总计 11.8 秒）和 <code>UI#stall_button_click</code>（4 次，总计 818 毫秒）</p></li>
+<li><p>199 个耗时超过 50 毫秒阈值的长任务</p></li>
+<li><p>888 帧，其中 37 帧卡顿（p95：14.35 毫秒）</p></li>
+</ul>
+
+
+<h2>实现亮点：切片分类</h2>
+
+<p>分析器中最有趣的部分是分类器。它使用显式标记列表，并且有意采用保守的分类方法：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="k">def</span> <span class="nf">classify_slice_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="bp">None</span><span class="p">,</span> <span class="n">pid</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="bp">None</span><span class="p">,</span> <span class="n">focus_pid</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="bp">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;Classify a slice into app/framework/system/unknown using pid + name tokens.&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="c"># If not from focus process, it&#39;s system</span>
+</span><span class='line'>    <span class="k">if</span> <span class="n">focus_pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span> <span class="ow">and</span> <span class="n">pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span> <span class="ow">and</span> <span class="n">pid</span> <span class="o">!=</span> <span class="n">focus_pid</span><span class="p">:</span>
+</span><span class='line'>        <span class="k">return</span> <span class="s">&quot;system&quot;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="ow">not</span> <span class="n">name</span><span class="p">:</span>
+</span><span class='line'>        <span class="k">return</span> <span class="s">&quot;unknown&quot;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">lower_name</span> <span class="o">=</span> <span class="n">name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">app_tokens</span> <span class="o">=</span> <span class="p">[</span><span class="s">&quot;ui#&quot;</span><span class="p">,</span> <span class="s">&quot;bg#&quot;</span><span class="p">,</span> <span class="s">&quot;startupinit&quot;</span><span class="p">]</span>
+</span><span class='line'>    <span class="n">framework_tokens</span> <span class="o">=</span> <span class="p">[</span>
+</span><span class='line'>        <span class="s">&quot;choreographer&quot;</span><span class="p">,</span> <span class="s">&quot;doframe&quot;</span><span class="p">,</span> <span class="s">&quot;renderthread&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="s">&quot;viewrootimpl&quot;</span><span class="p">,</span> <span class="s">&quot;dequeuebuffer&quot;</span><span class="p">,</span> <span class="s">&quot;blast&quot;</span><span class="p">,</span> <span class="s">&quot;hwui&quot;</span>
+</span><span class='line'>    <span class="p">]</span>
+</span><span class='line'>    <span class="n">system_tokens</span> <span class="o">=</span> <span class="p">[</span><span class="s">&quot;binder&quot;</span><span class="p">,</span> <span class="s">&quot;surfaceflinger&quot;</span><span class="p">,</span> <span class="s">&quot;sched&quot;</span><span class="p">,</span> <span class="s">&quot;kworker&quot;</span><span class="p">,</span> <span class="s">&quot;irq&quot;</span><span class="p">,</span> <span class="s">&quot;futex&quot;</span><span class="p">]</span>
+</span><span class='line'>    <span class="c"># Check app tokens first (highest confidence)</span>
+</span><span class='line'>    <span class="k">if</span> <span class="n">focus_pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span> <span class="ow">and</span> <span class="n">pid</span> <span class="o">==</span> <span class="n">focus_pid</span><span class="p">:</span>
+</span><span class='line'>        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">token</span> <span class="ow">in</span> <span class="n">lower_name</span> <span class="k">for</span> <span class="n">token</span> <span class="ow">in</span> <span class="n">app_tokens</span><span class="p">):</span>
+</span><span class='line'>            <span class="k">return</span> <span class="s">&quot;app&quot;</span>
+</span><span class='line'>        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">token</span> <span class="ow">in</span> <span class="n">lower_name</span> <span class="k">for</span> <span class="n">token</span> <span class="ow">in</span> <span class="n">framework_tokens</span><span class="p">):</span>
+</span><span class='line'>            <span class="k">return</span> <span class="s">&quot;framework&quot;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">token</span> <span class="ow">in</span> <span class="n">lower_name</span> <span class="k">for</span> <span class="n">token</span> <span class="ow">in</span> <span class="n">system_tokens</span><span class="p">):</span>
+</span><span class='line'>        <span class="k">return</span> <span class="s">&quot;system&quot;</span>
+</span><span class='line'>    <span class="k">return</span> <span class="s">&quot;unknown&quot;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>关键见解：<strong>保守的分类方法优于错误的置信度</strong>。如果无法准确分类，则“未知”是诚实的答案。</p>
+
+<p>请参阅<a href="https://github.com/singhsume123/perfetto-agent">完整实现</a>，了解启动检测、主线程解析和帧健康计算。</p>
+
+<h2>为你的应用添加插桩</h2>
+
+<p>为了最大限度地利用此分析，请对你的代码进行插桩：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">android.os.Trace</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">UserProfileLoader</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">loadProfile</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">UserProfile</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;UI#loadUserProfile&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;UI#fetchFromCache&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">cached</span> <span class="p">=</span> <span class="n">cache</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">cached</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="k">return</span> <span class="n">cached</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;IO#fetchFromNetwork&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">profile</span> <span class="p">=</span> <span class="n">api</span><span class="p">.</span><span class="n">fetchProfile</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">profile</span>
+</span><span class='line'>        <span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用一致的命名约定：</p>
+
+<ul>
+<li><p><code>UI#</code> — 主线程/UI 操作</p></li>
+<li><p><code>BG#</code> — 后台线程操作</p></li>
+<li><p><code>IO#</code> — I/O 操作</p></li>
+<li><p><code>DB#</code> — 数据库操作</p></li>
+</ul>
+
+
+<p>这使得分析器的输出能够立即转化为实际操作。</p>
+
+<h2>亲自尝试</h2>
+
+<p>该分析器是开源的：</p>
+
+<p>🔗 <strong>Perfetto 分析器</strong>：<a href="https://github.com/singhsume123/perfetto-agent">github.com/singhsume123/perfetto-agent</a></p>
+
+<p>🔗 <strong>TraceToy 测试应用</strong>：<a href="https://github.com/singhsume123/TraceToy">github.com/singhsume123/TraceToy</a></p>
+
+<p>该仓库包含：</p>
+
+<ul>
+<li><p>Python 命令行分析器</p></li>
+<li><p>示例跟踪和输出 (<code>analysis.json</code>)</p></li>
+<li><p>设置说明</p></li>
+</ul>
+
+
+<h2>要点总结</h2>
+
+<ol>
+<li><p><strong>Perfetto 跟踪功能强大但信息量庞大</strong> — 程序化分析能够从噪声中提取有效信息</p></li>
+<li><p><strong>归属至关重要</strong> — 了解谁执行了工作（进程、线程、组件）至关重要</p></li>
+<li><p><strong>明确职责分离</strong> — 应用、框架和系统之间的职责划分最重要的区别</p></li>
+<li><p><strong>时间窗口至关重要</strong> — 启动阶段和稳定阶段通常具有截然不同的特征</p></li>
+<li><p><strong>嫌疑人指出问题所在，而非解释问题原因</strong> — 确定性信号告诉你应该首先从哪里入手</p></li>
+<li><p><strong>保守的分类胜过错误的自信</strong> — “未知”总比错误好</p></li>
+<li><p><strong>为你的代码添加插桩</strong> — <code>Trace.beginSection()</code> 是你的好帮手</p></li>
+</ol>
+
+
+<p>性能调试并非要找出<em>所有</em>发生的事情。而是要找出：</p>
+
+<ul>
+<li><p><strong>什么才是关键的</strong></p></li>
+<li><p><strong>何时才是关键的</strong></p></li>
+<li><p><strong>谁负责</strong></p></li>
+</ul>
+
+
+<p>此分析器将这个模型清晰地呈现出来，并且机器可读。</p>
+
+<p>_有任何问题或反馈？请在 <a href="https://www.linkedin.com/in/sumeet-singh-arora-50605153/"><em>LinkedIn</em></a> 上联系我。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Compose中的IntrinsicSize实战指南]]></title>
@@ -12859,1168 +13751,6 @@ Anatolii Frolov发布于2025年11月20日。</p></blockquote>
 <p>我喜欢回答关于架构的具体问题，所以请随时在这里留下你的答案，我会尽快回复。当没有唯一的“正确”答案，而我们可以进行讨论时，这才是最有趣的。</p>
 
 <p>在以后的文章中，我将使用上述内容逐步指导你使用 Kotlin 和 Compose 创建架构良好的示例应用程序。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[面向开发者的系统设计：像建筑师一样思考]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/09/24/system-design-for-developers/"/>
-    <updated>2025-09-24T14:31:48+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/09/24/system-design-for-developers</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「System Design for Developers: Think Like an Architect」，原文链接<a href="https://towardsdev.com/system-design-for-developers-think-like-an-architect-87f32882ca28">https://towardsdev.com/system-design-for-developers-think-like-an-architect-87f32882ca28</a>，由Saurabh Singh发布于2025年8月25日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/09/24/system-design-for-developers/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*b1eSMQdryXSteTJredbMtA.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<blockquote><p>“建筑是一种社会行为，也是人类活动的物质舞台。”—— Spiro Kostof</p></blockquote>
-
-<p>正如建筑师不会在没有蓝图的情况下开始建造一样，开发者也不应该在没有系统设计的情况下开始编码。然而，许多开发者直接进入实现阶段，却发现自己陷入了技术债务、性能瓶颈和架构噩梦的迷宫之中，而这些本可以通过适当的规划来避免。</p>
-
-<p>系统设计是一门艺术和科学，它定义系统的架构、组件、模块、接口和数据，以满足特定需求。它就像一座屹立百年的房屋和一座因自身重量而倒塌的房屋之间的区别。</p>
-
-<h2>建筑师的思维方式：分解复杂问题</h2>
-
-<h2>分层思考，而非直线思考</h2>
-
-<p>想象一下，你正在设计一座摩天大楼。你不会先决定第 47 层的墙壁要刷什么颜色。你会先从地基开始，然后是结构框架，接着是电气和管道系统，最后是室内设计。</p>
-
-<p>软件系统也遵循同样的原则。想象一下<strong>可视化页面构建器应用程序</strong>——想想 Webflow、Wix 或 Squarespace 等工具，它们允许用户通过拖放界面创建网页，而无需编写代码。这些系统非常复杂，用户可以：</p>
-
-<ul>
-<li>将组件（按钮、图片、文本块）从库拖放到画布上</li>
-<li>通过可视化控件自定义属性（颜色、字体、大小）</li>
-<li>在构建过程中实时预览页面</li>
-<li>将网站直接发布到 Web 上</li>
-<li>与团队成员实时协作</li>
-</ul>
-
-
-<p>架构师无需深入研究拖放功能的实现细节，而是首先思考：</p>
-
-<p>基础层：核心实体有哪些？</p>
-
-<p>页面、组件、模板、用户、项目</p>
-
-<p>结构层：这些实体之间如何关联？</p>
-
-<p>用户创建项目
-项目包含页面
-页面由组件组成
-组件可以保存为模板</p>
-
-<p>系统层：它们如何通信？</p>
-
-<ul>
-<li>用于 CRUD 操作的 RESTful API</li>
-<li>用于实时协作的 WebSocket 连接</li>
-<li>用于组件更新的事件驱动架构</li>
-</ul>
-
-
-<p><strong>界面层</strong>：用户如何交互？</p>
-
-<ul>
-<li>用于项目管理的仪表盘</li>
-<li>用于页面编辑的画布</li>
-<li>用于选择的组件库</li>
-<li>用于测试的预览模式</li>
-</ul>
-
-
-<p>正如软件工程师 Grady Booch 曾经说过的：“优秀软件的功能在于化繁为简。” 这种分层方法将极其复杂的内容转化为易于管理的模块。</p>
-
-<h2>📝 互动练习：分层架构</h2>
-
-<p><strong>现在就拿起纸笔！</strong>在继续阅读之前，请尝试以下方法：</p>
-
-<ol>
-<li><strong>画四个水平矩形</strong>，并将它们叠放在一起</li>
-<li><strong>从上到下分别标注</strong>：界面、系统、结构、基础</li>
-<li><strong>选择你日常使用的任何应用</strong>（Netflix、Amazon、WhatsApp）</li>
-<li><strong>在每一层</strong>中填入你认为应该填入的内容</li>
-</ol>
-
-
-<p>Netflix 示例：_</p>
-
-<ul>
-<li>界面：搜索栏、视频播放器、推荐</li>
-<li>系统：流媒体服务、推荐引擎、用户身份验证</li>
-<li>结构：用户观看电影，电影有评分</li>
-<li>基础：用户、电影、评分、订阅</li>
-</ul>
-
-
-<p><strong>为什么要画这个？</strong>你的大脑对你手绘内容的记忆力比你刚刚阅读的内容强 6 倍。这张简单的草图会让你立刻理解文章的其余部分。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:2000/1*k5g3kjh3ugcfUf5CWJjoFw.jpeg" alt="我在重新设计视频平台架构时画了这张草图。产品经理终于明白了为什么我们不能简单地“添加一个功能”——他能看到它会影响到哪个层级。这张图避免了3个月的技术债务！" /></p>
-
-<h2>分解策略</h2>
-
-<p>分解复杂问题就像解剖手表。你需要了解每个齿轮、弹簧和机械装置，然后才能构建或修复整个钟表。</p>
-
-<p><strong>功能分解示例</strong>：可视化页面构建器</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="n">Page</span> <span class="n">Builder</span> <span class="n">System</span>
-</span><span class='line'><span class="err">├──</span> <span class="n">Authentication</span> <span class="o">&amp;</span> <span class="n">Authorization</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">User</span> <span class="n">registration</span><span class="o">/</span><span class="n">login</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Role</span><span class="o">-</span><span class="n">based</span> <span class="n">permissions</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">└──</span> <span class="n">Session</span> <span class="n">management</span>
-</span><span class='line'><span class="err">├──</span> <span class="n">Project</span> <span class="n">Management</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Project</span> <span class="n">CRUD</span> <span class="n">operations</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Version</span> <span class="n">control</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">└──</span> <span class="n">Collaboration</span> <span class="n">features</span>
-</span><span class='line'><span class="err">├──</span> <span class="n">Page</span> <span class="n">Editor</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Canvas</span> <span class="n">rendering</span> <span class="n">engine</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Component</span> <span class="n">management</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Drag</span><span class="o">-</span><span class="ow">and</span><span class="o">-</span><span class="n">drop</span> <span class="n">interface</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">└──</span> <span class="n">Real</span><span class="o">-</span><span class="n">time</span> <span class="n">preview</span>
-</span><span class='line'><span class="err">├──</span> <span class="n">Component</span> <span class="n">Library</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Built</span><span class="o">-</span><span class="ow">in</span> <span class="n">components</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">Custom</span> <span class="n">components</span>
-</span><span class='line'><span class="err">│</span>   <span class="err">└──</span> <span class="n">Template</span> <span class="n">system</span>
-</span><span class='line'><span class="err">└──</span> <span class="n">Export</span> <span class="o">&amp;</span> <span class="n">Publishing</span>
-</span><span class='line'>    <span class="err">├──</span> <span class="n">Static</span> <span class="n">site</span> <span class="n">generation</span>
-</span><span class='line'>    <span class="err">├──</span> <span class="n">Hosting</span> <span class="n">integration</span>
-</span><span class='line'>    <span class="err">└──</span> <span class="n">SEO</span> <span class="n">optimization</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>每个分支都可以独立开发、单独测试，并系统地集成。这种方法遵循 Unix 哲学：“专心做好一件事。”</p>
-
-<h2>📝 互动练习：系统分解树</h2>
-
-<p><strong>又该画草图了！</strong> 这个练习可以训练你的“架构师大脑”：</p>
-
-<ol>
-<li><strong>画一个树形结构</strong>，以“页面构建器”为根</li>
-<li><strong>添加 5 个主要分支</strong>（思考：哪些是大块？）</li>
-<li><strong>在每个分支下，添加 2-3 个叶子</strong>（较小的部分）</li>
-<li><strong>使用简单的方框和线条</strong>——无需复杂的图表！</li>
-</ol>
-
-
-<p><em>你的绘图可能看起来像：</em></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-</pre></td><td class='code'><pre><code class='gherkin'><span class='line'><span class="nf">Page Builder</span>
-</span><span class='line'><span class="nf">   /</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">   |</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">   |</span>
-</span><span class='line'>
-</span><span class='line'><span class="nf">   \</span>
-</span><span class='line'><span class="nf"> Auth  Pages  Components  Export</span>
-</span><span class='line'><span class="k">  |</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">  |</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">  |</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">  |</span><span class="nf"></span>
-</span><span class='line'><span class="nf">Login  Create   Library   HTML</span>
-</span><span class='line'><span class="nf">Signup Edit</span>
-</span><span class='line'>
-</span><span class='line'><span class="nf">Custom</span>
-</span><span class='line'>
-</span><span class='line'><span class="nf">PDF</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>神奇时刻</strong>：当你无法进一步分解一个方框时，这可能就是一个开发人员一周的工作。如果觉得方框太大，就进一步分解它！</p>
-
-<h2>可扩展性：今天构建，应对未来的问题</h2>
-
-<h2>成长型思维</h2>
-
-<blockquote><p>“种一棵树的最佳时机是20年前，其次是现在。”——中国谚语</p></blockquote>
-
-<p>可扩展性规划就像为房子选择地基。你可能从一栋小屋开始，但如果你计划扩建成一座豪宅，你就需要一个能够支撑未来发展的地基。</p>
-
-<p>考虑三个可扩展性维度：</p>
-
-<p><strong>垂直扩展（向上扩展）</strong>：就像在建筑物中增加更多楼层</p>
-
-<ul>
-<li>增加现有服务器上的 CPU、RAM 或存储空间</li>
-<li>简单但存在物理限制</li>
-<li>单点故障</li>
-</ul>
-
-
-<p><strong>水平扩展（向外扩展）</strong>：就像在综合体中建造更多建筑物</p>
-
-<ul>
-<li>添加更多服务器以分散负载</li>
-<li>更复杂但几乎不受限制</li>
-<li>更好的容错能力</li>
-</ul>
-
-
-<p><strong>功能扩展</strong>：就像为不同用途建造专用建筑物</p>
-
-<ul>
-<li>微服务架构</li>
-<li>每个服务处理特定功能</li>
-<li>独立扩展和部署</li>
-</ul>
-
-
-<h2>可扩展性的红绿灯系统</h2>
-
-<p><strong>🟢 绿灯决策（第一天）</strong>：</p>
-
-<ul>
-<li>简单的单体架构</li>
-<li>单一数据库</li>
-<li>使用 Redis 进行基本缓存</li>
-<li>静态资源的 CDN</li>
-</ul>
-
-
-<p><strong>🟡 黄灯决策（流量增长）</strong>：</p>
-
-<ul>
-<li>数据库只读副本</li>
-<li>应用服务器集群</li>
-<li>API 速率限制</li>
-<li>监控和报警系统</li>
-</ul>
-
-
-<p><strong>🔴 红灯决策（高流量）</strong>：</p>
-
-<ul>
-<li>微服务架构</li>
-<li>数据库分片</li>
-<li>用于异步处理的消息队列</li>
-<li>自动扩展基础设施</li>
-</ul>
-
-
-<p>对于我们的页面构建器示例，你可以从一个简单的 Python FastAPI 服务器和 PostgreSQL 数据库开始。随着流量的增长，你将引入：</p>
-
-<ol>
-<li><strong>缓存层</strong>：用于会话存储和频繁访问的模板的 Redis</li>
-<li><strong>CDN</strong>：用于服务组件资源和生成页面的 CloudFront</li>
-<li><strong>数据库优化</strong>：用于分析的读取副本，为不同域提供独立的数据库</li>
-<li><strong>服务分离</strong>：用于渲染、文件管理和用户管理的专用微服务</li>
-</ol>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*93OTsJ_L4-7WhICsL2EL4w.jpeg" alt="我绘制产品目标的草图" /></p>
-
-<h2>📝 互动练习：扩展演进</h2>
-
-<p><strong>这张图将成为你的扩展路线图！</strong></p>
-
-<ol>
-<li>在你的纸上<strong>画三列</strong>，分别标记为：“第 1 天”、“第 6 个月”、“第 2 年”</li>
-<li><p><strong>在每一列中，画出你的架构图：</strong></p></li>
-<li><p>第 1 天：画两个方框（前端、API），下方画一个圆柱体（数据库）</p></li>
-<li>第 6 个月：添加更多方框（Redis 缓存、CDN 云、负载均衡器）</li>
-<li>第 2 年：将 API 方框拆分成多个小方框（用户服务、项目服务等）</li>
-</ol>
-
-
-<p><strong>3. 在各列之间画箭头</strong>，展示演进过程</p>
-
-<p><strong>4. 在每列上方画一些简笔画</strong>，展示用户数量：100 → 1 万 → 100 万</p>
-
-<p><strong>从你的图中得出的关键洞察：</strong>注意复杂性是如何逐渐增长的，而不是一下子增长的。这就是真实系统演进的方式！</p>
-
-<h2>职责三位一体：数据库、API 和前端</h2>
-
-<h2>三层架构理念</h2>
-
-<p>将 Web 应用程序想象成一家餐厅：</p>
-
-<p><strong>前端（餐厅）</strong>：客户互动的地方</p>
-
-<ul>
-<li>用户界面和体验</li>
-<li>输入验证和格式化</li>
-<li>状态管理和路由</li>
-</ul>
-
-
-<p><strong>API（厨房）</strong>：魔法发生的地方</p>
-
-<ul>
-<li>业务逻辑处理</li>
-<li>数据转换和验证</li>
-<li>与外部服务集成</li>
-</ul>
-
-
-<p><strong>数据库（食品储藏室）</strong>：食材存储的地方</p>
-
-<ul>
-<li>数据持久化和检索</li>
-<li>数据完整性和关系</li>
-<li>性能优化</li>
-</ul>
-
-
-<blockquote><p>“好的架构不在于结构本身，而在于它所创造的空间。” — 安藤忠雄</p></blockquote>
-
-<h2>📝 互动练习：餐厅架构</h2>
-
-<p><strong>让我们通过一个绘画练习来具体化这一点：</strong></p>
-
-<ol>
-<li><p><strong>绘制一个简单的餐厅平面图</strong>，其中包含三个区域：</p></li>
-<li><p>餐厅（顾客就座的地方）</p></li>
-<li>厨房（准备食物的地方）</li>
-<li>储藏室（存放食材的地方）</li>
-</ol>
-
-
-<p><strong>2. 现在绘制箭头表示数据流向：</strong></p>
-
-<ul>
-<li>顾客点餐 → 厨房</li>
-<li>厨房索取食材 → 储藏室</li>
-<li><p>厨房送出准备好的食物 → 餐厅</p></li>
-<li><p><strong>为每个区域标注相应的 Web 对应项：</strong></p></li>
-<li><p>餐厅 = 前端</p></li>
-<li>厨房 = API</li>
-<li>储藏室 = 数据库</li>
-</ul>
-
-
-<p><strong>为什么这样做有效：</strong>现在你的大脑已经对抽象的系统概念有了物理隐喻。每次设计系统时，想象一下这家餐厅的场景！</p>
-
-<h2>职责边界</h2>
-
-<p><strong>数据库职责</strong>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="o">--</span> <span class="err">✅</span> <span class="n">Good</span><span class="p">:</span> <span class="n">Database</span> <span class="n">handles</span> <span class="n">data</span> <span class="n">integrity</span>
-</span><span class='line'><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">users</span> <span class="p">(</span>
-</span><span class='line'>    <span class="nb">id</span> <span class="n">SERIAL</span> <span class="n">PRIMARY</span> <span class="n">KEY</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">email</span> <span class="n">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span> <span class="n">UNIQUE</span> <span class="n">NOT</span> <span class="n">NULL</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">created_at</span> <span class="n">TIMESTAMP</span> <span class="n">DEFAULT</span> <span class="n">NOW</span><span class="p">()</span>
-</span><span class='line'><span class="p">);</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="o">--</span> <span class="err">✅</span> <span class="n">Good</span><span class="p">:</span> <span class="n">Database</span> <span class="n">enforces</span> <span class="n">relationships</span>
-</span><span class='line'><span class="n">CREATE</span> <span class="n">TABLE</span> <span class="n">pages</span> <span class="p">(</span>
-</span><span class='line'>    <span class="nb">id</span> <span class="n">SERIAL</span> <span class="n">PRIMARY</span> <span class="n">KEY</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">project_id</span> <span class="n">INTEGER</span> <span class="n">REFERENCES</span> <span class="n">projects</span><span class="p">(</span><span class="nb">id</span><span class="p">)</span> <span class="n">ON</span> <span class="n">DELETE</span> <span class="n">CASCADE</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">title</span> <span class="n">VARCHAR</span><span class="p">(</span><span class="mi">255</span><span class="p">)</span> <span class="n">NOT</span> <span class="n">NULL</span>
-</span><span class='line'><span class="p">);</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>API 职责</strong>（Python 和 FastAPI）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="c"># ✅ Good: API handles business logic</span>
-</span><span class='line'><span class="kn">from</span> <span class="nn">fastapi</span> <span class="kn">import</span> <span class="n">FastAPI</span><span class="p">,</span> <span class="n">HTTPException</span><span class="p">,</span> <span class="n">Depends</span>
-</span><span class='line'><span class="kn">from</span> <span class="nn">pydantic</span> <span class="kn">import</span> <span class="n">BaseModel</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">()</span><span class="nd">@app.post</span><span class="p">(</span><span class="s">&quot;/api/pages&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="n">async</span> <span class="k">def</span> <span class="nf">create_page</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">page_data</span><span class="p">:</span> <span class="n">PageCreateModel</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">current_user</span><span class="p">:</span> <span class="n">User</span> <span class="o">=</span> <span class="n">Depends</span><span class="p">(</span><span class="n">get_current_user</span><span class="p">)</span>
-</span><span class='line'><span class="p">):</span>
-</span><span class='line'>    <span class="c"># Validate user permissions</span>
-</span><span class='line'>    <span class="k">if</span> <span class="ow">not</span> <span class="n">can_user_edit_project</span><span class="p">(</span><span class="n">current_user</span><span class="p">,</span> <span class="n">page_data</span><span class="o">.</span><span class="n">project_id</span><span class="p">):</span>
-</span><span class='line'>        <span class="k">raise</span> <span class="n">HTTPException</span><span class="p">(</span><span class="n">status_code</span><span class="o">=</span><span class="mi">403</span><span class="p">,</span> <span class="n">detail</span><span class="o">=</span><span class="s">&quot;Unauthorized&quot;</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c"># Apply business rules</span>
-</span><span class='line'>    <span class="n">page</span> <span class="o">=</span> <span class="n">await</span> <span class="n">create_page_with_defaults</span><span class="p">(</span><span class="n">page_data</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c"># Return appropriate response</span>
-</span><span class='line'>    <span class="k">return</span> <span class="p">{</span><span class="s">&quot;page&quot;</span><span class="p">:</span> <span class="n">page</span><span class="p">,</span> <span class="s">&quot;message&quot;</span><span class="p">:</span> <span class="s">&quot;Page created successfully&quot;</span><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>前端职责</strong>（Angular）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-</pre></td><td class='code'><pre><code class='javascript'><span class='line'><span class="c1">// ✅ Good: Frontend handles user interaction</span>
-</span><span class='line'><span class="err">@</span><span class="nx">Component</span><span class="p">({</span>
-</span><span class='line'>  <span class="nx">selector</span><span class="o">:</span> <span class="s1">&#39;app-page-editor&#39;</span><span class="p">,</span>
-</span><span class='line'>  <span class="nx">templateUrl</span><span class="o">:</span> <span class="s1">&#39;./page-editor.component.html&#39;</span>
-</span><span class='line'><span class="p">})</span>
-</span><span class='line'><span class="kr">export</span> <span class="kr">class</span> <span class="nx">PageEditorComponent</span> <span class="p">{</span>
-</span><span class='line'>  <span class="nx">components</span><span class="o">:</span> <span class="nx">Component</span><span class="p">[]</span> <span class="o">=</span> <span class="p">[];</span>
-</span><span class='line'>  <span class="nx">isLoading</span> <span class="o">=</span> <span class="kc">false</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>  <span class="nx">constructor</span><span class="p">(</span><span class="kr">private</span> <span class="nx">apiService</span><span class="o">:</span> <span class="nx">ApiService</span><span class="p">)</span> <span class="p">{}</span>
-</span><span class='line'>
-</span><span class='line'>  <span class="c1">// Handle user interactions</span>
-</span><span class='line'>  <span class="nx">onComponentDrop</span><span class="p">(</span><span class="nx">component</span><span class="o">:</span> <span class="nx">Component</span><span class="p">,</span> <span class="nx">position</span><span class="o">:</span> <span class="nx">Position</span><span class="p">)</span><span class="o">:</span> <span class="k">void</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">this</span><span class="p">.</span><span class="nx">isLoading</span> <span class="o">=</span> <span class="kc">true</span><span class="p">;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">this</span><span class="p">.</span><span class="nx">apiService</span><span class="p">.</span><span class="nx">addComponent</span><span class="p">(</span><span class="nx">component</span><span class="p">,</span> <span class="nx">position</span><span class="p">)</span>
-</span><span class='line'>      <span class="p">.</span><span class="nx">subscribe</span><span class="p">({</span>
-</span><span class='line'>        <span class="nx">next</span><span class="o">:</span> <span class="p">(</span><span class="nx">result</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">this</span><span class="p">.</span><span class="nx">updateComponents</span><span class="p">(</span><span class="nx">result</span><span class="p">),</span>
-</span><span class='line'>        <span class="nx">error</span><span class="o">:</span> <span class="p">(</span><span class="nx">error</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="k">this</span><span class="p">.</span><span class="nx">handleError</span><span class="p">(</span><span class="nx">error</span><span class="p">),</span>
-</span><span class='line'>        <span class="nx">complete</span><span class="o">:</span> <span class="p">()</span> <span class="o">=&gt;</span> <span class="k">this</span><span class="p">.</span><span class="nx">isLoading</span> <span class="o">=</span> <span class="kc">false</span>
-</span><span class='line'>      <span class="p">});</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>架构模式：伟大系统的基石</h2>
-
-<h2>模型-视图-控制器 (MVC)：经典模式</h2>
-
-<p>MVC 就像组织一场戏剧演出：</p>
-
-<ul>
-<li><strong>模型</strong>：剧本和故事（数据和业务逻辑）</li>
-<li><strong>视图</strong>：舞台和演员（用户界面）</li>
-<li><strong>控制器</strong>：导演（模型和（查看）</li>
-</ul>
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='coffeescript'><span class='line'><span class="c1"># Model: Page data and operations</span>
-</span><span class='line'><span class="nx">from</span> <span class="nx">sqlalchemy</span> <span class="nx">import</span> <span class="nx">Column</span><span class="p">,</span> <span class="nx">Integer</span><span class="p">,</span> <span class="nb">String</span><span class="p">,</span> <span class="nx">JSON</span>
-</span><span class='line'><span class="nx">from</span> <span class="nx">sqlalchemy</span><span class="p">.</span><span class="nx">ext</span><span class="p">.</span><span class="nx">declarative</span> <span class="nx">import</span> <span class="nx">declarative_base</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="n">Base</span> <span class="o">=</span> <span class="n">declarative_base</span><span class="p">()</span><span class="k">class</span> <span class="nc">PageModel</span><span class="p">(</span><span class="n">Base</span><span class="p">):</span>
-</span><span class='line'>    <span class="n">__tablename__</span> <span class="o">=</span> <span class="s">&quot;pages&quot;</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="nb">id</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">Integer</span><span class="p">,</span> <span class="n">primary_key</span><span class="o">=</span><span class="bp">True</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">title</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">String</span><span class="p">(</span><span class="mi">255</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">components</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">JSON</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">project_id</span> <span class="o">=</span> <span class="n">Column</span><span class="p">(</span><span class="n">Integer</span><span class="p">,</span> <span class="n">nullable</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">async</span> <span class="k">def</span> <span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">db_session</span><span class="p">):</span>
-</span><span class='line'>        <span class="n">db_session</span><span class="o">.</span><span class="n">add</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">await</span> <span class="n">db_session</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
-</span><span class='line'>        <span class="k">return</span> <span class="bp">self</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='coffeescript'><span class='line'><span class="o">//</span> <span class="nv">View: </span><span class="nx">Page</span> <span class="nx">rendering</span> <span class="p">(</span><span class="nx">Angular</span> <span class="nx">Component</span><span class="p">)</span>
-</span><span class='line'><span class="nx">@Component</span><span class="p">({</span>
-</span><span class='line'>  <span class="nv">selector: </span><span class="s">&#39;app-page-view&#39;</span><span class="p">,</span>
-</span><span class='line'>  <span class="nv">template: </span><span class="o">`</span>
-</span><span class='line'>    <span class="o">&lt;</span><span class="nx">div</span> <span class="k">class</span><span class="o">=</span><span class="s">&quot;page&quot;</span><span class="o">&gt;</span>
-</span><span class='line'>      <span class="o">&lt;</span><span class="nx">h1</span><span class="o">&gt;</span><span class="p"></span><span class="o">&lt;/</span><span class="nx">h1</span><span class="o">&gt;</span>
-</span><span class='line'>      <span class="o">&lt;</span><span class="nx">app</span><span class="o">-</span><span class="nx">component</span>
-</span><span class='line'>        <span class="o">*</span><span class="nx">ngFor</span><span class="o">=</span><span class="s">&quot;let component of pageModel.components&quot;</span>
-</span><span class='line'>        <span class="p">[</span><span class="nx">componentData</span><span class="p">]</span><span class="o">=</span><span class="s">&quot;component&quot;</span><span class="o">&gt;</span>
-</span><span class='line'>      <span class="o">&lt;/</span><span class="nx">app</span><span class="o">-</span><span class="nx">component</span><span class="o">&gt;</span>
-</span><span class='line'>    <span class="o">&lt;/</span><span class="nx">div</span><span class="o">&gt;</span>
-</span><span class='line'>  <span class="o">`</span>
-</span><span class='line'><span class="p">})</span>
-</span><span class='line'><span class="nx">export</span> <span class="k">class</span> <span class="nx">PageViewComponent</span> <span class="p">{</span>
-</span><span class='line'>  <span class="nx">@Input</span><span class="p">()</span> <span class="nv">pageModel: </span><span class="nx">PageModel</span><span class="p">;</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='javascript'><span class='line'><span class="c1">// Controller: Coordination logic (Angular Service)</span>
-</span><span class='line'><span class="err">@</span><span class="nx">Injectable</span><span class="p">({</span>
-</span><span class='line'>  <span class="nx">providedIn</span><span class="o">:</span> <span class="s1">&#39;root&#39;</span>
-</span><span class='line'><span class="p">})</span>
-</span><span class='line'><span class="kr">export</span> <span class="kr">class</span> <span class="nx">PageController</span> <span class="p">{</span>
-</span><span class='line'>  <span class="nx">constructor</span><span class="p">(</span><span class="kr">private</span> <span class="nx">apiService</span><span class="o">:</span> <span class="nx">ApiService</span><span class="p">)</span> <span class="p">{}</span>
-</span><span class='line'>
-</span><span class='line'>  <span class="nx">async</span> <span class="nx">updateTitle</span><span class="p">(</span><span class="nx">pageId</span><span class="o">:</span> <span class="nx">number</span><span class="p">,</span> <span class="nx">newTitle</span><span class="o">:</span> <span class="nx">string</span><span class="p">)</span><span class="o">:</span> <span class="nx">Promise</span><span class="o">&lt;</span><span class="k">void</span><span class="o">&gt;</span> <span class="p">{</span>
-</span><span class='line'>    <span class="kr">const</span> <span class="nx">updatedPage</span> <span class="o">=</span> <span class="nx">await</span> <span class="k">this</span><span class="p">.</span><span class="nx">apiService</span><span class="p">.</span><span class="nx">updatePage</span><span class="p">(</span><span class="nx">pageId</span><span class="p">,</span> <span class="p">{</span> <span class="nx">title</span><span class="o">:</span> <span class="nx">newTitle</span> <span class="p">});</span>
-</span><span class='line'>    <span class="c1">// Emit event to refresh view</span>
-</span><span class='line'>    <span class="k">this</span><span class="p">.</span><span class="nx">pageUpdated</span><span class="p">.</span><span class="nx">emit</span><span class="p">(</span><span class="nx">updatedPage</span><span class="p">);</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>事件驱动架构：神经系统</h2>
-
-<p>事件驱动架构就像人类的神经系统——当某个部分发生事件时，其他部分会自动做出反应。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="c"># Event system for page builder</span>
-</span><span class='line'><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">List</span><span class="p">,</span> <span class="n">Callable</span>
-</span><span class='line'><span class="kn">import</span> <span class="nn">asyncio</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="k">class</span> <span class="nc">EventBus</span><span class="p">:</span>
-</span><span class='line'>    <span class="k">def</span> <span class="nf">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Callable</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">def</span> <span class="nf">on</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">callback</span><span class="p">:</span> <span class="n">Callable</span><span class="p">):</span>
-</span><span class='line'>        <span class="k">if</span> <span class="n">event</span> <span class="ow">not</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span><span class="p">:</span>
-</span><span class='line'>            <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span><span class="p">[</span><span class="n">event</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span class='line'>        <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span><span class="p">[</span><span class="n">event</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">callback</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">async</span> <span class="k">def</span> <span class="nf">emit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">event</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">):</span>
-</span><span class='line'>        <span class="n">callbacks</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">listeners</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">event</span><span class="p">,</span> <span class="p">[])</span>
-</span><span class='line'>        <span class="n">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="o">*</span><span class="p">[</span><span class="n">callback</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="k">for</span> <span class="n">callback</span> <span class="ow">in</span> <span class="n">callbacks</span><span class="p">])</span><span class="c"># Usage</span>
-</span><span class='line'><span class="n">event_bus</span> <span class="o">=</span> <span class="n">EventBus</span><span class="p">()</span><span class="c"># Auto-save feature</span>
-</span><span class='line'><span class="nd">@event_bus.on</span><span class="p">(</span><span class="s">&#39;component:added&#39;</span><span class="p">)</span>
-</span><span class='line'><span class="n">async</span> <span class="k">def</span> <span class="nf">auto_save_handler</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
-</span><span class='line'>    <span class="n">await</span> <span class="n">auto_save</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="s">&#39;page_id&#39;</span><span class="p">])</span>
-</span><span class='line'>    <span class="n">await</span> <span class="n">show_save_indicator</span><span class="p">()</span><span class="c"># Analytics tracking</span>
-</span><span class='line'><span class="nd">@event_bus.on</span><span class="p">(</span><span class="s">&#39;component:added&#39;</span><span class="p">)</span>
-</span><span class='line'><span class="n">async</span> <span class="k">def</span> <span class="nf">analytics_handler</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
-</span><span class='line'>    <span class="n">analytics</span><span class="o">.</span><span class="n">track</span><span class="p">(</span><span class="s">&#39;Component Added&#39;</span><span class="p">,</span> <span class="p">{</span>
-</span><span class='line'>        <span class="s">&#39;component_type&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s">&#39;component&#39;</span><span class="p">][</span><span class="s">&#39;type&#39;</span><span class="p">],</span>
-</span><span class='line'>        <span class="s">&#39;page_id&#39;</span><span class="p">:</span> <span class="n">data</span><span class="p">[</span><span class="s">&#39;page_id&#39;</span><span class="p">]</span>
-</span><span class='line'>    <span class="p">})</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>微服务：专业团队</h2>
-
-<p>微服务就像一个爵士乐团——每个音乐家（服务）都是各自乐器的专家，但他们共同努力，创造出美妙的音乐。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># Docker Compose for Page Builder Microservices</span>
-</span><span class='line'>version: <span class="s1">&#39;3.8&#39;</span>
-</span><span class='line'>services:
-</span><span class='line'>  user-service:
-</span><span class='line'>    image: pagebuilder/user-service:python
-</span><span class='line'>    environment:
-</span><span class='line'>      - <span class="nv">DATABASE_URL</span><span class="o">=</span>postgresql://users_db
-</span><span class='line'>      - <span class="nv">REDIS_URL</span><span class="o">=</span>redis://redis:6379
-</span><span class='line'>    ports:
-</span><span class='line'>      - <span class="s2">&quot;8001:8000&quot;</span>
-</span><span class='line'>
-</span><span class='line'>      project-service:
-</span><span class='line'>    image: pagebuilder/project-service:python
-</span><span class='line'>    environment:
-</span><span class='line'>      - <span class="nv">DATABASE_URL</span><span class="o">=</span>postgresql://projects_db
-</span><span class='line'>    ports:
-</span><span class='line'>      - <span class="s2">&quot;8002:8000&quot;</span>
-</span><span class='line'>
-</span><span class='line'>      rendering-service:
-</span><span class='line'>    image: pagebuilder/rendering-service:python
-</span><span class='line'>    environment:
-</span><span class='line'>      - <span class="nv">REDIS_URL</span><span class="o">=</span>redis://redis:6379
-</span><span class='line'>      - <span class="nv">S3_BUCKET</span><span class="o">=</span>pagebuilder-assets
-</span><span class='line'>    ports:
-</span><span class='line'>      - <span class="s2">&quot;8003:8000&quot;</span>
-</span><span class='line'>
-</span><span class='line'>      frontend:
-</span><span class='line'>    image: pagebuilder/angular-frontend
-</span><span class='line'>    ports:
-</span><span class='line'>      - <span class="s2">&quot;4200:80&quot;</span>
-</span><span class='line'>    environment:
-</span><span class='line'>      - <span class="nv">API_GATEWAY_URL</span><span class="o">=</span>http://api-gateway:8080
-</span><span class='line'>
-</span><span class='line'>      api-gateway:
-</span><span class='line'>    image: pagebuilder/api-gateway:python
-</span><span class='line'>    environment:
-</span><span class='line'>      - <span class="nv">USER_SERVICE_URL</span><span class="o">=</span>http://user-service:8000
-</span><span class='line'>      - <span class="nv">PROJECT_SERVICE_URL</span><span class="o">=</span>http://project-service:8000
-</span><span class='line'>      - <span class="nv">RENDERING_SERVICE_URL</span><span class="o">=</span>http://rendering-service:8000
-</span><span class='line'>    ports:
-</span><span class='line'>      - <span class="s2">&quot;8080:8000&quot;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>何时使用每种模式</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Kx0t7cKSgdtO0Q1PpRiLXg.jpeg" alt="这是我在一次架构评审会上画的草图，当时团队就各种模式争论了两个小时。这张图在5分钟内就结束了这场争论——每个人都清楚地看到了他们的项目与一个模式的对应关系。现在，我把这张照片保存在手机里，每次架构讨论时都会拿出来用。" /></p>
-
-<p><strong>在以下情况下使用 MVC</strong>：</p>
-
-<ul>
-<li>构建传统 Web 应用程序</li>
-<li>团队熟悉该模式</li>
-<li>需要清晰的关注点分离</li>
-</ul>
-
-
-<p><strong>在以下情况下使用事件驱动</strong>：</p>
-
-<ul>
-<li>实时功能很重要</li>
-<li>需要多个系统响应变化</li>
-<li>需要松散耦合</li>
-</ul>
-
-
-<p><strong>在以下情况下使用微服务</strong>：</p>
-
-<ul>
-<li>团队规模 > 10 名开发人员</li>
-<li>不同部分的扩展能力不同</li>
-<li>独立部署至关重要</li>
-</ul>
-
-
-<p>正如 Martin Fowler 所言：“傻瓜也能写出计算机能理解的代码。优秀的程序员写出人类能理解的代码。”</p>
-
-<h2>📝 互动练习：架构模式比较</h2>
-
-<p><strong>创建你的个人架构模式速查表：</strong></p>
-
-<ol>
-<li>在你的纸上<strong>画出三个部分</strong>：“MVC”、“事件驱动”、“微服务”</li>
-<li><p><strong>对于 MVC：</strong>画出三个相连的方框（模型 ↔ 控制器 ↔ 视图）</p></li>
-<li><p>在下面写上：“适合：传统应用，清晰的分离”</p></li>
-</ol>
-
-
-<p><strong>3.对于事件驱动：</strong> 画一个中心圆圈，标记为“事件总线”，并用箭头向外辐射到多个方框。</p>
-
-<ol>
-<li>在下面写：“适用于：实时功能，松耦合”</li>
-</ol>
-
-
-<p><strong>5. 对于微服务：</strong> 画 6-8 个独立的小方框，并用虚线连接它们。</p>
-
-<ul>
-<li>在下面写：“适用于：大型团队，独立扩展”</li>
-</ul>
-
-
-<p><strong>6. 添加决策树：</strong> 从问题到模式画箭头：</p>
-
-<ul>
-<li>“团队少于 5 人？” → MVC</li>
-<li>“需要实时功能吗？” → 事件驱动</li>
-<li>“多个团队？” → 微服务</li>
-</ul>
-
-
-<p><strong> 将此图放在手边！</strong> 这是你未来任何项目的架构决策流程图。</p>
-
-<h2>绘制真正有用的系统图</h2>
-
-<h2>视觉传达的艺术</h2>
-
-<blockquote><p>“一图胜千言，但一张好的图表胜过千次会议。” — 未知</p></blockquote>
-
-<p>系统图是软件架构的蓝图。它们应该讲述一个故事，而不是制造混乱。</p>
-
-<h2>📝 互动练习：图表层次结构</h2>
-
-<p><strong>练习三层系统图绘制方法：</strong></p>
-
-<p><strong>第一层 - 上下文（30 秒绘制）：</strong></p>
-
-<ol>
-<li><strong>绘制三个形状</strong>：圆形（用户）、矩形（你的系统）、云（外部服务）</li>
-<li><strong>用带标签的箭头连接</strong>：“HTTP 请求”、“API 调用”、“数据同步”</li>
-<li><strong>这回答了</strong>“我们的系统连接到什么？”</li>
-</ol>
-
-
-<p><strong>第二层 - 容器（2 分钟绘制）：</strong></p>
-
-<ol>
-<li><strong>将系统矩形分成四个部分</strong>：前端、API 网关、服务、数据库</li>
-<li><strong>用箭头</strong>显示它们之间的数据流**</li>
-<li><strong>这回答了</strong>“主要部分是什么？”</li>
-</ol>
-
-
-<p><strong>第三级——组件（5 分钟绘制）：</strong></p>
-
-<ol>
-<li><strong>选择一个容器（例如前端）并将其分解</strong>为模块</li>
-<li><strong>展示模块如何在该容器内交互</strong></li>
-<li><strong>这将回答</strong>“这个组件内部是如何工作的？”</li>
-</ol>
-
-
-<p><strong>本练习的强大之处：</strong>只需选择要绘制的图纸，即可在任何细节层面解释任何系统！</p>
-
-<h2>图表的层次结构</h2>
-
-<p><strong>上下文图</strong>：30,000 英尺的视角</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='inform7'><span class='line'><span class="cm">[Users]</span> --&gt; <span class="cm">[Page Builder System]</span> --&gt; <span class="cm">[CDN]</span>
-</span><span class='line'>           |
-</span><span class='line'>           v
-</span><span class='line'>      <span class="cm">[Database]</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>容器图</strong>：构建模块</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='inform7'><span class='line'><span class="cm">[Web Browser]</span> --&gt; <span class="cm">[Load Balancer]</span> --&gt; <span class="cm">[Web Application]</span>
-</span><span class='line'>                                         |
-</span><span class='line'>                                         v
-</span><span class='line'><span class="cm">[File Storage]</span> &lt;-- <span class="cm">[API Gateway]</span> &lt;-- <span class="cm">[Cache Layer]</span>
-</span><span class='line'>                        |
-</span><span class='line'>                        v
-</span><span class='line'>                   <span class="cm">[Database Cluster]</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>组件图</strong>：内部结构</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='mathematica'><span class='line'><span class="n">Web</span><span class="w"> </span><span class="n">Application</span><span class="err">:</span><span class="w"></span>
-</span><span class='line'><span class="err">├──</span><span class="w"> </span><span class="n">Authentication</span><span class="w"> </span><span class="n">Module</span><span class="w"></span>
-</span><span class='line'><span class="err">├──</span><span class="w"> </span><span class="n">Project</span><span class="w"> </span><span class="n">Management</span><span class="w"> </span><span class="n">Module</span><span class="w"></span>
-</span><span class='line'><span class="err">├──</span><span class="w"> </span><span class="n">Page</span><span class="w"> </span><span class="n">Editor</span><span class="w"> </span><span class="n">Module</span><span class="w"></span>
-</span><span class='line'><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">Canvas</span><span class="w"> </span><span class="n">Component</span><span class="w"></span>
-</span><span class='line'><span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">Toolbar</span><span class="w"> </span><span class="n">Component</span><span class="w"></span>
-</span><span class='line'><span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">Properties</span><span class="w"> </span><span class="n">Panel</span><span class="w"></span>
-</span><span class='line'><span class="err">├──</span><span class="w"> </span><span class="n">Component</span><span class="w"> </span><span class="n">Library</span><span class="w"> </span><span class="n">Module</span><span class="w"></span>
-</span><span class='line'><span class="err">└──</span><span class="w"> </span><span class="n">Export</span><span class="w"> </span><span class="n">Module</span><span class="w"></span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>有效的图表绘制原则</h2>
-
-<ol>
-<li><strong>从用户旅程开始</strong>：每个图表都应该回答“数据如何从用户操作流向结果？”</li>
-<li><strong>使用一致的符号</strong>：矩形表示进程，圆柱体表示数据存储，圆形表示外部实体</li>
-<li><strong>清晰地显示关系</strong>：箭头应指示数据流方向并进行标记</li>
-<li><strong>分层图表</strong>：从高层开始，然后放大到特定区域</li>
-<li><strong>包含不愉快的路径</strong>：显示错误处理和故障场景</li>
-</ol>
-
-
-<h2>整合：可视化页面构建器案例研究</h2>
-
-<p>让我们为我们的可视化页面构建器设计一个完整的系统架构：</p>
-
-<h2>高层架构</h2>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='coq'><span class='line'><span class="nc">Frontend</span> <span class="o">(</span><span class="nc">Angular</span><span class="o">)</span>
-</span><span class='line'><span class="err">├──</span> <span class="nc">Editor</span> <span class="nc">Canvas</span> <span class="kn">Module</span>
-</span><span class='line'><span class="err">├──</span> <span class="nc">Component</span> <span class="nc">Library</span> <span class="kn">Module</span>
-</span><span class='line'><span class="err">├──</span> <span class="nc">Project</span> <span class="nc">Dashboard</span> <span class="kn">Module</span>
-</span><span class='line'><span class="err">└──</span> <span class="nc">Shared</span> <span class="nc">Services</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='scss'><span class='line'><span class="nt">API</span> <span class="nt">Gateway</span> <span class="o">(</span><span class="nt">Python</span><span class="o">/</span><span class="nt">FastAPI</span><span class="o">)</span>
-</span><span class='line'><span class="err">├──</span> <span class="nt">Authentication</span> <span class="nt">Service</span>
-</span><span class='line'><span class="err">├──</span> <span class="nt">Project</span> <span class="nt">Service</span>
-</span><span class='line'><span class="err">├──</span> <span class="nt">Component</span> <span class="nt">Service</span>
-</span><span class='line'><span class="err">└──</span> <span class="nt">Rendering</span> <span class="nt">ServiceData</span> <span class="nt">Layer</span>
-</span><span class='line'><span class="err">├──</span> <span class="nt">PostgreSQL</span> <span class="o">(</span><span class="nt">structured</span> <span class="nt">data</span><span class="o">)</span>
-</span><span class='line'><span class="err">├──</span> <span class="nt">Redis</span> <span class="o">(</span><span class="nt">caching</span><span class="o">)</span>
-</span><span class='line'><span class="err">└──</span> <span class="nt">S3</span> <span class="o">(</span><span class="nt">file</span> <span class="nt">storage</span><span class="o">)</span><span class="nt">Infrastructure</span>
-</span><span class='line'><span class="err">├──</span> <span class="nt">CDN</span> <span class="o">(</span><span class="nt">CloudFront</span><span class="o">)</span>
-</span><span class='line'><span class="err">├──</span> <span class="nt">Load</span> <span class="nt">Balancer</span>
-</span><span class='line'><span class="err">└──</span> <span class="nt">Auto-scaling</span> <span class="nt">Groups</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>组件添加的数据流</h2>
-
-<ol>
-<li><strong>用户操作</strong>：将组件从库拖到画布</li>
-<li><strong>前端</strong>：验证位置，发送 API 请求</li>
-<li><strong>API 网关</strong>：验证请求，路由到组件服务</li>
-<li><strong>组件服务</strong>：验证业务规则，更新数据库</li>
-<li><strong>事件总线</strong>：发出“component_added”事件</li>
-<li><strong>渲染服务</strong>：生成更新后的页面预览</li>
-<li><strong>WebSocket</strong>：通知其他协作者</li>
-<li><strong>前端</strong>：使用新组件更新 UI</li>
-</ol>
-
-
-<h2>📝 互动练习：数据流映射</h2>
-
-<p><strong>将这个抽象的流程转化为一个可视化的故事：</strong></p>
-
-<ol>
-<li><strong>在一个流程中画出 8 个方框</strong>（每个方框对应上面的每个步骤）</li>
-<li><strong>用箭头连接它们</strong>以显示顺序</li>
-<li><strong>在每个方框上方写出所需时间</strong>：“50 毫秒”、“200 毫秒”、“100 毫秒”等。</li>
-<li><strong>在每个方框下方，注明可能出现的问题</strong>：“网络超时”、“身份验证失败”、“数据库宕机”</li>
-<li><p><strong>现在画出第二个版本</strong>，展示步骤 4 失败时会发生什么：</p></li>
-<li><p>用红色虚线画一条“悲伤的路径”箭头</p></li>
-<li>显示返回给用户的错误消息</li>
-<li>添加重试逻辑和回退选项</li>
-</ol>
-
-
-<p><strong>本练习将教会你：</strong>每个用户操作实际上都是一个复杂的系统编排。绘制箭头可以帮助你在生产环境中发生潜在故障之前发现它们！</p>
-
-<p><strong>额外提示：</strong> 为箭头添加颜色代码——绿色代表正常路径，红色代表错误，蓝色代表重试。</p>
-
-<h2>可扩展性考虑因素</h2>
-
-<p><strong>流量模式</strong>：</p>
-
-<ul>
-<li>高读取操作（浏览页面）</li>
-<li>突发写入操作（编辑会话）</li>
-<li>大文件上传（图片、资源）</li>
-</ul>
-
-
-<p><strong>扩展策略</strong>：</p>
-
-<ul>
-<li>将渲染后的页面缓存在 CDN 中</li>
-<li>使用只读副本进行页面浏览</li>
-<li>将大文件处理排队</li>
-<li>实现 WebSocket 连接池</li>
-</ul>
-
-
-<h2>要点：适用于任何 Web 应用程序的原则</h2>
-
-<h2>系统设计的黄金法则</h2>
-
-<ol>
-<li><strong>从简单开始，规划复杂</strong>：从单体应用开始，但要针对微服务进行设计</li>
-<li><strong>快速失败，快速学习</strong>：从第一天开始构建监控和报警功能</li>
-<li><strong>数据为王</strong>：先设计数据模型，其他一切都水到渠成</li>
-<li><strong>安全性不可或缺</strong>：在每一层都构建身份验证和授权机制</li>
-<li><strong>性能是关键特性</strong>：用户更容易注意到应用程序运行缓慢，而不是功能缺失</li>
-</ol>
-
-
-<h2>架构清单</h2>
-
-<p>在编写第一行代码之前编写代码时，请问自己：</p>
-
-<ul>
-<li>[ ] 核心实体及其关系是什么？</li>
-<li>[ ] 该系统如何处理 10 倍于当前流量的情况？</li>
-<li>[ ] 单点故障点在哪里？</li>
-<li>[ ] 不同的团队将如何在该系统上协作？</li>
-<li>[ ] 出现问题时会发生什么？</li>
-<li>[ ] 我们将如何监控和调试问题？</li>
-<li>[ ] 安全隐患是什么？</li>
-</ul>
-
-
-<h2>📝 互动练习：你的系统设计模板</h2>
-
-<p><strong>创建你的个人系统设计模板，可用于任何项目：</strong></p>
-
-<ol>
-<li><strong>绘制一个包含以下部分的空白模板：</strong></li>
-</ol>
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>┌────── 实体与关系 ────────┐ ┌───── 流量与扩展 ─────┐  │ │ │ │ │ │ │
-</span><span class='line'>└────────────────────────┘ └────────────────────┘ ┌─ 故障点 ──────
-</span><span class='line'>─────┐ ┌──── 团队边界 ────┐ │ │ │ │ │ │
-</span><span class='line'>└─────────────────────┘ └──────────────────────┘
-</span></code></pre></td></tr></table></div></figure>
-
-
-<ol>
-<li><p><strong>填写我们的页面构建器示例：</strong></p></li>
-<li><p>实体：用户、项目、页面、组件</p></li>
-<li>流量：浏览时读取量大，编辑时写入量大</li>
-<li>故障：数据库宕机、CDN 速度慢、WebSocket 断开连接</li>
-<li>团队：前端团队、API 团队、基础设施团队</li>
-</ol>
-
-
-<p><strong>2. 复制此模板</strong> — 将其用于未来的每个项目</p>
-
-<p><strong>为什么有效：</strong> 拥有一致的思维框架可以防止你忘记关键方面。你的绘图将成为你的系统设计清单！</p>
-
-<h2>你的绘图之旅：从草图到系统</h2>
-
-<p>如果你完成了本文的绘图练习，那么你现在拥有：</p>
-
-<ol>
-<li><strong>分层架构模板</strong>（用于分解任何复杂系统）</li>
-<li><strong>分解树方法</strong>（用于组织开发工作）</li>
-<li><strong>扩展演进路线图</strong>（用于规划发展阶段）</li>
-<li><strong>餐厅隐喻图</strong>（用于解释三层架构）</li>
-<li><strong>架构模式对比图</strong>（用于选择正确的方法）</li>
-<li><strong>三层图表系统</strong>（用于在任何细节层面进行沟通）</li>
-<li><strong>数据流映射技术</strong>（用于理解系统交互）</li>
-<li><strong>可复用系统设计模板</strong>（用于一致的项目规划）</li>
-</ol>
-
-
-<p><strong>这些手绘图表比任何昂贵的工具都更有价值</strong>，因为：</p>
-
-<ul>
-<li>通过绘制它们，你的大脑建立了更深层次的联系</li>
-<li>你可以随时随地重新创建它们</li>
-<li>它们根据你对系统的理解进行个性化定制</li>
-<li>它们弥合了抽象概念与实践之间的差距实施</li>
-</ul>
-
-
-<p><strong>保留你的图纸！</strong> 把它们贴在你的显示器上，用手机拍照，或者创建一个“系统设计速写本”，让它随着每个项目的进展而不断更新。</p>
-
-<h2>总结</h2>
-
-<blockquote><p>“架构师身处两个世界之间。你必须愿意打破基本的假设。”——安藤忠雄</p></blockquote>
-
-<p>系统设计并非要创造完美的架构，而是要做出明智的权衡。每个决策都有其后果，每个模式都有其利弊，每个解决方案都会产生新的问题需要解决。</p>
-
-<p>最好的架构师并非精通所有模式和技术，而是能够倾听需求、理解约束，并设计出能够与用户和组织和谐共存的系统。</p>
-
-<p>记住：你不仅仅是在构建软件，你还在为团队未来的成功奠定基础。构建好它，清晰地记录它，并始终做好演进的准备。</p>
-
-<p>俗话说，“几周的编码时间可以节省数小时的规划时间。” 投资于系统设计，未来的你（和团队）会感谢你。</p>
-
-<p>千个应用程序的旅程始于一个精心设计的系统。今天就开始像架构师一样思考，见证你的应用程序从脆弱的原型转变为经得起时间考验的强大、可扩展的平台。</p>
 ]]></content>
   </entry>
   

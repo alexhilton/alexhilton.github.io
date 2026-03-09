@@ -1,0 +1,1224 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>一个实用的Android Perfetto分析器 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="本文是一个实用指南，通过构建一个输出特定信息的Perfetto分析器，以程序化地理解Android应用性能分析。">
+  <meta name="keywords" content="Perfetto, Slice, Analyzer">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/03/09/pefetto-analyzer">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">一个实用的Android Perfetto分析器</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-03-09'><span class='date'><span class='date-month'>Mar</span> <span class='date-day'>9</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Building a Deterministic Perfetto Analyzer for Android」，原文链接<a href="https://proandroiddev.com/building-a-deterministic-perfetto-analyzer-for-android-95877b3e083e">https://proandroiddev.com/building-a-deterministic-perfetto-analyzer-for-android-95877b3e083e</a>，由Sumeet Singh Arora发布于2026年1月6日。</p></blockquote>
+
+<p><a href="/blog/2026/03/09/pefetto-analyzer/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*qr6R9rois09aHO5R-yZW6A.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>每个 Android 性能工程师都面临的问题</h2>
+
+<p>当你打开一个 <a href="https://perfetto.dev/">Perfetto</a> trace后。</p>
+
+<p>会有成千上万个切片（slice）。数十个线程。数百万个数据点。一条看起来像抽象艺术的时间线。</p>
+
+<p>而在这其中的某个地方——被层层系统噪声、框架回调和线程交错所掩盖——隐藏着一个简单问题的答案：<em>为什么我的应用运行缓慢？</em></p>
+
+<p>我花了数年时间大规模调试 Android 性能。模式总是千篇一律：</p>
+
+<ol>
+<li><p>用户抱怨启动卡顿/缓慢</p></li>
+<li><p>工程师捕获跟踪信息</p></li>
+<li><p>工程师打开 Perfetto 用户界面</p></li>
+<li><p>工程师花费 2 小时滚动、缩放、眯眼查看</p></li>
+<li><p>工程师<em>可能</em>找到了根本原因</p></li>
+</ol>
+
+
+<p>跟踪信息无法讲述故事。它们只是罗列事实——带有时间戳、层层嵌套、令人眼花缭乱。“拥有跟踪信息”和“理解性能”之间存在着巨大的鸿沟。</p>
+
+<p><strong>本文旨在通过编程方式弥合这一鸿沟。</strong></p>
+
+<p>在过去的几周里，我一直在构建一个<strong>Perfetto 跟踪分析器</strong>，它可以将原始跟踪信息转换为结构化的、易于理解的洞察。没有仪表盘。只有确定性分析，它反映了经验丰富的工程师实际思考性能问题的方式。</p>
+
+<p>读完本文，你将了解如何：</p>
+
+<ol>
+<li><p>使跟踪信息<strong>可读</strong>——启动时间、长时间任务、帧健康状况</p></li>
+<li><p>使跟踪信息<strong>可归属</strong>——进程、线程、组件所有权</p></li>
+<li><p>分离<strong>职责</strong>——应用程序、框架和系统</p></li>
+<li><p>使用<strong>时间窗口</strong>查找关键事件发生的时间点</p></li>
+<li><p>生成<strong>确定性嫌疑对象</strong>——用于调查的优先级信号</p></li>
+</ol>
+
+
+<h2>为什么 Perfetto 跟踪难以阅读</h2>
+
+<p>Perfetto 功能极其强大。它可以捕获：</p>
+
+<ul>
+<li><p>CPU 调度</p></li>
+<li><p>帧渲染</p></li>
+<li><p>Binder 事务</p></li>
+<li><p>应用自定义跟踪部分</p></li>
+<li><p>系统服务活动</p></li>
+</ul>
+
+
+<p>但强大的功能也带​​来了复杂性。一个典型的跟踪可能包含：</p>
+
+<ul>
+<li><p>超过 50,000 个切片</p></li>
+<li><p>超过 100 个不同的线程名称</p></li>
+<li><p>超过 10 层的嵌套层级结构</p></li>
+</ul>
+
+
+<p>当你调试卡顿的滚动或缓慢的启动问题时，你并不需要所有这些信息。你需要的是：</p>
+
+<ol>
+<li><p><strong>发生了什么</strong> — 启动时间、耗时较长的任务、帧健康状况</p></li>
+<li><p><strong>谁做的</strong> — 哪个进程、哪个线程</p></li>
+<li><p><strong>什么类型的工作</strong> — 应用代码、框架还是系统代码</p></li>
+</ol>
+
+
+<p>让我们逐一解决这些问题。</p>
+
+<h2>第一步：使跟踪更易读</h2>
+
+<p>首要目标是提取人们真正关心的高级指标。</p>
+
+<h3>启动时间</h3>
+
+<p><a href="https://github.com/singhsume123/perfetto-agent">分析器</a> 使用尽力而为的启发式方法来估算启动时间：<strong>从最早的切片到第一个 <code>Choreographer#doFrame</code></strong> 的时间。</p>
+
+<p>这种方法并不完美——它无法涵盖所有​​启动场景——但它提供了一个有用的基准进行比较。</p>
+
+<p>以下是 <a href="http://medium.com/r?url=https%3A%2F%2Fgithub.com%2Fsinghsume123%2FTraceToy">TraceToy</a> 测试跟踪的示例（TraceToy 是我专门构建的一个示例应用程序，用于生成有趣的测试跟踪——稍后会详细介绍）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;startup_ms&quot;</span><span class="p">:</span> <span class="mf">2910.15</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在生产环境中，对于优化良好的冷启动，你通常会看到 500–1500 毫秒的启动时间；而对于初始化繁重的应用程序，启动时间则可能达到 2000–5000 毫秒甚至更长。具体的数值并不重要，重要的是跟踪其随时间的变化——无论基线是 800 毫秒还是 3000 毫秒，20% 的性能下降就是 20% 的性能下降。</p>
+
+<p>生产环境的应用通常会更精确地检测启动过程——使用 <code>reportFullyDrawn()</code>、自定义跟踪标记（例如 <code>Startup#complete</code>）或 Jetpack App Startup 等库。当这些方法不可用时，分析器的启发式方法是一个合理的备选方案，但你可以（也应该）对其进行调整，使其与应用对“启动完成”的实际定义相匹配。</p>
+
+<p>一个数值。可立即用于性能下降检测。</p>
+
+<h3>UI 线程上的长任务</h3>
+
+<p>长任务是指超过阈值并阻塞主线程的任务片段。这些是导致卡顿和无响应的主要原因。</p>
+
+<p>分析器默认使用 <strong>50 毫秒的阈值</strong>（可通过 <code>--long-task-ms</code> 配置）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;ui_thread_long_tasks&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;threshold_ms&quot;</span><span class="p">:</span> <span class="mi">50</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;count&quot;</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;top&quot;</span><span class="p">:</span> <span class="p">[</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;&lt;internal slice&gt;&quot;</span><span class="p">,</span> <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">16572.1</span><span class="p">},</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;216&quot;</span><span class="p">,</span> <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">4103.2</span><span class="p">},</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;Handler: android.view.View&quot;</span><span class="p">,</span> <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">312.5</span><span class="p">}</span>
+</span><span class='line'>    <span class="p">]</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>看出问题了吗？是数字 ID。内部切片。无上下文。无归属信息。</p>
+
+<p>技术上正确。实际应用价值有限。</p>
+
+<p>我们知道<em>某些东西</em>阻塞了主线程 16 秒。但我们不知道<em>是什么</em>，也不知道<em>是谁</em>造成的。这就是原始分析失效的地方——也是为什么步骤 2（归属信息）至关重要的原因。</p>
+
+<h3>帧健康状况</h3>
+
+<p>丢帧会导致明显的卡顿。分析器从 <code>Choreographer#doFrame</code> 切片中提取帧时间：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;frame_features&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;total_frames&quot;</span><span class="p">:</span> <span class="mi">888</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;janky_frames&quot;</span><span class="p">:</span> <span class="mi">37</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;p95_frame_ms&quot;</span><span class="p">:</span> <span class="mf">14.35</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在这里，百分位数比平均值更重要——即使大多数帧都很快，少数几个坏帧也会破坏流畅度。</p>
+
+<h3>局限性</h3>
+
+<p>此时，我们可以回答：<em>发生了什么？</em></p>
+
+<p>但我们无法回答：<em>谁该负责？</em></p>
+
+<h2>步骤 2：使跟踪数据可归因</h2>
+
+<p>归因是指将性能数据与所有权关联起来。在调试实际问题时，工程师会问：</p>
+
+<ul>
+<li><p><em>哪个</em> <strong><em>进程</em></strong> <em>执行了此操作？</em></p></li>
+<li><p><em>哪个</em> <strong><em>线程</em></strong><em>？</em></p></li>
+<li><p><em>是我的</em> <strong><em>应用</em></strong> <em>还是其他程序</em>？_</p></li>
+</ul>
+
+
+<h3>聚焦进程过滤</h3>
+
+<p>首先，我们需要过滤掉噪声。跟踪数据会捕获设备上的<em>所有</em>活动——系统服务、其他应用、内核活动。其中大部分都无关紧要。</p>
+
+<p>分析器支持聚焦模式：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>python3 -m perfetto_agent.cli analyze <span class="se">\</span>
+</span><span class='line'>  --trace tracetoy_trace.perfetto-trace <span class="se">\</span>
+</span><span class='line'>  --focus-process com.example.tracetoy <span class="se">\</span>
+</span><span class='line'>  --out analysis.json
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这会将输出从“设备上发生的一切”转移到“与<em>此</em>应用相关的内容”。这是一个小小的标志，却能极大地提高信噪比。</p>
+
+<h3>进程和线程识别</h3>
+
+<p>设置聚焦进程后，每个切片都会包含所有权数据。分析器会将 <code>pid</code> 和 <code>tid</code> 连接到进程名和线程名：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">267.29</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;pid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;tid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;thread_name&quot;</span><span class="p">:</span> <span class="s2">&quot;xample.tracetoy&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;process_name&quot;</span><span class="p">:</span> <span class="s2">&quot;com.example.tracetoy&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>将其与步骤 1 中无用的 <code>"name": "216"</code> 进行比较。现在我们知道：</p>
+
+<ul>
+<li><p>✅ 它来自我的应用程序 (<code>com.example.tracetoy</code>)</p></li>
+<li><p>✅ 它运行在主线程上 (tid == pid)</p></li>
+<li><p>✅ 这是一个应用程序定义的段（<code>BG#</code> 前缀）</p></li>
+</ul>
+
+
+<h3>主线程检测</h3>
+
+<p>这里有一个微妙但重要的细节：<strong>主线程在跟踪信息中并不总是标记为“main”</strong>。</p>
+
+<p>分析器采用尽力而为的启发式方法：</p>
+
+<ol>
+<li><p>如果应用进程存在名为 <code>"main"</code> 的线程 → 使用该线程</p></li>
+<li><p>否则，回退到 <code>tid == pid</code>（在 Android 中通常适用于主线程）</p></li>
+</ol>
+
+
+<p>这模拟了经验丰富的工程师在元数据不完整时的推理方式——为了透明起见，分析器会记录所使用的启发式方法。</p>
+
+<h3>应用自定义节成为一等公民</h3>
+
+<p>Android 的 <code>Trace.beginSection()</code> API 允许开发者标记自定义 span：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;UI#loadUserProfile&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="c1">// ... work ...</span>
+</span><span class='line'><span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>分析器会显式地提取并聚合这些信息：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;app_sections&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;top_by_total_ms&quot;</span><span class="p">:</span> <span class="p">[</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span> <span class="nt">&quot;total_ms&quot;</span><span class="p">:</span> <span class="mf">11811.05</span><span class="p">,</span> <span class="nt">&quot;count&quot;</span><span class="p">:</span> <span class="mi">194</span><span class="p">},</span>
+</span><span class='line'>      <span class="p">{</span><span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;UI#stall_button_click&quot;</span><span class="p">,</span> <span class="nt">&quot;total_ms&quot;</span><span class="p">:</span> <span class="mf">818.05</span><span class="p">,</span> <span class="nt">&quot;count&quot;</span><span class="p">:</span> <span class="mi">4</span><span class="p">}</span>
+</span><span class='line'>    <span class="p">]</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这回答了以下问题：<em>我的代码的哪些部分</em>主导了执行？_</p>
+
+<p>至此，我们已将匿名切片转换为具有属性的、可操作的数据。但我们仍然没有回答最重要的问题：<strong>究竟是谁的错——我的应用、框架还是系统？</strong></p>
+
+<h2>第三步：职责分离</h2>
+
+<p>关于移动性能，有一个令人不安的真相：</p>
+
+<p><strong>当你的应用运行缓慢时，并非所有问题都出在你身上。</strong></p>
+
+<p>各种数据混杂在一起：</p>
+
+<ul>
+<li><p>你的应用代码</p></li>
+<li><p>Android 框架内部代码</p></li>
+<li><p>系统和内核活动</p></li>
+</ul>
+
+
+<p>如果不将这些数据分离，很容易得出错误的结论，并优化错误的地方。</p>
+
+<h3>确定性分类</h3>
+
+<p>每个切片现在都被标记为以下类别之一：</p>
+
+<ul>
+<li><p>🟢 <strong>app</strong> — 焦点进程上的应用程序标记（例如，<code>UI#stall_button_click</code>）</p></li>
+<li><p>🔵 <strong>framework</strong> — 焦点进程上的框架标记（例如，<code>Choreographer#doFrame</code>）</p></li>
+<li><p>🔴 <strong>system</strong> — 非焦点进程 ID 或系统标记（例如，<code>binder transaction</code>）</p></li>
+<li><p>⚪ <strong>unknown</strong> — 无法确定分类（例如，数字 ID）</p></li>
+</ul>
+
+
+<p>分类器有意采用<strong>保守</strong>的分类方式：</p>
+
+<ul>
+<li><p>基于进程 ID 的所有权</p></li>
+<li><p>基于线程的所有权</p></li>
+<li><p>基于明确的名称标记规则</p></li>
+</ul>
+
+
+<p>如果一个切片无法明确归类，则会被标记为“unknown”。这并非错误，而是诚实。</p>
+
+<h3>带有责任标签的长任务</h3>
+
+<p>以下是一个已分类的长任务切片示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">267.29</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;pid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;tid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;thread_name&quot;</span><span class="p">:</span> <span class="s2">&quot;xample.tracetoy&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;process_name&quot;</span><span class="p">:</span> <span class="s2">&quot;com.example.tracetoy&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;category&quot;</span><span class="p">:</span> <span class="s2">&quot;app&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>以及一个框架密集型任务切片示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;dequeueBuffer - VRI[MainActivity]#0(BLAST Consumer)0&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;dur_ms&quot;</span><span class="p">:</span> <span class="mf">180.4</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;pid&quot;</span><span class="p">:</span> <span class="mi">5664</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;tid&quot;</span><span class="p">:</span> <span class="mi">5688</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;thread_name&quot;</span><span class="p">:</span> <span class="s2">&quot;RenderThread&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nt">&quot;category&quot;</span><span class="p">:</span> <span class="s2">&quot;framework&quot;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>相同的跟踪记录，但对优化方向的影响却截然不同。</p>
+
+<h3>聚合分解</h3>
+
+<p>分析器无需手动查看数百个切片，而是计算以下内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;work_breakdown&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;by_category_ms&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;app&quot;</span><span class="p">:</span> <span class="mf">12603.72</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;framework&quot;</span><span class="p">:</span> <span class="mf">305.77</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;system&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;unknown&quot;</span><span class="p">:</span> <span class="mf">5167.50</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这一个代码块回答了一个重要的问题：</p>
+
+<blockquote><p>此性能问题主要是应用程序本身的问题吗？</p></blockquote>
+
+<p>有时答案令人不安，有时却令人欣慰。无论如何，它都基于数据。</p>
+
+<h3>主线程阻塞：究竟是谁的责任？</h3>
+
+<p>分析器按类别分解主线程阻塞时间：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;main_thread_blocking&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;app_ms&quot;</span><span class="p">:</span> <span class="mf">12603.72</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;framework_ms&quot;</span><span class="p">:</span> <span class="mf">305.77</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;system_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;unknown_ms&quot;</span><span class="p">:</span> <span class="mf">2840.88</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>责任归属在此变得不可回避。</p>
+
+<p>如果主线程主要被应用程序工作阻塞（就像这个跟踪记录中显示的那样），<strong>你就能准确地知道应该把优化工作集中在哪些方面</strong>。</p>
+
+<h3>摘要块</h3>
+
+<p>所有内容都汇总成一个最简洁的摘要：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;summary&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;main_thread_found&quot;</span><span class="p">:</span> <span class="kc">true</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;top_app_sections&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span> <span class="s2">&quot;dequeueBuffer - VRI[MainActivity]#0...&quot;</span><span class="p">,</span> <span class="s2">&quot;UI#stall_button_click&quot;</span><span class="p">],</span>
+</span><span class='line'>    <span class="nt">&quot;top_long_slice_name&quot;</span><span class="p">:</span> <span class="s2">&quot;BG#churn&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;dominant_work_category&quot;</span><span class="p">:</span> <span class="s2">&quot;app&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;main_thread_blocked_by&quot;</span><span class="p">:</span> <span class="s2">&quot;app&quot;</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这不是解释，而是一个<strong>信号</strong>——告诉你应该关注哪里，以及哪些地方不应该关注。</p>
+
+<h2>第四步：时间窗口和嫌疑对象</h2>
+
+<p>知道是谁执行了操作固然重要，但性能下降很少是全局性的——它们往往是<strong>暂时性的</strong>。</p>
+
+<p>典型的问题如下：</p>
+
+<ul>
+<li><p><em>为什么启动这么慢？</em></p></li>
+<li><p><em>为什么卡顿只在第一个屏幕之后才出现？</em></p></li>
+<li><p><em>为什么 UI 线程在交互过程中被阻塞，但在启动时却没有？</em></p></li>
+</ul>
+
+
+<p>缺乏时间上下文的归因分析仍然需要手动梳理时间线。第四步可以减轻这种认知负担。</p>
+
+<h3>时间窗口：明确“何时”⏱️</h3>
+
+<p>分析器不再将跟踪信息视为一条长长的时间线，而是将其划分为粗略的、确定性的窗口：</p>
+
+<ul>
+<li><p><strong>启动窗口</strong> — 从进程启动到启动结束</p></li>
+<li><p><strong>稳定状态窗口</strong> — 启动后的时间段（默认值：5 秒）</p></li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;time_windows&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;startup&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;start_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;end_ms&quot;</span><span class="p">:</span> <span class="mf">2910.15</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;method&quot;</span><span class="p">:</span> <span class="s2">&quot;startup_ms&quot;</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'>    <span class="nt">&quot;steady_state&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;start_ms&quot;</span><span class="p">:</span> <span class="mf">2910.15</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;end_ms&quot;</span><span class="p">:</span> <span class="mf">7910.15</span><span class="p">,</span>
+</span><span class='line'>      <span class="nt">&quot;method&quot;</span><span class="p">:</span> <span class="s2">&quot;startup_end + 5000ms&quot;</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>仅此一项就改变了你对跟踪信息的推理方式。</p>
+
+<h3>窗口分解：上下文中的责任归属 📊</h3>
+
+<p>对于每个窗口，分析器计算：</p>
+
+<ul>
+<li><p>按类别划分的总工作量（<code>app</code>、<code>framework</code>、<code>system</code>、<code>unknown</code>）</p></li>
+<li><p>按类别划分的主线程阻塞</p></li>
+</ul>
+
+
+<p>来自 TraceToy 跟踪：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;window_breakdown&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;startup&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="nt">&quot;by_category_ms&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;app&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;framework&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;system&quot;</span><span class="p">:</span> <span class="mf">378.43</span><span class="p">,</span> <span class="nt">&quot;unknown&quot;</span><span class="p">:</span> <span class="mf">101.34</span><span class="p">},</span>
+</span><span class='line'>      <span class="nt">&quot;main_thread_blocking_ms&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;app_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;framework_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;system_ms&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nt">&quot;unknown_ms&quot;</span><span class="p">:</span> <span class="mf">101.34</span><span class="p">}</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'>    <span class="nt">&quot;steady_state&quot;</span><span class="p">:</span> <span class="p">{</span> <span class="err">/*</span> <span class="err">...</span> <span class="err">*/</span> <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这可以确定性地回答以下问题：</p>
+
+<blockquote><p>启动阶段主要由系统工作主导。稳定阶段有大量未知工作阻塞了主线程。</p></blockquote>
+
+<p>无需猜测。</p>
+
+<h3>从数据到嫌疑人 🕵️</h3>
+
+<p>一旦掌握了归因、责任和时间窗口，就可以找出<strong>嫌疑人</strong>。</p>
+
+<p>嫌疑人<strong>并非解释</strong>，而是一个<em>优先级信号</em>。</p>
+
+<p>分析器生成一个确定性列表：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;suspects&quot;</span><span class="p">:</span> <span class="p">[</span>
+</span><span class='line'>    <span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Startup main thread dominated by unknown work&quot;</span><span class="p">,</span> <span class="nt">&quot;window&quot;</span><span class="p">:</span> <span class="s2">&quot;startup&quot;</span><span class="p">,</span> <span class="nt">&quot;evidence&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;unknown_ms&quot;</span><span class="p">:</span> <span class="mf">101.34</span><span class="p">}},</span>
+</span><span class='line'>    <span class="p">{</span><span class="nt">&quot;label&quot;</span><span class="p">:</span> <span class="s2">&quot;Startup dominated by system work&quot;</span><span class="p">,</span> <span class="nt">&quot;window&quot;</span><span class="p">:</span> <span class="s2">&quot;startup&quot;</span><span class="p">,</span> <span class="nt">&quot;evidence&quot;</span><span class="p">:</span> <span class="p">{</span><span class="nt">&quot;system_ms&quot;</span><span class="p">:</span> <span class="mf">378.43</span><span class="p">}}</span>
+</span><span class='line'>    <span class="err">//</span> <span class="err">...</span> <span class="err">more</span> <span class="err">suspects</span> <span class="err">for</span> <span class="err">steady_state</span>
+</span><span class='line'>  <span class="p">]</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这些标签是模板化的、可复现的，并且有证据支持。</p>
+
+<p>它们不解释问题，而是指明方向。</p>
+
+<h3>摘要现在更有意义了🧭</h3>
+
+<p>摘要块变得可操作：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span>
+</span><span class='line'>  <span class="nt">&quot;summary&quot;</span><span class="p">:</span> <span class="p">{</span>
+</span><span class='line'>    <span class="nt">&quot;startup_dominant_category&quot;</span><span class="p">:</span> <span class="s2">&quot;system&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;steady_state_dominant_category&quot;</span><span class="p">:</span> <span class="s2">&quot;unknown&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nt">&quot;top_suspect&quot;</span><span class="p">:</span> <span class="s2">&quot;Startup main thread dominated by unknown work&quot;</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果你只阅读此摘要，你就已经知道：</p>
+
+<ul>
+<li><p>从哪里开始调查</p></li>
+<li><p>应该查看哪种类型的工作</p></li>
+<li><p>哪个阶段最重要</p></li>
+</ul>
+
+
+<p>这与原始跟踪信息相比是一个巨大的转变。</p>
+
+<h2>整合所有步骤</h2>
+
+<p>以下是完整的工作流程：</p>
+
+<h3>1. 捕获跟踪</h3>
+
+<p>使用 Android Studio 的性能分析器或命令行：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>adb shell perfetto -o /data/misc/perfetto-traces/trace.perfetto-trace -t 10s <span class="se">\</span>
+</span><span class='line'>  sched freq idle am wm gfx view binder_driver hal dalvik camera input res memory
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 运行分析器</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>python3 -m perfetto_agent.cli analyze <span class="se">\</span>
+</span><span class='line'>  --trace trace.perfetto-trace <span class="se">\</span>
+</span><span class='line'>  --focus-process com.example.myapp <span class="se">\</span>
+</span><span class='line'>  --out analysis.json <span class="se">\</span>
+</span><span class='line'>  --long-task-ms <span class="m">50</span> <span class="se">\</span>
+</span><span class='line'>  --top-n 10
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3.阅读输出</h3>
+
+<p>首先查看 <code>summary</code> 块，了解主要类别和主要嫌疑人，然后深入查看具体信息：</p>
+
+<ul>
+<li><p><code>work_breakdown</code> 用于查看类别分布</p></li>
+<li><p><code>features.long_slices_attributed</code> 用于查看单个嫌疑人</p></li>
+<li><p><code>features.app_sections</code> 用于查看你的插桩代码</p></li>
+</ul>
+
+
+<h2>此功能无法实现的功能</h2>
+
+<p>让我们明确一下它的局限性：</p>
+
+<ul>
+<li><p>❌ <strong>不追究责任</strong> — 仅显示证据</p></li>
+<li><p>❌ <strong>不生成建议</strong> — 这需要理解意图</p></li>
+<li><p>❌ <strong>不声明因果关系</strong> — 相关性不等于因果关系</p></li>
+</ul>
+
+
+<p>该系统使责任<strong>可见</strong>。这就足够了。</p>
+
+<h2>使用 TraceToy 进行测试</h2>
+
+<p>我构建了一个名为 <strong>TraceToy</strong> 的示例应用程序，用于生成有趣的跟踪信息，以便测试分析器。</p>
+
+<p>它包含：</p>
+
+<ul>
+<li><p><strong>启动初始化</strong>（使用 <code>StartupInit</code> 标记）</p></li>
+<li><p><strong>UI 阻塞按钮</strong> — 使用 <code>UI#stall_button_click</code> 故意阻塞 UI 线程 200 毫秒</p></li>
+<li><p><strong>后台加载切换</strong> — 生成 <code>BG#churn</code> 标记</p></li>
+<li><p><strong>可滚动列表</strong> — 生成帧渲染事件</p></li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Kkwdpn2Wvc8hadZlx56COQ.png" alt="" /></p>
+
+<p>截图由作者从 Android TraceToys 示例应用中截取。</p>
+
+<h3>快速入门</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># Record a 20-second trace</span>
+</span><span class='line'>adb shell perfetto -o /data/misc/perfetto-traces/trace -t 20s sched gfx view dalvik
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># Interact with the app (tap UI Stall, scroll, toggle background load)# Pull and analyze</span>
+</span><span class='line'>adb pull /data/misc/perfetto-traces/trace tracetoy_trace.perfetto-trace
+</span><span class='line'>python3 -m perfetto_agent.cli analyze <span class="se">\</span>
+</span><span class='line'>  --trace tracetoy_trace.perfetto-trace <span class="se">\</span>
+</span><span class='line'>  --focus-process com.example.tracetoy <span class="se">\</span>
+</span><span class='line'>  --out analysis.json
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出应包含：</p>
+
+<ul>
+<li><p>已识别 TraceToy 进程（<code>com.example.tracetoy</code>，进程 ID 5664）</p></li>
+<li><p>应用部分中出现 <code>BG#churn</code>（194 次，总计 11.8 秒）和 <code>UI#stall_button_click</code>（4 次，总计 818 毫秒）</p></li>
+<li><p>199 个耗时超过 50 毫秒阈值的长任务</p></li>
+<li><p>888 帧，其中 37 帧卡顿（p95：14.35 毫秒）</p></li>
+</ul>
+
+
+<h2>实现亮点：切片分类</h2>
+
+<p>分析器中最有趣的部分是分类器。它使用显式标记列表，并且有意采用保守的分类方法：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+</pre></td><td class='code'><pre><code class='python'><span class='line'><span class="k">def</span> <span class="nf">classify_slice_name</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="bp">None</span><span class="p">,</span> <span class="n">pid</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="bp">None</span><span class="p">,</span> <span class="n">focus_pid</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="bp">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span class='line'>    <span class="sd">&quot;&quot;&quot;Classify a slice into app/framework/system/unknown using pid + name tokens.&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="c"># If not from focus process, it&#39;s system</span>
+</span><span class='line'>    <span class="k">if</span> <span class="n">focus_pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span> <span class="ow">and</span> <span class="n">pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span> <span class="ow">and</span> <span class="n">pid</span> <span class="o">!=</span> <span class="n">focus_pid</span><span class="p">:</span>
+</span><span class='line'>        <span class="k">return</span> <span class="s">&quot;system&quot;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="ow">not</span> <span class="n">name</span><span class="p">:</span>
+</span><span class='line'>        <span class="k">return</span> <span class="s">&quot;unknown&quot;</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">lower_name</span> <span class="o">=</span> <span class="n">name</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">app_tokens</span> <span class="o">=</span> <span class="p">[</span><span class="s">&quot;ui#&quot;</span><span class="p">,</span> <span class="s">&quot;bg#&quot;</span><span class="p">,</span> <span class="s">&quot;startupinit&quot;</span><span class="p">]</span>
+</span><span class='line'>    <span class="n">framework_tokens</span> <span class="o">=</span> <span class="p">[</span>
+</span><span class='line'>        <span class="s">&quot;choreographer&quot;</span><span class="p">,</span> <span class="s">&quot;doframe&quot;</span><span class="p">,</span> <span class="s">&quot;renderthread&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="s">&quot;viewrootimpl&quot;</span><span class="p">,</span> <span class="s">&quot;dequeuebuffer&quot;</span><span class="p">,</span> <span class="s">&quot;blast&quot;</span><span class="p">,</span> <span class="s">&quot;hwui&quot;</span>
+</span><span class='line'>    <span class="p">]</span>
+</span><span class='line'>    <span class="n">system_tokens</span> <span class="o">=</span> <span class="p">[</span><span class="s">&quot;binder&quot;</span><span class="p">,</span> <span class="s">&quot;surfaceflinger&quot;</span><span class="p">,</span> <span class="s">&quot;sched&quot;</span><span class="p">,</span> <span class="s">&quot;kworker&quot;</span><span class="p">,</span> <span class="s">&quot;irq&quot;</span><span class="p">,</span> <span class="s">&quot;futex&quot;</span><span class="p">]</span>
+</span><span class='line'>    <span class="c"># Check app tokens first (highest confidence)</span>
+</span><span class='line'>    <span class="k">if</span> <span class="n">focus_pid</span> <span class="ow">is</span> <span class="ow">not</span> <span class="bp">None</span> <span class="ow">and</span> <span class="n">pid</span> <span class="o">==</span> <span class="n">focus_pid</span><span class="p">:</span>
+</span><span class='line'>        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">token</span> <span class="ow">in</span> <span class="n">lower_name</span> <span class="k">for</span> <span class="n">token</span> <span class="ow">in</span> <span class="n">app_tokens</span><span class="p">):</span>
+</span><span class='line'>            <span class="k">return</span> <span class="s">&quot;app&quot;</span>
+</span><span class='line'>        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">token</span> <span class="ow">in</span> <span class="n">lower_name</span> <span class="k">for</span> <span class="n">token</span> <span class="ow">in</span> <span class="n">framework_tokens</span><span class="p">):</span>
+</span><span class='line'>            <span class="k">return</span> <span class="s">&quot;framework&quot;</span>
+</span><span class='line'>    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">token</span> <span class="ow">in</span> <span class="n">lower_name</span> <span class="k">for</span> <span class="n">token</span> <span class="ow">in</span> <span class="n">system_tokens</span><span class="p">):</span>
+</span><span class='line'>        <span class="k">return</span> <span class="s">&quot;system&quot;</span>
+</span><span class='line'>    <span class="k">return</span> <span class="s">&quot;unknown&quot;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>关键见解：<strong>保守的分类方法优于错误的置信度</strong>。如果无法准确分类，则“未知”是诚实的答案。</p>
+
+<p>请参阅<a href="https://github.com/singhsume123/perfetto-agent">完整实现</a>，了解启动检测、主线程解析和帧健康计算。</p>
+
+<h2>为你的应用添加插桩</h2>
+
+<p>为了最大限度地利用此分析，请对你的代码进行插桩：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">android.os.Trace</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">UserProfileLoader</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">loadProfile</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">UserProfile</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;UI#loadUserProfile&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;UI#fetchFromCache&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">cached</span> <span class="p">=</span> <span class="n">cache</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">cached</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="k">return</span> <span class="n">cached</span>
+</span><span class='line'>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">beginSection</span><span class="p">(</span><span class="s">&quot;IO#fetchFromNetwork&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">profile</span> <span class="p">=</span> <span class="n">api</span><span class="p">.</span><span class="n">fetchProfile</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span><span class='line'>            <span class="k">return</span> <span class="n">profile</span>
+</span><span class='line'>        <span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Trace</span><span class="p">.</span><span class="n">endSection</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用一致的命名约定：</p>
+
+<ul>
+<li><p><code>UI#</code> — 主线程/UI 操作</p></li>
+<li><p><code>BG#</code> — 后台线程操作</p></li>
+<li><p><code>IO#</code> — I/O 操作</p></li>
+<li><p><code>DB#</code> — 数据库操作</p></li>
+</ul>
+
+
+<p>这使得分析器的输出能够立即转化为实际操作。</p>
+
+<h2>亲自尝试</h2>
+
+<p>该分析器是开源的：</p>
+
+<p>🔗 <strong>Perfetto 分析器</strong>：<a href="https://github.com/singhsume123/perfetto-agent">github.com/singhsume123/perfetto-agent</a></p>
+
+<p>🔗 <strong>TraceToy 测试应用</strong>：<a href="https://github.com/singhsume123/TraceToy">github.com/singhsume123/TraceToy</a></p>
+
+<p>该仓库包含：</p>
+
+<ul>
+<li><p>Python 命令行分析器</p></li>
+<li><p>示例跟踪和输出 (<code>analysis.json</code>)</p></li>
+<li><p>设置说明</p></li>
+</ul>
+
+
+<h2>要点总结</h2>
+
+<ol>
+<li><p><strong>Perfetto 跟踪功能强大但信息量庞大</strong> — 程序化分析能够从噪声中提取有效信息</p></li>
+<li><p><strong>归属至关重要</strong> — 了解谁执行了工作（进程、线程、组件）至关重要</p></li>
+<li><p><strong>明确职责分离</strong> — 应用、框架和系统之间的职责划分最重要的区别</p></li>
+<li><p><strong>时间窗口至关重要</strong> — 启动阶段和稳定阶段通常具有截然不同的特征</p></li>
+<li><p><strong>嫌疑人指出问题所在，而非解释问题原因</strong> — 确定性信号告诉你应该首先从哪里入手</p></li>
+<li><p><strong>保守的分类胜过错误的自信</strong> — “未知”总比错误好</p></li>
+<li><p><strong>为你的代码添加插桩</strong> — <code>Trace.beginSection()</code> 是你的好帮手</p></li>
+</ol>
+
+
+<p>性能调试并非要找出<em>所有</em>发生的事情。而是要找出：</p>
+
+<ul>
+<li><p><strong>什么才是关键的</strong></p></li>
+<li><p><strong>何时才是关键的</strong></p></li>
+<li><p><strong>谁负责</strong></p></li>
+</ul>
+
+
+<p>此分析器将这个模型清晰地呈现出来，并且机器可读。</p>
+
+<p>_有任何问题或反馈？请在 <a href="https://www.linkedin.com/in/sumeet-singh-arora-50605153/"><em>LinkedIn</em></a> 上联系我。</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-03-09'><span class='date'><span class='date-month'>Mar</span> <span class='date-day'>9</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/02/02/mastering-intrisnicsize/" title="Previous Post: Compose中的IntrinsicSize实战指南">&laquo; Compose中的IntrinsicSize实战指南</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
