@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Ai | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/ai/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-03-16T13:05:59+00:00</updated>
+  <updated>2026-03-17T13:05:29+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,341 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[使用FunctionGemma进行设备端函数调用]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/03/17/function-calling-with-gemma/"/>
+    <updated>2026-03-17T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/03/17/function-calling-with-gemma</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「On-Device Function Calling with FunctionGemma」，原文链接<a href="https://medium.com/google-developer-experts/on-device-function-calling-with-functiongemma-39f7407e5d83">https://medium.com/google-developer-experts/on-device-function-calling-with-functiongemma-39f7407e5d83</a>，由Sasha Denisov发布于2025年12月29日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*MwYm9N3fInpcgKSCRJDrqw.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2><strong>我为什么相信离线代理</strong></h2>
+
+<p>我是 <a href="https://pub.dev/packages/flutter_gemma">flutter_gemma</a> 的创建者和维护者——这是一个用于在移动设备上本地运行 LLM 的 Flutter 插件。我越是使用设备端 AI，就越发确信：<em>未来属于本地代理，或者至少是混合代理</em>。</p>
+
+<h3>为什么？</h3>
+
+<p>想象一下，你是一位想要构建带有 AI 代理的移动或 Web 应用的开发者。当智能体部署在云端时，你会面临一系列问题：</p>
+
+<ul>
+<li><p><strong>延迟</strong> — 用户需要等待响应，速度取决于网络连接质量</p></li>
+<li><p><strong>Token成本</strong> — 你需要权衡用户定价和利润率</p></li>
+<li><p><strong>隐私</strong> — GDPR 和其他法规要求谨慎处理数据</p></li>
+<li><p><strong>网络依赖</strong> — 没有网络就无法提供服务</p></li>
+</ul>
+
+
+<p><strong>所有这些问题都可以通过将 AI 迁移到设备端来解决。</strong></p>
+
+<p>我在《把离线AI智能体装进口袋里》（<a href="https://medium.com/@denisov.shureg/the-dawn-of-offline-ai-agents-in-your-pocket-55fff80d794b">The Dawn of Offline AI Agents in Your Pocket</a>）一文中对此进行了详细阐述。但文章中的示例更像是Demo，而非生产解决方案。像 Ge​​mma 3n 这样的模型虽然能够很好地处理函数调用，但它们体积过大：无法集成到应用程序包中，需要单独下载，即使在旗舰机型上推理速度也很慢。在低端设备上，它们根本无法运行。而较小的型号则经常出现故障，难以记住工具。</p>
+
+<p>对于生产环境，你需要一个专门的型号：</p>
+
+<ul>
+<li><p><strong>体积小</strong> — 可放入手机内存</p></li>
+<li><p><strong>速度快</strong> — 解码速度 >100 tok/s</p></li>
+<li><p><strong>专为函数调用而生</strong> — 并非通用聊天工具</p></li>
+</ul>
+
+
+<p>而这样的型号现在已经存在——<a href="https://blog.google/technology/developers/functiongemma/"><strong>FunctionGemma</strong></a>。</p>
+
+<h3>什么是 FunctionGemma？</h3>
+
+<p><a href="https://ai.google.dev/gemma/docs/functiongemma">FunctionGemma</a> 是 <a href="https://developers.googleblog.com/en/introducing-gemma-3-270m/">Gemma 3 270M</a> 的一个特殊版本，专为函数调用而设计。</p>
+
+<p>Google 于 2025 年 12 月（几天前）发布了它。它回应了开发者在 Gemma 3 270M 发布后提出的主要需求——为设备端代理提供原生函数调用支持。</p>
+
+<h3>主要规格：</h3>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*RsktbjWuIWidtCUTyh6iKQ.png" alt="" /></p>
+
+<p><strong>实际应用效果：</strong></p>
+
+<ul>
+<li><p><strong>288 MB</strong> — 可直接嵌入应用包，无需单独下载</p></li>
+<li><p><strong>551 MB RAM</strong> — 即使在配备 4 GB 内存的入门级设备上也能流畅运行</p></li>
+<li><p><strong>2.7 亿个参数</strong> — 比 Gemma 3n E2B 小 10 倍，但足以满足函数调用需求</p></li>
+<li><p><strong>25.6 万词汇表</strong> — 庞大的词汇表能够很好地处理结构化数据和 JSON</p></li>
+<li><p><strong>0.3 秒 TTFT</strong> — 模型几乎瞬间响应</p></li>
+</ul>
+
+
+<p>在 flutter_gemma 插件的示例应用中查看其速度：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:428/format:webp/1*AFHP1EhImKCikEeOfEh3HA.gif" alt="flutter_gemma 示例中的函数调用" /></p>
+
+<blockquote><p><strong><em>有一点很重要。该模型的初始准确率只有 58%。听起来不太像能直接用于生产环境，对吧？</em></strong></p></blockquote>
+
+<p>但关键在于：FunctionGemma 可以轻松地针对你的特定函数进行微调。<a href="https://ai.google.dev/gemma/docs/functiongemma/model_card">微调后，准确率跃升至 <strong>85%</strong></a>。+27%——这就是“有时有效”和“可用于生产环境”之间的区别。</p>
+
+<h3>与竞品对比</h3>
+
+<p>为了更直观地比较，我们不妨将 FunctionGemma 与几个最接近的替代方案进行比较：<strong>Gemma 3n</strong> 和 <strong>Gemma 3 1B</strong> 作为间接竞争对手（支持函数调用的通用模型），<strong>Llama</strong> 作为流行的开源选项，以及 <strong>Hammer</strong>——MadeAgents 出品的直接竞争对手，专为函数调用而设计。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*pi5V7sojA62l9H-1dON2iQ.png" alt="" /></p>
+
+<p>FunctionGemma 仅提供 int8 版本（288 MB）——由于模型本身已经很小，这已经足够了。Gemma 3n E2B 则相反——仅提供 int4 版本，因为 int8 版本将占用约 6 GB 的空间。</p>
+
+<blockquote><p><strong>int8 与 int4 — 有什么区别？</strong>
+量化将模型权重从 32/16 位数字压缩为 8 位 (int8) 或 4 位 (int4)。位数越少，文件越小，推理速度越快，但质量可能越低。</p>
+
+<p><strong>int8</strong> — 质量和大小之间的平衡。质量损失极小（约 1~3%），文件大小比 FP16 减少约 2 倍。</p>
+
+<p><strong>int4</strong> — 最大程度的压缩，文件大小减少约 4 倍。质量损失更明显（约 2~10%，具体取决于模型），但通常可以接受，尤其对于函数调用而言。</p></blockquote>
+
+<p>还有一个重要的指标——准确率。<a href="https://gorilla.cs.berkeley.edu/leaderboard.html">伯克利函数调用排行榜 (BFCL)</a> 是评估函数调用能力的标准基准。 Gemma 3 1B 的得分约为 31%，Llama 3.2 1B 约为 26%，两者未经微调的性能都很弱。由于 Gemma 3n 是通用型程序，因此未对其进行测试。Hammer 2.1 0.5B 没有公开数据，但其 1.5B 版本开箱即用的得分约为 73%——尽管它在 int8 内存中占用约 1.5GB 的空间，是 FunctionGemma（288MB）的 5 倍。</p>
+
+<h3>何时选择哪种模型</h3>
+
+<ul>
+<li><p><strong>快速原型，无需微调</strong> → <a href="https://github.com/MadeAgents/Hammer">Hammer</a> 或 FunctionGemma 基础模型。</p></li>
+<li><p><strong>速度最快 + 体积最小 + 准确率最高</strong> → FunctionGemma（2.7 亿字节，约 126 tok/秒，微调后准确率达 85%）</p></li>
+<li><p><strong>多模态智能体（文本 + 图像）</strong> → <a href="https://ai.google.dev/gemma/docs/gemma3n">Gemma 3n</a></p></li>
+</ul>
+
+
+<h2>FunctionGemma 的独特格式</h2>
+
+<p>与大多数使用 JSON 的模型不同，FunctionGemma 拥有自己的格式和特殊标记。</p>
+
+<h3>函数调用格式</h3>
+
+<pre><code class="xml">&lt;start_function_call&gt;call:change_background_color
+      {color:&lt;escape&gt;red&lt;escape&gt;}&lt;end_function_call&gt;
+</code></pre>
+
+<p>让我们来分解一下：<code>&lt;start_function_call&gt;</code> — 函数调用开始，<code>call:</code> — 前缀，<code>change_background_color</code> — 函数名，<code>{color:&lt;escape&gt;red&lt;escape&gt;}</code> — 带转义标记的参数，<code>&lt;end_function_call&gt;</code> — 函数调用结束。</p>
+
+<h3>开发者角色</h3>
+
+<p>FunctionGemma 经过优化，以 <code>developer</code> 作为指令角色。使用 <code>system</code>（例如在 Hammer 或标准 Gemma 中）不会激活函数调用模式——模型将完全忽略你的工具定义。</p>
+
+<pre><code class="json">messages = [
+    {"role": "developer", "content": "You are a model that can do function calling..."},
+    {"role": "user", "content": "make it red"}
+]
+</code></pre>
+
+<p>使用 <code>system</code> 不会激活函数调用模式。</p>
+
+<h3>枚举支持</h3>
+
+<p>一个 2.7 亿的模型可能会产生虚假的参数值。如果没有约束，请求“把它变成红色”可能会生成 <code>{“color”: “crimson”}</code> 或 <code>{“color”: “rouge”}</code>。枚举类型强制模型仅从有效值中选择，从而确保函数调用的可靠性。</p>
+
+<p>格式：</p>
+
+<pre><code class="json">enum:[&lt;escape&gt;red&lt;escape&gt;,&lt;escape&gt;blue&lt;escape&gt;,&lt;escape&gt;green&lt;escape&gt;]
+</code></pre>
+
+<p>声明函数时，枚举类型位于 <code>description</code> 和 <code>type</code> 之间：</p>
+
+<pre><code class="json">color:{description:&lt;escape&gt;The color name&lt;escape&gt;,enum:[&lt;escape&gt;red&lt;escape&gt;,...],type:&lt;escape&gt;STRING&lt;escape&gt;}
+</code></pre>
+
+<h3>停止标记</h3>
+
+<p><strong>什么是停止标记？</strong> 停止标记是告知模型何时停止生成数据的特殊标记。对于 FunctionGemma，需要两个停止标记：<code>&lt;end_of_turn&gt;</code> — 消息结束，<code>&lt;start_function_response&gt;</code> — 模型停止并等待函数结果。</p>
+
+<p><strong>为什么它们很重要：</strong> 如果没有 <code>&lt;start_function_response&gt;</code>，模型在函数调用后不会暂停，而是会错误地获取响应。这两个标记都必须在模型转换为 <code>.task</code> 格式时设置。</p>
+
+<pre><code class="json">stop_tokens=[
+    "&lt;end_of_turn&gt;",
+    "&lt;start_function_response&gt;",  # Model stops, waits for result
+]
+</code></pre>
+
+<h2>模型准备流程</h2>
+
+<p>让我们详细了解一下模型准备流程——从微调到最终生成可在设备端运行的格式。理解这一点至关重要，因为 Google 最初只发布了 PyTorch 格式的 FunctionGemma 模型，而移动端部署需要进行格式转换。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*bHs4FiJDj7RfwKvERzVtbg.jpeg" alt="" /></p>
+
+<p>该流程首先使用 TRL/SFTTrainer 对 JSONL 格式的训练数据上的 <code>google/functiongemma-270m-it</code> 基础模型进行微调。训练完成后，使用 <code>ai-edge-torch</code> 和 <code>dynamic_int8</code> 量化算法将模型转换为 TFLite 格式。最后一步取决于目标运行时环境：对于 MediaPipe，将 TFLite 模型与分词器和停止标记合并到一个 <code>.task</code> 包中，该包可在 iOS、Android 和 Web 上运行。或者，你可以将其打包为 <code>.litertlm</code> 格式，用于 LiteRT-LM 运行时，该运行时提供 NPU 加速和更广泛的平台支持，包括桌面平台。</p>
+
+<p>转换为 TFLite 后，你可以选择将模型打包为两种可在设备端运行的格式之一：<code>.task</code>（用于 MediaPipe）或 <code>.litertlm</code>（用于 LiteRT-LM）。</p>
+
+<blockquote><p><strong>task</strong> — 这是 MediaPipe 格式，经过长时间的实战检验。<a href="https://ai.google.dev/edge/mediapipe/framework">MediaPipe</a> LLM 推理 API 已存在多年，可在 iOS、Android 和 Web 上可靠运行。模型与分词器和元数据一起打包在一个文件中。支持 GPU 加速。这就是 flutter_gemma 目前使用的格式。</p>
+
+<p><strong>litertlm</strong> — 这是 Google 推出的一种新格式，是 .task 的升级版，具有更好的压缩效果和额外的元数据。MediaPipe 也可以在 iOS、Android 和 Web 上运行 .litertlm，但不具备 NPU 等额外功能。 .litertlm 的主要优势在于其独立的运行时 <a href="https://ai.google.dev/edge/litert/next/litert_lm_npu">LiteRT-LM</a>：它支持 NPU（神经处理单元），可实现更强大的加速，并支持桌面平台——Linux、macOS、Windows，甚至 Raspberry Pi。但 LiteRT-LM 运行时目前仍处于早期预览阶段：iOS 和 Web 平台暂不支持（即将推出）。</p></blockquote>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*uUVf6Uv252V_luYwBnkgKQ.png" alt="" /></p>
+
+<h3>如何选择？</h3>
+
+<p><strong>移动应用（iOS + Android）或 Web 应用</strong>——请选择 <code>.task</code>。原生支持 MediaPipe LLM 推理 API：<a href="https://github.com/google-ai-edge/mediapipe-samples/tree/main/examples/llm_inference/android">Android</a> 和 <a href="https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference/ios">iOS</a> 都有现成的示例。在 Flutter 上，<a href="https://pub.dev/packages/flutter_gemma">flutter_gemma</a> 也开箱即用地支持它。</p>
+
+<p><strong>仅限 Android + 最大程度利用硬件</strong> — 使用 LiteRT-LM 运行时的 <code>.litertlm</code> 文件可实现 NPU 加速。请在 Google Play（适用于 Android）和 <a href="https://testflight.apple.com/join/nAtSQKTF">TestFlight</a>（适用于 iOS）上查看 <a href="https://play.google.com/store/apps/details?id=com.google.ai.edge.gallery">AI Edge Gallery</a>——这是 Google 的演示应用，包含 FunctionGemma、语音命令和小游戏。源代码位于 <a href="https://github.com/google-ai-edge/gallery">GitHub</a>。目前仅支持 Android。</p>
+
+<p><strong>桌面端（Linux、macOS、Windows）</strong>——仅支持通过 LiteRT-LM 集成的 <code>.litertlm</code> 文件。有多种集成选项：</p>
+
+<ul>
+<li><p><a href="https://github.com/google-ai-edge/LiteRT-LM/releases">CLI 工具 <code>lit</code></a>——从 HuggingFace 拉取模型，并只需一条命令即可运行推理。适用于 macOS、Linux 和 Windows 的二进制文件</p></li>
+<li><p><a href="https://github.com/google-ai-edge/LiteRT-LM/blob/main/kotlin/README.md">Kotlin API</a> — 适用于 Android 和 JVM（Linux、macOS、Windows）的完整 SDK</p></li>
+<li><p><a href="https://github.com/google-ai-edge/LiteRT-LM#litert%20%20%20%20%20%20%20%20%20%20%20%20+-lm-ap">C++ API</a> — 用于原生集成并支持流式传输的引擎、会话和对话类</p></li>
+</ul>
+
+
+<h3>flutter_gemma 支持</h3>
+
+<p><a href="https://pub.dev/packages/flutter_gemma">flutter_gemma</a> 通过 MediaPipe LLM 推理 API，支持 iOS、Android 和 Web 上的 <code>.task</code> 和 <code>.litertlm</code> 格式。</p>
+
+<p>至于基于 NPU 和桌面平台的 LiteRT-LM 运行时，相关工作已经在进行中。一旦 Google 开放 iOS 的公共 API（预计在 2026 年初），我们将添加全面支持。桌面平台也在我们的计划之中——敬请期待，即将推出。</p>
+
+<h3>即用型 Colab Notebook</h3>
+
+<p>我已经为整个流程准备好了 Notebook：</p>
+
+<ol>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_finetuning.ipynb"><strong>微调</strong></a> — 加载基础模型，准备 JSONL 数据集，使用 TRL/SFTTrainer 进行训练，保存到云端硬盘</p></li>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_to_tflite.ipynb"><strong>TFLite 转换</strong></a> — 使用 ai-edge-torch 将 PyTorch 模型转换为 TFLite 模型，应用 int8 量化</p></li>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_tflite_to_task.ipynb"><strong>任务包</strong></a> — 将 TFLite、分词器和停止标记合并为 .task 文件，用于 MediaPipe</p></li>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_to_litertlm.ipynb"><strong>LiteRT-LM 包</strong></a> — 使用 ai-edge-torch-nightly 转换为 .litertlm 文件，并添加元数据和停止标记，用于 LiteRT-LM 运行时</p></li>
+</ol>
+
+
+<h3>训练数据格式</h3>
+
+<p>为了优化 FunctionGemma 在你的函数上的性能，你需要训练数据——用户请求示例及其对应的函数调用。数据格式为简单的 JSONL，其中每一行将用户短语映射到一个函数名及其参数。</p>
+
+<pre><code class="json">{"user_content": "make it red", "tool_name": "change_background_color", "tool_arguments": "{\"color\": \"red\"}"}
+{"user_content": "rename app to Hello", "tool_name": "change_app_title", "tool_arguments": "{\"title\": \"Hello\"}"}
+{"user_content": "show alert saying hi", "tool_name": "show_alert", "tool_arguments": "{\"title\": \"Alert\", \"message\": \"hi\"}"}
+</code></pre>
+
+<blockquote><p>你需要多少个示例？</p>
+
+<p>在我的演示应用中，我使用了 <strong>284 个示例</strong>，每个功能大约 90-100 个。多样性很重要：不仅仅是重复 94 次“把它变成红色”，而是不同的表达方式，例如“改成红色”、“设置背景为红色”、“我想要一个红色背景”、“请把背景变成红色”等等。模型需要了解真实用户是如何表达请求的。</p></blockquote>
+
+<h2>与 flutter_gemma 集成</h2>
+
+<p><a href="https://github.com/DenisovAV/flutter_gemma"><em>https://github.com/DenisovAV/flutter_gemma</em></a> <em>— 我的 Flutter 插件，用于在本地运行 Gemma 模型（以防你忘记了）:)</em></p>
+
+<h3>模型设置</h3>
+
+<p>选择模型类型 — 这将激活特殊的 FunctionGemma 解析器。</p>
+
+<pre><code class="dart">// ModelType.functionGemma activates the special parser
+final model = Model.functionGemma_270M;
+// or your fine-tuned version
+final model = Model.functionGemma_demo;
+</code></pre>
+
+<h3>定义函数</h3>
+
+<p>使用 JSON Schema 格式描述你的函数 — 与 OpenAI 函数调用相同。</p>
+
+<pre><code class="dart">final tools = [
+  Tool(
+    name: 'change_background_color',
+    description: 'Changes the app background color',
+    parameters: {
+      'type': 'object',
+      'properties': {
+        'color': {
+          'type': 'string',
+          'enum': ['red', 'blue', 'green', 'yellow', 'purple', 'orange'],
+          'description': 'The color name',
+        },
+      },
+      'required': ['color'],
+    },
+  ),
+];
+</code></pre>
+
+<h3>创建带有工具的聊天</h3>
+
+<p>创建聊天时传递你的工具 — 插件将自动生成系统提示。</p>
+
+<pre><code class="dart">final chat = await model.createChat(tools: tools);
+</code></pre>
+
+<h3>处理响应</h3>
+
+<p>处理数据流 — 你将获得文本标记或函数调用。</p>
+
+<pre><code class="dart">await chat.addQuery(Message.text(text: userInput, isUser: true));
+
+await for (final response in chat.generateChatResponseAsync()) {
+  if (response is TextResponse) {
+    // Regular text
+    appendToUI(response.token);
+  } else if (response is FunctionCallResponse) {
+    // Function call!
+    final result = await executeFunction(
+      response.name,  // "change_background_color"
+      response.args,  // {"color": "red"}
+    );    
+
+    // Send result back to the model
+    await chat.addQuery(Message.toolResponse(
+      toolName: response.name,
+      response: result,
+    ));
+  }
+}
+</code></pre>
+
+<blockquote><p>底层工作原理</p>
+
+<ol>
+<li><p>插件自动生成包含函数声明的提示符</p></li>
+<li><p><code>FunctionCallParser</code> 解析特殊的 FunctionGemma 格式</p></li>
+<li><p>流式安全函数调用检测</p></li>
+<li><p>跨平台：iOS、Android、Web</p></li>
+</ol>
+</blockquote>
+
+<h3>实际示例</h3>
+
+<p><a href="https://github.com/DenisovAV/flutter_gemma/tree/main/example">演示应用</a> — 你已在上方看到过它的截图。我创建了一个包含三个函数的演示：<code>change_background_color</code>（更改背景颜色）、<code>change_app_title</code>（更改标题）和<code>show_alert</code>（显示警告对话框）。</p>
+
+<p><strong>示例对话框</strong></p>
+
+<p><strong>用户：</strong> “将背景设为红色”</p>
+
+<p><strong>模型：</strong>“<start_function_call>call:change_background_color{color:<escape>red<escape>}<end_function_call>”</p>
+
+<p><strong>插件：</strong> 解析函数调用，调用 <code>changeBackgroundColor(“red”)</code>，将结果发送给模型，模型生成响应：“完成！背景现在是红色了。”</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*0wEK0hlMrW9hzmLlQPZlQw.png" alt="" /></p>
+
+<h3>即用型模型 — 无需转换</h3>
+
+<p>要试用 FunctionGemma，你无需完成整个流程或进行微调。我已经准备好了即用型模型：</p>
+
+<p><strong>1.基础模型（已转换为 .task 文件）：</strong></p>
+
+<p>Google 仅以 PyTorch 格式发布了 FunctionGemma。我完成了整个转换流程，并上传了最终的 <code>.task</code> 文件：<a href="https://huggingface.co/sasha-denisov/function-gemma-270M-it">sasha-denisov/function-gemma-270M-it</a>。这是 Google 的原始模型，未经微调。准确率约为 58%——虽然不算完美，但足以用于实验和原型开发。只想尝试在设备上调用函数？那就下载这个模型吧。</p>
+
+<p><strong>2.针对演示应用进行了微调：</strong></p>
+
+<p>如果你想查看微调后的效果，这里有一个基于 flutter_gemma 示例中的函数训练的模型：<a href="https://huggingface.co/sasha-denisov/functiongemma-flutter-gemma-demo">sasha-denisov/functiongemma-flutter-gemma-demo</a>。该模型使用 284 个示例训练了 3 个函数（<code>change_background_color</code>、<code>change_app_title</code> 和 <code>show_alert</code>）。准确率显著高于基准模型。</p>
+
+<h2>结论</h2>
+
+<p>FunctionGemma 是 Google 最小的函数调用专用模型——2.7 亿个参数，288 MB，解码速度约为 126 tok/s。没错，它需要微调（准确率从 58% 提升到 85%），没错，它使用了一种奇怪的自定义格式，而不是 JSON。但它适用于任何手机，响应速度极快，而且确实有效。现在就可以构建带有离线 AI 代理的应用——体积小、速度快、可靠性高，足以满足生产环境的需求。无需等待模型体积更小、设备速度更快的“神奇未来”，未来已来！</p>
+
+<p><a href="https://flutter.dev/">Flutter</a> 让这一切变得格外轻松——一套代码库，覆盖所有平台：iOS、Android、Web 和桌面。如果你想更进一步，<a href="https://github.com/DenisovAV/flutter_gemma">flutter_gemma</a> 是开源的，我们始终欢迎贡献者。</p>
+
+<blockquote><p>_本文是我关于移动应用中 AI 实际应用系列文章的一部分。接下来将会是：“完全设备端 RAG — 完整指南” — 订阅即可获取更新。</p></blockquote>
+
+<p><strong>联系我：</strong> <a href="https://medium.com/r?url=https%3A%2F%2Fgithub.com%2FDenisovAV">GitHub</a>, <a href="https://www.linkedin.com/in/aleks-denisov/">LinkedIn</a>, <a href="https://medium.com/@denisov.shureg">Medium</a>, <a href="https://x.com/ShuregDenisov">X</a></p>
+
+<h3>相关链接</h3>
+
+<ul>
+<li><a href="https://ai.google.dev/gemma/docs/functiongemma/model_card">FunctionGemma 模型卡</a>, <a href="https://blog.google/technology/developers/functiongemma/">Google 博客 — FunctionGemma</a>, <a href="https://huggingface.co/google/functiongemma-270m-it">HuggingFace 上的 FunctionGemma</a>, <a href="https://github.com/DenisovAV/flutter_gemma">flutter_gemma</a>, <a href="https://github.com/MadeAgents/Hammer">Hammer 2.1</a>, <a href="https://ai.google.dev/gemma/docs/gemma3n">Gemma 3n</a>, <a href="https://github.com/google-ai-edge/LiteRT-LM">LiteRT-LM</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[把离线AI代理装进口袋里]]></title>
@@ -1238,7 +1573,7 @@ drive.mount('/content/drive')
 
 <p>如有任何疑问，欢迎随时联系：</p>
 
-<p>📧 <strong>邮箱：</strong> <a href="&#x6d;&#97;&#105;&#108;&#x74;&#111;&#x3a;&#100;&#101;&#x6e;&#x69;&#x73;&#111;&#x76;&#46;&#115;&#x68;&#117;&#114;&#101;&#103;&#x40;&#103;&#109;&#97;&#x69;&#x6c;&#46;&#x63;&#111;&#x6d;">&#x64;&#x65;&#x6e;&#x69;&#115;&#x6f;&#x76;&#46;&#x73;&#104;&#x75;&#114;&#101;&#x67;&#x40;&#103;&#109;&#x61;&#105;&#x6c;&#x2e;&#x63;&#x6f;&#109;</a></p>
+<p>📧 <strong>邮箱：</strong> <a href="&#109;&#x61;&#105;&#108;&#x74;&#111;&#58;&#x64;&#x65;&#x6e;&#x69;&#x73;&#x6f;&#118;&#46;&#x73;&#x68;&#117;&#114;&#101;&#103;&#x40;&#x67;&#x6d;&#x61;&#x69;&#108;&#46;&#99;&#x6f;&#109;">&#100;&#101;&#x6e;&#105;&#115;&#x6f;&#118;&#x2e;&#115;&#104;&#117;&#114;&#x65;&#103;&#64;&#103;&#x6d;&#97;&#105;&#108;&#46;&#x63;&#x6f;&#109;</a></p>
 
 <p>🔗 <strong>领英：</strong> <a href="https://www.linkedin.com/in/aleks-denisov/">Sasha Denisov</a></p>
 ]]></content>

@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-03-16T13:05:59+00:00</updated>
+  <updated>2026-03-17T13:05:29+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,408 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[使用FunctionGemma进行设备端函数调用]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/03/17/function-calling-with-gemma/"/>
+    <updated>2026-03-17T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/03/17/function-calling-with-gemma</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「On-Device Function Calling with FunctionGemma」，原文链接<a href="https://medium.com/google-developer-experts/on-device-function-calling-with-functiongemma-39f7407e5d83">https://medium.com/google-developer-experts/on-device-function-calling-with-functiongemma-39f7407e5d83</a>，由Sasha Denisov发布于2025年12月29日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/03/17/function-calling-with-gemma/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*MwYm9N3fInpcgKSCRJDrqw.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2><strong>我为什么相信离线代理</strong></h2>
+
+<p>我是 <a href="https://pub.dev/packages/flutter_gemma">flutter_gemma</a> 的创建者和维护者——这是一个用于在移动设备上本地运行 LLM 的 Flutter 插件。我越是使用设备端 AI，就越发确信：<em>未来属于本地代理，或者至少是混合代理</em>。</p>
+
+<h3>为什么？</h3>
+
+<p>想象一下，你是一位想要构建带有 AI 代理的移动或 Web 应用的开发者。当智能体部署在云端时，你会面临一系列问题：</p>
+
+<ul>
+<li><p><strong>延迟</strong> — 用户需要等待响应，速度取决于网络连接质量</p></li>
+<li><p><strong>Token成本</strong> — 你需要权衡用户定价和利润率</p></li>
+<li><p><strong>隐私</strong> — GDPR 和其他法规要求谨慎处理数据</p></li>
+<li><p><strong>网络依赖</strong> — 没有网络就无法提供服务</p></li>
+</ul>
+
+
+<p><strong>所有这些问题都可以通过将 AI 迁移到设备端来解决。</strong></p>
+
+<p>我在《把离线AI智能体装进口袋里》（<a href="https://medium.com/@denisov.shureg/the-dawn-of-offline-ai-agents-in-your-pocket-55fff80d794b">The Dawn of Offline AI Agents in Your Pocket</a>）一文中对此进行了详细阐述。但文章中的示例更像是Demo，而非生产解决方案。像 Ge​​mma 3n 这样的模型虽然能够很好地处理函数调用，但它们体积过大：无法集成到应用程序包中，需要单独下载，即使在旗舰机型上推理速度也很慢。在低端设备上，它们根本无法运行。而较小的型号则经常出现故障，难以记住工具。</p>
+
+<p>对于生产环境，你需要一个专门的型号：</p>
+
+<ul>
+<li><p><strong>体积小</strong> — 可放入手机内存</p></li>
+<li><p><strong>速度快</strong> — 解码速度 >100 tok/s</p></li>
+<li><p><strong>专为函数调用而生</strong> — 并非通用聊天工具</p></li>
+</ul>
+
+
+<p>而这样的型号现在已经存在——<a href="https://blog.google/technology/developers/functiongemma/"><strong>FunctionGemma</strong></a>。</p>
+
+<h3>什么是 FunctionGemma？</h3>
+
+<p><a href="https://ai.google.dev/gemma/docs/functiongemma">FunctionGemma</a> 是 <a href="https://developers.googleblog.com/en/introducing-gemma-3-270m/">Gemma 3 270M</a> 的一个特殊版本，专为函数调用而设计。</p>
+
+<p>Google 于 2025 年 12 月（几天前）发布了它。它回应了开发者在 Gemma 3 270M 发布后提出的主要需求——为设备端代理提供原生函数调用支持。</p>
+
+<h3>主要规格：</h3>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*RsktbjWuIWidtCUTyh6iKQ.png" alt="" /></p>
+
+<p><strong>实际应用效果：</strong></p>
+
+<ul>
+<li><p><strong>288 MB</strong> — 可直接嵌入应用包，无需单独下载</p></li>
+<li><p><strong>551 MB RAM</strong> — 即使在配备 4 GB 内存的入门级设备上也能流畅运行</p></li>
+<li><p><strong>2.7 亿个参数</strong> — 比 Gemma 3n E2B 小 10 倍，但足以满足函数调用需求</p></li>
+<li><p><strong>25.6 万词汇表</strong> — 庞大的词汇表能够很好地处理结构化数据和 JSON</p></li>
+<li><p><strong>0.3 秒 TTFT</strong> — 模型几乎瞬间响应</p></li>
+</ul>
+
+
+<p>在 flutter_gemma 插件的示例应用中查看其速度：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:428/format:webp/1*AFHP1EhImKCikEeOfEh3HA.gif" alt="flutter_gemma 示例中的函数调用" /></p>
+
+<blockquote><p><strong><em>有一点很重要。该模型的初始准确率只有 58%。听起来不太像能直接用于生产环境，对吧？</em></strong></p></blockquote>
+
+<p>但关键在于：FunctionGemma 可以轻松地针对你的特定函数进行微调。<a href="https://ai.google.dev/gemma/docs/functiongemma/model_card">微调后，准确率跃升至 <strong>85%</strong></a>。+27%——这就是“有时有效”和“可用于生产环境”之间的区别。</p>
+
+<h3>与竞品对比</h3>
+
+<p>为了更直观地比较，我们不妨将 FunctionGemma 与几个最接近的替代方案进行比较：<strong>Gemma 3n</strong> 和 <strong>Gemma 3 1B</strong> 作为间接竞争对手（支持函数调用的通用模型），<strong>Llama</strong> 作为流行的开源选项，以及 <strong>Hammer</strong>——MadeAgents 出品的直接竞争对手，专为函数调用而设计。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*pi5V7sojA62l9H-1dON2iQ.png" alt="" /></p>
+
+<p>FunctionGemma 仅提供 int8 版本（288 MB）——由于模型本身已经很小，这已经足够了。Gemma 3n E2B 则相反——仅提供 int4 版本，因为 int8 版本将占用约 6 GB 的空间。</p>
+
+<blockquote><p><strong>int8 与 int4 — 有什么区别？</strong>
+量化将模型权重从 32/16 位数字压缩为 8 位 (int8) 或 4 位 (int4)。位数越少，文件越小，推理速度越快，但质量可能越低。</p>
+
+<p><strong>int8</strong> — 质量和大小之间的平衡。质量损失极小（约 1~3%），文件大小比 FP16 减少约 2 倍。</p>
+
+<p><strong>int4</strong> — 最大程度的压缩，文件大小减少约 4 倍。质量损失更明显（约 2~10%，具体取决于模型），但通常可以接受，尤其对于函数调用而言。</p></blockquote>
+
+<p>还有一个重要的指标——准确率。<a href="https://gorilla.cs.berkeley.edu/leaderboard.html">伯克利函数调用排行榜 (BFCL)</a> 是评估函数调用能力的标准基准。 Gemma 3 1B 的得分约为 31%，Llama 3.2 1B 约为 26%，两者未经微调的性能都很弱。由于 Gemma 3n 是通用型程序，因此未对其进行测试。Hammer 2.1 0.5B 没有公开数据，但其 1.5B 版本开箱即用的得分约为 73%——尽管它在 int8 内存中占用约 1.5GB 的空间，是 FunctionGemma（288MB）的 5 倍。</p>
+
+<h3>何时选择哪种模型</h3>
+
+<ul>
+<li><p><strong>快速原型，无需微调</strong> → <a href="https://github.com/MadeAgents/Hammer">Hammer</a> 或 FunctionGemma 基础模型。</p></li>
+<li><p><strong>速度最快 + 体积最小 + 准确率最高</strong> → FunctionGemma（2.7 亿字节，约 126 tok/秒，微调后准确率达 85%）</p></li>
+<li><p><strong>多模态智能体（文本 + 图像）</strong> → <a href="https://ai.google.dev/gemma/docs/gemma3n">Gemma 3n</a></p></li>
+</ul>
+
+
+<h2>FunctionGemma 的独特格式</h2>
+
+<p>与大多数使用 JSON 的模型不同，FunctionGemma 拥有自己的格式和特殊标记。</p>
+
+<h3>函数调用格式</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;start_function_call&gt;</span>call:change_background_color
+</span><span class='line'>      {color:<span class="nt">&lt;escape&gt;</span>red<span class="nt">&lt;escape&gt;</span>}<span class="nt">&lt;end_function_call&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>让我们来分解一下：<code>&lt;start_function_call&gt;</code> — 函数调用开始，<code>call:</code> — 前缀，<code>change_background_color</code> — 函数名，<code>{color:&lt;escape&gt;red&lt;escape&gt;}</code> — 带转义标记的参数，<code>&lt;end_function_call&gt;</code> — 函数调用结束。</p>
+
+<h3>开发者角色</h3>
+
+<p>FunctionGemma 经过优化，以 <code>developer</code> 作为指令角色。使用 <code>system</code>（例如在 Hammer 或标准 Gemma 中）不会激活函数调用模式——模型将完全忽略你的工具定义。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="err">messages</span> <span class="err">=</span> <span class="p">[</span>
+</span><span class='line'>    <span class="p">{</span><span class="nt">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;developer&quot;</span><span class="p">,</span> <span class="nt">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;You are a model that can do function calling...&quot;</span><span class="p">},</span>
+</span><span class='line'>    <span class="p">{</span><span class="nt">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="nt">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;make it red&quot;</span><span class="p">}</span>
+</span><span class='line'><span class="p">]</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用 <code>system</code> 不会激活函数调用模式。</p>
+
+<h3>枚举支持</h3>
+
+<p>一个 2.7 亿的模型可能会产生虚假的参数值。如果没有约束，请求“把它变成红色”可能会生成 <code>{“color”: “crimson”}</code> 或 <code>{“color”: “rouge”}</code>。枚举类型强制模型仅从有效值中选择，从而确保函数调用的可靠性。</p>
+
+<p>格式：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="err">enum:</span><span class="p">[</span><span class="err">&lt;escape&gt;red&lt;escape&gt;</span><span class="p">,</span><span class="err">&lt;escape&gt;blue&lt;escape&gt;</span><span class="p">,</span><span class="err">&lt;escape&gt;green&lt;escape&gt;</span><span class="p">]</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>声明函数时，枚举类型位于 <code>description</code> 和 <code>type</code> 之间：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="err">color:</span><span class="p">{</span><span class="err">description:&lt;escape&gt;The</span> <span class="err">color</span> <span class="err">name&lt;escape&gt;,enum:[&lt;escape&gt;red&lt;escape&gt;,...],type:&lt;escape&gt;STRING&lt;escape&gt;</span><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>停止标记</h3>
+
+<p><strong>什么是停止标记？</strong> 停止标记是告知模型何时停止生成数据的特殊标记。对于 FunctionGemma，需要两个停止标记：<code>&lt;end_of_turn&gt;</code> — 消息结束，<code>&lt;start_function_response&gt;</code> — 模型停止并等待函数结果。</p>
+
+<p><strong>为什么它们很重要：</strong> 如果没有 <code>&lt;start_function_response&gt;</code>，模型在函数调用后不会暂停，而是会错误地获取响应。这两个标记都必须在模型转换为 <code>.task</code> 格式时设置。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="err">stop_tokens=</span><span class="p">[</span>
+</span><span class='line'>    <span class="s2">&quot;&lt;end_of_turn&gt;&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="s2">&quot;&lt;start_function_response&gt;&quot;</span><span class="p">,</span>  <span class="err">#</span> <span class="err">Model</span> <span class="err">stops</span><span class="p">,</span> <span class="err">waits</span> <span class="err">for</span> <span class="err">result</span>
+</span><span class='line'><span class="p">]</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>模型准备流程</h2>
+
+<p>让我们详细了解一下模型准备流程——从微调到最终生成可在设备端运行的格式。理解这一点至关重要，因为 Google 最初只发布了 PyTorch 格式的 FunctionGemma 模型，而移动端部署需要进行格式转换。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*bHs4FiJDj7RfwKvERzVtbg.jpeg" alt="" /></p>
+
+<p>该流程首先使用 TRL/SFTTrainer 对 JSONL 格式的训练数据上的 <code>google/functiongemma-270m-it</code> 基础模型进行微调。训练完成后，使用 <code>ai-edge-torch</code> 和 <code>dynamic_int8</code> 量化算法将模型转换为 TFLite 格式。最后一步取决于目标运行时环境：对于 MediaPipe，将 TFLite 模型与分词器和停止标记合并到一个 <code>.task</code> 包中，该包可在 iOS、Android 和 Web 上运行。或者，你可以将其打包为 <code>.litertlm</code> 格式，用于 LiteRT-LM 运行时，该运行时提供 NPU 加速和更广泛的平台支持，包括桌面平台。</p>
+
+<p>转换为 TFLite 后，你可以选择将模型打包为两种可在设备端运行的格式之一：<code>.task</code>（用于 MediaPipe）或 <code>.litertlm</code>（用于 LiteRT-LM）。</p>
+
+<blockquote><p><strong>task</strong> — 这是 MediaPipe 格式，经过长时间的实战检验。<a href="https://ai.google.dev/edge/mediapipe/framework">MediaPipe</a> LLM 推理 API 已存在多年，可在 iOS、Android 和 Web 上可靠运行。模型与分词器和元数据一起打包在一个文件中。支持 GPU 加速。这就是 flutter_gemma 目前使用的格式。</p>
+
+<p><strong>litertlm</strong> — 这是 Google 推出的一种新格式，是 .task 的升级版，具有更好的压缩效果和额外的元数据。MediaPipe 也可以在 iOS、Android 和 Web 上运行 .litertlm，但不具备 NPU 等额外功能。 .litertlm 的主要优势在于其独立的运行时 <a href="https://ai.google.dev/edge/litert/next/litert_lm_npu">LiteRT-LM</a>：它支持 NPU（神经处理单元），可实现更强大的加速，并支持桌面平台——Linux、macOS、Windows，甚至 Raspberry Pi。但 LiteRT-LM 运行时目前仍处于早期预览阶段：iOS 和 Web 平台暂不支持（即将推出）。</p></blockquote>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*uUVf6Uv252V_luYwBnkgKQ.png" alt="" /></p>
+
+<h3>如何选择？</h3>
+
+<p><strong>移动应用（iOS + Android）或 Web 应用</strong>——请选择 <code>.task</code>。原生支持 MediaPipe LLM 推理 API：<a href="https://github.com/google-ai-edge/mediapipe-samples/tree/main/examples/llm_inference/android">Android</a> 和 <a href="https://ai.google.dev/edge/mediapipe/solutions/genai/llm_inference/ios">iOS</a> 都有现成的示例。在 Flutter 上，<a href="https://pub.dev/packages/flutter_gemma">flutter_gemma</a> 也开箱即用地支持它。</p>
+
+<p><strong>仅限 Android + 最大程度利用硬件</strong> — 使用 LiteRT-LM 运行时的 <code>.litertlm</code> 文件可实现 NPU 加速。请在 Google Play（适用于 Android）和 <a href="https://testflight.apple.com/join/nAtSQKTF">TestFlight</a>（适用于 iOS）上查看 <a href="https://play.google.com/store/apps/details?id=com.google.ai.edge.gallery">AI Edge Gallery</a>——这是 Google 的演示应用，包含 FunctionGemma、语音命令和小游戏。源代码位于 <a href="https://github.com/google-ai-edge/gallery">GitHub</a>。目前仅支持 Android。</p>
+
+<p><strong>桌面端（Linux、macOS、Windows）</strong>——仅支持通过 LiteRT-LM 集成的 <code>.litertlm</code> 文件。有多种集成选项：</p>
+
+<ul>
+<li><p><a href="https://github.com/google-ai-edge/LiteRT-LM/releases">CLI 工具 <code>lit</code></a>——从 HuggingFace 拉取模型，并只需一条命令即可运行推理。适用于 macOS、Linux 和 Windows 的二进制文件</p></li>
+<li><p><a href="https://github.com/google-ai-edge/LiteRT-LM/blob/main/kotlin/README.md">Kotlin API</a> — 适用于 Android 和 JVM（Linux、macOS、Windows）的完整 SDK</p></li>
+<li><p><a href="https://github.com/google-ai-edge/LiteRT-LM#litert%20%20%20%20%20%20%20%20%20%20%20%20+-lm-ap">C++ API</a> — 用于原生集成并支持流式传输的引擎、会话和对话类</p></li>
+</ul>
+
+
+<h3>flutter_gemma 支持</h3>
+
+<p><a href="https://pub.dev/packages/flutter_gemma">flutter_gemma</a> 通过 MediaPipe LLM 推理 API，支持 iOS、Android 和 Web 上的 <code>.task</code> 和 <code>.litertlm</code> 格式。</p>
+
+<p>至于基于 NPU 和桌面平台的 LiteRT-LM 运行时，相关工作已经在进行中。一旦 Google 开放 iOS 的公共 API（预计在 2026 年初），我们将添加全面支持。桌面平台也在我们的计划之中——敬请期待，即将推出。</p>
+
+<h3>即用型 Colab Notebook</h3>
+
+<p>我已经为整个流程准备好了 Notebook：</p>
+
+<ol>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_finetuning.ipynb"><strong>微调</strong></a> — 加载基础模型，准备 JSONL 数据集，使用 TRL/SFTTrainer 进行训练，保存到云端硬盘</p></li>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_to_tflite.ipynb"><strong>TFLite 转换</strong></a> — 使用 ai-edge-torch 将 PyTorch 模型转换为 TFLite 模型，应用 int8 量化</p></li>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_tflite_to_task.ipynb"><strong>任务包</strong></a> — 将 TFLite、分词器和停止标记合并为 .task 文件，用于 MediaPipe</p></li>
+<li><p><a href="https://colab.research.google.com/github/DenisovAV/flutter_gemma/blob/main/colabs/functiongemma_to_litertlm.ipynb"><strong>LiteRT-LM 包</strong></a> — 使用 ai-edge-torch-nightly 转换为 .litertlm 文件，并添加元数据和停止标记，用于 LiteRT-LM 运行时</p></li>
+</ol>
+
+
+<h3>训练数据格式</h3>
+
+<p>为了优化 FunctionGemma 在你的函数上的性能，你需要训练数据——用户请求示例及其对应的函数调用。数据格式为简单的 JSONL，其中每一行将用户短语映射到一个函数名及其参数。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='json'><span class='line'><span class="p">{</span><span class="nt">&quot;user_content&quot;</span><span class="p">:</span> <span class="s2">&quot;make it red&quot;</span><span class="p">,</span> <span class="nt">&quot;tool_name&quot;</span><span class="p">:</span> <span class="s2">&quot;change_background_color&quot;</span><span class="p">,</span> <span class="nt">&quot;tool_arguments&quot;</span><span class="p">:</span> <span class="s2">&quot;{\&quot;color\&quot;: \&quot;red\&quot;}&quot;</span><span class="p">}</span>
+</span><span class='line'><span class="p">{</span><span class="nt">&quot;user_content&quot;</span><span class="p">:</span> <span class="s2">&quot;rename app to Hello&quot;</span><span class="p">,</span> <span class="nt">&quot;tool_name&quot;</span><span class="p">:</span> <span class="s2">&quot;change_app_title&quot;</span><span class="p">,</span> <span class="nt">&quot;tool_arguments&quot;</span><span class="p">:</span> <span class="s2">&quot;{\&quot;title\&quot;: \&quot;Hello\&quot;}&quot;</span><span class="p">}</span>
+</span><span class='line'><span class="p">{</span><span class="nt">&quot;user_content&quot;</span><span class="p">:</span> <span class="s2">&quot;show alert saying hi&quot;</span><span class="p">,</span> <span class="nt">&quot;tool_name&quot;</span><span class="p">:</span> <span class="s2">&quot;show_alert&quot;</span><span class="p">,</span> <span class="nt">&quot;tool_arguments&quot;</span><span class="p">:</span> <span class="s2">&quot;{\&quot;title\&quot;: \&quot;Alert\&quot;, \&quot;message\&quot;: \&quot;hi\&quot;}&quot;</span><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p>你需要多少个示例？</p>
+
+<p>在我的演示应用中，我使用了 <strong>284 个示例</strong>，每个功能大约 90-100 个。多样性很重要：不仅仅是重复 94 次“把它变成红色”，而是不同的表达方式，例如“改成红色”、“设置背景为红色”、“我想要一个红色背景”、“请把背景变成红色”等等。模型需要了解真实用户是如何表达请求的。</p></blockquote>
+
+<h2>与 flutter_gemma 集成</h2>
+
+<p><a href="https://github.com/DenisovAV/flutter_gemma"><em>https://github.com/DenisovAV/flutter_gemma</em></a> <em>— 我的 Flutter 插件，用于在本地运行 Gemma 模型（以防你忘记了）:)</em></p>
+
+<h3>模型设置</h3>
+
+<p>选择模型类型 — 这将激活特殊的 FunctionGemma 解析器。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='dart'><span class='line'><span class="c1">// ModelType.functionGemma activates the special parser</span>
+</span><span class='line'><span class="kd">final</span> <span class="n">model</span> <span class="o">=</span> <span class="n">Model</span><span class="p">.</span><span class="n">functionGemma_270M</span><span class="p">;</span>
+</span><span class='line'><span class="c1">// or your fine-tuned version</span>
+</span><span class='line'><span class="kd">final</span> <span class="n">model</span> <span class="o">=</span> <span class="n">Model</span><span class="p">.</span><span class="n">functionGemma_demo</span><span class="p">;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>定义函数</h3>
+
+<p>使用 JSON Schema 格式描述你的函数 — 与 OpenAI 函数调用相同。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='dart'><span class='line'><span class="kd">final</span> <span class="n">tools</span> <span class="o">=</span> <span class="p">[</span>
+</span><span class='line'>  <span class="n">Tool</span><span class="p">(</span>
+</span><span class='line'>    <span class="nl">name:</span> <span class="s1">&#39;change_background_color&#39;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nl">description:</span> <span class="s1">&#39;Changes the app background color&#39;</span><span class="p">,</span>
+</span><span class='line'>    <span class="nl">parameters:</span> <span class="p">{</span>
+</span><span class='line'>      <span class="s1">&#39;type&#39;</span><span class="o">:</span> <span class="s1">&#39;object&#39;</span><span class="p">,</span>
+</span><span class='line'>      <span class="s1">&#39;properties&#39;</span><span class="o">:</span> <span class="p">{</span>
+</span><span class='line'>        <span class="s1">&#39;color&#39;</span><span class="o">:</span> <span class="p">{</span>
+</span><span class='line'>          <span class="s1">&#39;type&#39;</span><span class="o">:</span> <span class="s1">&#39;string&#39;</span><span class="p">,</span>
+</span><span class='line'>          <span class="s1">&#39;enum&#39;</span><span class="o">:</span> <span class="p">[</span><span class="s1">&#39;red&#39;</span><span class="p">,</span> <span class="s1">&#39;blue&#39;</span><span class="p">,</span> <span class="s1">&#39;green&#39;</span><span class="p">,</span> <span class="s1">&#39;yellow&#39;</span><span class="p">,</span> <span class="s1">&#39;purple&#39;</span><span class="p">,</span> <span class="s1">&#39;orange&#39;</span><span class="p">],</span>
+</span><span class='line'>          <span class="s1">&#39;description&#39;</span><span class="o">:</span> <span class="s1">&#39;The color name&#39;</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">},</span>
+</span><span class='line'>      <span class="p">},</span>
+</span><span class='line'>      <span class="s1">&#39;required&#39;</span><span class="o">:</span> <span class="p">[</span><span class="s1">&#39;color&#39;</span><span class="p">],</span>
+</span><span class='line'>    <span class="p">},</span>
+</span><span class='line'>  <span class="p">),</span>
+</span><span class='line'><span class="p">];</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>创建带有工具的聊天</h3>
+
+<p>创建聊天时传递你的工具 — 插件将自动生成系统提示。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='dart'><span class='line'><span class="kd">final</span> <span class="n">chat</span> <span class="o">=</span> <span class="n">await</span> <span class="n">model</span><span class="p">.</span><span class="n">createChat</span><span class="p">(</span><span class="nl">tools:</span> <span class="n">tools</span><span class="p">);</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>处理响应</h3>
+
+<p>处理数据流 — 你将获得文本标记或函数调用。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='dart'><span class='line'><span class="n">await</span> <span class="n">chat</span><span class="p">.</span><span class="n">addQuery</span><span class="p">(</span><span class="n">Message</span><span class="p">.</span><span class="n">text</span><span class="p">(</span><span class="nl">text:</span> <span class="n">userInput</span><span class="p">,</span> <span class="nl">isUser:</span> <span class="kc">true</span><span class="p">));</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">await</span> <span class="k">for</span> <span class="p">(</span><span class="kd">final</span> <span class="n">response</span> <span class="k">in</span> <span class="n">chat</span><span class="p">.</span><span class="n">generateChatResponseAsync</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">response</span> <span class="k">is</span> <span class="n">TextResponse</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Regular text</span>
+</span><span class='line'>    <span class="n">appendToUI</span><span class="p">(</span><span class="n">response</span><span class="p">.</span><span class="n">token</span><span class="p">);</span>
+</span><span class='line'>  <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">response</span> <span class="k">is</span> <span class="n">FunctionCallResponse</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Function call!</span>
+</span><span class='line'>    <span class="kd">final</span> <span class="n">result</span> <span class="o">=</span> <span class="n">await</span> <span class="n">executeFunction</span><span class="p">(</span>
+</span><span class='line'>      <span class="n">response</span><span class="p">.</span><span class="n">name</span><span class="p">,</span>  <span class="c1">// &quot;change_background_color&quot;</span>
+</span><span class='line'>      <span class="n">response</span><span class="p">.</span><span class="n">args</span><span class="p">,</span>  <span class="c1">// {&quot;color&quot;: &quot;red&quot;}</span>
+</span><span class='line'>    <span class="p">);</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// Send result back to the model</span>
+</span><span class='line'>    <span class="n">await</span> <span class="n">chat</span><span class="p">.</span><span class="n">addQuery</span><span class="p">(</span><span class="n">Message</span><span class="p">.</span><span class="n">toolResponse</span><span class="p">(</span>
+</span><span class='line'>      <span class="nl">toolName:</span> <span class="n">response</span><span class="p">.</span><span class="n">name</span><span class="p">,</span>
+</span><span class='line'>      <span class="nl">response:</span> <span class="n">result</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">));</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p>底层工作原理</p>
+
+<ol>
+<li><p>插件自动生成包含函数声明的提示符</p></li>
+<li><p><code>FunctionCallParser</code> 解析特殊的 FunctionGemma 格式</p></li>
+<li><p>流式安全函数调用检测</p></li>
+<li><p>跨平台：iOS、Android、Web</p></li>
+</ol>
+</blockquote>
+
+<h3>实际示例</h3>
+
+<p><a href="https://github.com/DenisovAV/flutter_gemma/tree/main/example">演示应用</a> — 你已在上方看到过它的截图。我创建了一个包含三个函数的演示：<code>change_background_color</code>（更改背景颜色）、<code>change_app_title</code>（更改标题）和<code>show_alert</code>（显示警告对话框）。</p>
+
+<p><strong>示例对话框</strong></p>
+
+<p><strong>用户：</strong> “将背景设为红色”</p>
+
+<p><strong>模型：</strong>“<start_function_call>call:change_background_color{color:<escape>red<escape>}<end_function_call>”</p>
+
+<p><strong>插件：</strong> 解析函数调用，调用 <code>changeBackgroundColor(“red”)</code>，将结果发送给模型，模型生成响应：“完成！背景现在是红色了。”</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*0wEK0hlMrW9hzmLlQPZlQw.png" alt="" /></p>
+
+<h3>即用型模型 — 无需转换</h3>
+
+<p>要试用 FunctionGemma，你无需完成整个流程或进行微调。我已经准备好了即用型模型：</p>
+
+<p><strong>1.基础模型（已转换为 .task 文件）：</strong></p>
+
+<p>Google 仅以 PyTorch 格式发布了 FunctionGemma。我完成了整个转换流程，并上传了最终的 <code>.task</code> 文件：<a href="https://huggingface.co/sasha-denisov/function-gemma-270M-it">sasha-denisov/function-gemma-270M-it</a>。这是 Google 的原始模型，未经微调。准确率约为 58%——虽然不算完美，但足以用于实验和原型开发。只想尝试在设备上调用函数？那就下载这个模型吧。</p>
+
+<p><strong>2.针对演示应用进行了微调：</strong></p>
+
+<p>如果你想查看微调后的效果，这里有一个基于 flutter_gemma 示例中的函数训练的模型：<a href="https://huggingface.co/sasha-denisov/functiongemma-flutter-gemma-demo">sasha-denisov/functiongemma-flutter-gemma-demo</a>。该模型使用 284 个示例训练了 3 个函数（<code>change_background_color</code>、<code>change_app_title</code> 和 <code>show_alert</code>）。准确率显著高于基准模型。</p>
+
+<h2>结论</h2>
+
+<p>FunctionGemma 是 Google 最小的函数调用专用模型——2.7 亿个参数，288 MB，解码速度约为 126 tok/s。没错，它需要微调（准确率从 58% 提升到 85%），没错，它使用了一种奇怪的自定义格式，而不是 JSON。但它适用于任何手机，响应速度极快，而且确实有效。现在就可以构建带有离线 AI 代理的应用——体积小、速度快、可靠性高，足以满足生产环境的需求。无需等待模型体积更小、设备速度更快的“神奇未来”，未来已来！</p>
+
+<p><a href="https://flutter.dev/">Flutter</a> 让这一切变得格外轻松——一套代码库，覆盖所有平台：iOS、Android、Web 和桌面。如果你想更进一步，<a href="https://github.com/DenisovAV/flutter_gemma">flutter_gemma</a> 是开源的，我们始终欢迎贡献者。</p>
+
+<blockquote><p>_本文是我关于移动应用中 AI 实际应用系列文章的一部分。接下来将会是：“完全设备端 RAG — 完整指南” — 订阅即可获取更新。</p></blockquote>
+
+<p><strong>联系我：</strong> <a href="https://medium.com/r?url=https%3A%2F%2Fgithub.com%2FDenisovAV">GitHub</a>, <a href="https://www.linkedin.com/in/aleks-denisov/">LinkedIn</a>, <a href="https://medium.com/@denisov.shureg">Medium</a>, <a href="https://x.com/ShuregDenisov">X</a></p>
+
+<h3>相关链接</h3>
+
+<ul>
+<li><a href="https://ai.google.dev/gemma/docs/functiongemma/model_card">FunctionGemma 模型卡</a>, <a href="https://blog.google/technology/developers/functiongemma/">Google 博客 — FunctionGemma</a>, <a href="https://huggingface.co/google/functiongemma-270m-it">HuggingFace 上的 FunctionGemma</a>, <a href="https://github.com/DenisovAV/flutter_gemma">flutter_gemma</a>, <a href="https://github.com/MadeAgents/Hammer">Hammer 2.1</a>, <a href="https://ai.google.dev/gemma/docs/gemma3n">Gemma 3n</a>, <a href="https://github.com/google-ai-edge/LiteRT-LM">LiteRT-LM</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[把离线AI代理装进口袋里]]></title>
@@ -1739,7 +2141,7 @@
 
 <p>如有任何疑问，欢迎随时联系：</p>
 
-<p>📧 <strong>邮箱：</strong> <a href="&#109;&#97;&#x69;&#x6c;&#116;&#x6f;&#58;&#x64;&#101;&#x6e;&#x69;&#115;&#x6f;&#x76;&#x2e;&#x73;&#x68;&#117;&#x72;&#x65;&#103;&#64;&#103;&#x6d;&#x61;&#105;&#108;&#46;&#99;&#111;&#x6d;">&#x64;&#101;&#x6e;&#105;&#115;&#111;&#118;&#46;&#115;&#104;&#x75;&#114;&#x65;&#103;&#x40;&#103;&#x6d;&#97;&#105;&#x6c;&#46;&#99;&#x6f;&#x6d;</a></p>
+<p>📧 <strong>邮箱：</strong> <a href="&#x6d;&#x61;&#x69;&#x6c;&#116;&#x6f;&#58;&#x64;&#101;&#110;&#105;&#115;&#111;&#118;&#x2e;&#x73;&#104;&#117;&#114;&#101;&#103;&#64;&#x67;&#x6d;&#97;&#x69;&#x6c;&#x2e;&#x63;&#x6f;&#109;">&#100;&#x65;&#x6e;&#x69;&#x73;&#111;&#118;&#46;&#115;&#104;&#x75;&#114;&#101;&#x67;&#x40;&#x67;&#x6d;&#x61;&#x69;&#x6c;&#x2e;&#x63;&#111;&#109;</a></p>
 
 <p>🔗 <strong>领英：</strong> <a href="https://www.linkedin.com/in/aleks-denisov/">Sasha Denisov</a></p>
 ]]></content>
@@ -13337,816 +13739,6 @@ Anatolii Frolov发布于2025年11月20日。</p></blockquote>
 
 
 <p>记住：最好的同步就是没有同步。尽可能地，设计系统时，通过使用不可变数据结构、消息传递（Actors/Channels）或响应式流（Flow/StateFlow）来完全避免共享可变状态。但是，当你在协程代码中确实需要互斥时，<code>Mutex</code> 是你的最佳选择。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[突破速度障碍：非阻塞启动画面如何将Android 应用启动时间缩短90%]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/10/14/non-blocking-splash/"/>
-    <updated>2025-10-14T14:41:32+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/10/14/non-blocking-splash</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Breaking the Speed Barrier: How Non-Blocking Splash Screens Cut Android App Launch Time by 90%」，原文链接<a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90">https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90</a>，由Sankalp Chauhan发布于2025年9月28日。</p></blockquote>
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#overview">概述</a></h2>
-
-<p>正值佳节期间，我们在每个应用上都能看到精美的启动画面和自定义徽标。在开发这些应用时，每个 Android 开发者都会面临启动画面的困境：用户期望获得美观且品牌化的启动体验，但 Google 原生的启动画面 API 却存在明显的局限性。创建自定义 <strong>SplashActivity</strong> 的常见解决方案看似合理，但却会引入隐藏的性能损失，导致应用运行缓慢且响应迟钝。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2025/10/14/non-blocking-splash/"><img src="https://sankalpchauhan.com/2db6f13d4b8881938f2fccacd47ff90b/untitled-design-1-.mp4.gif" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>为了应对这一挑战，我开发了一个名为<strong>EventSplash</strong>的测试库，该库实现了一种非阻塞启动画面方法。完整的实现和基准测试代码可在 GitHub 上获取：<a href="https://github.com/sankalpchauhan-me/fast-splash-experiment">fast-splash-experiment</a>（链接：<a href="https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E3%80%82">https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E3%80%82</a></p>
-
-<p>本案例研究通过一项对照实验，比较了传统的基于活动的启动画面和创新的基于视图的启动画面方法，并提供了实证证据。使用<strong>保守的同类比较</strong>，结果显示：<strong>页面加载时间缩短 90%</strong>，<strong>首次内容绘制时间提升 78%</strong>，<strong>完全绘制时间缩短 41%</strong>。</p>
-
-<p>我们将探索 Lottie 等复杂动画可能带来的显著优势，同时明确并发处理的利弊权衡和资源成本。</p>
-
-<ul>
-<li><strong>首次内容绘制 (FCP)</strong>：屏幕上出现第一个有意义内容的时间</li>
-<li><strong>完全绘制时间 (FPT)</strong>：屏幕完全渲染并可交互的时间</li>
-<li><strong>冷启动</strong>：应用在进程未运行时启动（性能影响最大）</li>
-<li><strong>卡顿</strong>：用户认为性能不佳的卡顿或掉帧</li>
-<li><strong>TTID/TTFD</strong>：初始显示时间/完全绘制时间（Android 官方指标）</li>
-<li><strong>内存压力</strong>：可用内存极低时的系统状态</li>
-<li><strong>低内存终止程序 (LMK)</strong>：在内存压力下终止进程的 Android 守护进程</li>
-<li><strong>Choreographer.doFrame</strong>：Android 的帧协调系统，用于管理动画、输入和绘制</li>
-</ul>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-problem-statement">问题声明</a></h3>
-
-<p>Google 原生的 Android 12+ SplashScreen API 性能出色，但自定义选项有限 <a href="https://developer.android.com/develop/ui/views/launch/splash-screen">[1]</a>。它不支持：</p>
-
-<ul>
-<li>视频背景</li>
-<li>Lottie 动画</li>
-<li>复杂的品牌元素</li>
-<li>促销/活动期间的促销内容</li>
-<li>自定义过渡效果</li>
-</ul>
-
-
-<p>这迫使开发者不得不进行自定义实现，通常使用专用的“SplashActivity”。虽然这种方法提供了创作自由，但它会创建一个<strong>阻塞序列</strong>，从而延迟应用主内容的显示。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-traditional-splash-activities-hurt-performance">为什么传统的闪屏活动会损害性能</a></h3>
-
-<p>Android 文档强调，应用应该针对冷启动进行优化，因为这“也可以提高温启动和热启动的性能”<a href="https://developer.android.com/topic/performance/vitals/launch-time">[2]</a>。然而，传统的闪屏实现方式违背了这一原则。</p>
-
-<p>当你使用单独的“SplashActivity”时，系统必须：</p>
-
-<ol>
-<li>创建并初始化启动画面 Activity</li>
-<li>扩展启动画面视图</li>
-<li>运行启动画面动画直至完成</li>
-<li>销毁启动画面 Activity</li>
-<li>创建并初始化主 Activity</li>
-<li>扩展主内容视图</li>
-</ol>
-
-
-<p>这种顺序流程意味着你的主内容在启动画面完成之前无法开始加载，这是一个影响用户感知性能的根本架构缺陷。</p>
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-journey-exploring-different-approaches">折腾：探索不同的方法</a></h2>
-
-<p>在最终确定 EventSplash 实现方案之前，我探索了几种方法。了解这些探索为最终的设计决策提供了宝贵的背景，并展示了性能优化的迭代本质。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#discarded-approach-the-translucent-activity-overlay">弃用的方法：半透明 Activity 覆盖</a></h3>
-
-<p>最初的想法是使用带有半透明主题的“SplashActivity”覆盖“MainActivity”。理论上，MainActivity 可以在后台加载，而启动画面则显示在最上面。</p>
-
-<p><strong>启动顺序：</strong></p>
-
-<ol>
-<li>应用以具有半透明主题的 SplashActivity 启动</li>
-<li>SplashActivity 显示在 MainActivity 之上，但不会完全遮挡 MainActivity</li>
-<li>短暂延迟或初始化完成后，SplashActivity 结束，MainActivity 显露出来</li>
-</ol>
-
-
-<p><strong>弃用原因：</strong></p>
-
-<p>这种方法导致<strong>14% 的性能下降</strong>。问题在于 Android 处理 Activity 生命周期和渲染的方式。系统并非真正并行启动两个 Activity。相反，它创建了一种顺序依赖关系，GPU 被迫组合两个独立的 Activity 缓冲区，这会在 RAM 和电池方面造成巨大的开销，有时甚至会禁用窗口过渡动画。</p>
-
-<p>正如 Android 文档中关于半透明 Activity 的说明 <a href="https://medium.com/androiddevelopers/the-android-lifecycle-cheat-sheet-part-iv-49946659b094">[3]</a>：</p>
-
-<blockquote><p>“窗口管理器会保持原先的屏幕表面按 Z 轴顺序排列，并将新的屏幕表面混合在其上方。原先的 Activity 仍然可以通过新窗口中任何透明或部分透明的像素看到。”</p></blockquote>
-
-<p>正是这种混合操作导致了性能下降。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-winning-approach-the-gated-splash-screen-mechanism">制胜之道：门控启动画面机制</a></h3>
-
-<p>我最终找到了一种更复杂的方法，它采用了<strong>门控启动画面机制</strong>。此方法使用“ViewTreeObserver.OnPreDrawListener”来阻止所有 UI 渲染，直到满足特定条件为止。</p>
-
-<p><strong>工作原理：</strong></p>
-
-<ol>
-<li>启动时，会立即将 <code>OnPreDrawListener</code> 附加到 Activity 的 <code>decorView</code> 上。</li>
-<li>监听器的 <code>onPreDraw()</code> 方法返回 <code>false</code>，从而有效阻止所有绘制操作。</li>
-<li>监听器仅在所有条件都满足时才返回 <code>true</code>，允许内容渲染。</li>
-</ol>
-
-
-<p><strong>关键实现：</strong></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// The gate mechanism</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">gate</span><span class="p">.</span><span class="n">onPreDraw</span><span class="p">()</span> <span class="err">→</span> <span class="n">returns</span> <span class="k">false</span> <span class="p">=</span> <span class="n">BLOCK</span> <span class="n">all</span> <span class="n">drawing</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">gate</span><span class="p">.</span><span class="n">onPreDraw</span><span class="p">()</span> <span class="err">→</span> <span class="n">returns</span> <span class="k">true</span> <span class="p">=</span> <span class="n">ALLOW</span> <span class="n">drawing</span> <span class="n">to</span> <span class="n">proceed</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这种方法完全符合 Android 官方文档中关于延长启动画面在屏幕上停留时间的建议 <a href="https://developer.android.com/develop/ui/views/launch/splash-screen">[1]</a>:</p>
-
-<blockquote><p>“如果你需要加载少量数据，例如从本地磁盘异步加载应用内设置，可以使用 ViewTreeObserver.OnPreDrawListener 暂停应用以绘制其第一帧。”</p></blockquote>
-
-<p>EventSplash 库扩展了这一概念，在应用启动时提供对用户可见内容的帧完美控制，防止任何内容闪烁，确保无缝体验。</p>
-
-<p><img src="https://sankalpchauhan.com/static/6810168ee26fb4ae7c236e03fbdd71bc/e5715/view-hirearchy.png" alt="DecorView 将包含我们的 SplashView 和 ContentView" /></p>
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-experiment-measuring-real-world-impact">实验：测量实际影响</a></h2>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#test-environment">测试环境</a></h3>
-
-<ul>
-<li><strong>设备</strong>：小米 POCO F1，Android 10</li>
-<li><strong>构建</strong>：发布配置</li>
-<li><strong>方法</strong>：每个配置 35 次冷启动，每次运行之间暂停 2 秒</li>
-<li><strong>指标</strong>：自定义 PerfTracker 库，用于测量页面加载时间、FCP 和 FPT</li>
-<li><strong>脚本</strong>：通过 <code>perf_loop.sh</code> 自动执行可重复性</li>
-</ul>
-
-
-<p>所有测试代码和脚本均可在 <a href="https://github.com/sankalpchauhan-me/fast-splash-experiment">GitHub 代码库</a> （链接：<a href="https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E8%8E%B7%E5%8F%96%EF%BC%8C%E4%BB%A5%E7%A1%AE%E4%BF%9D%E5%8F%AF%E9%87%8D%E5%A4%8D%E6%80%A7%E3%80%82">https://github.com/sankalpchauhan-me/fast-splash-experiment%EF%BC%89%E8%8E%B7%E5%8F%96%EF%BC%8C%E4%BB%A5%E7%A1%AE%E4%BF%9D%E5%8F%AF%E9%87%8D%E5%A4%8D%E6%80%A7%E3%80%82</a></p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#implementation-approaches-tested">测试的实现方法</a></h3>
-
-<ol>
-<li><strong>默认阻塞闪屏</strong>：简单的 <code>SplashActivity</code> 和基本路由（保守的基准）</li>
-<li><strong>默认非阻塞闪屏</strong>：EventSplash 库和简单的叠加层</li>
-<li><strong>Lottie 阻塞闪屏</strong>：传统方法和复杂的动画</li>
-<li><strong>Lottie 非阻塞闪屏</strong>：EventSplash 与 Lottie 动画并行运行</li>
-</ol>
-
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#results-conservative-claims-with-dramatic-potential">结果：保守的声明，但效果显著潜力</a></h2>
-
-<p><img src="https://sankalpchauhan.com/static/b4c51a8a6d8ebb0f3f12161c0441e89d/e5715/performance_comparison.png" alt="性能对比" /></p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-honest-comparison-default-splash-performance">真实对比：默认闪屏性能</a></h3>
-
-<p>为了进行<strong>同类比较</strong>，我们重点关注在默认的闪屏实现中，阻塞方法只是简单地为了路由目的而扩大 Activity：</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:center;"> 方法 </th>
-<th style="text-align:center;"> 页面加载时间 (毫秒) </th>
-<th style="text-align:center;"> FCP (毫秒) </th>
-<th style="text-align:center;"> FPT (毫秒) </th>
-<th style="text-align:center;"> 用户影响 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:center;"> <strong>默认阻塞</strong> </td>
-<td style="text-align:center;"> 366 </td>
-<td style="text-align:center;"> 744 </td>
-<td style="text-align:center;"> 2,195 </td>
-<td style="text-align:center;"> 明显的延迟 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> <strong>默认非阻塞</strong> </td>
-<td style="text-align:center;"> 37 </td>
-<td style="text-align:center;"> 164 </td>
-<td style="text-align:center;"> 1,295 </td>
-<td style="text-align:center;"> 流畅、响应迅速 </td>
-</tr>
-<tr>
-<td style="text-align:center;"> <strong>提升</strong> </td>
-<td style="text-align:center;"> <strong>90%</strong> </td>
-<td style="text-align:center;"> <strong>78%</strong> </td>
-<td style="text-align:center;"> <strong>41%</strong> </td>
-<td style="text-align:center;"> <strong>显著提升</strong> </td>
-</tr>
-</tbody>
-</table>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-lottie-animation-advantage">Lottie 动画的优势</a></h3>
-
-<p>当我们引入复杂的 Lottie 动画时，架构上的差异会更加明显发音：</p>
-
-<table>
-<thead>
-<tr>
-<th style="text-align:center;"> 方法 </th>
-<th style="text-align:center;"> 页面加载时间 (毫秒) </th>
-<th style="text-align:center;"> FCP (毫秒) </th>
-<th style="text-align:center;"> FPT (毫秒) </th>
-<th style="text-align:center;"> 备注 </th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:center;"> <strong>Lottie 阻塞</strong> </td>
-<td style="text-align:center;"> 2,228 </td>
-<td style="text-align:center;"> 2,347 </td>
-<td style="text-align:center;"> 3,524 </td>
-<td style="text-align:center;"> <em>包含动画时长</em> </td>
-</tr>
-<tr>
-<td style="text-align:center;"> <strong>Lottie 非阻塞</strong> </td>
-<td style="text-align:center;"> 109 </td>
-<td style="text-align:center;"> 312 </td>
-<td style="text-align:center;"> 1,467 </td>
-<td style="text-align:center;"> <em>动画并行运行</em> </td>
-</tr>
-<tr>
-<td style="text-align:center;"> <strong>提升</strong> </td>
-<td style="text-align:center;"> <strong>95%</strong> </td>
-<td style="text-align:center;"> <strong>87%</strong> </td>
-<td style="text-align:center;"> <strong>58%</strong> </td>
-<td style="text-align:center;"> <strong>显著提升</strong> </td>
-</tr>
-</tbody>
-</table>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#understanding-the-lottie-numbers">理解 Lottie 数值</a></h3>
-
-<p><strong>重要提示</strong>：Lottie 阻塞数值在设计上包含动画时长，用户必须等待整个动画完成后才能看到任何主要内容。在非阻塞方法中，<strong>动画和内容加载并行运行</strong>，因此当 Lottie 动画完成时，FPT 通常已经完成或接近完成。</p>
-
-<p>这种并行执行是其关键的架构优势：<strong>无需牺牲性能即可获得精美的动画</strong>。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#performance-improvements-breakdown">性能改进细分</a></h3>
-
-<p><img src="https://sankalpchauhan.com/static/620f7ce36b7f1d75840820adb257fa7f/e5715/improvement_chart.png" alt="改进图表" />
-改进图表</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#recap-what-happened">回顾：发生了什么</a></h3>
-
-<p>即使与保守的默认启动画面相比，非阻塞方法也实现了<strong>90% 的页面加载速度提升次</strong>。用户体验从“明显的延迟”转变为“流畅且响应迅速”。</p>
-
-<p>对于像 Lottie 这样的复杂动画，其优势更加显著，因为传统方法迫使用户等待整个动画序列，然后才会出现任何有意义的内容。</p>
-
-<p><img src="https://sankalpchauhan.com/6f6ac6fcfed426f343bb76cd31f4694e/comparison.mp4.gif" alt="旧用户体验与新用户体验对比" /></p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-the-technical-mechanism">原因：技术机制</a></h3>
-
-<p>性能提升源于<strong>并行执行</strong>。传统方法<strong>顺序</strong>运行启动画面和主内容，而基于视图的方法<strong>并发</strong>运行它们：</p>
-
-<p><strong>传统（顺序）</strong>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='css'><span class='line'><span class="nt">Splash</span> <span class="nt">Activity</span> <span class="err">→</span> <span class="nt">Animation</span> <span class="err">→</span> <span class="nt">Destroy</span> <span class="err">→</span> <span class="nt">Main</span> <span class="nt">Activity</span> <span class="err">→</span> <span class="nt">Content</span> <span class="nt">Load</span> <span class="err">→</span> <span class="nt">Display</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>非阻塞（并行）</strong>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='css'><span class='line'><span class="nt">Main</span> <span class="nt">Activity</span> <span class="o">+</span> <span class="nt">Content</span> <span class="nt">Load</span> <span class="o">(</span><span class="nt">background</span><span class="o">)</span>
-</span><span class='line'>     <span class="err">↓</span>
-</span><span class='line'><span class="nt">Splash</span> <span class="nt">View</span> <span class="o">(</span><span class="nt">overlay</span><span class="o">)</span> <span class="err">→</span> <span class="nt">Remove</span> <span class="nt">overlay</span> <span class="err">→</span> <span class="nt">Display</span> <span class="nt">loaded</span> <span class="nt">content</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这种架构差异彻底消除了阻塞瓶颈。</p>
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#deep-dive-understanding-the-technical-implementation">深入探究：理解技术实现</a></h2>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#traditional-splash-activity-implementation">传统的 Splash Activity 实现</a></h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">SplashActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">installSplashScreen</span><span class="p">()</span>
-</span><span class='line'>        <span class="n">enableEdgeToEdge</span><span class="p">()</span>
-</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">Loader</span> <span class="p">{</span> <span class="c1">// Blocks until animation completes</span>
-</span><span class='line'>                <span class="n">startActivity</span><span class="p">(</span><span class="n">Intent</span><span class="p">(</span><span class="k">this</span><span class="n">@SplashActivity</span><span class="p">,</span> <span class="n">MainActivity</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">))</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">@Composable</span>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">Loader</span><span class="p">(</span><span class="n">onComplete</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">composition</span> <span class="k">by</span> <span class="n">rememberLottieComposition</span><span class="p">(</span><span class="n">LottieCompositionSpec</span><span class="p">.</span><span class="n">RawRes</span><span class="p">(</span><span class="n">R</span><span class="p">.</span><span class="n">raw</span><span class="p">.</span><span class="n">sale_tags</span><span class="p">))</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">progress</span> <span class="k">by</span> <span class="n">animateLottieCompositionAsState</span><span class="p">(</span><span class="n">composition</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">// Animation blocks main content loading</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">progress</span> <span class="p">==</span> <span class="m">1.0f</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">onComplete</span><span class="p">.</span><span class="n">invoke</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#event-splash-non-blocking-implementation">EventSplash：非阻塞实现</a></h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">EventSplash</span><span class="p">(</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">activity</span><span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">config</span><span class="p">:</span> <span class="n">EventSplashConfig</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">decorView</span><span class="p">:</span> <span class="n">ViewGroup</span> <span class="p">=</span> <span class="n">activity</span><span class="p">.</span><span class="n">window</span><span class="p">.</span><span class="n">decorView</span> <span class="k">as</span> <span class="n">ViewGroup</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">composeView</span><span class="p">:</span> <span class="n">ComposeView</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Gate prevents premature display until main content ready</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">gate</span> <span class="p">=</span> <span class="k">object</span> <span class="err">: </span><span class="nc">ViewTreeObserver</span><span class="p">.</span><span class="n">OnPreDrawListener</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">override</span> <span class="k">fun</span> <span class="nf">onPreDraw</span><span class="p">():</span> <span class="n">Boolean</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">return</span> <span class="k">if</span> <span class="p">(</span><span class="n">isReady</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">decorView</span><span class="p">.</span><span class="n">viewTreeObserver</span><span class="p">.</span><span class="n">removeOnPreDrawListener</span><span class="p">(</span><span class="k">this</span><span class="p">)</span>
-</span><span class='line'>                <span class="k">true</span>
-</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="k">false</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">init</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">decorView</span><span class="p">.</span><span class="n">viewTreeObserver</span><span class="p">.</span><span class="n">addOnPreDrawListener</span><span class="p">(</span><span class="n">gate</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">setupSplashCompose</span><span class="p">()</span> <span class="c1">// Non-blocking overlay</span>
-</span><span class='line'>        <span class="n">isReady</span> <span class="p">=</span> <span class="k">true</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">setupSplashCompose</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">view</span> <span class="p">=</span> <span class="n">ComposeView</span><span class="p">(</span><span class="n">activity</span><span class="p">).</span><span class="n">apply</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">layoutParams</span> <span class="p">=</span> <span class="n">ViewGroup</span><span class="p">.</span><span class="n">LayoutParams</span><span class="p">(</span><span class="n">MATCH_PARENT</span><span class="p">,</span> <span class="n">MATCH_PARENT</span><span class="p">)</span>
-</span><span class='line'>            <span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">getProvider</span><span class="p">(</span><span class="n">config</span><span class="p">).</span><span class="n">Content</span><span class="p">(</span><span class="n">onFinish</span> <span class="p">=</span> <span class="p">{</span> <span class="n">dismiss</span><span class="p">()</span> <span class="p">})</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="n">composeView</span> <span class="p">=</span> <span class="n">view</span>
-</span><span class='line'>        <span class="n">decorView</span><span class="p">.</span><span class="n">addView</span><span class="p">(</span><span class="n">view</span><span class="p">)</span> <span class="c1">// Overlay on main content</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#usage-comparison">使用情况比较</a></h3>
-
-<p><strong>传统方法</strong>:</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Requires separate activity, blocks main content</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">MainActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// Main content only loads after splash completes</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>EventSplash 方法</strong>:</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">MainActivity</span> <span class="p">:</span> <span class="n">ComponentActivity</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">:</span> <span class="n">Bundle</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onCreate</span><span class="p">(</span><span class="n">savedInstanceState</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">// Non-blocking: splash displays while content loads</span>
-</span><span class='line'>        <span class="n">EventSplashApi</span><span class="p">.</span><span class="n">attachTo</span><span class="p">(</span><span class="k">this</span><span class="p">).</span><span class="n">with</span><span class="p">(</span><span class="n">getSaleConfig</span><span class="p">()).</span><span class="n">show</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">setContent</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">// Main content loads immediately in parallel</span>
-</span><span class='line'>            <span class="n">MainAppContent</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#recap-implementation-differences">回顾：实现差异</a></h3>
-
-<p>传统方法需要单独的 Activity 生命周期，而 EventSplash 会注入一个与主内容加载过程共存的视图叠加层。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-architectural-advantages">原因：架构优势</a></h3>
-
-<ol>
-<li><strong>单一 Activity 上下文</strong>：消除 Activity 转换开销</li>
-<li><strong>并行处理</strong>：主内容在启动画面显示时加载</li>
-<li><strong>减少内存占用</strong>：没有重复的 Activity 对象</li>
-<li><strong>减少 Choreographer.doFrame 循环</strong>：减少渲染管线压力</li>
-<li><strong>优化视图层级</strong>：使用单一装饰视图，而非多个独立的 Activity</li>
-</ol>
-
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#the-choreographer-do-frame-problem">Choreographer.doFrame 问题</a></h2>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#understanding-frame-rendering-issues">理解帧渲染问题</a></h3>
-
-<p>Android 的渲染系统依赖于 <code>Choreographer.doFrame</code> 来协调动画、输入和绘制 <a href="https://developer.android.com/topic/performance/vitals/render">[4]</a>。文档警告：</p>
-
-<blockquote><p>“如果 Systrace 显示 Choreographer#doFrame 的布局部分工作过多或过于频繁，则意味着你遇到了布局性能问题”</p></blockquote>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#why-splash-activities-cause-jank">为什么闪屏 Activity 会导致卡顿</a></h3>
-
-<p>传统的闪屏实现会造成多个性能瓶颈：</p>
-
-<ol>
-<li><strong>双重布局传递</strong>：每个 Activity 都需要单独的视图填充和布局</li>
-<li><strong>上下文切换开销</strong>：操作系统必须管理多个 Activity 上下文</li>
-<li><strong>内存压力</strong>：重复的视图层次结构会消耗额外的 RAM</li>
-<li><strong>帧时序问题</strong>：Activity 转换会触发额外的 doFrame 周期</li>
-</ol>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#perfetto-analysis-insights">Perfetto 分析洞察</a></h3>
-
-<p>使用 Perfetto 分析轨迹时，传统的启动画面会显示：</p>
-
-<ul>
-<li><code>Choreographer.doFrame</code> 执行时间延长</li>
-<li>布局膨胀多次峰值</li>
-<li>垃圾回收压力增加</li>
-<li>主线程可用性延迟</li>
-</ul>
-
-
-<p>基于视图的方法通过在整个启动过程中维护单一渲染上下文来消除这些问题。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#critical-consideration-concurrent-processing-isnt-free">⚠️ 关键考虑：并发处理并非免费</a></h3>
-
-<p>虽然我们的结果显示性能显著提升，但<strong>非阻塞方法也带来了一系列挑战</strong>，必须仔细考虑。同时运行启动动画和主内容加载会带来额外的资源压力，而顺序加载方法则不会出现这种压力。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#memory-pressure-the-primary-concern">内存压力：主要问题</a></h3>
-
-<p><strong>峰值内存使用量增加</strong>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='nix'><span class='line'><span class="o">//</span> Memory usage pattern comparison
-</span><span class='line'>Traditional Approach<span class="p">:</span>
-</span><span class='line'>Splash<span class="p">:</span> <span class="mi">50</span>MB <span class="err">→</span> <span class="mi">0</span>MB <span class="err">→</span> Main Content<span class="p">:</span> <span class="mi">120</span><span class="ss">MB =</span> Peak<span class="p">:</span> <span class="mi">120</span>MB
-</span><span class='line'>
-</span><span class='line'>Non-blocking Approach<span class="p">:</span>
-</span><span class='line'>Splash <span class="o">+</span> Main Content<span class="p">:</span> <span class="mi">50</span>MB <span class="o">+</span> <span class="mi">120</span><span class="ss">MB =</span> Peak<span class="p">:</span> <span class="mi">170</span>MB
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>实际影响</strong>：</p>
-
-<ul>
-<li><strong>简单的闪屏叠加</strong>在并发执行期间会增加 20-50MB 的内存</li>
-<li><strong>Lottie 动画</strong>在渲染期间可能会消耗 50-100MB 以上的内存</li>
-<li><strong>综合峰值使用量</strong>可能比顺序加载方法高出 40-70%</li>
-<li><strong>低端设备</strong>（1-2GB RAM）容易受到内存压力的影响</li>
-</ul>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#low-memory-killer-risk">低内存杀手风险</a></h3>
-
-<p>Android 的低内存终止守护进程会监控系统内存，并可能在压力下终止应用 <a href="https://source.android.com/docs/core/perf/lmkd">[5]</a>:</p>
-
-<blockquote><p>“内存压力是指系统内存不足的状态，需要 Android 通过限制或终止不重要的进程来释放内存”</p></blockquote>
-
-<p><strong>风险因素</strong>:</p>
-
-<ul>
-<li>启动过程中终止应用进程会导致糟糕的用户体验</li>
-<li>后台应用被更频繁地终止</li>
-<li>并发分配导致的内存碎片</li>
-<li>在预算设备上尤其成问题</li>
-</ul>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#cpu-and-battery-implications">CPU 和电池影响</a></h3>
-
-<p><strong>CPU 开销增加</strong>：</p>
-
-<ul>
-<li><code>Choreographer.doFrame</code> 处理多个并发操作</li>
-<li>主线程因 UI 工作重叠而变得更加繁忙</li>
-<li>GPU 渲染管线同时处理启动画面和内容</li>
-</ul>
-
-
-<p><strong>功耗问题</strong>：研究表明，“智能手机上的 UI 渲染需要强大的 CPU 和 GPU 才能满足用户感知的流畅度，并且这占了相当一部分的功耗”<a href="https://www.sciencedirect.com/science/article/abs/pii/S1383762122001540">[6]</a>。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#device-compatibility-challenges">设备兼容性挑战</a></h3>
-
-<p><strong>低端设备注意事项</strong>:</p>
-
-<ul>
-<li>单核或双核处理器难以并行化</li>
-<li>有限的 RAM 使得内存压力至关重要</li>
-<li>较慢的存储速度加剧加载延迟</li>
-<li>优势可能无法转化为低端设备的优势</li>
-</ul>
-
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#when-not-to-use-non-blocking-approach">何时不应使用非阻塞方法</a></h2>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#scenarios-where-traditional-approach-may-be-better">传统方法可能更佳的场景：</a></h3>
-
-<ol>
-<li><strong>资源极其受限的设备</strong>（&lt; 2GB RAM）</li>
-<li><strong>电池关键型应用</strong>，功耗至关重要</li>
-<li><strong>简单的启动画面</strong>，没有复杂的动画</li>
-<li><strong>启动处理繁重的应用</strong>，已经给应用带来了压力系统</li>
-<li><strong>遗留代码库</strong>，重构风险大于收益</li>
-</ol>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#risk-mitigation-strategies">风险缓解策略</a></h3>
-
-<p><strong>自适应实施</strong>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">AdaptiveSplashStrategy</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">chooseSplashApproach</span><span class="p">():</span> <span class="n">SplashConfig</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="k">when</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">isLowEndDevice</span><span class="p">()</span> <span class="p">-&gt;</span> <span class="n">SimpleSplashConfig</span><span class="p">()</span>
-</span><span class='line'>            <span class="n">isBatteryLow</span><span class="p">()</span> <span class="p">-&gt;</span> <span class="n">ReducedAnimationConfig</span><span class="p">()</span>
-</span><span class='line'>            <span class="n">isHighPerformanceDevice</span><span class="p">()</span> <span class="p">-&gt;</span> <span class="n">FullLottieConfig</span><span class="p">()</span>
-</span><span class='line'>            <span class="k">else</span> <span class="p">-&gt;</span> <span class="n">DefaultConfig</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">isLowEndDevice</span><span class="p">():</span> <span class="n">Boolean</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">activityManager</span> <span class="p">=</span> <span class="n">getSystemService</span><span class="p">(</span><span class="n">Context</span><span class="p">.</span><span class="n">ACTIVITY_SERVICE</span><span class="p">)</span> <span class="k">as</span> <span class="n">ActivityManager</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">activityManager</span><span class="p">.</span><span class="n">isLowRamDevice</span> <span class="p">||</span>
-</span><span class='line'>               <span class="n">Runtime</span><span class="p">.</span><span class="n">getRuntime</span><span class="p">().</span><span class="n">maxMemory</span><span class="p">()</span> <span class="p">&lt;</span> <span class="m">256</span> <span class="p">*</span> <span class="m">1024</span> <span class="p">*</span> <span class="m">1024</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>内存监控</strong>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">monitorMemoryPressure</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">memoryInfo</span> <span class="p">=</span> <span class="n">ActivityManager</span><span class="p">.</span><span class="n">MemoryInfo</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">activityManager</span><span class="p">.</span><span class="n">getMemoryInfo</span><span class="p">(</span><span class="n">memoryInfo</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">memoryInfo</span><span class="p">.</span><span class="n">lowMemory</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// Fallback to simpler splash</span>
-</span><span class='line'>        <span class="n">simplifyOrDismissSplash</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#industry-context-and-validation">行业背景和验证</a></h2>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#alignment-with-industry-best-practices">与行业最佳做法保持一致实践</a></h3>
-
-<p>EventSplash 方法符合最新的行业趋势和官方建议。像 Turo 这样的公司通过消除专用的启动活动也取得了类似的效果。正如他们的案例研究 <a href="https://medium.com/androiddevelopers/turo-reduced-its-app-startup-time-by-77-using-android-developer-tools-and-best-practices-bcf82f596bcf">[7]</a> 中所述：</p>
-
-<blockquote><p>“最初，我们使用专用的 SplashActivity 来运行所有启动工作，然后再将应用路由到 HomeActivity。然而，最新的指南建议不要采用这种方法。因此，我们移除了多余的 SplashActivity，并将所有启动逻辑转移到了根 Activity。”</p></blockquote>
-
-<p>Turo 使用类似的原理实现了<strong>77% 的启动时间缩短</strong>。</p>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#validation-through-official-documentation">通过官方文档验证</a></h3>
-
-<p>Android 官方文档明确建议使用“ViewTreeObserver.OnPreDrawListener”进行启动画面管理，<a href="https://developer.android.com/develop/ui/views/launch/splash-screen">[1]</a>，这进一步验证了该方法，而这正是 EventSplash 的核心实现。</p>
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#best-practices-and-common-pitfalls">最佳实践和常见陷阱</a></h2>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#dos">建议✅</a></h3>
-
-<ul>
-<li>在性能强大的设备上，<strong>使用基于视图的启动画面实现</strong>自定义动画</li>
-<li>根据设备性能<strong>实施自适应策略</strong></li>
-<li>使用真实设备**测量性能，并跨设备层级发布版本</li>
-<li>监控内存使用情况**并实施内存泄漏预防</li>
-<li>针对最坏情况进行冷启动优化</li>
-<li>在低端设备上进行广泛测试**以确保广泛的兼容性</li>
-<li><strong>为启动画面实施适当的生命周期管理</strong></li>
-</ul>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#donts">注意事项❌</a></h3>
-
-<ul>
-<li><strong>不要想当然地认为一刀切</strong>：设备性能差异巨大</li>
-<li><strong>不要忽视内存压力</strong>：监控并适应系统限制</li>
-<li><strong>不要在未考虑替代方案的情况下使用单独的 SplashActivity</strong></li>
-<li><strong>不要用启动画面动画阻碍主内容加载</strong></li>
-<li><strong>不要忽略 Play 管理中心内的 Android Vitals 指标</strong></li>
-<li><strong>不要只在高端设备</strong>或调试版本上进行测试</li>
-<li><strong>不要在启动画面中创建复杂的视图层次结构</strong></li>
-<li><strong>不要在启动画面中执行繁重的操作</strong></li>
-<li><strong>不要忘记清理启动画面</strong>并清除缓存</li>
-</ul>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#common-pitfalls">常见陷阱</a></h3>
-
-<ol>
-<li><strong>内存泄漏</strong>：未能清除 LottieCompositionCache</li>
-<li><strong>设备能力假设</strong>：未适应低端设备限制</li>
-<li><strong>生命周期问题</strong>：未正确处理 Activity 状态变化</li>
-<li><strong>动画冲突</strong>：闪屏动画干扰主内容</li>
-<li><strong>测试偏差</strong>：仅在快速设备或调试版本上进行测试</li>
-<li><strong>指标误解</strong>：关注动画时长而非用户感知的性能</li>
-<li><strong>资源监控疏忽</strong>：未监控内存和 CPU 使用模式</li>
-</ol>
-
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#making-informed-architectural-decisions">制定明智的架构决策</a></h2>
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#decision-framework">决策框架</a></h3>
-
-<p>在选择启动画面方案时，请考虑以下因素：</p>
-
-<p><strong>设备受众特征</strong>：</p>
-
-<ul>
-<li>你的用户中有多少比例使用低端设备？</li>
-<li>你支持的最低 RAM 配置是多少？</li>
-<li>你是否瞄准了拥有廉价设备的新兴市场？</li>
-</ul>
-
-
-<p><strong>应用特性</strong>：</p>
-
-<ul>
-<li>你的主要内容加载复杂度如何？</li>
-<li>你是否对网络依赖性很强？</li>
-<li>你当前的内存占用是多少？</li>
-</ul>
-
-
-<p><strong>业务需求</strong>：</p>
-
-<ul>
-<li>自定义启动动画对你的品牌有多重要？</li>
-<li>你能实现渐进式增强吗？</li>
-<li>你的开发和测试能力如何？</li>
-</ul>
-
-
-<h3><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#recommended-strategy">推荐策略</a></h3>
-
-<p><strong>渐进式增强方法</strong>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">EventSplashApi</span><span class="p">.</span><span class="n">attachTo</span><span class="p">(</span><span class="k">this</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">withFallback</span><span class="p">(</span><span class="n">SimpleSplashConfig</span><span class="p">())</span>
-</span><span class='line'>    <span class="c1">// Low-end devices</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">withStandard</span><span class="p">(</span><span class="n">ImageSplashConfig</span><span class="p">())</span>
-</span><span class='line'>    <span class="c1">// Mid-range devices</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">withEnhanced</span><span class="p">(</span><span class="n">LottieConfig</span><span class="p">())</span>
-</span><span class='line'>    <span class="c1">// High-end devices</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">adaptToDevice</span><span class="p">()</span>
-</span><span class='line'>    <span class="c1">// Automatic selection</span>
-</span><span class='line'>    <span class="p">.</span><span class="n">show</span><span class="p">()</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>此方法提供：</p>
-
-<ul>
-<li>适用于所有设备的<strong>基本功能</strong></li>
-<li>在资源允许的情况下<strong>增强体验</strong></li>
-<li>根据设备性能<strong>自动适配</strong></li>
-<li>在内存压力下<strong>优雅降级</strong></li>
-</ul>
-
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#insights-recommendations">见解与建议</a></h2>
-
-<p>非阻塞启动画面方法<strong>显著提升性能</strong>（保守测试中页面加载速度提升 90%，复杂动画下最高可达 95%），但也存在一些不足。<strong>并发处理会增加峰值内存使用量和 CPU 开销</strong>，这在低端设备上可能会造成问题。</p>
-
-<p><strong>关键见解</strong>：其优势显著且可衡量，但也伴随着资源成本，必须通过自适应的实施策略进行管理。</p>
-
-<p><strong>诚挚建议</strong>：使用非阻塞方法并结合设备感知回退机制。即使是保守估计，也能显​​示出显著的性能提升，其架构优势也令人信服。然而，该实现必须足够复杂，才能支持所有 Android 设备。</p>
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#conclusion">结论</a></h2>
-
-<p>_本案例研究表明，性能优化需要在保持诚实声明的同时平衡相互竞争的约束条件。非阻塞、基于视图的方法提供了显著且可衡量的优势，但成功实施需要深入了解其收益和成本。</p>
-
-<p>通过摆脱传统的“SplashActivity”模式，采用更复杂、更并发的架构，我们可以构建速度更快、响应更灵敏的 Android 应用，并在整个生态系统中可靠地运行。</p>
-
-<p><strong>我们的目标不仅仅是构建更快的应用，而是构建使用体验即时、愉悦的应用，因为最终，性能是用户能够注意到并欣赏的功能。</strong></p>
-
-<h2><a href="https://sankalpchauhan.com/breaking-the-speed-barrier-how-non-blocking-splash-screens-cut-android-app-launch-time-by-90#references">参考</a></h2>
-
-<ol>
-<li><a href="https://developer.android.com/develop/ui/views/launch/splash-screen">闪屏 | 视图 | Android 开发者</a></li>
-<li><a href="https://developer.android.com/topic/performance/vitals/launch-time">应用启动时间 | 应用质量 | Android 开发者</a></li>
-<li><a href="https://medium.com/androiddevelopers/the-android-lifecycle-cheat-sheet-part-iv-49946659b094">Android 生命周期速查表 — 第四部分：ViewModel、半透明 Activity 和启动模式 | 作者：Jose Alcérreca</a></li>
-<li><a href="https://developer.android.com/topic/performance/vitals/render">渲染缓慢 | 应用质量 | Android 开发者</a></li>
-<li><a href="https://source.android.com/docs/core/perf/lmkd">低内存终止守护进程 (lmkd) | Android 开源项目</a></li>
-<li><a href="https://www.sciencedirect.com/science/article/abs/pii/S1383762122001540">移动 UI 渲染功耗研究</a></li>
-<li><a href="https://medium.com/androiddevelopers/turo-reduced-its-app-startup-time-by-77-using-android-developer-tools-and-best-practices-bcf82f596bcf">Turo 利用 Android 开发者工具和最佳实践将其应用启动时间缩短了 77%</a></li>
-</ol>
-
 ]]></content>
   </entry>
   
