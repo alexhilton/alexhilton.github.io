@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-03-17T13:05:29+00:00</updated>
+  <updated>2026-03-20T12:22:25+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,469 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[端侧RAG实战指南]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/03/20/on-device-rag/"/>
+    <updated>2026-03-20T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/03/20/on-device-rag</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「On-Device RAG for App Developers: Embeddings, Vector Search, and Beyond」，原文链接<a href="https://medium.com/google-developer-experts/on-device-rag-for-app-developers-embeddings-vector-search-and-beyond-47127e954c24">https://medium.com/google-developer-experts/on-device-rag-for-app-developers-embeddings-vector-search-and-beyond-47127e954c24</a>，由Sasha Denisov发布于2026年2月21日。</p></blockquote>
+
+<p>我们已经探讨了<a href="https://alexhilton.github.io/@denisov.shureg/the-dawn-of-offline-ai-agents-in-your-pocket-55fff80d794b">离线 AI 代理的重要性</a> 和<a href="https://alexhilton.github.io/google-developer-experts/on-device-function-calling-with-functiongemma-39f7407e5d83">如何通过函数调用赋予它们工具</a>。现在，让我们通过赋予它们<strong>记忆</strong>——即使用 RAG（检索增强生成）搜索和检索你的私有数据——来完善整个图景。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2026/03/20/on-device-rag/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*NSzLzKxcFdjkzp1-Jlnzgg.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<blockquote><p>当我开始构建 Flutter Gemma 时，开发者们提出的第一个问题是：“如何让 AI 了解我的数据？” 不是维基百科，也不是通用知识——而是他们应用的数据。用户、联系人、文档。这正是 RAG 填补的空白。想象一下，你正在构建一个带有 AI 助手的个人 CRM 应用。你的用户问：“我应该跟进上周会议中的哪些人？” 挑战在于：AI 需要访问<strong>你的</strong>数据——你的联系人、你的对话记录、你的业务背景——而不是它训练时获得的通用知识。</p></blockquote>
+
+<h3>问题：大型语言模型不了解你的数据</h3>
+
+<p>大型语言模型基于海量的公共数据（维基百科、书籍、网站）进行训练。它们在通用推理方面表现出色。但他们对你的联系人、会议记录，甚至昨天与客户的对话都一无所知。</p>
+
+<p>如果你问一个普通的LLM（客户关系管理）“我应该跟进上周联系的哪些人？”，你得到的要么是“我没有权限访问你的联系人”——虽然诚实但毫无用处——要么是一个自以为是、信誓旦旦地给出错误姓名和细节的答案。</p>
+
+<p>有几种方法可以让LLM访问你的数据。我们来逐一看看。</p>
+
+<p><strong>方法A：把所有信息都塞进提示框</strong></p>
+
+<p>最直接的解决方法——把所有数据都塞进上下文。提示：“以下是我所有的联系人：- Sarah Chen，谷歌，企业级负责人……，- Mike Ross，Meta，潜在客户……，- …（还有498个联系人）我应该跟进谁？”</p>
+
+<p>问题：</p>
+
+<ul>
+<li><p><strong>上下文限制</strong>：设备端模型通常支持8K-32K个令牌。如果你有很多数据，根本装不下。</p></li>
+<li><p><strong>速度慢且成本高</strong>：上下文中的每个令牌都会增加计算时间和内存占用。上下文越长，响应速度越慢，电池消耗也越快。</p></li>
+<li><p><strong>容易被淹没在噪声中</strong>：查询某个联系人时，为什么要处理其他 499 个联系人的信息？更糟糕的是，LLM 往往会忽略隐藏在冗长上下文中的细节——你需要的那个联系人很可能被遗漏。</p></li>
+</ul>
+
+
+<p><strong>方法 B：微调模型</strong></p>
+
+<p>使用你的数据训练模型，使其“了解”这些数据。但是：</p>
+
+<ul>
+<li><p><strong>容易过时</strong>：你的 CRM 数据每天都在变化。每天都要重新训练吗？</p></li>
+<li><p><strong>成本高</strong>：微调需要消耗计算资源和时间。</p></li>
+<li><p><strong>无法扩展</strong>：每个用户的数据都不同。理论上，你可以使用 LoRa 为每个用户进行微调，但这既复杂又难以维护。</p></li>
+</ul>
+
+
+<p>对于静态知识，微调效果很好——我在<a href="https://alexhilton.github.io/google-developer-experts/fine-tuning-gemma-with-lora-for-on-device-inference-android-ios-web-with-separate-lora-weights-f05d1db30d86">使用 LoRa 进行 Gemma 设备端推理微调</a>中详细介绍了这一点。但对于频繁变化的数据，微调就不是最佳方案了。</p>
+
+<p><strong>方法 C：RAG — 先检索后生成</strong> <strong>（优胜方案）</strong></p>
+
+<p>与其将所有信息都提供给 LLM，不如针对每个查询<strong>仅检索相关信息</strong>：</p>
+
+<ul>
+<li><p>查询联系人 → 仅检索该联系人的信息 → 发送给 LLM</p></li>
+<li><p>查询公司 → 仅检索该公司的联系人 → 发送给 LLM</p></li>
+<li><p>查询后续跟进 → 检索需要跟进的联系人 → 发送给 LLM</p></li>
+</ul>
+
+
+<p>其优势：</p>
+
+<ul>
+<li><p><strong>始终保持最新</strong>：数据在查询时检索，而非预先嵌入模型。</p></li>
+<li><p><strong>可扩展至任何用户</strong>：相同的模型，不同的数据——每个设备都有自己的本地存储。</p></li>
+<li><p><strong>聚焦上下文</strong>：LLM 只看到它需要的信息——没有干扰，没有“中间丢失”的信息。</p></li>
+</ul>
+
+
+<p>这就是 <strong>RAG（检索增强生成）</strong>——它就是解决方案。</p>
+
+<p>最棒的是什么？ RAG 可以<strong>完全在设备端运行</strong>——检索和生成都在本地完成，无需云端。</p>
+
+<p>但“检索相关信息”究竟意味着什么？我们如何在成千上万条记录中找到正确的数据？让我们深入了解一下其机制。</p>
+
+<h3>RAG 基础知识</h3>
+
+<p>RAG 指的是先检索相关数据，然后生成响应。但我们究竟该如何找到“相关”数据呢？</p>
+
+<p><strong>查找正确的记录</strong></p>
+
+<p>为了回答用户的问题，我们需要在数据库中找到正确的记录。检索技术有很多种，例如关键词搜索、混合搜索、基于图的检索等等。本文将重点介绍一种目前可以使用 Flutter Gemma 轻松实现的技术：<strong>语义搜索</strong>（也称为向量搜索）。</p>
+
+<p><strong>什么是语义搜索？</strong></p>
+
+<p>传统的关键词搜索存在缺陷。例如，搜索“大公司”时，你找不到“企业客户”——即使它们的意思相同。语义搜索通过理解文本含义而非仅仅匹配单词来解决这个问题。其核心思想是：将文本转换为能够捕捉其含义的数字（向量）。含义相似 → 向量相似。这样，查找相关记录就变成了一个数学问题——找到与查询最接近的向量。</p>
+
+<p><strong>嵌入：将文本转换为向量</strong></p>
+
+<p>为了实现语义搜索，我们需要将数据转换为向量。这就是<strong>嵌入模型</strong>的作用所在。嵌入模型接收文本并输出一个向量——通常包含 768 个或更多数字，用于表示文本的含义：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="s2">&quot;enterprise sales lead&quot;</span>  →  <span class="o">[</span>0.12, -0.45, 0.78, 0.23, ...<span class="o">]</span>  <span class="o">(</span><span class="m">768</span> numbers<span class="o">)</span>
+</span><span class='line'><span class="s2">&quot;big company executive&quot;</span>  →  <span class="o">[</span>0.11, -0.44, 0.77, 0.25, ...<span class="o">]</span>  <span class="o">(</span>similar!<span class="o">)</span>
+</span><span class='line'><span class="s2">&quot;banana smoothie recipe&quot;</span> →  <span class="o">[</span>0.89, 0.12, -0.34, 0.56, ...<span class="o">]</span>  <span class="o">(</span>very different<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>2025 年 9 月，谷歌发布了<a href="https://developers.googleblog.com/en/introducing-embeddinggemma">EmbeddingGemma</a>——一个基于 Gemma 3 的 3.08 亿参数嵌入模型，专为设备端使用而设计。你可以在 <a href="https://huggingface.co/google/embeddinggemma-300m">HuggingFace</a> 上找到该模型。我一看到公告就知道 Flutter Gemma 需要嵌入支持——这意味着要为三个平台实现嵌入生成（当时桌面平台还不支持）。</p>
+
+<p>在 Android 平台上，Google 提供了一个官方的 <a href="https://mvnrepository.com/artifact/com.google.ai.edge.localagents/localagents-rag">AI Edge LocalAgents RAG SDK</a>，因此集成非常简单。iOS 和 Web 平台的情况则不同——没有官方 SDK，所以我从头开始构建了整个流程：iOS 使用 TensorFlow Lite 解释器，Web 使用 LiteRT.js，两者都使用 SentencePiece 分词器，手动处理张量，并进行精细的内存管理。桌面版支持即将推出（希望如此）</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*TN52upeWnHcnS5LD1YPA3A.png" alt="" /></p>
+
+<p>趁着这个机会，我觉得只支持 EmbeddingGemma 还不够——所以我又添加了 <a href="https://huggingface.co/litert-community/Gecko-110m-en">Gecko</a>，这是谷歌于 2024 年 3 月发布的一款较早的嵌入模型。Gecko 利用大型 LLM 的知识蒸馏技术，仅用 1.1 亿个参数就能实现强大的检索性能。它的速度是 EmbeddingGemma 的 2.6 倍，但准确率略低——这在资源受限的设备上需要实时搜索，并且可以牺牲一些质量来换取速度时非常有用。</p>
+
+<p>以下是如何使用 Flutter Gemma 生成嵌入代码：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='Dart'><span class='line'><span class="kd">final</span> <span class="n">embedder</span> <span class="o">=</span> <span class="n">await</span> <span class="n">FlutterGemma</span><span class="p">.</span><span class="n">getActiveEmbedder</span><span class="p">();</span>
+</span><span class='line'><span class="kd">final</span> <span class="n">vector</span> <span class="o">=</span> <span class="n">await</span> <span class="n">embedder</span><span class="p">.</span><span class="n">generateEmbedding</span><span class="p">(</span><span class="s2">&quot;enterprise sales lead&quot;</span><span class="p">);</span>
+</span><span class='line'><span class="c1">// vector: [0.12, -0.45, 0.78, ...] — ready for search</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>存储向量：向量数据库</h3>
+
+<p>有了向量之后，你需要一个地方来存储它们并进行高效搜索。这就是<strong>向量数据库</strong>的作用。</p>
+
+<p>像 Pinecone、Chroma 或 Qdrant 这样的云解决方案很受欢迎，但它们需要网络调用，这与设备端 AI 的初衷背道而驰。对于嵌入式应用，<a href="https://objectbox.io">ObjectBox</a> 是一个不错的选择——它是一个内置 HNSW 向量搜索的设备端数据库，专为移动设备和物联网设计。ObjectBox 拥有 <a href="https://pub.dev/packages/objectbox">Flutter SDK</a>，因此你可以轻松地将其与 Flutter Gemma 结合使用进行嵌入式开发。但如果你不想在应用中添加额外的数据库依赖项，Flutter Gemma 提供了一种更简单的开箱即用方案：带有 HNSW 索引的纯 SQLite。无需额外依赖——SQLite 已集成到 Flutter 支持的每个平台上。</p>
+
+<p>底层实现虽然跨平台保持一致，但使用了平台特定的 API：</p>
+
+<ul>
+<li><p><strong>Android</strong> 使用 <code>SQLiteOpenHelper</code>，嵌入数据以二进制 BLOB (float32) 格式存储。每个 768 维向量仅占用 3KB 空间——紧凑且读取速度快。</p></li>
+<li><p><strong>iOS</strong> 直接使用 SQLite3 C API，存储格式与 Android 相同。向量编码为小端 float32 数组，与 Android 相同，因此数据库文件与二进制文件兼容。</p></li>
+<li><p><strong>Web</strong> 的实现比较复杂——浏览器本身没有原生 SQLite。我使用了 <a href="https://github.com/rhashimoto/wa-sqlite">wa-sqlite</a>，它是 SQLite 的 WebAssembly 移植版本，并使用 <a href="https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system">OPFS (Origin Private File System)</a> 进行持久化存储。需要注意的是：OPFS 需要 Web Worker，因此所有数据库操作都在专用的工作线程中运行，并通过消息传递将数据传递给主线程。</p></li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*gdqe0lY9uBvEtng1S-KGkA.jpeg" alt="Fluter Gemma RAG" /></p>
+
+<p>这三个平台都使用相同的模式、相同的 BLOB 编码和相同的余弦相似度计算方法——因此无论应用程序运行在何处，搜索结果都保持一致。</p>
+
+<h3>搜索工作原理</h3>
+
+<p>当用户提出问题时，我们会使用相同的嵌入模型将其转换为向量，然后在数据库中找到最接近的向量。</p>
+
+<p>“最接近”是通过<strong>余弦相似度</strong>来衡量的——它计算高维空间中两个向量之间的角度。得分范围从 -1 到 1：1 表示向量指向同一方向（含义相同），0 表示它们垂直（不相关），-1 表示方向相反。实际上，任何高于 0.3-0.4 的值通常都具有相关性——具体的阈值取决于你的数据和用例。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1060/1*4nw3Hoi6Ew54QjrUXSItFg.png" alt="余弦相似度" /></p>
+
+<p>最简单的方法是<strong>暴力搜索</strong>：将你的查询与数据库中的每个文档进行比较，计算每个文档的余弦相似度，然后返回匹配度最高的文档。这种方法对于小型数据集（数百甚至数千条记录）来说效果很好。但是，对于 10 万个联系人，每次搜索都需要进行 10 万次相似度计算。这速度太慢了。</p>
+
+<p><strong>HNSW（分层可导航小世界）</strong> 通过巧妙的多层图结构解决了这个问题。可以把它想象成地铁线路图：快线连接主要枢纽（顶层），而慢线连接每个站点（底层）。搜索从顶层开始，先进行大范围的跳跃以接近目标，然后再向下移动到局部层以提高精度。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*B7xqWKRrRSxYDoeHjQwhkA.jpeg" alt="HNSW" /></p>
+
+<p>结果是：搜索复杂度从 O(n) 降低到 O(log n)。对于 10 万个联系人，只需要进行约 17 次比较，而不是 10 万次。Flutter Gemma 的 HNSW 实现采用了一种“过度获取并重新排序”的策略——HNSW 返回 2 倍的候选结果（快速、近似），然后使用精确的余弦相似度筛选出前 K 个结果。近似搜索速度快，精确搜索准确。</p>
+
+<p>API 保持不变——Flutter Gemma 会在底层处理优化：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='Dart'><span class='line'><span class="kd">final</span> <span class="n">results</span> <span class="o">=</span> <span class="n">await</span> <span class="n">FlutterGemmaPlugin</span><span class="p">.</span><span class="n">instance</span><span class="p">.</span><span class="n">searchSimilar</span><span class="p">(</span>
+</span><span class='line'>  <span class="nl">query:</span> <span class="s2">&quot;enterprise contacts&quot;</span><span class="p">,</span>
+</span><span class='line'>  <span class="nl">topK:</span> <span class="m">5</span><span class="p">,</span>
+</span><span class='line'>  <span class="nl">threshold:</span> <span class="m">0.3</span><span class="p">,</span>
+</span><span class='line'><span class="p">);</span>
+</span><span class='line'><span class="c1">// results: records semantically similar to &quot;enterprise contacts&quot;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>分块：数据准备</h3>
+
+<p>在建立索引之前，你需要决定如何将数据拆分成可搜索的单元——这称为<strong>分块</strong>。对于 CRM 系统，自然的分块方式是：一个联系人对应一个文档。但对于较长的内容，例如会议记录或电子邮件，你需要一种策略：固定大小的分割（简单但可能会截断句子中间部分）、语义分割（尊重语义边界）或文档结构（段落、章节）。最佳实践是在分块之间保持 10-20% 的重叠，以防止在边界处丢失上下文。</p>
+
+<h2>使用 Flutter Gemma 实现 RAG</h2>
+
+<blockquote><p>现在我们已经了解了理论，接下来让我们看看如何在实践中应用它。<a href="https://github.com/DenisovAV/flutter_gemma/tree/main/example">Flutter Gemma 示例应用</a> 包含一个完整的 RAG 实现——你可以查看它以获取完整代码。</p></blockquote>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Ur_xnWc4SwUg2_WA5IdGOQ.jpeg" alt="" /></p>
+
+<p>主要有两种工作流程：<strong>数据导入</strong>（将数据导入矢量存储）和<strong>检索</strong>（在查询时进行搜索）。</p>
+
+<h3>数据导入</h3>
+
+<p>在进行任何搜索之前，所有数据都需要矢量化并存储。此过程在应用程序首次加载时执行一次，之后会随着数据的变化而增量更新。</p>
+
+<p><strong>初始索引</strong> — 首次启动时，处理所有现有记录：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='Dart'><span class='line'><span class="n">Future</span><span class="o">&lt;</span><span class="kt">void</span><span class="o">&gt;</span> <span class="n">indexAllContacts</span><span class="p">(</span><span class="n">List</span><span class="o">&lt;</span><span class="n">Contact</span><span class="o">&gt;</span> <span class="n">contacts</span><span class="p">)</span> <span class="n">async</span> <span class="p">{</span>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">embedder</span> <span class="o">=</span> <span class="n">await</span> <span class="n">FlutterGemma</span><span class="p">.</span><span class="n">getActiveEmbedder</span><span class="p">();</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="k">for</span> <span class="p">(</span><span class="kd">final</span> <span class="n">contact</span> <span class="k">in</span> <span class="n">contacts</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="kd">final</span> <span class="n">embedding</span> <span class="o">=</span> <span class="n">await</span> <span class="n">embedder</span><span class="p">.</span><span class="n">generateEmbedding</span><span class="p">(</span>
+</span><span class='line'>      <span class="n">contact</span><span class="p">.</span><span class="n">toSearchableText</span><span class="p">(),</span>
+</span><span class='line'>    <span class="p">);</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">await</span> <span class="n">FlutterGemmaPlugin</span><span class="p">.</span><span class="n">instance</span><span class="p">.</span><span class="n">addDocumentWithEmbedding</span><span class="p">(</span>
+</span><span class='line'>      <span class="nl">id:</span> <span class="n">contact</span><span class="p">.</span><span class="n">id</span><span class="p">,</span>
+</span><span class='line'>      <span class="nl">content:</span> <span class="n">contact</span><span class="p">.</span><span class="n">toSearchableText</span><span class="p">(),</span>
+</span><span class='line'>      <span class="nl">embedding:</span> <span class="n">embedding</span><span class="p">,</span>
+</span><span class='line'>      <span class="nl">metadata:</span> <span class="n">jsonEncode</span><span class="p">(</span><span class="n">contact</span><span class="p">.</span><span class="n">toJson</span><span class="p">()),</span>
+</span><span class='line'>    <span class="p">);</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>保持数据同步</strong> — 当记录发生更改时，矢量存储必须随之更新。为你的数据源设置监听器：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Dart'><span class='line'><span class="c1">// Listen for changes and update vector store  </span>
+</span><span class='line'><span class="n">contactsRepository</span><span class="p">.</span><span class="n">onContactChanged</span><span class="p">.</span><span class="n">listen</span><span class="p">((</span><span class="n">contact</span><span class="p">)</span> <span class="n">async</span> <span class="p">{</span>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">embedder</span> <span class="o">=</span> <span class="n">await</span> <span class="n">FlutterGemma</span><span class="p">.</span><span class="n">getActiveEmbedder</span><span class="p">();</span>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">embedding</span> <span class="o">=</span> <span class="n">await</span> <span class="n">embedder</span><span class="p">.</span><span class="n">generateEmbedding</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">contact</span><span class="p">.</span><span class="n">toSearchableText</span><span class="p">(),</span>
+</span><span class='line'>  <span class="p">);</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// addDocumentWithEmbedding uses INSERT OR REPLACE —   </span>
+</span><span class='line'>  <span class="c1">// same ID overwrites the old record  </span>
+</span><span class='line'>  <span class="n">await</span> <span class="n">FlutterGemmaPlugin</span><span class="p">.</span><span class="n">instance</span><span class="p">.</span><span class="n">addDocumentWithEmbedding</span><span class="p">(</span>
+</span><span class='line'>    <span class="nl">id:</span> <span class="n">contact</span><span class="p">.</span><span class="n">id</span><span class="p">,</span>
+</span><span class='line'>    <span class="nl">content:</span> <span class="n">contact</span><span class="p">.</span><span class="n">toSearchableText</span><span class="p">(),</span>
+</span><span class='line'>    <span class="nl">embedding:</span> <span class="n">embedding</span><span class="p">,</span>
+</span><span class='line'>  <span class="p">);</span>
+</span><span class='line'><span class="p">});</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>关键在于：你的向量存储是主数据的<strong>派生缓存</strong>。如果它不同步，搜索结果就会过时或出错。</p>
+
+<h3>检索</h3>
+
+<p>当用户提出问题时，将其转换为向量并查找相似文档：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+</pre></td><td class='code'><pre><code class='Dart'><span class='line'><span class="n">Future</span><span class="o">&lt;</span><span class="kt">String</span><span class="o">&gt;</span> <span class="n">answerQuestion</span><span class="p">(</span><span class="kt">String</span> <span class="n">userQuery</span><span class="p">)</span> <span class="n">async</span> <span class="p">{</span>
+</span><span class='line'>  <span class="c1">// 1. Search for relevant context  </span>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">results</span> <span class="o">=</span> <span class="n">await</span> <span class="n">FlutterGemmaPlugin</span><span class="p">.</span><span class="n">instance</span><span class="p">.</span><span class="n">searchSimilar</span><span class="p">(</span>
+</span><span class='line'>    <span class="nl">query:</span> <span class="n">userQuery</span><span class="p">,</span>
+</span><span class='line'>    <span class="nl">topK:</span> <span class="m">5</span><span class="p">,</span>
+</span><span class='line'>    <span class="nl">threshold:</span> <span class="m">0.3</span><span class="p">,</span>
+</span><span class='line'>  <span class="p">);</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// 2. Build context from results  </span>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">context</span> <span class="o">=</span> <span class="n">results</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">map</span><span class="p">((</span><span class="n">r</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">r</span><span class="p">.</span><span class="n">content</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">join</span><span class="p">(</span><span class="s1">&#39;</span><span class="se">\n\n</span><span class="s1">&#39;</span><span class="p">);</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// 3. Pass to LLM with context  </span>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">prompt</span> <span class="o">=</span> <span class="s1">&#39;&#39;&#39;  </span>
+</span><span class='line'><span class="s1">Based on the following information:  </span>
+</span><span class='line'><span class="si">$</span><span class="n">context</span><span class="s1">  </span>
+</span><span class='line'><span class="s1">  </span>
+</span><span class='line'><span class="s1">Answer the user</span><span class="se">\&#39;</span><span class="s1">s question: </span><span class="si">$</span><span class="n">userQuery</span><span class="s1">  </span>
+</span><span class='line'><span class="s1">&#39;&#39;&#39;</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">chat</span> <span class="o">=</span> <span class="n">await</span> <span class="n">model</span><span class="p">.</span><span class="n">createChat</span><span class="p">();</span>
+</span><span class='line'>  <span class="n">await</span> <span class="n">chat</span><span class="p">.</span><span class="n">addQuery</span><span class="p">(</span><span class="n">Message</span><span class="p">(</span><span class="nl">text:</span> <span class="n">prompt</span><span class="p">,</span> <span class="nl">isUser:</span> <span class="kc">true</span><span class="p">));</span>
+</span><span class='line'>  <span class="kd">final</span> <span class="n">response</span> <span class="o">=</span> <span class="n">await</span> <span class="n">chat</span><span class="p">.</span><span class="n">generateChatResponse</span><span class="p">();</span>
+</span><span class='line'>  <span class="k">return</span> <span class="p">(</span><span class="n">response</span> <span class="o">as</span> <span class="n">TextResponse</span><span class="p">).</span><span class="n">token</span><span class="p">;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>LLM 现在可以访问数据库中的相关数据，而无需将所有内容都塞进提示框中。</p>
+
+<h2>从搜索到理解</h2>
+
+<p>语义搜索打开了关键词匹配永远无法实现的大门。“查找我的企业联系人”会检索到标记为“财富 500 强”的记录、提及“大交易”的笔记以及“Alphabet”的联系人——即使这些记录中没有包含“企业”一词。嵌入模型理解的是含义，而不仅仅是文本。</p>
+
+<p>但是，如果你尝试搜索“我昨天和谁谈过？”，这种神奇的功能就会失效。</p>
+
+<p>“昨天”一词会生成一个表示“昨天”概念的嵌入向量，类似于“最近”、“过去”、“之前”。你的联系人记录包含日期：“2026-01-19”、“1月19日”。这些日期在语义上并不相似——不存在一个向量空间，使得“昨天”和“2026-01-19”指向同一方向。</p>
+
+<p>而且，日期并非唯一的问题：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*lYtZvdmcF8kVDPJKL15XsQ.jpeg" alt="" /></p>
+
+<p>这些查询需要的是推理——字段过滤、排序、连接——而不是相似性匹配。我们需要语言学习模型（LLM）理解意图并将自然语言翻译成结构化查询。</p>
+
+<h3>基于 LLM 的增强型 RAG（基于函数调用）</h3>
+
+<p>我们发现，当查询需要推理时（例如日期解析、字段过滤和排序），语义搜索会失效。解决方案是什么？让 LLM 处理推理，然后调用函数来执行结构化查询。</p>
+
+<p>这就是 <a href="https://weaviate.io/blog/what-is-agentic-rag"><strong>Agentic RAG</strong>——2025-2026 年的主流模式</a>，其中 LLM 动态地决定如何以及何时检索信息。</p>
+
+<p>我们不会将用户的查询直接传递给向量搜索，而是先让 LLM 解析它。为了使这种智能体行为在设备上生效，你需要一个能够理解函数调用（而不仅仅是聊天）的模型。谷歌专门为此发布了 <a href="https://ai.google.dev/gemma/docs/functiongemma">FunctionGemma</a>：一个拥有 2.7 亿个参数的模型，经过优化，可以解析用户意图并使用正确的参数调用函数。我在<a href="https://alexhilton.github.io/google-developer-experts/on-device-function-calling-with-functiongemma-39f7407e5d83">使用 FunctionGemma 进行设备端函数调用</a>中详细介绍了如何使用它。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*cwdSeePXogLlCOfGNoHnZg.jpeg" alt="" /></p>
+
+<p>LLM 负责推理（日期运算、意图提取），而函数负责数据检索。</p>
+
+<h3>混合搜索：RAG 与过滤器的结合</h3>
+
+<p>FunctionGemma 从用户查询中提取参数后，你的函数可以将语义搜索与结构化过滤相结合：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+</pre></td><td class='code'><pre><code class='Dart'><span class='line'><span class="n">Future</span><span class="o">&lt;</span><span class="n">List</span><span class="o">&lt;</span><span class="n">Contact</span><span class="o">&gt;&gt;</span> <span class="n">searchContacts</span><span class="p">(</span><span class="n">Map</span><span class="o">&lt;</span><span class="kt">String</span><span class="p">,</span> <span class="n">dynamic</span><span class="o">&gt;</span> <span class="n">params</span><span class="p">)</span> <span class="n">async</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">List</span><span class="o">&lt;</span><span class="n">Contact</span><span class="o">&gt;</span> <span class="n">contacts</span><span class="p">;</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// If semantic query provided, start with RAG  </span>
+</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;semantic_query&#39;</span><span class="p">]</span> <span class="o">!=</span> <span class="kc">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="kd">final</span> <span class="n">results</span> <span class="o">=</span> <span class="n">await</span> <span class="n">FlutterGemmaPlugin</span><span class="p">.</span><span class="n">instance</span><span class="p">.</span><span class="n">searchSimilar</span><span class="p">(</span>
+</span><span class='line'>      <span class="nl">query:</span> <span class="n">params</span><span class="p">[</span><span class="s1">&#39;semantic_query&#39;</span><span class="p">],</span>
+</span><span class='line'>      <span class="nl">topK:</span> <span class="m">50</span><span class="p">,</span>
+</span><span class='line'>      <span class="nl">threshold:</span> <span class="m">0.25</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">);</span>
+</span><span class='line'>    <span class="n">contacts</span> <span class="o">=</span> <span class="n">results</span><span class="p">.</span><span class="n">map</span><span class="p">((</span><span class="n">r</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">Contact</span><span class="p">.</span><span class="n">fromJson</span><span class="p">(</span><span class="n">jsonDecode</span><span class="p">(</span><span class="n">r</span><span class="p">.</span><span class="n">metadata</span><span class="o">!</span><span class="p">))).</span><span class="n">toList</span><span class="p">();</span>
+</span><span class='line'>  <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">contacts</span> <span class="o">=</span> <span class="n">await</span> <span class="n">contactsRepository</span><span class="p">.</span><span class="n">getAll</span><span class="p">();</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="c1">// Apply structured filters extracted by LLM  </span>
+</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;company&#39;</span><span class="p">]</span> <span class="o">!=</span> <span class="kc">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">contacts</span> <span class="o">=</span> <span class="n">contacts</span><span class="p">.</span><span class="n">where</span><span class="p">((</span><span class="n">c</span><span class="p">)</span> <span class="o">=&gt;</span>
+</span><span class='line'>      <span class="n">c</span><span class="p">.</span><span class="n">company</span><span class="p">.</span><span class="n">toLowerCase</span><span class="p">().</span><span class="n">contains</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;company&#39;</span><span class="p">].</span><span class="n">toLowerCase</span><span class="p">())</span>
+</span><span class='line'>    <span class="p">).</span><span class="n">toList</span><span class="p">();</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;last_contact_before&#39;</span><span class="p">]</span> <span class="o">!=</span> <span class="kc">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="kd">final</span> <span class="n">before</span> <span class="o">=</span> <span class="n">DateTime</span><span class="p">.</span><span class="n">parse</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;last_contact_before&#39;</span><span class="p">]);</span>
+</span><span class='line'>    <span class="n">contacts</span> <span class="o">=</span> <span class="n">contacts</span><span class="p">.</span><span class="n">where</span><span class="p">((</span><span class="n">c</span><span class="p">)</span> <span class="o">=&gt;</span> <span class="n">c</span><span class="p">.</span><span class="n">lastContact</span><span class="p">.</span><span class="n">isBefore</span><span class="p">(</span><span class="n">before</span><span class="p">)).</span><span class="n">toList</span><span class="p">();</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>  <span class="k">return</span> <span class="n">contacts</span><span class="p">.</span><span class="n">take</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;limit&#39;</span><span class="p">]</span> <span class="o">??</span> <span class="m">10</span><span class="p">).</span><span class="n">toList</span><span class="p">();</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>关键在于：RAG 处理语义部分（“对企业定价感兴趣”），而结构化过滤器处理逻辑部分（日期、状态、公司）。 FunctionGemma 会根据查询决定使用哪些参数。</p>
+
+<h3>现在一切正常</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='Dart'><span class='line'><span class="c1">// ✅ Temporal queries  </span>
+</span><span class='line'><span class="n">await</span> <span class="n">query</span><span class="p">(</span><span class="s2">&quot;Who did I talk to yesterday?&quot;</span><span class="p">);</span>
+</span><span class='line'><span class="c1">// LLM extracts: last_contact_after=&quot;2026-01-18&quot;, last_contact_before=&quot;2026-01-19&quot;  </span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ✅ Structured filters    </span>
+</span><span class='line'><span class="n">await</span> <span class="n">query</span><span class="p">(</span><span class="s2">&quot;Leads assigned to me without email&quot;</span><span class="p">);</span>
+</span><span class='line'><span class="c1">// LLM extracts: status=&quot;lead&quot;, owner=&quot;current_user&quot;, has_email=false  </span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ✅ Combined semantic + structured  </span>
+</span><span class='line'><span class="n">await</span> <span class="n">query</span><span class="p">(</span><span class="s2">&quot;Google contacts interested in enterprise pricing&quot;</span><span class="p">);</span>
+</span><span class='line'><span class="c1">// LLM extracts: company=&quot;Google&quot;, semantic_query=&quot;interested in enterprise pricing&quot;  </span>
+</span><span class='line'>
+</span><span class='line'><span class="c1">// ✅ Complex reasoning  </span>
+</span><span class='line'><span class="n">await</span> <span class="n">query</span><span class="p">(</span><span class="s2">&quot;Prospects I should follow up with from Q4 last year&quot;</span><span class="p">);</span>
+</span><span class='line'><span class="c1">// LLM calculates Q4 2025 dates, adds semantic_query=&quot;follow up needed&quot;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>LLM 发挥其优势（理解语言、推断日期），而结构化查询则发挥其优势（过滤、排序、连接）。</p>
+
+<h2>结论</h2>
+
+<p>RAG 弥合了通用 LLM 和你的私有数据之间的鸿沟。借助 Flutter Gemma，整个流程（嵌入、向量搜索和生成）都在设备端运行，无需云端。</p>
+
+<p>首先，对于语义至关重要的查询，请使用语义搜索。当遇到日期、过滤器、排序等限制时，可以使用 FunctionGemma 添加函数调用，让 LLM 协调结构化检索。</p>
+
+<p><a href="https://github.com/DenisovAV/flutter_gemma/tree/main/example">Flutter Gemma 示例应用</a> 包含完整的 RAG 实现。克隆它，用你的数据进行测试，看看当人工智能完全在用户口袋里运行时，会发生什么。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[使用FunctionGemma进行设备端函数调用]]></title>
@@ -2141,7 +2604,7 @@
 
 <p>如有任何疑问，欢迎随时联系：</p>
 
-<p>📧 <strong>邮箱：</strong> <a href="&#x6d;&#x61;&#x69;&#x6c;&#116;&#x6f;&#58;&#x64;&#101;&#110;&#105;&#115;&#111;&#118;&#x2e;&#x73;&#104;&#117;&#114;&#101;&#103;&#64;&#x67;&#x6d;&#97;&#x69;&#x6c;&#x2e;&#x63;&#x6f;&#109;">&#100;&#x65;&#x6e;&#x69;&#x73;&#111;&#118;&#46;&#115;&#104;&#x75;&#114;&#101;&#x67;&#x40;&#x67;&#x6d;&#x61;&#x69;&#x6c;&#x2e;&#x63;&#111;&#109;</a></p>
+<p>📧 <strong>邮箱：</strong> <a href="&#109;&#97;&#105;&#x6c;&#116;&#x6f;&#58;&#100;&#x65;&#110;&#x69;&#115;&#x6f;&#x76;&#46;&#x73;&#x68;&#x75;&#x72;&#x65;&#x67;&#x40;&#x67;&#x6d;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#109;">&#100;&#101;&#x6e;&#105;&#115;&#111;&#118;&#46;&#x73;&#104;&#117;&#x72;&#x65;&#x67;&#x40;&#x67;&#x6d;&#97;&#105;&#108;&#46;&#x63;&#x6f;&#x6d;</a></p>
 
 <p>🔗 <strong>领英：</strong> <a href="https://www.linkedin.com/in/aleks-denisov/">Sasha Denisov</a></p>
 ]]></content>
@@ -12667,1078 +13130,6 @@ Anatolii Frolov发布于2025年11月20日。</p></blockquote>
 <p>无论是构建可旋转的视频播放器、保留滚动位置的导航系统，还是在配置更改后保持状态的复杂表单，<code>retain{}</code> 都能在 Jetpack Compose 中提供基于作用域的状态保存功能。</p>
 
 <p>如果你想了解最新的技能、新闻、技术文章、面试问题和实用代码技巧，请查看 <a href="https://github.com/doveletter/">Dove Letter</a>。如果你想深入了解面试准备，千万不要错过终极 Android 面试指南：<a href="https://www.android.skydoves.me/">Manifest Android Interview</a>。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Kotlin互斥锁(Mutex)：协程的线程安全守护神]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex/"/>
-    <updated>2025-10-15T15:05:51+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Kotlin Mutex: Thread-Safe Concurrency for Coroutines」，原文链接<a href="https://carrion.dev/en/posts/kotlin-mutex-concurrency-guide/">https://carrion.dev/en/posts/kotlin-mutex-concurrency-guide/</a>，由Ignacio Carrión发布于2025年10月3日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/10/15/kotlin-mutex/"><img src="file:///Users/alexhilton/Downloads/kotlin_mutex.webp" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>使用 Kotlin 协程构建并发应用程序时，保护共享的可变状态至关重要。虽然传统的 Java 同步工具（例如 <code>synchronized</code> 块和 <code>ReentrantLock</code>）可以正常工作，但它们会阻塞线程，并且与协程的挂起模型不兼容。因此，引入 <code>Mutex</code>——一个协程友好的同步原语，它提供互斥而不阻塞线程。</p>
-
-<p>本指南探讨了何时使用 Mutex、最佳实践以及它与其他并发控制机制的比较。</p>
-
-<h2>TL;DR：省流版本的建议</h2>
-
-<ul>
-<li>当需要保护多个协程访问的共享可变状态时，请使用 <code>Mutex</code>。</li>
-<li>在协程代码中，优先使用 <code>Mutex</code> 而不是 <code>synchronized</code>，以避免阻塞线程。</li>
-<li>使用 <code>mutex.withLock { }</code> 自动获取和释放锁。</li>
-<li>对于更复杂的状态管理场景，请考虑使用 <code>Actor</code> 或 <code>StateFlow</code>。</li>
-<li>对于简单的计数器，请改用 <code>AtomicInteger</code> 或 <code>AtomicReference</code>。</li>
-<li>如果需要将并发访问限制为多个许可，请使用 <code>Semaphore</code>。</li>
-<li>如果不使用 <code>withLock</code>，请始终在 finally 块中释放锁。</li>
-</ul>
-
-
-<h2>什么是互斥锁？</h2>
-
-<p><code>Mutex</code>（互斥）是 <code>kotlinx.coroutines</code> 中的同步原语，用于确保同一时间只有一个协程可以执行临界区。与阻塞线程的传统锁不同，Mutex 会暂停协程，从而使线程可以自由地执行其他工作。</p>
-
-<p>基本结构：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.sync.Mutex</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.sync.withLock</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">protectedOperation</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// Critical section - only one coroutine at a time</span>
-</span><span class='line'>        <span class="c1">// Modify shared state safely here</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>关键特性：</p>
-
-<ul>
-<li>非阻塞：暂停协程而不是阻塞线程</li>
-<li>公平：默认按先进先出顺序授予访问权限</li>
-<li>不重入安全：持有锁的协程无法再次获取锁（防止死锁）</li>
-<li>轻量级：比线程阻塞锁更高效</li>
-</ul>
-
-
-<h2>互斥锁的核心用例</h2>
-
-<p>最常见的用例——确保对共享变量的安全访问：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">CounterService</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">counter</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">counter</span><span class="p">++</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getCount</span><span class="p">():</span> <span class="n">Int</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">counter</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>2. 协调资源访问</h3>
-
-<p>当多个协程需要对某个资源进行独占访问时：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">FileWriter</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">file</span><span class="p">:</span> <span class="n">File</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">appendLine</span><span class="p">(</span><span class="n">line</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">file</span><span class="p">.</span><span class="n">appendText</span><span class="p">(</span><span class="s">&quot;$line\n&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>3.确保顺序执行</h3>
-
-<p>即使操作是并发触发的，也必须按顺序执行：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">OrderProcessor</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">orders</span> <span class="p">=</span> <span class="n">mutableListOf</span><span class="p">&lt;</span><span class="n">Order</span><span class="p">&gt;()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">processOrder</span><span class="p">(</span><span class="n">order</span><span class="p">:</span> <span class="n">Order</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">// Ensure orders are processed sequentially</span>
-</span><span class='line'>            <span class="n">orders</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>
-</span><span class='line'>            <span class="n">validateOrder</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>
-</span><span class='line'>            <span class="n">persistOrder</span><span class="p">(</span><span class="n">order</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>4. 线程安全的延迟初始化</h3>
-
-<p>在挂起上下文中实现线程安全的延迟初始化：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">DatabaseConnection</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">connection</span><span class="p">:</span> <span class="n">Connection</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getConnection</span><span class="p">():</span> <span class="n">Connection</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">connection</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="k">return</span> <span class="n">connection</span><span class="o">!!</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">return</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">// Double-check inside lock</span>
-</span><span class='line'>            <span class="n">connection</span> <span class="o">?:</span> <span class="n">createConnection</span><span class="p">().</span><span class="n">also</span> <span class="p">{</span> <span class="n">connection</span> <span class="p">=</span> <span class="n">it</span> <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">private</span> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">createConnection</span><span class="p">():</span> <span class="n">Connection</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="c1">// Simulate connection setup</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">Connection</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>最佳实践</h2>
-
-<h3>1. 始终使用 withLock</h3>
-
-<p>即使发生异常，withLock 也会自动处理锁的获取和释放：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Good: Automatic cleanup</span>
-</span><span class='line'><span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">dangerousOperation</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// ❌ Bad: Manual management, error-prone</span>
-</span><span class='line'><span class="n">mutex</span><span class="p">.</span><span class="n">lock</span><span class="p">()</span>
-</span><span class='line'><span class="k">try</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">dangerousOperation</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">unlock</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>2. 保持临界区较小</h3>
-
-<p>尽量减少锁的持有时间以减少争用：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Good: Lock only for critical section</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUser</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">validated</span> <span class="p">=</span> <span class="n">validateName</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="c1">// Outside lock</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">userCache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">validated</span> <span class="c1">// Only this needs protection</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">notifyObservers</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span> <span class="c1">// Outside lock</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// ❌ Bad: Holding lock during slow operations</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUserSlow</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">validated</span> <span class="p">=</span> <span class="n">validateName</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="c1">// Slow operation inside lock</span>
-</span><span class='line'>        <span class="n">userCache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">validated</span>
-</span><span class='line'>        <span class="n">notifyObservers</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span> <span class="c1">// I/O inside lock</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>3. 避免嵌套锁</h3>
-
-<p>互斥锁不可重入。避免两次获取同一个锁：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Bad: Deadlock!</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">problematic</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">helperFunction</span><span class="p">()</span> <span class="c1">// Tries to acquire mutex again</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">helperFunction</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// Will suspend forever</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// ✅ Good: Restructure to avoid nesting</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">better</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">helperFunctionUnsafe</span><span class="p">()</span> <span class="c1">// No lock acquisition</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">fun</span> <span class="nf">helperFunctionUnsafe</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// Assumes caller holds lock</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>4. 优先考虑无锁替代方案</h3>
-
-<p>对于简单操作，原子类型速度更快：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Better for simple counters</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">AtomicCounter</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">counter</span> <span class="p">=</span> <span class="n">AtomicInteger</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="n">incrementAndGet</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="k">get</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// ❌ Overkill for a simple counter</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">MutexCounter</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">counter</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="n">counter</span><span class="p">++</span> <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>5.文档锁不变量</h3>
-
-<p>明确锁保护的对象：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">UserCache</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span> <span class="c1">// Protects userMap and lastUpdate</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">userMap</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">User</span><span class="p">&gt;()</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">lastUpdate</span> <span class="p">=</span> <span class="m">0L</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUser</span><span class="p">(</span><span class="n">id</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">userMap</span><span class="p">[</span><span class="n">id</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
-</span><span class='line'>            <span class="n">lastUpdate</span> <span class="p">=</span> <span class="n">System</span><span class="p">.</span><span class="n">currentTimeMillis</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>互斥锁 vs. 其他同步方法</h2>
-
-<h3>互斥锁 vs. synchronized</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Traditional synchronized (blocks thread)</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">SynchronizedCounter</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">count</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">@Synchronized</span>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">count</span><span class="p">++</span> <span class="c1">// Thread blocked while waiting</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// Mutex (suspends coroutine)</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">MutexCounter</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">count</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">count</span><span class="p">++</span> <span class="c1">// Coroutine suspended, thread free</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>何时该用哪个：</strong></p>
-
-<ul>
-<li>对于非暂停代码和旧版 Java 互操作，请使用 <code>synchronized</code></li>
-<li>对于暂停函数和基于协程的代码，请使用 <code>Mutex</code></li>
-<li>在协程上下文中，<code>Mutex</code> 效率更高，因为线程不会被阻塞</li>
-</ul>
-
-
-<h3>互斥锁 vs. 信号量</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Mutex: Only one coroutine at a time</span>
-</span><span class='line'><span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// Semaphore: N coroutines at a time</span>
-</span><span class='line'><span class="k">val</span> <span class="py">semaphore</span> <span class="p">=</span> <span class="n">Semaphore</span><span class="p">(</span><span class="n">permits</span> <span class="p">=</span> <span class="m">3</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// Example: Rate limiting API calls</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">ApiClient</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">semaphore</span> <span class="p">=</span> <span class="n">Semaphore</span><span class="p">(</span><span class="m">5</span><span class="p">)</span> <span class="c1">// Max 5 concurrent requests</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">makeRequest</span><span class="p">(</span><span class="n">endpoint</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">Response</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">semaphore</span><span class="p">.</span><span class="n">withPermit</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">return</span> <span class="n">httpClient</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">endpoint</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>何时使用谁：</strong></p>
-
-<ul>
-<li>需要独占访问（单次许可）时使用 <code>Mutex</code></li>
-<li>需要将并发限制为 N 个操作时使用 <code>Semaphore</code></li>
-</ul>
-
-
-<h3>互斥锁 vs. Actor</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Mutex: Manual synchronization</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">MutexBasedCache</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Data</span><span class="p">&gt;()</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">get</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">=</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="p">}</span>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">put</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="p">=</span> <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="n">cache</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="p">=</span> <span class="n">value</span> <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// Actor: Message-based synchronization</span>
-</span><span class='line'><span class="n">sealed</span> <span class="k">class</span> <span class="nc">CacheMessage</span>
-</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Get</span><span class="p">(</span><span class="k">val</span> <span class="py">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="k">val</span> <span class="py">response</span><span class="p">:</span> <span class="n">CompletableDeferred</span><span class="p">&lt;</span><span class="n">Data</span><span class="p">?&gt;)</span> <span class="p">:</span> <span class="n">CacheMessage</span><span class="p">()</span>
-</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">Put</span><span class="p">(</span><span class="k">val</span> <span class="py">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="k">val</span> <span class="py">value</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="p">:</span> <span class="n">CacheMessage</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">fun</span> <span class="nf">CoroutineScope</span><span class="p">.</span><span class="n">cacheActor</span><span class="p">()</span> <span class="p">=</span> <span class="n">actor</span><span class="p">&lt;</span><span class="n">CacheMessage</span><span class="p">&gt;</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Data</span><span class="p">&gt;()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">for</span> <span class="p">(</span><span class="n">msg</span> <span class="k">in</span> <span class="n">channel</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">when</span> <span class="p">(</span><span class="n">msg</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">is</span> <span class="n">Get</span> <span class="p">-&gt;</span> <span class="n">msg</span><span class="p">.</span><span class="n">response</span><span class="p">.</span><span class="n">complete</span><span class="p">(</span><span class="n">cache</span><span class="p">[</span><span class="n">msg</span><span class="p">.</span><span class="n">key</span><span class="p">])</span>
-</span><span class='line'>            <span class="k">is</span> <span class="n">Put</span> <span class="p">-&gt;</span> <span class="n">cache</span><span class="p">[</span><span class="n">msg</span><span class="p">.</span><span class="n">key</span><span class="p">]</span> <span class="p">=</span> <span class="n">msg</span><span class="p">.</span><span class="n">value</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>何时使用谁：</strong></p>
-
-<ul>
-<li>使用 <code>Mutex</code> 进行直接方法调用的简单同步</li>
-<li>对于复杂的状态机或需要消息队列时，使用 <code>Actor</code></li>
-<li>Actor 提供更好的封装性，并且可以处理背压</li>
-</ul>
-
-
-<h3>Mutex 与 StateFlow</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Mutex: Imperative state management</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">MutexState</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">state</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateState</span><span class="p">(</span><span class="n">transform</span><span class="p">:</span> <span class="p">(</span><span class="n">Int</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Int</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">state</span> <span class="p">=</span> <span class="n">transform</span><span class="p">(</span><span class="n">state</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// StateFlow: Reactive state management</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">FlowState</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_state</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">state</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">_state</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">updateState</span><span class="p">(</span><span class="n">transform</span><span class="p">:</span> <span class="p">(</span><span class="n">Int</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Int</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">_state</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">transform</span><span class="p">)</span> <span class="c1">// Thread-safe built-in</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>何时使用哪个：</strong></p>
-
-<ul>
-<li>需要自定义同步逻辑时使用 <code>Mutex</code></li>
-<li>使用 <code>StateFlow</code> 进行内置线程安全的可观察状态</li>
-<li><code>StateFlow</code> 更适合 UI 状态和响应式架构</li>
-</ul>
-
-
-<h3>Mutex 与原子类型</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// AtomicInteger: Lock-free for simple operations</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">AtomicCounter</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">counter</span> <span class="p">=</span> <span class="n">AtomicInteger</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="n">incrementAndGet</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">fun</span> <span class="nf">addAndGet</span><span class="p">(</span><span class="n">delta</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">=</span> <span class="n">counter</span><span class="p">.</span><span class="n">addAndGet</span><span class="p">(</span><span class="n">delta</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// Mutex: For complex operations</span>
-</span><span class='line'><span class="k">class</span> <span class="nc">ComplexCounter</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">counter</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">history</span> <span class="p">=</span> <span class="n">mutableListOf</span><span class="p">&lt;</span><span class="n">Int</span><span class="p">&gt;()</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">increment</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">counter</span><span class="p">++</span>
-</span><span class='line'>            <span class="n">history</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">counter</span><span class="p">)</span> <span class="c1">// Multiple operations</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>何时使用哪个：</strong></p>
-
-<ul>
-<li>使用原子类型进行单变量操作（计数器、标志）</li>
-<li>需要协调多个变量时使用 <code>Mutex</code></li>
-<li>原子操作速度更快，但受限于特定操作</li>
-</ul>
-
-
-<h2>常见陷阱</h2>
-
-<h3>1. 忘记使用 suspend</h3>
-
-<p>互斥操作需要暂停：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Won&#39;t compile</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">broken</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="p">}</span> <span class="c1">// Error: suspend function called in non-suspend context</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// ✅ Correct</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">correct</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span> <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>2. 长时间操作期间持有锁</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Bad: Holding lock during I/O</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">bad</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">data</span> <span class="p">=</span> <span class="n">httpClient</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span> <span class="c1">// Network call inside lock</span>
-</span><span class='line'>        <span class="n">cache</span><span class="p">[</span><span class="n">url</span><span class="p">]</span> <span class="p">=</span> <span class="n">data</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// ✅ Good: Fetch outside lock</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">good</span><span class="p">(</span><span class="n">url</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">data</span> <span class="p">=</span> <span class="n">httpClient</span><span class="p">.</span><span class="k">get</span><span class="p">(</span><span class="n">url</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">cache</span><span class="p">[</span><span class="n">url</span><span class="p">]</span> <span class="p">=</span> <span class="n">data</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>3. 假设可重入</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Deadlock: Mutex is not reentrant</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">outer</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">inner</span><span class="p">()</span> <span class="c1">// Deadlock!</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">inner</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// Never reached</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>4. 不处理取消</h3>
-
-<p>持有锁时务必考虑取消：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Good: withLock handles cancellation</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">proper</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">doWork</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span> <span class="c1">// Lock released even on cancellation</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// ❌ Risky: Manual lock management</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">risky</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">mutex</span><span class="p">.</span><span class="n">lock</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">try</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">doWork</span><span class="p">()</span> <span class="c1">// If cancelled here, lock stays acquired</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">unlock</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>性能考量</h2>
-
-<ul>
-<li><strong>互斥 vs. synchronized</strong>：在协程密集型代码中，互斥更高效，因为线程不会被阻塞</li>
-<li><strong>争用</strong>：高争用会降低性能；考虑分片（为不同的键设置多个锁）</li>
-<li><strong>锁粒度</strong>：更细粒度的锁（更多锁，每个锁保护更少的数据）可减少争用</li>
-<li><strong>无锁替代方案</strong>：对于简单操作，原子类型和 <code>StateFlow</code> 速度更快</li>
-</ul>
-
-
-<p>示例：分片以减少争用：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">ShardedCache</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">shardCount</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">16</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutexes</span> <span class="p">=</span> <span class="n">Array</span><span class="p">(</span><span class="n">shardCount</span><span class="p">)</span> <span class="p">{</span> <span class="n">Mutex</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">caches</span> <span class="p">=</span> <span class="n">Array</span><span class="p">(</span><span class="n">shardCount</span><span class="p">)</span> <span class="p">{</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Data</span><span class="p">&gt;()</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">shardIndex</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">=</span> <span class="n">key</span><span class="p">.</span><span class="n">hashCode</span><span class="p">()</span> <span class="n">and</span> <span class="p">(</span><span class="n">shardCount</span> <span class="p">-</span> <span class="m">1</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">put</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">Data</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">index</span> <span class="p">=</span> <span class="n">shardIndex</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">mutexes</span><span class="p">[</span><span class="n">index</span><span class="p">].</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">caches</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="n">key</span><span class="p">]</span> <span class="p">=</span> <span class="n">value</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">get</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">Data</span><span class="p">?</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">index</span> <span class="p">=</span> <span class="n">shardIndex</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">mutexes</span><span class="p">[</span><span class="n">index</span><span class="p">].</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">caches</span><span class="p">[</span><span class="n">index</span><span class="p">][</span><span class="n">key</span><span class="p">]</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>真实示例：线程安全的Repository</h2>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">UserRepository</span><span class="p">(</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">api</span><span class="p">:</span> <span class="n">UserApi</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">database</span><span class="p">:</span> <span class="n">UserDatabase</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">User</span><span class="p">&gt;()</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getUser</span><span class="p">(</span><span class="n">userId</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">User</span><span class="p">?</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// Check cache first (read lock)</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">cache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="k">return</span> <span class="n">it</span> <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">// Try database (outside lock)</span>
-</span><span class='line'>        <span class="n">database</span><span class="p">.</span><span class="n">getUser</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span> <span class="n">user</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">cache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>            <span class="k">return</span> <span class="n">user</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">// Fetch from API (outside lock)</span>
-</span><span class='line'>        <span class="k">return</span> <span class="k">try</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">api</span><span class="p">.</span><span class="n">fetchUser</span><span class="p">(</span><span class="n">userId</span><span class="p">)</span>
-</span><span class='line'>            <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">cache</span><span class="p">[</span><span class="n">userId</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
-</span><span class='line'>                <span class="n">database</span><span class="p">.</span><span class="n">insertUser</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>            <span class="n">user</span>
-</span><span class='line'>        <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">null</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">updateUser</span><span class="p">(</span><span class="n">user</span><span class="p">:</span> <span class="n">User</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">cache</span><span class="p">[</span><span class="n">user</span><span class="p">.</span><span class="n">id</span><span class="p">]</span> <span class="p">=</span> <span class="n">user</span>
-</span><span class='line'>            <span class="n">database</span><span class="p">.</span><span class="n">updateUser</span><span class="p">(</span><span class="n">user</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">clearCache</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">cache</span><span class="p">.</span><span class="n">clear</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>测试互斥锁保护的代码</h2>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Test</span>
-</span><span class='line'><span class="k">fun</span> <span class="err">`</span><span class="nf">concurrent</span> <span class="n">increments</span> <span class="n">should</span> <span class="n">be</span> <span class="n">thread</span><span class="p">-</span><span class="n">safe</span><span class="err">`</span><span class="p">()</span> <span class="p">=</span> <span class="n">runTest</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">counter</span> <span class="p">=</span> <span class="n">CounterService</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Launch 1000 concurrent increments</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">jobs</span> <span class="p">=</span> <span class="n">List</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">counter</span><span class="p">.</span><span class="n">increment</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">jobs</span><span class="p">.</span><span class="n">joinAll</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Should be exactly 1000</span>
-</span><span class='line'>    <span class="n">assertEquals</span><span class="p">(</span><span class="m">1000</span><span class="p">,</span> <span class="n">counter</span><span class="p">.</span><span class="n">getCount</span><span class="p">())</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Test</span>
-</span><span class='line'><span class="k">fun</span> <span class="err">`</span><span class="nf">mutex</span> <span class="n">prevents</span> <span class="n">race</span> <span class="n">conditions</span><span class="err">`</span><span class="p">()</span> <span class="p">=</span> <span class="n">runTest</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">cache</span> <span class="p">=</span> <span class="n">mutableMapOf</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">Int</span><span class="p">&gt;()</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">mutex</span> <span class="p">=</span> <span class="n">Mutex</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Simulate race condition</span>
-</span><span class='line'>    <span class="n">coroutineScope</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">repeat</span><span class="p">(</span><span class="m">100</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">mutex</span><span class="p">.</span><span class="n">withLock</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="k">val</span> <span class="py">current</span> <span class="p">=</span> <span class="n">cache</span><span class="p">[</span><span class="s">&quot;key&quot;</span><span class="p">]</span> <span class="o">?:</span> <span class="m">0</span>
-</span><span class='line'>                    <span class="n">delay</span><span class="p">(</span><span class="m">1</span><span class="p">)</span> <span class="c1">// Simulate work</span>
-</span><span class='line'>                    <span class="n">cache</span><span class="p">[</span><span class="s">&quot;key&quot;</span><span class="p">]</span> <span class="p">=</span> <span class="n">current</span> <span class="p">+</span> <span class="m">1</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">assertEquals</span><span class="p">(</span><span class="m">100</span><span class="p">,</span> <span class="n">cache</span><span class="p">[</span><span class="s">&quot;key&quot;</span><span class="p">])</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>总结</h2>
-
-<p><code>Mutex</code> 是一个强大的工具，用于在基于协程的应用程序中保护共享可变状态。它提供线程安全的同步，而不会阻塞线程，使其成为并发协程代码的理想选择。</p>
-
-<p><strong>关键要点</strong>：</p>
-
-<ul>
-<li>使用 <code>withLock</code> 进行自动锁管理</li>
-<li>保持临界区简洁高效</li>
-<li>适当时考虑更简单的替代方案（例如原子操作、StateFlow）</li>
-<li>了解何时使用 Mutex 而非其他同步原语</li>
-<li>始终妥善处理取消操作</li>
-</ul>
-
-
-<p>记住：最好的同步就是没有同步。尽可能地，设计系统时，通过使用不可变数据结构、消息传递（Actors/Channels）或响应式流（Flow/StateFlow）来完全避免共享可变状态。但是，当你在协程代码中确实需要互斥时，<code>Mutex</code> 是你的最佳选择。</p>
 ]]></content>
   </entry>
   
