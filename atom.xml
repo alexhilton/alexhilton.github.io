@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-03-20T12:22:25+00:00</updated>
+  <updated>2026-03-26T12:14:00+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,836 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[深度解析Compose中的BoxWithConstraints]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose/"/>
+    <updated>2026-03-26T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「BoxWithConstraints in Jetpack Compose: The Complete Deep Dive」，原文链接<a href="https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7">https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7</a>，由Sehaj kahlon发布于2026年2月15日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*MLsQmsCtobQD5EhMRB1jFg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>关键点：这个组件存在的意义是什么？</h2>
+
+<p>让我来描述一下你可能经历过的场景。</p>
+
+<p>你正在构建一个卡片组件。在手机上，它应该垂直堆叠：图片在上，文字在下。在平板电脑上，它应该水平拉伸：图片在左，文字在右。需求很简单，对吧？</p>
+
+<p>你的第一反应可能是：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">AdaptiveCard</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">configuration</span> <span class="p">=</span> <span class="n">LocalConfiguration</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">configuration</span><span class="p">.</span><span class="n">screenWidthDp</span> <span class="p">&lt;</span> <span class="m">600</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">VerticalCard</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">HorizontalCard</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>这种方法存在缺陷。</strong> 原因如下。</p>
+
+<p><code>LocalConfiguration.current.screenWidthDp</code> 返回的是屏幕宽度。但如果你的卡片位于 <code>NavigationRail</code> 中呢？或者在分屏应用中？或者在 ChromeOS 的可调整大小的窗口中呢？你的卡片并不关心屏幕大小——它只关心<strong>实际分配给它的空间</strong>。</p>
+
+<p>这就是 <code>BoxWithConstraints</code> 解决的根本问题：<strong>它告诉你父元素分配给你的空间大小，而不是屏幕大小。</strong></p>
+
+<p>可以这样理解：</p>
+
+<ul>
+<li><p><code>LocalConfiguration</code> = &ldquo;房间有多大？&rdquo;</p></li>
+<li><p><code>BoxWithConstraints</code> = &ldquo;你把我放在的盒子有多大？&rdquo;</p></li>
+</ul>
+
+
+<p>相框并不关心你的房子有多大。它只关心分配给它的墙面空间。</p>
+
+<h2>内部机制：底层工作原理</h2>
+
+<h3>Compose 执行模型（以及 BoxWithConstraints 为何会破坏它）</h3>
+
+<p>要理解 <code>BoxWithConstraints</code>，你必须首先了解 Compose 的执行流程：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>Composition → Measurement → Layout → Drawing
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在标准的 Compose 代码中：</p>
+
+<ol>
+<li><p><strong>组合</strong>：你声明 UI 树（<code>Column { Text("Hello") }</code>）</p></li>
+<li><p><strong>测量</strong>：系统测量每个节点</p></li>
+<li><p><strong>布局</strong>：节点定位</p></li>
+<li><p><strong>绘制</strong>：像素绘制到屏幕上</p></li>
+</ol>
+
+
+<p>这个顺序<strong>不可更改</strong>。组合先于测量。你无法测量尚未组合的内容。</p>
+
+<p>但是 <code>BoxWithConstraints</code> 提出了一个不寻常的问题：<em>“我能否在决定组合内容之前就知道我的约束条件？”</em></p>
+
+<p>这就像要求厨师在烹饪之前先摆盘一样。</p>
+
+<h2>引入子组合：Compose 的延迟组合机制</h2>
+
+<p><code>BoxWithConstraints</code> 通过<strong>子组合</strong>实现此功能，该机制将组合操作延迟到测量时执行。</p>
+
+<p>以下是实际实现（为清晰起见已简化）：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">BoxWithConstraints</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">contentAlignment</span><span class="p">:</span> <span class="n">Alignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">TopStart</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">propagateMinConstraints</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">false</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">BoxWithConstraintsScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">SubcomposeLayout</span><span class="p">(</span><span class="n">modifier</span><span class="p">)</span> <span class="p">{</span> <span class="n">constraints</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="c1">// We&#39;re NOW in the measurement phase, but we can compose!</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">scope</span> <span class="p">=</span> <span class="n">BoxWithConstraintsScopeImpl</span><span class="p">(</span><span class="k">this</span><span class="p">,</span> <span class="n">constraints</span><span class="p">)</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">measurables</span> <span class="p">=</span> <span class="n">subcompose</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span> <span class="n">scope</span><span class="p">.</span><span class="n">content</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="c1">// Standard Box measurement logic follows...</span>
+</span><span class='line'>        <span class="n">with</span><span class="p">(</span><span class="n">measurePolicy</span><span class="p">)</span> <span class="p">{</span> <span class="n">measure</span><span class="p">(</span><span class="n">measurables</span><span class="p">,</span> <span class="n">constraints</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>关键在于 <code>SubcomposeLayout</code>。它反转了正常的流程：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>Normal:
+</span><span class='line'>
+</span><span class='line'>Composition → Measurement
+</span><span class='line'>Subcompose: Measurement → Composition <span class="o">(</span>of children<span class="o">)</span> → Measurement <span class="o">(</span>of children<span class="o">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>当父元素请求 <code>BoxWithConstraints</code> 测量自身时，它会：</p>
+
+<ol>
+<li><p>接收约束条件</p></li>
+<li><p><strong>创建一个包含这些约束条件的作用域</strong></p></li>
+<li><p><strong>此时组合子元素</strong></p></li>
+<li><p>测量已组合的子元素</p></li>
+<li><p>返回测量结果</p></li>
+</ol>
+
+
+<p>这就是为什么 <code>BoxWithConstraints</code> 被认为是“重量级”的原因。它在测量阶段执行组合操作。</p>
+
+<h2>三层节点架构</h2>
+
+<p>在内部，<code>SubcomposeLayout</code> 将子节点分为三个不同的区域进行管理：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="o">[</span>Active nodes<span class="o">]</span> <span class="o">[</span>Reusable nodes<span class="o">]</span> <span class="o">[</span>Precomposed nodes<span class="o">]</span>
+</span><span class='line'>     ↑
+</span><span class='line'>
+</span><span class='line'>     ↑
+</span><span class='line'>
+</span><span class='line'>     ↑
+</span><span class='line'>  Currently
+</span><span class='line'>
+</span><span class='line'>  <span class="s2">&quot;Recycled&quot;</span>
+</span><span class='line'>
+</span><span class='line'>  Pre-composed
+</span><span class='line'>    used
+</span><span class='line'>
+</span><span class='line'>    <span class="k">for</span> reuse
+</span><span class='line'>
+</span><span class='line'>    ahead of <span class="nb">time</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>活动节点</strong>：当前测量阶段正在使用的插槽。</p>
+
+<p><strong>可重用节点</strong>：之前已激活但仍保留的插槽（类似于 RecyclerView 的可回收视图）。当需要类似内容时，这些插槽会被“重新激活”，而不是创建新的组合。</p>
+
+<p><strong>预组合节点</strong>：通过 <code>precompose()</code> 预先组合的插槽（惰性列表内部使用此功能在即将显示的项目可见之前进行组合）。</p>
+
+<p>正是这种架构使得 <code>LazyColumn</code> 能够流畅滚动。它不会创建和销毁组合，而是在这三个节点池之间进行节点的轮换。</p>
+
+<h2>约束：深入解析</h2>
+
+<p>在 <code>BoxWithConstraintsScope</code> 中，你可以访问四个属性：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">interface</span> <span class="n">BoxWithConstraintsScope</span> <span class="p">:</span> <span class="n">BoxScope</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">minWidth</span><span class="p">:</span> <span class="n">Dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">maxWidth</span><span class="p">:</span> <span class="n">Dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">minHeight</span><span class="p">:</span> <span class="n">Dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">maxHeight</span><span class="p">:</span> <span class="n">Dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">constraints</span><span class="p">:</span> <span class="n">Constraints</span>  <span class="c1">// The raw pixel-based constraints</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>这些属性的实际含义是什么？</h3>
+
+<p><code>**maxWidth**</code> <strong>/</strong> <code>**maxHeight**</code>：父元素提供的最大空间。如果为 <code>Dp.Infinity</code>，则表示父元素允许你“随意使用”（通常来自可滚动容器）。</p>
+
+<p><code>**minWidth**</code> <strong>/</strong> <code>**minHeight**</code>：父元素期望的最小高度。通常为 <code>0.dp</code>，但如果父元素使用了 <code>propagateMinConstraints = true</code> 或你使用的是基于 <code>weight</code> 的布局，则该值可能不为零。</p>
+
+<h2>屏幕尺寸陷阱</h2>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// These are NOT the screen dimensions!</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">width</span> <span class="p">=</span> <span class="n">maxWidth</span>   <span class="c1">// Space YOUR PARENT gave YOU</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">height</span> <span class="p">=</span> <span class="n">maxHeight</span> <span class="c1">// Space YOUR PARENT gave YOU</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>考虑以下层级结构：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Row</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">NavigationRail</span> <span class="p">{</span> <span class="cm">/* 80.dp wide */</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">1f</span><span class="p">))</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// maxWidth here is (screenWidth - 80.dp)</span>
+</span><span class='line'>        <span class="c1">// NOT screenWidth!</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这正是 <code>BoxWithConstraints</code> 存在的意义。<code>LocalConfiguration</code> 会给出错误的答案。</p>
+
+<h2>有界约束与无界约束</h2>
+
+<p>这里有一个容易引起混淆的细微差别：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">item</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// maxHeight == Dp.Infinity !!!</span>
+</span><span class='line'>            <span class="c1">// Because LazyColumn offers infinite vertical space</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>maxHeight</code> 的值为 <code>Infinity</code>，因为 <code>LazyColumn</code> 不会限制其子元素的高度，它会滚动。这是预期行为，但这意味着你不能在可滚动容器内使用 <code>maxHeight</code> 来进行响应式布局。</p>
+
+<h2>实际用例</h2>
+
+<h3>用例 1：响应式卡片布局</h3>
+
+<p>此卡片会根据<strong>可用空间</strong>（而非屏幕方向）在垂直和水平布局之间切换：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ResponsiveProductCard</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">imageUrl</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">title</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">description</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">isWide</span> <span class="p">=</span> <span class="n">maxWidth</span> <span class="p">&gt;</span> <span class="m">400.</span><span class="n">dp</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">isWide</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// Horizontal layout: image left, text right</span>
+</span><span class='line'>            <span class="n">Row</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(),</span>
+</span><span class='line'>                <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">AsyncImage</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">model</span> <span class="p">=</span> <span class="n">imageUrl</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">contentDescription</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">0.4f</span><span class="p">)</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">aspectRatio</span><span class="p">(</span><span class="m">1f</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>                <span class="n">Column</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">0.6f</span><span class="p">),</span>
+</span><span class='line'>                    <span class="n">verticalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">Center</span>
+</span><span class='line'>                <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">headlineSmall</span><span class="p">)</span>
+</span><span class='line'>                    <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="n">description</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">bodyMedium</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// Vertical layout: image top, text bottom</span>
+</span><span class='line'>            <span class="n">Column</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">AsyncImage</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">model</span> <span class="p">=</span> <span class="n">imageUrl</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">contentDescription</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
+</span><span class='line'>                        <span class="p">.</span><span class="n">aspectRatio</span><span class="p">(</span><span class="m">16f</span> <span class="p">/</span> <span class="m">9f</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>                <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">12.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">headlineSmall</span><span class="p">)</span>
+</span><span class='line'>                <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="n">description</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">bodyMedium</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>为什么这比检查屏幕尺寸更好</strong>：将此卡片放入双列网格中，即使在平板电脑上，它也会自动显示垂直布局。它真正实现了对<em>其</em>容器的响应式布局。</p>
+
+<h3>用例 2：动态文本大小</h3>
+
+<p>自动调整文本大小以适应可用宽度：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">AutoSizeTitle</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">fontSize</span> <span class="p">=</span> <span class="k">when</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">maxWidth</span> <span class="p">&lt;</span> <span class="m">200.</span><span class="n">dp</span> <span class="p">-&gt;</span> <span class="m">14.</span><span class="n">sp</span>
+</span><span class='line'>            <span class="n">maxWidth</span> <span class="p">&lt;</span> <span class="m">300.</span><span class="n">dp</span> <span class="p">-&gt;</span> <span class="m">18.</span><span class="n">sp</span>
+</span><span class='line'>            <span class="n">maxWidth</span> <span class="p">&lt;</span> <span class="m">400.</span><span class="n">dp</span> <span class="p">-&gt;</span> <span class="m">24.</span><span class="n">sp</span>
+</span><span class='line'>            <span class="k">else</span> <span class="p">-&gt;</span> <span class="m">32.</span><span class="n">sp</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="n">text</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">fontSize</span> <span class="p">=</span> <span class="n">fontSize</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">maxLines</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">overflow</span> <span class="p">=</span> <span class="n">TextOverflow</span><span class="p">.</span><span class="n">Ellipsis</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>用例 3：基于宽度的网格项数</h3>
+
+<p>动态计算网格列数：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">AdaptiveGrid</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Item</span><span class="p">&gt;,</span>
+</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">columns</span> <span class="p">=</span> <span class="n">maxOf</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">/</span> <span class="m">160.</span><span class="n">dp</span><span class="p">).</span><span class="n">toInt</span><span class="p">())</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">LazyVerticalGrid</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">columns</span> <span class="p">=</span> <span class="n">GridCells</span><span class="p">.</span><span class="n">Fixed</span><span class="p">(</span><span class="n">columns</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">verticalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">items</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
+</span><span class='line'>                <span class="n">GridItem</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>性能陷阱和最佳实践</h2>
+
+<h3>何时不应使用 BoxWithConstraints</h3>
+
+<p><strong>1. 当一个简单的修饰符就足够时</strong></p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Overkill</span>
+</span><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="n">maxWidth</span> <span class="p">*</span> <span class="m">0.5f</span><span class="p">,</span> <span class="n">maxHeight</span> <span class="p">*</span> <span class="m">0.5f</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Just use fillMaxSize with a fraction</span>
+</span><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(</span><span class="m">0.5f</span><span class="p">))</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>2. 当你只是检查屏幕方向时</strong></p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Using BoxWithConstraints for screen-level decisions</span>
+</span><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">&gt;</span> <span class="n">maxHeight</span><span class="p">)</span> <span class="n">LandscapeLayout</span><span class="p">()</span> <span class="k">else</span> <span class="n">PortraitLayout</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Use LocalConfiguration for screen-level decisions</span>
+</span><span class='line'><span class="k">val</span> <span class="py">configuration</span> <span class="p">=</span> <span class="n">LocalConfiguration</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'><span class="k">if</span> <span class="p">(</span><span class="n">configuration</span><span class="p">.</span><span class="n">orientation</span> <span class="p">==</span> <span class="n">Configuration</span><span class="p">.</span><span class="n">ORIENTATION_LANDSCAPE</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">LandscapeLayout</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">PortraitLayout</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>3.在 LazyColumn/LazyRow 元素内部</strong></p>
+
+<p>这是一个常见的错误：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Performance issue</span>
+</span><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">items</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span> <span class="n">index</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">BoxWithConstraints</span> <span class="p">{</span>  <span class="c1">// Subcomposition per item!</span>
+</span><span class='line'>            <span class="n">ItemContent</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>每个元素都会触发子组合。如果元素数量为 1000，则在滚动过程中会重复执行子组合。相反，将 <code>BoxWithConstraints</code> 提升到父级：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Single subcomposition</span>
+</span><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">itemHeight</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">&gt;</span> <span class="m">400.</span><span class="n">dp</span><span class="p">)</span> <span class="m">120.</span><span class="n">dp</span> <span class="k">else</span> <span class="m">80.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="n">LazyColumn</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">items</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span> <span class="n">index</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">ItemContent</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">height</span> <span class="p">=</span> <span class="n">itemHeight</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>更轻量级的替代方案</h2>
+
+<p><strong>基于百分比的尺寸：</strong></p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Use Modifier.fillMaxWidth(fraction)</span>
+</span><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(</span><span class="m">0.8f</span><span class="p">))</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Use Modifier.weight in Row/Column</span>
+</span><span class='line'><span class="n">Row</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">1f</span><span class="p">))</span>  <span class="c1">// 25%</span>
+</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">3f</span><span class="p">))</span>  <span class="c1">// 75%</span>
+</span><span class='line'><span class="p">}</span><span class="n">For</span> <span class="n">aspect</span> <span class="n">ratio</span><span class="p">:</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">aspectRatio</span><span class="p">(</span><span class="m">16f</span> <span class="p">/</span> <span class="m">9f</span><span class="p">))</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>不使用子组件的自定义尺寸逻辑：</strong></p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Custom Layout is lighter than SubcomposeLayout</span>
+</span><span class='line'><span class="n">Layout</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">content</span> <span class="p">=</span> <span class="p">{</span> <span class="cm">/* your content */</span> <span class="p">}</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span> <span class="n">measurables</span><span class="p">,</span> <span class="n">constraints</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="c1">// Full control over measurement without subcomposition cost</span>
+</span><span class='line'>    <span class="c1">// But you can&#39;t make composition decisions here</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>窗口尺寸类（屏幕级响应式）：</strong></p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Material3&#39;s adaptive APIs</span>
+</span><span class='line'><span class="k">val</span> <span class="py">windowSizeClass</span> <span class="p">=</span> <span class="n">calculateWindowSizeClass</span><span class="p">(</span><span class="n">activity</span><span class="p">)</span>
+</span><span class='line'><span class="k">when</span> <span class="p">(</span><span class="n">windowSizeClass</span><span class="p">.</span><span class="n">widthSizeClass</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">WindowWidthSizeClass</span><span class="p">.</span><span class="n">Compact</span> <span class="p">-&gt;</span> <span class="n">CompactLayout</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">WindowWidthSizeClass</span><span class="p">.</span><span class="n">Medium</span> <span class="p">-&gt;</span> <span class="n">MediumLayout</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">WindowWidthSizeClass</span><span class="p">.</span><span class="n">Expanded</span> <span class="p">-&gt;</span> <span class="n">ExpandedLayout</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>重要陷阱和边界情况</h2>
+
+<h3>1. 固有尺寸不起作用</h3>
+
+<p>这将导致崩溃：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Row</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;Hello&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="n">IntrinsicSize</span><span class="p">.</span><span class="n">Min</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// CRASH: &quot;Asking for intrinsic measurements of </span>
+</span><span class='line'>        <span class="c1">// SubcomposeLayout layouts is not supported&quot;</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>SubcomposeLayout</code> 无法回答“你的固有尺寸是多少？”因为它在接收到实际约束之前无法确定要组合的内容。</p>
+
+<p><strong>解决方法</strong>：为 <code>BoxWithConstraints</code> 添加显式的大小修饰符：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">100.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Now intrinsic measurement isn&#39;t needed</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>2. 首次组合时序</h3>
+
+<p>在首次组合时，<code>BoxWithConstraints</code> 还没有约束。子元素会先使用占位符值进行组合，然后再使用实际约束重新组合。这意味着：</p>
+
+<ul>
+<li><p>内部的 <code>LaunchedEffect</code> 等效果可能会触发两次</p></li>
+<li><p>基于约束的初始状态计算可能需要保护</p></li>
+</ul>
+
+
+<p><strong>最佳实践</strong>：保护基于约束的逻辑：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">constraints</span><span class="p">.</span><span class="n">hasBoundedWidth</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">columns</span> <span class="p">=</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">/</span> <span class="m">160.</span><span class="n">dp</span><span class="p">).</span><span class="n">toInt</span><span class="p">()</span>
+</span><span class='line'>        <span class="c1">// Safe to use</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>3. 通常不需要嵌套 <code>BoxWithConstraints</code></h3>
+
+<p>如果你发现自己需要嵌套它们：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">BoxWithConstraints</span> <span class="p">{</span>  <span class="c1">// Usually unnecessary</span>
+</span><span class='line'>        <span class="c1">// ...</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>内部的 <code>BoxWithConstraints</code> 具有相同的约束（除非被修改）。只需使用外部作用域即可。</p>
+
+<h3>4. 状态提升的重要性（详见此处）</h3>
+
+<p>由于测量期间内容会被子组合，因此在 <code>BoxWithConstraints</code> 内部创建的状态具有特殊的生命周期特征：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// This state is created during MEASUREMENT, not composition</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">count</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="c1">// If parent re-measures without recomposing, this state persists</span>
+</span><span class='line'>    <span class="c1">// But if the slot is &quot;recycled&quot;, it might reset</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>最佳实践</strong>：将重要状态提升到 <code>BoxWithConstraints</code> 之上：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">var</span> <span class="py">count</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// count is stable regardless of subcomposition lifecycle</span>
+</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Count: $count&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>5. propagateMinConstraints 参数</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">propagateMinConstraints</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Children now MUST be at least minWidth x minHeight</span>
+</span><span class='line'>    <span class="c1">// This can cause unexpected overflow if children </span>
+</span><span class='line'>    <span class="c1">// have their own size requirements</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>仅当你明确希望强制子元素具有最小尺寸时才使用此参数。</p>
+
+<h2>总结：何时使用 BoxWithConstraints</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*ReLZsAjntRlcLXMJlYEUbw.png" alt="" /></p>
+
+<h2>结语</h2>
+
+<p><code>BoxWithConstraints</code> 是一个表面看似简单，但当你理解其底层机制后，会发现它蕴含着丰富的内涵。它不仅仅是一个<strong>“告诉你自身大小的盒子”</strong>，而是一种允许元素组合决策依赖于布局信息的机制。</p>
+
+<p>当你真正需要<strong>容器感知响应式布局</strong>时，请使用它。如果更简单的修饰符就能满足需求，则应避免使用它。永远记住：<strong>它会带来额外的开销，因为它本质上与常规代码合成不同。</strong></p>
+
+<p><strong>最好的代码并非使用最复杂的 API，而是使用最适合当前任务的 API。</strong></p>
+
+<p><strong>如果这篇深度解析对你有所帮助，请考虑与你的团队分享。知识共享才能促进 Android 社​​区的发展。</strong></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[端侧RAG实战指南]]></title>
@@ -2604,7 +3434,7 @@
 
 <p>如有任何疑问，欢迎随时联系：</p>
 
-<p>📧 <strong>邮箱：</strong> <a href="&#109;&#97;&#105;&#x6c;&#116;&#x6f;&#58;&#100;&#x65;&#110;&#x69;&#115;&#x6f;&#x76;&#46;&#x73;&#x68;&#x75;&#x72;&#x65;&#x67;&#x40;&#x67;&#x6d;&#x61;&#x69;&#108;&#x2e;&#99;&#111;&#109;">&#100;&#101;&#x6e;&#105;&#115;&#111;&#118;&#46;&#x73;&#104;&#117;&#x72;&#x65;&#x67;&#x40;&#x67;&#x6d;&#97;&#105;&#108;&#46;&#x63;&#x6f;&#x6d;</a></p>
+<p>📧 <strong>邮箱：</strong> <a href="&#109;&#97;&#105;&#108;&#116;&#111;&#x3a;&#100;&#101;&#110;&#x69;&#x73;&#x6f;&#x76;&#46;&#115;&#x68;&#117;&#x72;&#101;&#103;&#x40;&#103;&#x6d;&#x61;&#105;&#108;&#x2e;&#99;&#111;&#109;">&#100;&#101;&#x6e;&#x69;&#115;&#x6f;&#118;&#46;&#115;&#x68;&#x75;&#x72;&#101;&#x67;&#x40;&#103;&#109;&#x61;&#x69;&#x6c;&#x2e;&#99;&#x6f;&#109;</a></p>
 
 <p>🔗 <strong>领英：</strong> <a href="https://www.linkedin.com/in/aleks-denisov/">Sasha Denisov</a></p>
 ]]></content>
@@ -12245,891 +13075,6 @@ Anatolii Frolov发布于2025年11月20日。</p></blockquote>
 <p>“AndroidView”相机预览的时代已经结束。如果你要在 2025 年及以后构建相机功能，那么你将使用 Compose 来构建它们。现在终于有了可以正确支持这些功能的工具。</p>
 
 <p>现在，甩掉那个“AndroidView”包装器，编写一些漂亮的相机 UI 吧。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[理解retain{}的内部机制：Jetpack Compose中基于作用域的状态保存]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/10/22/understanding-retrain-internals/"/>
-    <updated>2025-10-22T14:29:55+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/10/22/understanding-retrain-internals</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Understanding retain{} internals: A Scope-based State Preservation in Jetpack Compose」，原文链接<a href="https://proandroiddev.com/understanding-retain-internals-a-new-way-to-preserve-state-in-jetpack-compose-54471a32fd05">https://proandroiddev.com/understanding-retain-internals-a-new-way-to-preserve-state-in-jetpack-compose-54471a32fd05</a>，由Jaewoong Eum发布于2025年10月15日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/10/22/understanding-retrain-internals/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*yQo3amM25om4TWkUzgxjvQ.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>Jetpack Compose 是一种现代 Android UI 开发方式，拥有声明式方法和强大的状态管理原语。虽然 <code>remember{}</code> 能够很好地在重组过程中保存状态，但它有一个根本性的局限性：它无法在配置更改或导航转换后继续生效。引入 <code>retain{}</code>，这是一种在瞬时销毁场景下保存状态的新方法，同时保持可组合性。</p>
-
-<p>在本文中，你将深入了解 <code>retain{}</code>、<code>RetainScope</code>、<code>RetainObserver</code> 和 <code>RetainedEffect</code> 的内部机制，探索它们的底层工作原理，以及使 Retention 既内存安全又性能卓越的优化方法。</p>
-
-<p>如果你尚未阅读以下之前的文章，理解以下部分将对你有所帮助：</p>
-
-<ul>
-<li><a href="https://medium.com/proandroiddev/exploring-retain-api-a-new-way-to-persist-state-in-jetpack-compose-bfb2fe2eae43">预览 retain{} API：Jetpack Compose 中持久化状态的新方法</a></li>
-<li><a href="https://medium.com/proandroiddev/previewing-retainedeffect-a-new-side-effect-to-bridge-between-composition-and-retention-lifecycles-685b9e543de7">预览 RetainedEffect：桥接 Composition 和 Retention 生命周期的新 Side Effect</a></li>
-</ul>
-
-
-<h2>导入 Compose 运行时 retain 库</h2>
-
-<p>你可以使用以下依赖项导入 Compose 运行时 retain 库：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.compose.runtime:runtime-retain:1.10.0-alpha05&quot;</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>请注意，此库目前处于实验阶段，未来将不断完善和稳定发布。</p>
-
-<h2>理解核心问题：为什么 remember{} 还不够</h2>
-
-<p>从本质上讲，<code>remember{}</code> 可以在单个组合生命周期内跨重组保留状态。但是，当你的 Activity 因配置更改而重新创建时会发生什么？或者当导航目标从返回堆栈中移除时？状态会丢失，你的可组合项会重新开始。</p>
-
-<p>传统的 Android 解决方案涉及 <code>ViewModel</code> 和 <code>SavedStateHandle</code>，但它们本身也具有复杂性：序列化要求、手动状态恢复以及在可组合项层次结构之外管理状态的认知开销。如果我们可以拥有一个像 <code>remember{}</code> 一样工作，但又能在这些瞬时销毁后继续存在的东西，那会怎样？</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// With remember: state lost on configuration change</span>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">VideoPlayer</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">player</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">MediaPlayer</span><span class="p">()</span> <span class="p">}</span> <span class="c1">// Lost on rotation!</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// With retain: state preserved across configuration changes</span>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">VideoPlayer</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">player</span> <span class="p">=</span> <span class="n">retain</span> <span class="p">{</span> <span class="n">MediaPlayer</span><span class="p">()</span> <span class="p">}</span> <span class="c1">// Survives rotation!</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>retain{}</code> 背后的关键洞察是，状态销毁并不总是永久性的。通常，它是暂时的；内容会被重新创建，恢复之前的状态会对我们有利。这就是“RetainScope”发挥作用的地方。</p>
-
-<h2>retain{} API 及其生命周期</h2>
-
-<p>如果你检查 retain 函数签名，会发现它与 <code>remember</code> API 类似，但存在以下区别：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="n">inline</span> <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">reified</span> <span class="n">T</span><span class="p">&gt;</span> <span class="n">retain</span><span class="p">(</span><span class="n">noinline</span> <span class="n">calculation</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">T</span><span class="p">):</span> <span class="n">T</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="n">inline</span> <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">reified</span> <span class="n">T</span><span class="p">&gt;</span> <span class="n">retain</span><span class="p">(</span><span class="k">vararg</span> <span class="n">keys</span><span class="p">:</span> <span class="n">Any</span><span class="p">?,</span> <span class="n">noinline</span> <span class="n">calculation</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">T</span><span class="p">):</span> <span class="n">T</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>带有 <code>reified</code> 类型参数的 inline 修饰符无需显式类参数即可实现类型安全的保留。但真正的魔力在于其实现：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">T</span><span class="p">&gt;</span> <span class="n">retainImpl</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">RetainKeys</span><span class="p">,</span> <span class="n">calculation</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">T</span><span class="p">):</span> <span class="n">T</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">retainScope</span> <span class="p">=</span> <span class="n">LocalRetainScope</span><span class="p">.</span><span class="n">current</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">holder</span> <span class="p">=</span> <span class="n">remember</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">retainedValue</span> <span class="p">=</span> <span class="n">retainScope</span><span class="p">.</span><span class="n">getExitedValueOrDefault</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">RetainScopeMissingValue</span><span class="p">)</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">retainedValue</span> <span class="p">!==</span> <span class="n">RetainScopeMissingValue</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">RetainedValueHolder</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">key</span> <span class="p">=</span> <span class="n">key</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">value</span> <span class="p">=</span> <span class="n">@Suppress</span><span class="p">(</span><span class="s">&quot;UNCHECKED_CAST&quot;</span><span class="p">)</span> <span class="p">(</span><span class="n">retainedValue</span> <span class="k">as</span> <span class="n">T</span><span class="p">),</span>
-</span><span class='line'>                <span class="n">owner</span> <span class="p">=</span> <span class="n">retainScope</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">isNewlyRetained</span> <span class="p">=</span> <span class="k">false</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">RetainedValueHolder</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">key</span> <span class="p">=</span> <span class="n">key</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">value</span> <span class="p">=</span> <span class="n">calculation</span><span class="p">(),</span>
-</span><span class='line'>                <span class="n">owner</span> <span class="p">=</span> <span class="n">retainScope</span><span class="p">,</span>
-</span><span class='line'>                <span class="n">isNewlyRetained</span> <span class="p">=</span> <span class="k">true</span><span class="p">,</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">holder</span><span class="p">.</span><span class="n">owner</span> <span class="p">!==</span> <span class="n">retainScope</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">SideEffect</span> <span class="p">{</span> <span class="n">holder</span><span class="p">.</span><span class="n">readoptUnder</span><span class="p">(</span><span class="n">retainScope</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="k">return</span> <span class="n">holder</span><span class="p">.</span><span class="n">value</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>此实现揭示了保留的两个阶段特性：</p>
-
-<p><strong>阶段 1：记忆阶段</strong>。<code>retain{}</code> 首先使用 <code>remember{}</code> 创建一个 <code>RetainedValueHolder</code>。该持有者包装实际值并跟踪其生命周期。</p>
-
-<p><strong>阶段 2：保留阶段</strong>。当持有者离开组合时，<code>RetainScope</code> 不会立即将其丢弃，而是决定是否将其保留以备将来恢复。</p>
-
-<h2>RetainedValueHolder 和 RetainScope</h2>
-
-<p>首先，如果你仔细研究 <code>RetainedValueHolder</code> 的内部代码，你会发现它是生命周期管理发生的地方。它实现了 <code>RememberObserver</code> 接口，以便与 Compose 的生命周期挂钩：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">internal</span> <span class="k">class</span> <span class="nc">RetainedValueHolder</span><span class="p">&lt;</span><span class="k">out</span> <span class="n">T</span><span class="p">&gt;</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">(</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">value</span><span class="p">:</span> <span class="n">T</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">owner</span><span class="p">:</span> <span class="n">RetainScope</span><span class="p">,</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">isNewlyRetained</span><span class="p">:</span> <span class="n">Boolean</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">RememberObserver</span> <span class="p">{</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onRemembered</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">value</span> <span class="k">is</span> <span class="n">RetainObserver</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">isNewlyRetained</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">isNewlyRetained</span> <span class="p">=</span> <span class="k">false</span>
-</span><span class='line'>                <span class="n">value</span><span class="p">.</span><span class="n">onRetained</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>            <span class="n">value</span><span class="p">.</span><span class="n">onEnteredComposition</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onForgotten</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">owner</span><span class="p">.</span><span class="n">isKeepingExitedValues</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">owner</span><span class="p">.</span><span class="n">saveExitingValue</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">value</span> <span class="k">is</span> <span class="n">RetainObserver</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">value</span><span class="p">.</span><span class="n">onExitedComposition</span><span class="p">()</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(!</span><span class="n">owner</span><span class="p">.</span><span class="n">isKeepingExitedValues</span><span class="p">)</span> <span class="n">value</span><span class="p">.</span><span class="n">onRetired</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onAbandoned</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">owner</span><span class="p">.</span><span class="n">isKeepingExitedValues</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">value</span> <span class="k">is</span> <span class="n">RetainObserver</span><span class="p">)</span> <span class="n">value</span><span class="p">.</span><span class="n">onRetained</span><span class="p">()</span>
-</span><span class='line'>            <span class="n">owner</span><span class="p">.</span><span class="n">saveExitingValue</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">value</span> <span class="k">is</span> <span class="n">RetainObserver</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">value</span><span class="p">.</span><span class="n">onUnused</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>重要的一点是，该持有者会拦截组合生命周期事件并将其转换为保留事件。当 <code>onForgotten()</code> 被调用时（值离开组合），它会检查 <code>RetainScope</code> 是否保留了已退出的值。如果是，它会保存该值以供将来恢复，而不是丢弃它。</p>
-
-<p><code>RetainScope</code> 是保留系统的核心概念。它管理何时保留值、如何存储它们以及何时恢复或退出它们。让我们来看看它的细节：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">public</span> <span class="k">abstract</span> <span class="k">class</span> <span class="nc">RetainScope</span> <span class="p">:</span> <span class="n">RetainStateProvider</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">protected</span> <span class="k">var</span> <span class="py">keepExitedValuesRequests</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">0</span>
-</span><span class='line'>        <span class="k">private</span> <span class="k">set</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">final</span> <span class="k">override</span> <span class="k">val</span> <span class="py">isKeepingExitedValues</span><span class="p">:</span> <span class="n">Boolean</span>
-</span><span class='line'>        <span class="k">get</span><span class="p">()</span> <span class="p">=</span> <span class="n">keepExitedValuesRequests</span> <span class="p">&gt;</span> <span class="m">0</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">public</span> <span class="k">abstract</span> <span class="k">fun</span> <span class="nf">getExitedValueOrDefault</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">defaultIfAbsent</span><span class="p">:</span> <span class="n">Any</span><span class="p">?):</span> <span class="n">Any</span><span class="p">?</span>
-</span><span class='line'>    <span class="k">protected</span> <span class="k">abstract</span> <span class="k">fun</span> <span class="nf">saveExitingValue</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">Any</span><span class="p">?)</span>
-</span><span class='line'>    <span class="k">protected</span> <span class="k">abstract</span> <span class="k">fun</span> <span class="nf">onStartKeepingExitedValues</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">protected</span> <span class="k">abstract</span> <span class="k">fun</span> <span class="nf">onStopKeepingExitedValues</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>作用域有两种运行模式：</p>
-
-<ol>
-<li><strong>普通模式</strong> (<code>isKeepingExitedValues = false</code>)：值离开组合时会被丢弃，就像 <code>remember{}</code> 一样。</li>
-<li><strong>保留模式</strong> (<code>isKeepingExitedValues = true</code>)：值退出时会被保留，以便将来恢复。</li>
-</ol>
-
-
-<p>那么，保留生命周期是如何运作的呢？通过原始源代码中嵌入的图表可以最好地理解保留生命周期：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>┌──────────────────────┐
-</span><span class='line'>│                      │
-</span><span class='line'>│ retain<span class="o">(</span>keys<span class="o">)</span> <span class="o">{</span> ... <span class="o">}</span> │
-</span><span class='line'>│        ┌────────────┐│
-</span><span class='line'>└────────┤  value: T  ├┘
-</span><span class='line'>         └──┬─────────┘
-</span><span class='line'>            │   ▲
-</span><span class='line'>        Exit│   │Enter
-</span><span class='line'> composition│   │composition
-</span><span class='line'>   or change│   │
-</span><span class='line'>        keys│   │                         ┌──────────────────────────┐
-</span><span class='line'>            │   ├───No retained value─────┤   calculation: <span class="o">()</span> -&gt; T   │
-</span><span class='line'>            │   │   or different keys     └──────────────────────────┘
-</span><span class='line'>            │   │                         ┌──────────────────────────┐
-</span><span class='line'>            │   └───Re-enter composition──┤    Local RetainScope     │
-</span><span class='line'>            │       with the same keys    └─────────────────┬────────┘
-</span><span class='line'>            │                                           ▲   │
-</span><span class='line'>            │                      ┌─Yes────────────────┘   │ value not
-</span><span class='line'>            │                      │                        │ restored and
-</span><span class='line'>            │   .──────────────────┴──────────────────.     │ scope stops
-</span><span class='line'>            └─▶<span class="o">(</span>   RetainScope.isKeepingExitedValues   <span class="o">)</span>    │ keeping exited
-</span><span class='line'>                <span class="sb">`</span>──────────────────┬──────────────────<span class="err">&#39;</span>     │ values
-</span><span class='line'>                                   │                        ▼
-</span><span class='line'>                                   │      ┌──────────────────────────┐
-</span><span class='line'>                                   └─No──▶│     value is retired     │
-</span><span class='line'>                                          └──────────────────────────┘
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>此流程揭示了几个关键的见解：</p>
-
-<ol>
-<li><strong>保留是有条件的</strong>：只有当 <code>isKeepingExitedValues</code> 为 <code>true</code> 时，值才会被保留。</li>
-<li><strong>键很重要</strong>：即使在保留期间，更改的键也会导致立即退出。</li>
-<li><strong>恢复是自动的</strong>：当内容使用相同的键重新输入时，保留的值将被恢复。</li>
-<li><strong>退出是最终的</strong>：保留停止时未恢复的值将被退出。</li>
-</ol>
-
-
-<h2>ControlledRetainScope：可变实现</h2>
-
-<p>虽然 <code>RetainScope</code> 提供了抽象，但 <code>ControlledRetainScope</code> 才是主要的实现：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">public</span> <span class="k">class</span> <span class="nc">ControlledRetainScope</span> <span class="p">:</span> <span class="n">RetainScope</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">keptExitedValues</span> <span class="p">=</span> <span class="n">SafeMultiValueMap</span><span class="p">&lt;</span><span class="n">Any</span><span class="p">,</span> <span class="n">Any</span><span class="p">?&gt;()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">saveExitingValue</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">value</span><span class="p">:</span> <span class="n">Any</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">keptExitedValues</span><span class="p">.</span><span class="n">add</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">@Suppress</span><span class="p">(</span><span class="s">&quot;UNCHECKED_CAST&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">getExitedValueOrDefault</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">defaultIfAbsent</span><span class="p">:</span> <span class="n">Any</span><span class="p">?):</span> <span class="n">Any</span><span class="p">?</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">keptExitedValues</span><span class="p">.</span><span class="n">removeLast</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">defaultIfAbsent</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onStopKeepingExitedValues</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">keptExitedValues</span><span class="p">.</span><span class="n">forEachValue</span> <span class="p">{</span> <span class="n">value</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">value</span> <span class="k">is</span> <span class="n">RetainObserver</span><span class="p">)</span> <span class="n">value</span><span class="p">.</span><span class="n">onRetired</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="n">keptExitedValues</span><span class="p">.</span><span class="n">clear</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>该实现使用 <code>SafeMultiValueMap</code> 进行存储是一个重要的设计选择。为什么？因为多个 retain 调用可以具有相同的键：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">Example</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// Both have the same positional key!</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">value1</span> <span class="p">=</span> <span class="n">retain</span> <span class="p">{</span> <span class="s">&quot;First&quot;</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">value2</span> <span class="p">=</span> <span class="n">retain</span> <span class="p">{</span> <span class="s">&quot;Second&quot;</span> <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>该映射按 LIFO（后进先出）顺序存储每个键的值。恢复时，<code>removeLast()</code> 确保值按其存储的相反顺序恢复，从而保持 retain 调用与其值之间的正确配对。</p>
-
-<p>此外，<code>ControlledRetainScope</code> 支持嵌套在父级 <code>RetainStateProvider</code> 下：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">setParentRetainStateProvider</span><span class="p">(</span><span class="n">parent</span><span class="p">:</span> <span class="n">RetainStateProvider</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">oldParent</span> <span class="p">=</span> <span class="n">parentScope</span>
-</span><span class='line'>    <span class="n">parentScope</span> <span class="p">=</span> <span class="n">parent</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">parent</span><span class="p">.</span><span class="n">addRetainStateObserver</span><span class="p">(</span><span class="n">parentObserver</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">oldParent</span><span class="p">.</span><span class="n">removeRetainStateObserver</span><span class="p">(</span><span class="n">parentObserver</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">parent</span><span class="p">.</span><span class="n">isKeepingExitedValues</span><span class="p">)</span> <span class="n">startKeepingExitedValues</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">oldParent</span><span class="p">.</span><span class="n">isKeepingExitedValues</span><span class="p">)</span> <span class="n">stopKeepingExitedValues</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这支持有序的层次结构，其中子作用域从父级继承保留状态。你可以利用此功能使所有 <code>RetainScopes</code> 在配置更改期间保留，根作用域会检测到配置更改，并沿层次结构向下级联保留。</p>
-
-<h2>RetainObserver：保留对象的生命周期回调</h2>
-
-<p>需要了解其保留生命周期的对象需要实现 <code>RetainObserver</code>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Suppress</span><span class="p">(</span><span class="s">&quot;CallbackName&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="k">public</span> <span class="n">interface</span> <span class="n">RetainObserver</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">public</span> <span class="k">fun</span> <span class="nf">onRetained</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Successfully retained</span>
-</span><span class='line'>    <span class="k">public</span> <span class="k">fun</span> <span class="nf">onEnteredComposition</span><span class="p">()</span> <span class="c1">// Entered composition</span>
-</span><span class='line'>    <span class="k">public</span> <span class="k">fun</span> <span class="nf">onExitedComposition</span><span class="p">()</span>  <span class="c1">// Exited composition</span>
-</span><span class='line'>    <span class="k">public</span> <span class="k">fun</span> <span class="nf">onRetired</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// No longer retained</span>
-</span><span class='line'>    <span class="k">public</span> <span class="k">fun</span> <span class="nf">onUnused</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Created but never used</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这些回调实现了 <code>remember{}</code> 无法实现的资源管理模式。设想一个媒体播放器，当屏幕未显示时应该暂停，但如果可能再次显示，则不应释放资源：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">RetainableMediaPlayer</span> <span class="p">:</span> <span class="n">RetainObserver</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">player</span><span class="p">:</span> <span class="n">MediaPlayer</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onRetained</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">player</span> <span class="p">=</span> <span class="n">MediaPlayer</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onEnteredComposition</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">player</span><span class="o">?.</span><span class="n">play</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onExitedComposition</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">player</span><span class="o">?.</span><span class="n">pause</span><span class="p">()</span> <span class="c1">// Just pause, don&#39;t release</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onRetired</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">player</span><span class="o">?.</span><span class="n">release</span><span class="p">()</span> <span class="c1">// Now we can release</span>
-</span><span class='line'>        <span class="n">player</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onUnused</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// Never entered composition, clean up</span>
-</span><span class='line'>        <span class="n">player</span><span class="o">?.</span><span class="n">release</span><span class="p">()</span>
-</span><span class='line'>        <span class="n">player</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>还应记住，回调遵循严格的顺序保证。当多个 <code>RetainObserver</code> 同时进入组合状态时，它们的 <code>onEnteredComposition</code> 回调将按顺序触发。退出时，<code>onExitedComposition</code> 将按相反顺序触发<strong>，</strong>以确保正确清理嵌套资源。</p>
-
-<h2>RememberObserver 限制</h2>
-
-<p>你可以在 <code>RetainedValueHolder</code> 中找到一个有趣的安全检查：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">init</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">value</span> <span class="k">is</span> <span class="n">RememberObserver</span> <span class="p">&amp;&amp;</span> <span class="n">value</span> <span class="p">!</span><span class="k">is</span> <span class="n">RetainObserver</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">throw</span> <span class="n">IllegalArgumentException</span><span class="p">(</span>
-</span><span class='line'>            <span class="s">&quot;Retained a value that implements RememberObserver but not RetainObserver. &quot;</span> <span class="p">+</span>
-</span><span class='line'>            <span class="s">&quot;To receive the correct callbacks, the retained value &#39;$value&#39; must also &quot;</span> <span class="p">+</span>
-</span><span class='line'>            <span class="s">&quot;implement RetainObserver.&quot;</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>为什么有这个限制？<code>RememberObserver</code> 回调（<code>onRemembered</code>、<code>onForgotten</code>、<code>onAbandoned</code>）与保留语义不一致。暂时脱离组合的保留值不会被“遗忘”，而是处于不确定状态，可能会再次返回。使用 <code>RememberObserver</code> 会导致错误的生命周期回调，因此库强制使用 <code>RetainObserver</code>。</p>
-
-<h2>RetainedEffect：保留后仍存在的副作用</h2>
-
-<p><code>RetainedEffect</code> 将保留的概念扩展到副作用：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">RetainedEffect</span><span class="p">(</span><span class="n">key1</span><span class="p">:</span> <span class="n">Any</span><span class="p">?,</span> <span class="n">effect</span><span class="p">:</span> <span class="n">RetainedEffectScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">RetainedEffectResult</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">retain</span><span class="p">(</span><span class="n">key1</span><span class="p">)</span> <span class="p">{</span> <span class="n">RetainedEffectImpl</span><span class="p">(</span><span class="n">effect</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">private</span> <span class="k">class</span> <span class="nc">RetainedEffectImpl</span><span class="p">(</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">effect</span><span class="p">:</span> <span class="n">RetainedEffectScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">RetainedEffectResult</span>
-</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">RetainObserver</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">onRetire</span><span class="p">:</span> <span class="n">RetainedEffectResult</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onRetained</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">onRetire</span> <span class="p">=</span> <span class="n">InternalRetainedEffectScope</span><span class="p">.</span><span class="n">effect</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onRetired</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">onRetire</span><span class="o">?.</span><span class="n">retire</span><span class="p">()</span>
-</span><span class='line'>        <span class="n">onRetire</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Other callbacks are no-ops</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>实现非常简单：它将 effect 包装在一个 <code>RetainObserver</code> 中，该 <code>RetainObserver</code> 在保留时执行 effect，并在退出时进行清理。与 DisposableEffect 不同，DisposableEffect 在离开组合时运行其处置，而 RetainedEffect 仅在真正退出时处置：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">VideoPlayer</span><span class="p">(</span><span class="n">mediaUri</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">player</span> <span class="p">=</span> <span class="n">retain</span><span class="p">(</span><span class="n">mediaUri</span><span class="p">)</span> <span class="p">{</span> <span class="n">MediaPlayer</span><span class="p">(</span><span class="n">mediaUri</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// DisposableEffect would dispose on every hide/show</span>
-</span><span class='line'>    <span class="c1">// RetainedEffect only disposes when truly done</span>
-</span><span class='line'>    <span class="n">RetainedEffect</span><span class="p">(</span><span class="n">player</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">player</span><span class="p">.</span><span class="n">initialize</span><span class="p">()</span>
-</span><span class='line'>        <span class="n">onRetire</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">player</span><span class="p">.</span><span class="n">close</span><span class="p">()</span> <span class="c1">// Only called when player is retired</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这是一个很好的例子，说明在短暂的 UI 变化期间不应重新创建昂贵的资源。</p>
-
-<h2>RetainedContentHost 和 RetainScopeHolder</h2>
-
-<p><code>compose-runtime-retain</code> 库提供了基于这些原语构建的更高级别的抽象。<code>RetainedContentHost</code> 管理显示/隐藏场景：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">public</span> <span class="k">fun</span> <span class="nf">RetainedContentHost</span><span class="p">(</span><span class="n">active</span><span class="p">:</span> <span class="n">Boolean</span><span class="p">,</span> <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">retainScope</span> <span class="p">=</span> <span class="n">retainControlledRetainScope</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">active</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">LocalRetainScope</span> <span class="n">provides</span> <span class="n">retainScope</span><span class="p">,</span> <span class="n">content</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">val</span> <span class="py">composer</span> <span class="p">=</span> <span class="n">currentComposer</span>
-</span><span class='line'>        <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">retainScope</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">val</span> <span class="py">cancellationHandle</span> <span class="p">=</span>
-</span><span class='line'>                <span class="k">if</span> <span class="p">(</span><span class="n">retainScope</span><span class="p">.</span><span class="n">keepExitedValuesRequestsFromSelf</span> <span class="p">&gt;</span> <span class="m">0</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">composer</span><span class="p">.</span><span class="n">scheduleFrameEndCallback</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">retainScope</span><span class="p">.</span><span class="n">stopKeepingExitedValues</span><span class="p">()</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="k">null</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>            <span class="n">onDispose</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">cancellationHandle</span><span class="o">?.</span><span class="n">cancel</span><span class="p">()</span>
-</span><span class='line'>                <span class="n">retainScope</span><span class="p">.</span><span class="n">startKeepingExitedValues</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>该实现揭示了一些时间控制：</p>
-
-<p><strong>变为活动状态</strong>：安排在帧结束时停止保留，确保所有内容都首先恢复其值。</p>
-
-<p><strong>变为非活动状态</strong>：在内容被移除之前立即开始保留。</p>
-
-<p>这确保了值在需要时被准确保留，不会太早（这会阻止恢复），也不会太晚（这会丢失值）。</p>
-
-<p>对于列表等动态内容，<code>RetainScopeHolder</code> 负责管理每个项目的保留：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">public</span> <span class="k">class</span> <span class="nc">RetainScopeHolder</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">childScopes</span> <span class="p">=</span> <span class="n">MutableScatterMap</span><span class="p">&lt;</span><span class="n">Any</span><span class="p">?,</span> <span class="n">ControlledRetainScope</span><span class="p">&gt;()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="k">public</span> <span class="k">fun</span> <span class="nf">getOrCreateRetainScopeForChild</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">?):</span> <span class="n">RetainScope</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">childScopes</span><span class="p">.</span><span class="n">getOrPut</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">ControlledRetainScope</span><span class="p">().</span><span class="n">apply</span> <span class="p">{</span>
-</span><span class='line'>                <span class="k">if</span> <span class="p">(</span><span class="n">isParentKeepingExitedValues</span><span class="p">)</span> <span class="n">startKeepingExitedValues</span><span class="p">()</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">@Composable</span>
-</span><span class='line'>    <span class="k">public</span> <span class="k">fun</span> <span class="nf">RetainScopeProvider</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">?,</span> <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">CompositionLocalProvider</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">LocalRetainScope</span> <span class="n">provides</span> <span class="n">getOrCreateRetainScopeForChild</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">content</span><span class="p">()</span>
-</span><span class='line'>            <span class="n">PresenceIndicator</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">@Composable</span>
-</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">PresenceIndicator</span><span class="p">(</span><span class="n">key</span><span class="p">:</span> <span class="n">Any</span><span class="p">?)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">composer</span> <span class="p">=</span> <span class="n">currentComposer</span>
-</span><span class='line'>        <span class="n">DisposableEffect</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">val</span> <span class="py">endRetainHandle</span> <span class="p">=</span>
-</span><span class='line'>                <span class="k">if</span> <span class="p">(</span><span class="n">keepExitedValuesRequestsFor</span><span class="p">(</span><span class="n">key</span><span class="p">)</span> <span class="p">&gt;</span> <span class="m">0</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">composer</span><span class="p">.</span><span class="n">scheduleFrameEndCallback</span> <span class="p">{</span>
-</span><span class='line'>                        <span class="n">stopKeepingExitedValues</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class='line'>                    <span class="p">}</span>
-</span><span class='line'>                <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="k">null</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="n">onDispose</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">endRetainHandle</span><span class="o">?.</span><span class="n">cancel</span><span class="p">()</span>
-</span><span class='line'>                <span class="n">startKeepingExitedValues</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>PresenceIndicator</code> 可组合项是一种巧妙的模式。它按组合顺序放置在内容<strong>之后</strong>，以确保正确的生命周期管理。移除时，它会触发保留。添加时，它会安排在帧完成后停止保留。</p>
-
-<h2>内存和性能考量</h2>
-
-<p>该实现中进行了值得理解的权衡：</p>
-
-<p><strong>内存优先于 CPU</strong>：保留值在内存中保留的时间比 <code>remember{}</code> 更长。这用内存换取了重新创建时的 CPU 开销。对于开销较大的对象（例如位图、媒体播放器），这通常是值得的。</p>
-
-<p><strong>O(n) 范围操作</strong>：查找要恢复或退出的值需要迭代存储的值。对于包含数十个保留值的典型用例，这可以忽略不计。</p>
-
-<p><strong>惰性分配</strong>：仅在需要时分配缓冲区和存储空间。未使用的 <code>RetainScope</code> 开销极小。</p>
-
-<p><strong>通过具体化实现类型安全</strong>：内联/具体化模式消除了运行时类型检查的需要，同时保持了类型安全。</p>
-
-<p><strong>默认为组合范围</strong>：与 ViewModel（应用范围）或 rememberSaveable（Activity范围）不同，retain 是组合范围的，可以对保留边界进行细粒度的控制。</p>
-
-<p>另外，需要注意的是，不要将长期存活的对象保留在其预期作用域之外，以免造成内存泄漏，正如 Compose 库中的以下注释所示。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="cm">/**</span>
-</span><span class='line'><span class="cm"> * 重要提示：保留值的保存时间比其所关联的可组合项的生命周期长。</span>
-</span><span class='line'><span class="cm"> * 如果保留对象的保存时间超过其预期的</span>
-</span><span class='line'><span class="cm"> * 生命周期，则可能导致内存泄漏。请谨慎选择保留的数据类型。切勿保留 Android 上下文或</span>
-</span><span class='line'><span class="cm"> * 直接或间接引用上下文（包括视图）的对象。</span>
-</span><span class='line'><span class="cm"> */</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>测试保留机制</h2>
-
-<p>一个有趣的<a href="https://github.com/androidx/androidx/blob/942319dfe9d751390febcef640d43290886f1a0b/compose/runtime/runtime-retain/src/commonTest/kotlin/androidx/compose/runtime/retain/RetainTests.kt#L866">内部单元测试用例</a> 表明，该库可以处理边缘情况并保证：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Test</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">retain_duplicateRetainKeys</span><span class="p">()</span> <span class="p">=</span> <span class="n">compositionTest</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">scope</span> <span class="p">=</span> <span class="n">ControlledRetainScope</span><span class="p">().</span><span class="n">apply</span> <span class="p">{</span> <span class="n">startKeepingExitedValues</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">showContent</span> <span class="p">=</span> <span class="k">true</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">compose</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">CompositionLocalProvider</span><span class="p">(</span><span class="n">value</span> <span class="p">=</span> <span class="n">LocalRetainScope</span> <span class="n">provides</span> <span class="n">scope</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">showContent</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="c1">// All have same key!</span>
-</span><span class='line'>                <span class="n">retain</span> <span class="p">{</span> <span class="n">CountingRetainObject</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>                <span class="n">retain</span> <span class="p">{</span> <span class="n">CountingRetainObject</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>                <span class="n">retain</span> <span class="p">{</span> <span class="n">CountingRetainObject</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// Hide and show content</span>
-</span><span class='line'>    <span class="n">showContent</span> <span class="p">=</span> <span class="k">false</span>
-</span><span class='line'>    <span class="n">recomposeScope</span><span class="p">.</span><span class="n">invalidate</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">advance</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">showContent</span> <span class="p">=</span> <span class="k">true</span>
-</span><span class='line'>    <span class="n">recomposeScope</span><span class="p">.</span><span class="n">invalidate</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">advance</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// All values correctly restored despite duplicate keys</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>测试验证了即使存在重复的键（在循环或生成的内容中很常见），值也能通过后进先出 (LIFO) 顺序与其保留调用正确配对。</p>
-
-<h2>结论</h2>
-
-<p>在本文中，我们探索了 <code>retain{}</code>、<code>RetainScope</code>、<code>RetainObserver</code> 和 <code>RetainedEffect</code> API 的工作原理及其内部机制。了解这些内部机制有助于我们更好地决定何时使用 <code>retain{}</code>、<code>remember{}</code> 和 <code>rememberSaveable{}</code>，如何构建保留资源，以及预期的性能特征。</p>
-
-<p>无论是构建可旋转的视频播放器、保留滚动位置的导航系统，还是在配置更改后保持状态的复杂表单，<code>retain{}</code> 都能在 Jetpack Compose 中提供基于作用域的状态保存功能。</p>
-
-<p>如果你想了解最新的技能、新闻、技术文章、面试问题和实用代码技巧，请查看 <a href="https://github.com/doveletter/">Dove Letter</a>。如果你想深入了解面试准备，千万不要错过终极 Android 面试指南：<a href="https://www.android.skydoves.me/">Manifest Android Interview</a>。</p>
 ]]></content>
   </entry>
   

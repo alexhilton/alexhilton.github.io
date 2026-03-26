@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-03-20T12:22:25+00:00</updated>
+  <updated>2026-03-26T12:14:00+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,534 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[深度解析Compose中的BoxWithConstraints]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose/"/>
+    <updated>2026-03-26T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「BoxWithConstraints in Jetpack Compose: The Complete Deep Dive」，原文链接<a href="https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7">https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7</a>，由Sehaj kahlon发布于2026年2月15日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*MLsQmsCtobQD5EhMRB1jFg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>关键点：这个组件存在的意义是什么？</h2>
+
+<p>让我来描述一下你可能经历过的场景。</p>
+
+<p>你正在构建一个卡片组件。在手机上，它应该垂直堆叠：图片在上，文字在下。在平板电脑上，它应该水平拉伸：图片在左，文字在右。需求很简单，对吧？</p>
+
+<p>你的第一反应可能是：</p>
+
+<pre><code class="kotlin">@Composable
+fun AdaptiveCard() {
+    val configuration = LocalConfiguration.current
+    if (configuration.screenWidthDp &lt; 600) {
+        VerticalCard()
+    } else {
+        HorizontalCard()
+    }
+}
+</code></pre>
+
+<p><strong>这种方法存在缺陷。</strong> 原因如下。</p>
+
+<p><code>LocalConfiguration.current.screenWidthDp</code> 返回的是屏幕宽度。但如果你的卡片位于 <code>NavigationRail</code> 中呢？或者在分屏应用中？或者在 ChromeOS 的可调整大小的窗口中呢？你的卡片并不关心屏幕大小——它只关心<strong>实际分配给它的空间</strong>。</p>
+
+<p>这就是 <code>BoxWithConstraints</code> 解决的根本问题：<strong>它告诉你父元素分配给你的空间大小，而不是屏幕大小。</strong></p>
+
+<p>可以这样理解：</p>
+
+<ul>
+<li><p><code>LocalConfiguration</code> = &ldquo;房间有多大？&rdquo;</p></li>
+<li><p><code>BoxWithConstraints</code> = &ldquo;你把我放在的盒子有多大？&rdquo;</p></li>
+</ul>
+
+
+<p>相框并不关心你的房子有多大。它只关心分配给它的墙面空间。</p>
+
+<h2>内部机制：底层工作原理</h2>
+
+<h3>Compose 执行模型（以及 BoxWithConstraints 为何会破坏它）</h3>
+
+<p>要理解 <code>BoxWithConstraints</code>，你必须首先了解 Compose 的执行流程：</p>
+
+<pre><code class="bash">Composition → Measurement → Layout → Drawing
+</code></pre>
+
+<p>在标准的 Compose 代码中：</p>
+
+<ol>
+<li><p><strong>组合</strong>：你声明 UI 树（<code>Column { Text("Hello") }</code>）</p></li>
+<li><p><strong>测量</strong>：系统测量每个节点</p></li>
+<li><p><strong>布局</strong>：节点定位</p></li>
+<li><p><strong>绘制</strong>：像素绘制到屏幕上</p></li>
+</ol>
+
+
+<p>这个顺序<strong>不可更改</strong>。组合先于测量。你无法测量尚未组合的内容。</p>
+
+<p>但是 <code>BoxWithConstraints</code> 提出了一个不寻常的问题：<em>“我能否在决定组合内容之前就知道我的约束条件？”</em></p>
+
+<p>这就像要求厨师在烹饪之前先摆盘一样。</p>
+
+<h2>引入子组合：Compose 的延迟组合机制</h2>
+
+<p><code>BoxWithConstraints</code> 通过<strong>子组合</strong>实现此功能，该机制将组合操作延迟到测量时执行。</p>
+
+<p>以下是实际实现（为清晰起见已简化）：</p>
+
+<pre><code class="kotlin">@Composable
+fun BoxWithConstraints(
+    modifier: Modifier = Modifier,
+    contentAlignment: Alignment = Alignment.TopStart,
+    propagateMinConstraints: Boolean = false,
+    content: @Composable BoxWithConstraintsScope.() -&gt; Unit,
+) {
+    SubcomposeLayout(modifier) { constraints -&gt;
+        // We're NOW in the measurement phase, but we can compose!
+        val scope = BoxWithConstraintsScopeImpl(this, constraints)
+        val measurables = subcompose(Unit) { scope.content() }
+
+        // Standard Box measurement logic follows...
+        with(measurePolicy) { measure(measurables, constraints) }
+    }
+}
+</code></pre>
+
+<p>关键在于 <code>SubcomposeLayout</code>。它反转了正常的流程：</p>
+
+<pre><code class="bash">Normal:
+
+Composition → Measurement
+Subcompose: Measurement → Composition (of children) → Measurement (of children)
+</code></pre>
+
+<p>当父元素请求 <code>BoxWithConstraints</code> 测量自身时，它会：</p>
+
+<ol>
+<li><p>接收约束条件</p></li>
+<li><p><strong>创建一个包含这些约束条件的作用域</strong></p></li>
+<li><p><strong>此时组合子元素</strong></p></li>
+<li><p>测量已组合的子元素</p></li>
+<li><p>返回测量结果</p></li>
+</ol>
+
+
+<p>这就是为什么 <code>BoxWithConstraints</code> 被认为是“重量级”的原因。它在测量阶段执行组合操作。</p>
+
+<h2>三层节点架构</h2>
+
+<p>在内部，<code>SubcomposeLayout</code> 将子节点分为三个不同的区域进行管理：</p>
+
+<pre><code class="bash">[Active nodes] [Reusable nodes] [Precomposed nodes]
+     ↑
+
+     ↑
+
+     ↑
+  Currently
+
+  "Recycled"
+
+  Pre-composed
+    used
+
+    for reuse
+
+    ahead of time
+</code></pre>
+
+<p><strong>活动节点</strong>：当前测量阶段正在使用的插槽。</p>
+
+<p><strong>可重用节点</strong>：之前已激活但仍保留的插槽（类似于 RecyclerView 的可回收视图）。当需要类似内容时，这些插槽会被“重新激活”，而不是创建新的组合。</p>
+
+<p><strong>预组合节点</strong>：通过 <code>precompose()</code> 预先组合的插槽（惰性列表内部使用此功能在即将显示的项目可见之前进行组合）。</p>
+
+<p>正是这种架构使得 <code>LazyColumn</code> 能够流畅滚动。它不会创建和销毁组合，而是在这三个节点池之间进行节点的轮换。</p>
+
+<h2>约束：深入解析</h2>
+
+<p>在 <code>BoxWithConstraintsScope</code> 中，你可以访问四个属性：</p>
+
+<pre><code class="kotlin">interface BoxWithConstraintsScope : BoxScope {
+    val minWidth: Dp
+    val maxWidth: Dp
+    val minHeight: Dp
+    val maxHeight: Dp
+    val constraints: Constraints  // The raw pixel-based constraints
+}
+</code></pre>
+
+<h3>这些属性的实际含义是什么？</h3>
+
+<p><code>**maxWidth**</code> <strong>/</strong> <code>**maxHeight**</code>：父元素提供的最大空间。如果为 <code>Dp.Infinity</code>，则表示父元素允许你“随意使用”（通常来自可滚动容器）。</p>
+
+<p><code>**minWidth**</code> <strong>/</strong> <code>**minHeight**</code>：父元素期望的最小高度。通常为 <code>0.dp</code>，但如果父元素使用了 <code>propagateMinConstraints = true</code> 或你使用的是基于 <code>weight</code> 的布局，则该值可能不为零。</p>
+
+<h2>屏幕尺寸陷阱</h2>
+
+<pre><code class="kotlin">BoxWithConstraints {
+    // These are NOT the screen dimensions!
+    val width = maxWidth   // Space YOUR PARENT gave YOU
+    val height = maxHeight // Space YOUR PARENT gave YOU
+}
+</code></pre>
+
+<p>考虑以下层级结构：</p>
+
+<pre><code class="kotlin">Row(Modifier.fillMaxSize()) {
+    NavigationRail { /* 80.dp wide */ }
+    BoxWithConstraints(Modifier.weight(1f)) {
+        // maxWidth here is (screenWidth - 80.dp)
+        // NOT screenWidth!
+    }
+}
+</code></pre>
+
+<p>这正是 <code>BoxWithConstraints</code> 存在的意义。<code>LocalConfiguration</code> 会给出错误的答案。</p>
+
+<h2>有界约束与无界约束</h2>
+
+<p>这里有一个容易引起混淆的细微差别：</p>
+
+<pre><code class="kotlin">LazyColumn {
+    item {
+        BoxWithConstraints {
+            // maxHeight == Dp.Infinity !!!
+            // Because LazyColumn offers infinite vertical space
+        }
+
+        }
+</code></pre>
+
+<p><code>maxHeight</code> 的值为 <code>Infinity</code>，因为 <code>LazyColumn</code> 不会限制其子元素的高度，它会滚动。这是预期行为，但这意味着你不能在可滚动容器内使用 <code>maxHeight</code> 来进行响应式布局。</p>
+
+<h2>实际用例</h2>
+
+<h3>用例 1：响应式卡片布局</h3>
+
+<p>此卡片会根据<strong>可用空间</strong>（而非屏幕方向）在垂直和水平布局之间切换：</p>
+
+<pre><code class="kotlin">@Composable
+fun ResponsiveProductCard(
+    imageUrl: String,
+    title: String,
+    description: String,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(modifier = modifier) {
+        val isWide = maxWidth &gt; 400.dp
+
+        if (isWide) {
+            // Horizontal layout: image left, text right
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .weight(0.4f)
+                        .aspectRatio(1f)
+                )
+                Column(
+                    modifier = Modifier.weight(0.6f),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(title, style = MaterialTheme.typography.headlineSmall)
+                    Spacer(Modifier.height(8.dp))
+                    Text(description, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        } else {
+            // Vertical layout: image top, text bottom
+            Column {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(title, style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(4.dp))
+                Text(description, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+    }
+}
+</code></pre>
+
+<p><strong>为什么这比检查屏幕尺寸更好</strong>：将此卡片放入双列网格中，即使在平板电脑上，它也会自动显示垂直布局。它真正实现了对<em>其</em>容器的响应式布局。</p>
+
+<h3>用例 2：动态文本大小</h3>
+
+<p>自动调整文本大小以适应可用宽度：</p>
+
+<pre><code class="kotlin">@Composable
+fun AutoSizeTitle(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(modifier = modifier) {
+        val fontSize = when {
+            maxWidth &lt; 200.dp -&gt; 14.sp
+            maxWidth &lt; 300.dp -&gt; 18.sp
+            maxWidth &lt; 400.dp -&gt; 24.sp
+            else -&gt; 32.sp
+        }
+
+        Text(
+            text = text,
+            fontSize = fontSize,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+</code></pre>
+
+<h3>用例 3：基于宽度的网格项数</h3>
+
+<p>动态计算网格列数：</p>
+
+<pre><code class="kotlin">@Composable
+fun AdaptiveGrid(
+    items: List&lt;Item&gt;,
+    modifier: Modifier = Modifier
+) {
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val columns = maxOf(1, (maxWidth / 160.dp).toInt())
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(items) { item -&gt;
+                GridItem(item)
+            }
+        }
+    }
+}
+</code></pre>
+
+<h2>性能陷阱和最佳实践</h2>
+
+<h3>何时不应使用 BoxWithConstraints</h3>
+
+<p><strong>1. 当一个简单的修饰符就足够时</strong></p>
+
+<pre><code class="kotlin">// ❌ Overkill
+BoxWithConstraints {
+    Box(Modifier.size(maxWidth * 0.5f, maxHeight * 0.5f))
+}
+</code></pre>
+
+<pre><code class="kotlin">// ✅ Just use fillMaxSize with a fraction
+Box(Modifier.fillMaxSize(0.5f))
+</code></pre>
+
+<p><strong>2. 当你只是检查屏幕方向时</strong></p>
+
+<pre><code class="kotlin">// ❌ Using BoxWithConstraints for screen-level decisions
+BoxWithConstraints {
+    if (maxWidth &gt; maxHeight) LandscapeLayout() else PortraitLayout()
+}
+</code></pre>
+
+<pre><code class="kotlin">// ✅ Use LocalConfiguration for screen-level decisions
+val configuration = LocalConfiguration.current
+if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+    LandscapeLayout()
+} else {
+    PortraitLayout()
+}
+</code></pre>
+
+<p><strong>3.在 LazyColumn/LazyRow 元素内部</strong></p>
+
+<p>这是一个常见的错误：</p>
+
+<pre><code class="kotlin">// ❌ Performance issue
+LazyColumn {
+    items(1000) { index -&gt;
+        BoxWithConstraints {  // Subcomposition per item!
+            ItemContent(index)
+        }
+    }
+}
+</code></pre>
+
+<p>每个元素都会触发子组合。如果元素数量为 1000，则在滚动过程中会重复执行子组合。相反，将 <code>BoxWithConstraints</code> 提升到父级：</p>
+
+<pre><code class="kotlin">// ✅ Single subcomposition
+BoxWithConstraints {
+    val itemHeight = if (maxWidth &gt; 400.dp) 120.dp else 80.dp
+    LazyColumn {
+        items(1000) { index -&gt;
+            ItemContent(index, height = itemHeight)
+        }
+    }
+}
+</code></pre>
+
+<h2>更轻量级的替代方案</h2>
+
+<p><strong>基于百分比的尺寸：</strong></p>
+
+<pre><code class="kotlin">// Use Modifier.fillMaxWidth(fraction)
+Box(Modifier.fillMaxWidth(0.8f))
+</code></pre>
+
+<pre><code class="kotlin">// Use Modifier.weight in Row/Column
+Row {
+    Box(Modifier.weight(1f))  // 25%
+    Box(Modifier.weight(3f))  // 75%
+}For aspect ratio:
+</code></pre>
+
+<pre><code class="kotlin">Box(Modifier.aspectRatio(16f / 9f))
+</code></pre>
+
+<p><strong>不使用子组件的自定义尺寸逻辑：</strong></p>
+
+<pre><code class="kotlin">// Custom Layout is lighter than SubcomposeLayout
+Layout(
+    content = { /* your content */ }
+) { measurables, constraints -&gt;
+    // Full control over measurement without subcomposition cost
+    // But you can't make composition decisions here
+}
+</code></pre>
+
+<p><strong>窗口尺寸类（屏幕级响应式）：</strong></p>
+
+<pre><code class="kotlin">// Material3's adaptive APIs
+val windowSizeClass = calculateWindowSizeClass(activity)
+when (windowSizeClass.widthSizeClass) {
+    WindowWidthSizeClass.Compact -&gt; CompactLayout()
+    WindowWidthSizeClass.Medium -&gt; MediumLayout()
+    WindowWidthSizeClass.Expanded -&gt; ExpandedLayout()
+}
+</code></pre>
+
+<h2>重要陷阱和边界情况</h2>
+
+<h3>1. 固有尺寸不起作用</h3>
+
+<p>这将导致崩溃：</p>
+
+<pre><code class="kotlin">Row {
+    Text(
+        "Hello",
+        modifier = Modifier.height(IntrinsicSize.Min)
+    )
+    BoxWithConstraints {
+        // CRASH: "Asking for intrinsic measurements of 
+        // SubcomposeLayout layouts is not supported"
+    }
+}
+</code></pre>
+
+<p><code>SubcomposeLayout</code> 无法回答“你的固有尺寸是多少？”因为它在接收到实际约束之前无法确定要组合的内容。</p>
+
+<p><strong>解决方法</strong>：为 <code>BoxWithConstraints</code> 添加显式的大小修饰符：</p>
+
+<pre><code class="kotlin">BoxWithConstraints(Modifier.height(100.dp)) {
+    // Now intrinsic measurement isn't needed
+}
+</code></pre>
+
+<h3>2. 首次组合时序</h3>
+
+<p>在首次组合时，<code>BoxWithConstraints</code> 还没有约束。子元素会先使用占位符值进行组合，然后再使用实际约束重新组合。这意味着：</p>
+
+<ul>
+<li><p>内部的 <code>LaunchedEffect</code> 等效果可能会触发两次</p></li>
+<li><p>基于约束的初始状态计算可能需要保护</p></li>
+</ul>
+
+
+<p><strong>最佳实践</strong>：保护基于约束的逻辑：</p>
+
+<pre><code class="kotlin">BoxWithConstraints {
+    if (constraints.hasBoundedWidth) {
+        val columns = (maxWidth / 160.dp).toInt()
+        // Safe to use
+    }
+}
+</code></pre>
+
+<h3>3. 通常不需要嵌套 <code>BoxWithConstraints</code></h3>
+
+<p>如果你发现自己需要嵌套它们：</p>
+
+<pre><code class="kotlin">BoxWithConstraints {
+    BoxWithConstraints {  // Usually unnecessary
+        // ...
+    }
+}
+</code></pre>
+
+<p>内部的 <code>BoxWithConstraints</code> 具有相同的约束（除非被修改）。只需使用外部作用域即可。</p>
+
+<h3>4. 状态提升的重要性（详见此处）</h3>
+
+<p>由于测量期间内容会被子组合，因此在 <code>BoxWithConstraints</code> 内部创建的状态具有特殊的生命周期特征：</p>
+
+<pre><code class="kotlin">BoxWithConstraints {
+    // This state is created during MEASUREMENT, not composition
+    var count by remember { mutableStateOf(0) }
+
+    // If parent re-measures without recomposing, this state persists
+    // But if the slot is "recycled", it might reset
+}
+</code></pre>
+
+<p><strong>最佳实践</strong>：将重要状态提升到 <code>BoxWithConstraints</code> 之上：</p>
+
+<pre><code class="kotlin">var count by remember { mutableStateOf(0) }
+</code></pre>
+
+<pre><code class="kotlin">BoxWithConstraints {
+    // count is stable regardless of subcomposition lifecycle
+    Text("Count: $count")
+}
+</code></pre>
+
+<h3>5. propagateMinConstraints 参数</h3>
+
+<pre><code class="kotlin">BoxWithConstraints(propagateMinConstraints = true) {
+    // Children now MUST be at least minWidth x minHeight
+    // This can cause unexpected overflow if children 
+    // have their own size requirements
+}
+</code></pre>
+
+<p>仅当你明确希望强制子元素具有最小尺寸时才使用此参数。</p>
+
+<h2>总结：何时使用 BoxWithConstraints</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*ReLZsAjntRlcLXMJlYEUbw.png" alt="" /></p>
+
+<h2>结语</h2>
+
+<p><code>BoxWithConstraints</code> 是一个表面看似简单，但当你理解其底层机制后，会发现它蕴含着丰富的内涵。它不仅仅是一个<strong>“告诉你自身大小的盒子”</strong>，而是一种允许元素组合决策依赖于布局信息的机制。</p>
+
+<p>当你真正需要<strong>容器感知响应式布局</strong>时，请使用它。如果更简单的修饰符就能满足需求，则应避免使用它。永远记住：<strong>它会带来额外的开销，因为它本质上与常规代码合成不同。</strong></p>
+
+<p><strong>最好的代码并非使用最复杂的 API，而是使用最适合当前任务的 API。</strong></p>
+
+<p><strong>如果这篇深度解析对你有所帮助，请考虑与你的团队分享。知识共享才能促进 Android 社​​区的发展。</strong></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Compose中的IntrinsicSize实战指南]]></title>
@@ -1553,240 +2081,6 @@ internal interface ComposeUiNode {
 <li>[5] 设备上的辅助功能服务在 Android 系统中是 AccessibilityService 的实现，但在 iOS、桌面或 Web 端则有所不同，因此我在本文中使用“辅助功能服务”这个通用术语。</li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[学会在Jetpack Compose中加载Lottie动画资源]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/12/25/compose-lottie-resources/"/>
-    <updated>2025-12-25T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/12/25/compose-lottie-resources</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「From File to Fetch」，原文链接<a href="https://proandroiddev.com/from-file-to-fetch-ed6dca1122c8">https://proandroiddev.com/from-file-to-fetch-ed6dca1122c8</a>，由Katie Barnett发布于2025年11月23日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*qaaJ_zFlqmNT3CKeLpsvKw.gif" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>_注意：我与 Airbnb 及其 Lottie 项目（Lottie 的 GitHub 仓库）没有任何关联。](<a href="https://github.com/airbnb/lottie-android">https://github.com/airbnb/lottie-android</a>)我最近刚在一个应用中实现了 Lottie，想分享一些示例来佐证<a href="https://lottie.airbnb.tech/#/android-compose">官方文档</a>。</p>
-
-<h2>了解 Lottie</h2>
-
-<p>之前，我写过关于动画的文章<a href="https://medium.com/bilue/expanding-dialog-in-jetpack-compose-a6be40deab86">https://medium.com/bilue/card-flip-animation-with-jetpack-compose-f60aaaad4ac9</a>，也<a href="https://www.youtube.com/watch?v=ol9zpXu3g1U">在</a>上讨论过这个主题，以及我是如何创建原生动画的。但有时，我们想要一些更具艺术性的效果，不需要移动屏幕上的可组合元素；这时，我们就需要一个预先构建好的动画。</p>
-
-<p>Lottie 就派上用场了。</p>
-
-<p>如果你之前没有使用过 Lottie，它是由 Airbnb 开发人员开发的一个库，可以解析 Adob​​e After Effects 动画并将其导出为 JSON 格式。其理念是，设计师可以创建复杂的动画，而无需手动渲染。有很多设计工具的插件可以帮助创建动画，例如 Figma。如果你具备一定的设计天赋（我没有！），上手也很容易。</p>
-
-<p>Lottie 已经存在一段时间了，可以在多个平台上渲染，例如 iOS、Web、Windows，当然还有 Android。它可用于 <a href="https://lottie.airbnb.tech/#/android">XML 视图</a>，但我今天要重点介绍的是它与 Jetpack Compose 的集成。</p>
-
-<p>官方文档在这里 <a href="https://lottie.airbnb.tech/#/android-compose">https://lottie.airbnb.tech/#/android-compose</a>，但它并没有详细介绍如何使用 <code>LottieCompositionSpec</code> 中的多种不同源类​​型，以最便捷的方式提供我们的 Lottie 文件。实际上，某些应用可能需要处理多种源类型，尤其是在后端调用中指定特定动画的情况下。</p>
-
-<p>我们将逐步介绍每种类型，但首先，让我们使用字符串来保存 Lottie 动画数据，从而进行基本设置。</p>
-
-<h2>字符串来源</h2>
-
-<p>使用任何 SDK 的第一步都是添加依赖项：</p>
-
-<pre><code class="kotlin">// build.gradle.kts
-...
-
-dependencies {
-    ...
-    implementation(libs.lottie.compose)
-}
-
-// libs.version.toml
-[versions]
-lottie = "6.6.6"
-
-[libraries]
-lottie-compose = { group = "com.airbnb.android", name = "lottie-compose", version.ref = "lottie" }
-</code></pre>
-
-<p>然后，在 Composable 中，我们需要创建 <code>LottieCompositionSpec</code>。对于 JSON 字符串，我们可以使用 <code>LottieCompositionSpec.JsonString(val jsonString: String)</code>，</p>
-
-<p>并将字符串传递给它。接下来，使用 <code>rememberLottieComposition</code> 并传入 <code>spec</code> 来记住组合状态。最后，可以将此状态传递给 <code>LottieAnimation</code> 以显示动画。</p>
-
-<pre><code class="kotlin">val lottieCompositionSpec = LottieCompositionSpec.JsonString(JSON_STRING)
-val lottieComposition = rememberLottieComposition(
-    spec = lottieCompositionSpec
-)
-LottieAnimation(composition = lottieComposition.value)
-
-const val JSON_STRING = "{\"v\":\"4.10.1\",...\"bm\":0}]}"
-</code></pre>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:280/format:webp/1*pILmCNmRVMiswfyiq3yviw.gif" alt="Lottie动画来自 https://github.com/airbnb/lottie-android" /></p>
-
-<p>现在，将动画存储在字符串中并非最易读或可持续的方式，更好的选择是使用Lottie JSON文件。一种方法是将其存储在assets目录中……</p>
-
-<h2>Asset文件</h2>
-
-<p>我们可以将Lottie文件存储为<code>.json</code>或<code>.lottie</code>文件（它们是同一种文件，只是扩展名不同），并将其存储在<code>app/assets</code>目录中。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*RYfpCujExeKM_FC0XOedPA.png" alt="" /></p>
-
-<p>这里唯一的区别是我们需要使用 <code>LottieCompositionSpec.Asset(val assetName: String)</code> 并传递 <code>assets</code> 目录下的路径（你可以根据需要进行组织）。</p>
-
-<pre><code class="kotlin">val lottieCompositionSpecLottieFile = LottieCompositionSpec.Asset("animations/android_wave.lottie")
-val lottieCompositionSpecJsonFile = LottieCompositionSpec.Asset("animations/android_wave.json")
-</code></pre>
-
-<p>类似地，我们可以使用 <code>LottieCompositionSpec.File(val fileName: String)</code> 从设备文件系统中的任何位置加载动画文件——只需确保应用程序已获得该文件的访问权限即可！</p>
-
-<p>使用资源文件意味着我们无法获得编译时保护来确保文件存在，但我们可以使用 <code>res/raw</code> 目录。</p>
-
-<h2>原始资源文件</h2>
-
-<p>同样，这很简单，只需将文件添加到 <code>raw</code> 目录即可：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*I0jHURry7W04WUibyHvunA.png" alt="" /></p>
-
-<p>现在，我们可以通过使用 <code>LottieCompositionSpec.RawRes</code> 和 <code>R.raw</code> 访问原始资源，从而获得编译时安全性。</p>
-
-<pre><code class="kotlin">val lottieCompositionSpec = LottieCompositionSpec.RawRes(R.raw.android_wave)
-</code></pre>
-
-<p>最后，如果我们希望在需要时动态获取 Lottie 文件，而不是将其打包到应用程序中，我们可以从 URL 加载它。</p>
-
-<h2>URL 来源</h2>
-
-<p>与上述类似，我们可以使用 <code>LottieCompositionSpec.Url</code> 加载以 URL 形式存储的 Lottie 文件：</p>
-
-<pre><code class="kotlin">val lottieCompositionSpec = LottieCompositionSpec.Url("https://url/AndroidWave.json")
-</code></pre>
-
-<p>如果一切顺利，用户网络连接良好，这当然很好，但我们需要确保能够处理任何错误。</p>
-
-<h3>错误响应和添加加载状态</h3>
-
-<p>动画加载也可能需要一些时间，尤其是在动画文件较大或用户网络连接不佳的情况下。为此，我们可以使用 <code>LottieCompositionResult</code> 来检测动画的状态。</p>
-
-<p>当动画正在下载或解析时，<code>LottieCompositionResult.isLoading</code> 将为 true；当解析成功且合成已准备好显示时，<code>LottieCompositionResult.isSuccess</code> 将为 true。我们还有两个状态：<code>LottieCompositionResult.isComplete</code>，当 <code>isLoading</code> 为 false 时（无论组合是否成功），它将为 true；最后是 <code>LottieCompositionResult.isFailure</code>，当出现不可恢复的错误时（即下文讨论的 <code>onRetry</code> lambda 返回 <code>false</code> 时），它将为 true。</p>
-
-<p>为了展示标准的加载、错误和成功行为，我们可以像这样使用 <code>isLoading</code> 和 <code>isSuccess</code>：</p>
-
-<pre><code class="kotlin">if (lottieComposition.isLoading) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.height(100.dp)
-    ) {
-        CircularProgressIndicator()
-    }
-} else if (lottieComposition.isSuccess) {
-    LottieAnimation(
-        composition = lottieComposition.value,
-        modifier = Modifier.height(100.dp)
-    )
-} else {
-    Image(
-        imageVector = Icons.Filled.Error,
-        contentDescription = null,
-        modifier = Modifier.height(100.dp)
-    )
-}
-</code></pre>
-
-<h3>重试动画加载错误</h3>
-
-<p>Lottie 提供了一种简单易用的方法，可以使用 <code>rememberLottieComposition</code> 中的 <code>onRetry</code> 来重试动画加载。我们可以通过两种方式使用它：</p>
-
-<p><strong>反复重试直到达到某个限制</strong></p>
-
-<p>在构造 <code>rememberLottieComposition</code> 时，我们可以指定 <code>onRetry</code> lambda，并返回 <code>true</code> 以继续重试，返回 <code>false</code> 以停止重试。 <code>onRetry</code> 包含一个 <code>failCount</code> 参数。这允许应用重试次数限制或指数退避。例如：</p>
-
-<pre><code class="kotlin">val lottieComposition = rememberLottieComposition(
-    spec = lottieCompositionSpec,
-    onRetry = { failCount, exception -&gt;
-        Timber.d(exception, "Error loading animation: ${exception.message}")
-        failCount &lt; 5
-    }
-)
-</code></pre>
-
-<p>这里我将动画设置为重试 5 次后停止。你可以在此 lambda 表达式中添加错误消息或其他任何有用的信息（但请使用上面描述的 <code>LottieCompositionResult.isLoading</code> 布尔值来显示加载行为，而不是在此处设置另一个变量）。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:280/format:webp/1*d9gomTwO-kr5K9mufbMinA.gif" alt="" /></p>
-
-<p><strong>等待重试信号</strong></p>
-
-<p>我们还可以允许动画等待重试，直到某个外部条件发生变化，例如按下按钮或恢复网络连接。</p>
-
-<p>为此，我们使用 <code>rememberLottieRetrySignal</code>。</p>
-
-<pre><code class="kotlin">val retrySignal = rememberLottieRetrySignal()
-var url by remember { mutableStateOf("https://bad/url") }
-val lottieCompositionSpec = LottieCompositionSpec.Url(url)
-val lottieComposition = rememberLottieComposition(
-    spec = lottieCompositionSpec,
-    onRetry = { _, exception -&gt;
-        Timber.d(exception, "Error loading animation: ${exception.message}")
-        retrySignal.awaitRetry()
-        false
-    }
-)
-Column(...) {
-    if (lottieComposition.isLoading) {
-        ...
-    } else if (lottieComposition.isSuccess) {
-        LottieAnimation(
-            composition = lottieComposition.value,
-            modifier = Modifier.height(100.dp)
-        )
-    } else {
-        ...
-    }
-    TextButton(onClick = {
-        url = "https://url/AndroidWave.json"
-        retrySignal.retry()
-    }) {
-        Text("Fix url &amp; retry")
-    }
-}
-</code></pre>
-
-<p>在这个简单的示例中，我将 URL 设置为无效 URL，然后在 <code>onRetry</code> 中，当发生错误时，我们可以使用记住的 <code>retrySignal</code> 来等待重试。 <code>retrySignal.awaitRetry()</code>。动画将保持加载状态，直到按钮点击时调用 <code>retrySignal.retry()</code>。如果你不希望保持加载状态，而是希望在重试之前显示错误信息，你可以完全省略 <code>retrySignal</code>，并更新已记住的 <code>url</code> 状态，这样 <code>LottieCompositionSpec</code> 将重新组合。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:280/format:webp/1*HZRs6-0_sZxmXImH999iVA.gif" alt="" /></p>
-
-<h2>动画配置</h2>
-
-<p>最后，动画加载正确后，我们可以使用一些其他配置项来优化动画效果。</p>
-
-<p>虽然最好在 Lottie 文件本身（创建时完成）中控制这些动画行为，但你也可以通过以下方式调整动画的播放方式： <code>LottieAnimation</code> 本身是可组合的。要了解其功能，最好查看一些可用参数：</p>
-
-<pre><code class="kotlin">// An excerpt from version 6.6.6 of the SDK
-@Composable
-fun LottieAnimation(
-    clipSpec: LottieClipSpec? = null,
-    speed: Float = 1f,
-    iterations: Int = 1,
-    reverseOnRepeat: Boolean = false,
-    alignment: Alignment = Alignment.Center,
-    contentScale: ContentScale = ContentScale.Fit,
-    ... // + others for more advanced use, check out the SDK documentation
-) {}
-</code></pre>
-
-<p>在这里，我们可以控制：</p>
-
-<ul>
-<li><p><code>clipSpec</code>：动画播放的帧</p></li>
-<li><p><code>speed</code>：动画速度</p></li>
-<li><p><code>iterations</code>：动画运行次数（使用 <code>LottieConstants.IterateForever</code> 可无限循环）</p></li>
-<li><p><code>reverseOnRepeat</code>：循环播放后反向播放</p></li>
-<li><p><code>alignment</code> 和 <code>contentScale</code>：就像图像一样，我们可以调整动画在指定范围内的布局。</p></li>
-</ul>
-
-
-<p>现在你可以了解 Lottie 的所有用法，请务必为你正在开发的应用程序选择最佳方案，并选择最便捷的方式从你的设计团队获取文件，而无需费力地在不同文件格式之间进行转换。</p>
-
-<p>再见！现在！</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:600/1*AbjuxEFO34XUsPCAs-U-Kw.gif" alt="" /></p>
-
-<p>你可以在我的 GitHub 仓库的 <a href="https://github.com/KatieBarnett/Experiments/tree/main/jc-lottie">jc-lottie</a> 模块中找到上述示例代码。</p>
 ]]></content>
   </entry>
   
