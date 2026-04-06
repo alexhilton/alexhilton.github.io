@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-03-30T14:23:04+00:00</updated>
+  <updated>2026-04-06T12:11:25+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,614 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[在Compose中用Shader实现透明的粘稠元球效果]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/04/06/transparent-metaball/"/>
+    <updated>2026-04-06T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/04/06/transparent-metaball</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Compose AGSL Shader: Gooey Outline Metaball Effect with Transparent Background」，原文链接<a href="https://medium.com/@yuriyskul/compose-agsl-shader-gooey-outline-metaball-effect-with-transparent-background-cb8b0e72286c">https://medium.com/@yuriyskul/compose-agsl-shader-gooey-outline-metaball-effect-with-transparent-background-cb8b0e72286c</a>，由Yuriy Skul发布于2024年12月2日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1200/1*sTO1Btb7Di56_kZK9JKJkA.gif" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>本文探讨如何通过两个圆形之间的简单交互创建<strong>元球效果</strong>。<strong>元球形状带有边框，而背景保持完全透明</strong>，从而确保底层内容的可见性。元球内部的图标也保持可见。此效果是通过对整个容器应用高级<strong>AGSL 着色器</strong>，并结合对每个交互元素应用模糊效果来实现的。</p>
+
+<p>创建带有轮廓效果的透明边框元球背景的概念可以参考这篇文章：在 Jetpack Compose 中使用模糊和 AGSL 运行时渲染效果链创建带有轮廓描边边框的透明元球背景。</p>
+
+<p>圆形按钮的 Gooey Metaball 特效：</p>
+
+<ul>
+<li><p><strong>第一部分</strong>：<a href="/@yuriyskul/gooey-metaball-effects-on-android-with-jetpack-compose-blurring-and-alpha-filtering-concepts-63f1cf879257">使用 Jetpack Compose 在 Android 上实现 Gooey（Metaball）特效：跨所有 API 级别的模糊和 Alpha 过滤概念。</a></p></li>
+<li><p><strong>第二部分</strong>：<a href="/@yuriyskul/compose-gooey-metaball-button-effect-fixing-blur-mask-issues-on-pre-android-10-devices-with-d8f3fadc2680">使用渐变光晕和图标简化修复 Android 10 之前设备上的模糊蒙版问题。</a></p></li>
+<li><p><strong>第三部分</strong>：<a href="/@yuriyskul/jetpack-compose-gooey-metaball-interaction-using-agsl-shader-and-blur-fixing-coloring-issues-c70affdcde0f">Jetpack Compose：使用 AGSL 着色器和模糊效果实现 Gooey（元球）交互——修复颜色问题。</a></p></li>
+<li><p><strong>第四部分</strong>：当前状态。</p></li>
+</ul>
+
+
+<p>需求：</p>
+
+<ul>
+<li><p><strong>不透明边框</strong>：元球形状应具有特定颜色的不透明边框，例如<strong>黑色</strong>。</p></li>
+<li><p><strong>透明内背景</strong>：元球的内背景应完全透明，以确保整个区域的背景完全不受影响且可见。</p></li>
+<li><p><strong>可见按钮图标</strong>：元球内部的图标必须保持完全<strong>不透明</strong>，并具有定义的颜色且可见。</p></li>
+<li><p><strong>处理折叠后的元球</strong>：当元球折叠成一个点时，应仅保留<strong>最顶部的图标</strong>可见，以确保折叠状态下的清晰度。</p></li>
+</ul>
+
+
+<p>让我们从<a href="/@yuriyskul/gooey-metaball-effects-on-android-with-jetpack-compose-blurring-and-alpha-filtering-concepts-63f1cf879257"><strong>第一部分</strong></a>中的第一个AGSL基础示例的代码开始。在这个示例中，我们将<strong>AGSL着色器效果</strong>应用于父级<strong>MetaballBox</strong>，并为每个圆形按钮添加了模糊效果：</p>
+
+<p>正如我在<a href="/@yuriyskul/chaining-blur-and-agsl-runtime-rendereffects-to-create-transparent-metaball-backgrounds-with-15680ad1e1a9"><strong>创建透明边框metaball背景的概念</strong></a>中所述，为metaball创建边框的思路是在AGSL脚本中使用<strong>阈值透明度范围</strong>进行过滤。透明度值落在指定范围内的像素将被设置为<strong>完全不透明颜色</strong>，而所有其他像素则被设置为<strong>完全透明</strong>，从而形成清晰锐利的边界效果。</p>
+
+<p>这并非本文的主要关注点。然而，由于元球形状内部包含不透明图标，因此会出现一些问题。为了解决这些问题，本文将探讨一些变通方法和技巧，以满足上述要求。</p>
+
+<h2>AGSL：颜色测试探究</h2>
+
+<p>让我们运行测试着色器，并根据每个点的输入<strong>alpha</strong>值为其分配特定颜色。着色器逻辑应用以下规则：</p>
+
+<ul>
+<li><strong>如果 alpha = 0.0</strong>：</li>
+</ul>
+
+
+<p>该点<strong>完全透明</strong>，为了便于调试，被标记为<strong>黄色</strong>。</p>
+
+<ul>
+<li><strong>如果 alpha &lt; cutoff_min</strong>：</li>
+</ul>
+
+
+<p>该点位于元球的<strong>内部区域</strong>，并被标记为<strong>绿色</strong>以示区别。</p>
+
+<ul>
+<li><strong>如果 alpha 介于 cutoff_min 和 cutoff_max 之间</strong>：</li>
+</ul>
+
+
+<p>该点位于<strong>边界区域</strong>，并被标记为<strong>黑色</strong>，以标记过渡区域。</p>
+
+<ul>
+<li><strong>如果 alpha > cutoff_max 但小于 1.0</strong>：</li>
+</ul>
+
+
+<p>该点位于<strong>外部混合区域</strong>，透明度开始逐渐减弱。它被标记为<strong>蓝色</strong>以表示此范围。</p>
+
+<ul>
+<li><strong>如果 alpha = 1.0</strong>：</li>
+</ul>
+
+
+<p>该点<strong>完全不透明</strong>，并以<strong>红色</strong>标记其最大不透明度。</p>
+
+<pre><code class="kotlin">cutoff_min = 0.5f  
+cutoff_max = 0.6f
+
+@Language("AGSL")  
+const val ShaderSource_outlined_color_test_1 = """  
+    uniform shader composable;  
+
+    uniform float cutoff_min; // Minimum cutoff value for transparency  
+    uniform float border_thickness; // Thickness of the border  
+    uniform float3 rgbColor;  // Custom RGB color (not directly used in this logic)  
+
+    half4 main(float2 fragCoord) {  
+        half4 color = composable.eval(fragCoord);  
+
+        // Calculate cutoff_max dynamically using border_thickness  
+        float cutoff_max = cutoff_min + border_thickness;  
+
+        // If alpha is exactly 0.0 (fully transparent), set it to yellow  
+        if (color.a == 0.0) {  
+            color.rgb = half3(1.0, 1.0, 0.0); // Yellow for fully transparent  
+        }  
+        // If alpha is below the minimum cutoff, make it green  
+        else if (color.a &lt; cutoff_min) {  
+            color.rgb = half3(0.0, 1.0, 0.0); // Green  
+        }   
+        // If alpha is within the cutoff range (border area), make it black  
+        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
+            color.rgb = half3(0.0, 0.0, 0.0); // Black  
+        }   
+        // If alpha is above the maximum cutoff but less than fully opaque (outer area), make it blue  
+        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
+            color.rgb = half3(0.0, 0.0, 1.0); // Blue  
+        }   
+        // Fully opaque case where alpha = 1, make it red  
+        else {  
+            color.rgb = half3(1.0, 0.0, 0.0); // Red  
+        }  
+
+        // Ensure alpha is fully opaque for all cases  
+        color.a = 1.0;  
+
+        return color;  
+    }  
+"""
+</code></pre>
+
+<p>模糊半径 = 16dp 时的结果（元球大小 = 100dp）</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*f0t_6j6AZqr74cWtWWTkbQ.gif" alt="模糊半径 16dp (R = 50dp)" /></p>
+
+<p>如前所述，本文的重点并非创建边框（黑色区域），而是解决与内部透明部分相关的额外要求，同时保持图标不透明。难点在于如何根据透明度进行过滤，以确定给定点属于图标还是背景。</p>
+
+<p>但在解决这个问题之前，我们先来了解一下为什么在图像内部会看到一个红色圆圈（一个完全不透明的像素）。</p>
+
+<p>假设我们有一个半径为 50 dp 的某种颜色的完全不透明的圆，并应用一个半径很小的模糊效果（1-2 像素），结果会显示这个完全不透明的圆会比原来的 50 dp 半径略小一些。需要强调的是，“完全不透明的圆”指的是圆内所有 alpha 值恰好为 1.0（完全不透明）的点，而 alpha 值小于 1.0（半透明或完全透明）的点则不属于这个圆。模糊半径越大，得到的完全不透明的圆就越小。本质上，模糊效果起到了一种柔化或扩散的作用，从而缩小了模糊圆的尺寸。</p>
+
+<p>如果模糊半径大于不透明圆的半径会发生什么呢？在这种情况下，圆内将不再存在完全不透明的像素，因为模糊会将不透明度完全分散到整个区域，只留下半透明像素。</p>
+
+<p>实际上，要完全模糊一个完全不透明的圆并移除所有不透明像素，我们需要应用一个大于 Metaball 圆形形状的<strong>半径/2</strong>的模糊半径。</p>
+
+<p>在这种情况下，Metaball 背景将不再包含任何完全不透明的像素。但是，由于图标渲染在一个单独的图层上（参见<strong>MetaballBox</strong>的实现），该图层未应用模糊效果，因此图标像素的不透明度将保持不变，<strong>alpha = 1.0</strong>。</p>
+
+<p>Metaball 圆形按钮 = 100 dp，因此 R = 50 dp。</p>
+
+<p>让我们设置一个大于 R/2 + 1 dp = 25 dp 的模糊半径。</p>
+
+<p>对于 <strong>25 dp</strong> 的模糊半径，仍然会存在一个小的内部不透明点。为了确保不留下任何完全不透明的像素，我们将模糊半径设置为 <strong>26.dp</strong>。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*9xZ9Py3k9Dyd52lpF74T3g.gif" alt="模糊半径 26.dp (R = 50.dp)" /></p>
+
+<p>越来越接近目标了！在按钮展开状态下，我们可以使用 <code>alpha = 1</code> 来过滤图标。但是，当按钮折叠时，模糊的元球层会产生<strong>累积效应</strong>，在给定的模糊半径下，最终完全不透明像素的区域会变大。我不确定具体的计算公式，而且这并不特别重要，因为我会在文章后面提出不同的解决方案。现在，我们先采用一个<strong>变通方法</strong>，进一步增大模糊半径。</p>
+
+<p>应用模糊半径 = 36.dp:</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*zyEJpSm3eq9ixMPbj6my5w.gif" alt="模糊半径 36.dp (R = 50.dp)" /></p>
+
+<h2>简易 AGSL：按 Alpha 值过滤区域</h2>
+
+<p>我们来设置输入 RGB 颜色，并将 Alpha 值设为 1，用于<strong>红色</strong>区域（<strong>图标</strong>）和<strong>黑色</strong>区域（<strong>边框</strong>）。</p>
+
+<p>然后，将透明度（Alpha = 0）应用于所有其他区域。但这里有个小细节：</p>
+
+<p>在我的示例中，我使用黑色作为圆形按钮的颜色，但需要注意的是，黑色是“零”色 (0, 0, 0)。如果圆形按钮的背景色是任何非“零”色，例如绿色，那么我们通过将 Alpha 通道设置为 0 来使其完全透明的模糊半透明区域仍然会影响混合效果。这种混合效果的出现是因为颜色分量（RGB）的值不为零，从而导致出现意想不到的视觉效果，例如：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1136/1*BXNddgNOlwNZqNvBJVdCZQ.png" alt="绿色背景圆形按钮示例。" /></p>
+
+<p>因此，如果我们希望某个像素完全透明，并且<strong>背景图层不受影响，不会产生任何副作用</strong>，我们不仅应该将 <code>alpha = 0</code> 设置为 0，还应该将 <strong>“零”RGB 颜色</strong> 设置为黑色 (<code>0, 0, 0</code>)。</p>
+
+<p>之前，我使用的边框粗细为 <strong>0.1f</strong>。为了使边框更细，我们将其减小到 <strong>0.05f</strong>。</p>
+
+<pre><code class="kotlin">@Language("AGSL")  
+const val ShaderSource_outlined_simple = """  
+    uniform shader composable;  
+
+    uniform float cutoff_min; // Minimum cutoff value for transparency  
+    uniform float border_thickness; // Thickness of the border  
+    uniform float3 rgbColor;  // RGB color passed as parameter  
+
+     // Constant for black (zero) RGB color  
+    const half3 BLACK_MASK_RGB = half3(0.0, 0.0, 0.0);  
+
+    half4 main(float2 fragCoord) {  
+        half4 color = composable.eval(fragCoord);  
+
+        // Calculate cutoff_max dynamically using border_thickness  
+        float cutoff_max = cutoff_min + border_thickness;  
+
+        // If alpha is exactly 0.0 (fully transparent), do nothing  
+        if (color.a == 0.0) {  
+            // Do nothing  
+        }  
+        // If alpha is below the minimum cutoff,  
+        // make it fully transparent and black  
+        else if (color.a &lt; cutoff_min) {  
+            color.rgb = BLACK_MASK_RGB; // Set to black  
+            color.a = 0.0; // Fully transparent  
+        }   
+        // If alpha is within the cutoff range (border area),   
+        // make it the custom color  
+        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
+            color.rgb = rgbColor; // Set to custom color  
+            color.a = 1.0; // Fully opaque  
+        }   
+        // If alpha is above the maximum cutoff but less than   
+        //  fully opaque (outer area), make it fully transparent and black  
+        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
+            color.rgb = BLACK_MASK_RGB; // Set to black  
+            color.a = 0.0; // Fully transparent  
+        }   
+        // Fully opaque case where alpha = 1 (Icon area),  
+        // make it the custom color  
+        else {  
+            color.rgb = rgbColor; // Set to custom color  
+            color.a = 1.0; // Fully opaque  
+        }  
+
+        return color;  
+    }  
+"""
+</code></pre>
+
+<p>结果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:892/1*s5cJYscet9Gr2Pzoil7WvA.gif" alt="简单 AGSL：仅按透明度值过滤区域" /></p>
+
+<p>由于内部背景是透明的，我们需要解决<strong>图标重叠问题</strong>。一个快速的解决方案是隐藏下方按钮的图标，同时保持上方按钮的图标可见。</p>
+
+<p>我们可以跟踪按钮的偏移量，当偏移量小于<strong>20dp</strong>时，将下方图标的可见性状态设置为<strong>false</strong>。相反，当偏移量大于<strong>20dp</strong>时，将其设置为<strong>true</strong>。</p>
+
+<p>为了优化，将此逻辑封装在 <code>**derivedStateOf**</code> 中。此外，将按钮图标封装在 <code>**AnimatedVisibility**</code> 中。或者，你可以尝试根据按钮之间的偏移量手动更改 alpha 色调。</p>
+
+<p>但是，如果我们希望图标的可见性过渡平滑，这种方法就行不通了。在下面的代码片段中，我将展开动画的持续时间设置为 <strong>7 秒</strong>，将隐藏动画的持续时间设置为 <strong>4 秒</strong>。但由于 AGSL 会根据 alpha 值进行过滤，一旦图标的 alpha 值逐渐低于 <strong>1</strong>，它就会立即完全透明。在展开动画期间，图标不会逐渐淡入——它会一直保持不可见，直到 <strong>4 秒动画结束</strong>。此时，当 <code>AnimatedVisibility</code> 容器将其 alpha 值设置为完全不透明（<code>alpha = 1</code>）时，图标会立即弹出。</p>
+
+<pre><code class="kotlin">@Composable  
+fun ExampleAGSLOutlineContent(  
+    modifier: Modifier = Modifier  
+) {  
+        var isExpanded by remember { mutableStateOf(false) }  
+        val offsetDistance = (80).dp  
+        val buttonOffset by animateDpAsState(  
+            targetValue = if (isExpanded) offsetDistance else 0.dp,  
+            animationSpec = tween(durationMillis = 7000)  
+        )  
+
+        val color = Color.Black  
+
+        //test visibility start  
+        var isVisible by remember { mutableStateOf(false) } // Another state for visibility  
+        // Derived state to update visibility based on buttonOffset  
+        val derivedVisibility = remember(buttonOffset) {  
+            derivedStateOf { buttonOffset &gt; 40.dp }  
+        }  
+
+
+        // Observe derived state and update visibility  
+        LaunchedEffect(derivedVisibility.value) {  
+            isVisible = derivedVisibility.value  
+        }  
+
+//
+
+val blurRadius = 16.dp
+//
+
+val blurRadius = 26.dp
+        val blurRadius = 36.dp  
+
+
+        OutlineShaderMetaballBox(  
+            modifier = modifier,  
+            color = color  
+        ) {  
+
+            Box(  
+                contentAlignment = Alignment.Center,  
+                modifier = Modifier  
+                    .fillMaxWidth()  
+                    .padding(vertical = 24.dp)  
+            ) {  
+
+                BlurCircularButton(  
+                    Modifier.offset { IntOffset(x = -buttonOffset.roundToPx(), y = 0) },  
+                    onClick = { isExpanded = !isExpanded },  
+                    color = color,  
+                    blur = blurRadius,  
+                ) {  
+
+                    AnimatedVisibility(  
+                        visible = isVisible,  
+                        enter = fadeIn(animationSpec = tween(durationMillis = 4000)),  
+                        exit = fadeOut(animationSpec = tween(durationMillis = 4000)),  
+                    ) {  
+                        Icon(  
+                            modifier = Modifier.size(28.dp),  
+                            imageVector = Icons.Filled.Delete,  
+                            contentDescription = null,  
+                            tint = color,  
+                        )  
+                    }  
+                }  
+                BlurCircularButton(  
+                    Modifier  
+                        .offset { IntOffset(x = +buttonOffset.roundToPx(), y = 0) },  
+                    onClick = { isExpanded = !isExpanded },  
+                    color = color,  
+                    blur = blurRadius,  
+                ) {  
+                    Icon(  
+                        modifier = Modifier.size(28.dp),  
+                        imageVector = Icons.Filled.Build,  
+                        contentDescription = null,  
+                        tint = color,  
+                    )  
+                }  
+            }  
+        }  
+}
+</code></pre>
+
+<p>图标可见性过渡闪烁不流畅：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*QmmZVzScXVjnTz5ebteIiw.gif" alt="AGSL Alpha 通道过滤破坏了动画可见性过渡" /></p>
+
+<p>对于快速展开/折叠动画和可见性过渡的持续时间，例如 <strong>150 毫秒</strong> 或 <strong>300 毫秒</strong>，此问题可能不明显，并且可以正常工作。</p>
+
+<ul>
+<li><p>实现简单：AGSL 脚本非常简单，仅依赖于输入像素颜色的 Alpha 通道进行过滤。</p></li>
+<li><p>对最小模糊半径有严格的依赖性。合并的元素越多，就越难计算或通过实验确定稳定实现所需的最小可接受模糊半径。这使得该方法不可靠，不适合实现健壮稳定的效果。</p></li>
+<li><p>由于 AGSL 脚本中基于 alpha 通道的滤波特性，图标的平滑出现和消失难以实现。</p></li>
+<li><p>随着元球交互中涉及的元素数量增加，以及膨胀物理机制的复杂性提升，确定和实现图标出现或消失的精确时机变得困难，进一步增加了控制的复杂性和整体逻辑的复杂性。</p></li>
+</ul>
+
+
+<p>让我们寻找更好的解决方案：</p>
+
+<h2>中级 AGSL：按 Alpha 值和标记颜色过滤区域</h2>
+
+<p>让我们再次回到较小的模糊半径 16dp。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1084/1*AMLBHaITVM_8pT3SzURMbA.png" alt="Alpha = 1 的红色区域" /></p>
+
+<p>我们需要检测红色不透明区域中的像素是否属于图标。</p>
+
+<p>我建议使用一个额外的 RGB 颜色作为标记。唯一的要求是，对于应用 AGSL 效果的容器及其子元素，该颜色必须是唯一的。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*nubnETXkwfYHQlIEk0XQCw.png" alt="为 AGSL 着色器添加一个浮点型参数 markerColor。" /></p>
+
+<p>我们使用<strong>青色 RGB</strong>作为标记颜色。使用 <code>Color.Cyan</code> 为图标着色，并将相同的<strong>青色</strong>作为参数传递给 AGSL 脚本。</p>
+
+<p>在 AGSL 中定义以下参数：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*yq17jZov8ZTSQEspwqJ73Q.png" alt="添加新参数：rgbMarkerColor，类型为 uniform float3" /></p>
+
+<p>AGSL 着色器源代码的结构与上一章相同，唯一的区别在于最后一个 <code>else</code> 代码块，其中 alpha 值为 1，代表测试屏幕上的中心红色。</p>
+
+<p>在不透明部分，检查像素的 RGB 颜色是否等于 <code>markerColor</code>。如果为真，则它是图标像素——你可以将其着色为任何你想要的颜色。设置 <code>alpha = 1</code> 是多余的，因为我们已经在不透明的 <code>else</code> 语句块中了。</p>
+
+<p>否则，如果为假，则它肯定不是图标像素——通过将 RGB 值设置为黑色并将 <code>alpha = 0</code> 设置为 0 使其完全透明。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*HT2R2H2yKApfzo3EII58bA.png" alt="使用标记颜色检测像素是否属于图标" /></p>
+
+<p>完整的 AGSL 脚本：</p>
+
+<pre><code class="kotlin">@Language("AGSL")  
+const val ShaderSource_outlined_marker_color = """  
+    uniform shader composable;  
+
+    uniform float cutoff_min; // Minimum cutoff value for transparency  
+    uniform float border_thickness; // Thickness of the border  
+    uniform float3 rgbColor;  // RGB color passed as parameter  
+
+    uniform float3 rgbMarkerColor;  // marker for Icon tint color  
+
+     // Constant for black (zero) RGB color  
+    const half3 BLACK_MASK_RGB = half3(0.0, 0.0, 0.0);  
+
+    half4 main(float2 fragCoord) {  
+        half4 color = composable.eval(fragCoord);  
+
+        // Calculate cutoff_max dynamically using border_thickness  
+        float cutoff_max = cutoff_min + border_thickness;  
+
+        // If alpha is exactly 0.0 (fully transparent), do nothing  
+        if (color.a == 0.0) {  
+            // Do nothing  
+        }  
+        // If alpha is below the minimum cutoff,  
+        // make it fully transparent and black  
+        else if (color.a &lt; cutoff_min) {  
+            color.rgb = BLACK_MASK_RGB; // Set to black  
+            color.a = 0.0; // Fully transparent  
+        }   
+        // If alpha is within the cutoff range (border area),   
+        // make it the custom color  
+        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
+            color.rgb = rgbColor; // Set to custom color  
+            color.a = 1.0; // Fully opaque  
+        }   
+        // If alpha is above the maximum cutoff but less than   
+        //  fully opaque (outer area), make it fully transparent and black  
+        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
+            color.rgb = BLACK_MASK_RGB; // Set to black  
+            color.a = 0.0; // Fully transparent  
+        } else {  
+         // Fully opaque case where alpha = 1  
+             if(color.rgb == rgbMarkerColor){  
+             //Icon area  
+                color.rgb = rgbColor;  // Set to Icon color  
+             }else{  
+             //pixel is out of icon shape - make it transparent  
+                color.rgb = BLACK_MASK_RGB;  
+                color.a = 0.0;  
+            }  
+        }  
+
+        return color;  
+    }  
+"""
+</code></pre>
+
+<p>以下是三种情况的解决方案示例：</p>
+
+<ul>
+<li><p>当图标中心部分在折叠和展开状态下均存在不透明边框时（<strong>blurRadius = 16dp</strong>）。</p></li>
+<li><p>当图标在展开状态下仅形状不透明，但在折叠状态下仍然存在不透明边框时（<strong>blurRadius = 26dp</strong>）。</p></li>
+<li><p>当模糊半径足够大，以至于在展开和折叠状态下均不存在不透明边框时（<strong>blurRadius = 36dp</strong>）。</p></li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*f-mqRDLEVi_iUsCEjl8J1A.gif" alt="blurRadius 16.dp" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*ucu3DGrhCrb2cuKJTe3_vQ.gif" alt="blurRadius 26.dp" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*lh0kitLN7mLi99BdNvu5mA.gif" alt="blurRadius 26.dp" /></p>
+
+<p>请注意，尽管所有示例均使用 <code>borderAlphaThickness = 0.05f</code> 执行，但增加 <code>blurRadius</code> 的值也会增加边框的粗细。</p>
+
+<ul>
+<li><p>AGSL 的实现相对简单，满足文章开头概述的要求。</p></li>
+<li><p>重叠部分会自动处理，因此折叠时无需手动隐藏底层图标。</p></li>
+<li><p>应该也能处理更多数量的元球。</p></li>
+<li><p>可以很好地适应不同的模糊半径。</p></li>
+<li><p>如果传递了额外的标记颜色参数但未正确设置为色调颜色，则该参数可能会成为潜在的错误来源。</p></li>
+<li><p>必须确保标记颜色具有唯一的 RGB 值，并且与用于模糊效果的颜色不同。</p></li>
+<li><p>消失的重叠图标就像一个不可见的透明图层。虽然这对于 Material 3（更抽象）来说没有问题，但对于 Material Design 2 的老用户来说，这可能会破坏设计理念。</p></li>
+</ul>
+
+
+<h2>高级 AGSL：按 Alpha 值、标记颜色和计算亮度过滤区域。</h2>
+
+<p>上一章的解决方案，持续时间更长，并略微放大：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*k3nkqjSeE-Z9tutJNYcRGg.gif" alt="图标突然消失（不平滑）" /></p>
+
+<p>左侧图标在清晰的、不可见的边框下方突然消失。我们通过使其在接近边框时平滑淡出，并在折叠状态下完全消失来修复此问题。</p>
+
+<p>基于上一章中 <code>else</code> 语句（本例中为 <code>alpha = 1</code>）检查是否与 <code>colorMarker</code> 值相等，我将进行修改，增加一项检查是否与黑色 RGB 值相等的检查，并将 <code>else</code> 语句留空：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*hW55iNq39TUn2BJZg-fcsQ.png" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*cN0p-qw9Nsm6224Ph7wtaQ.gif" alt="展开/折叠过程中，左侧图标被模糊区域覆盖" /></p>
+
+<p>在折叠过程中，我们看到左侧（后方）图标的颜色接近 <code>rgbMarkerColor</code>（Color.CYAN），该图标部分被顶部的元球形状覆盖。然而，情况略有不同，因此条件 <code>color.rgb == rgbMarkerColor</code> 不匹配。随着图标逐渐靠近，这种“接近标记颜色”的颜色会逐渐过渡到接近黑色（即用于模糊效果的元球圆形按钮背景色）。</p>
+
+<p>颜色并非完全是青色的原因在于混合效果。当左侧图标被右侧元球的模糊图层覆盖时，标记颜色会发生扭曲。根据标记颜色上方黑色模糊层的透明度，我们看到的颜色要么非常接近标记颜色，要么更接近黑色。</p>
+
+<p>从视频中，我们可以观察到颜色之间的平滑过渡。</p>
+
+<p>为了最大程度地增强亮度变化的效果，我们使用亮度最高的 <code>MarkerColor</code>——纯白色 <code>(1, 1, 1)</code>。最终颜色由用于模糊效果的圆形按钮背景色决定，在本例中为黑色——这非常适合接下来的解决方案。</p>
+
+<p><strong>将 <code>**MarkerColor**</code> </strong>更改为白色：**</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*hlfNRuBhjq8rnh0CADk8ng.gif" alt="从接近白色的不透明过渡到接近黑色的不透明。" /></p>
+
+<p>在最终的 GIF 动画中，当 <code>markerColor = (1, 1, 1)</code>（白色）时，我们可以看到，左侧图标在与右侧元球重叠并逐渐靠近的过程中，其 RGB 值从接近白色的完全不透明过渡到接近黑色的完全不透明。</p>
+
+<p>本章的解决方案是利用亮度从亮到暗的变化，并将这些变化转换​​为透明度从不透明到透明的变化。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*8CPstoAxFyCZYYsCnISZAw.png" alt="使用亮度作为 Alpha 通道" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*x_0aiGzvUnQfN71wBPJc3A.gif" alt="亮度作为 Alpha 通道（模糊半径 16dp）" /></p>
+
+<p>当模糊半径非常小时，元球中心呈现不透明的圆形（我在第一章“AGSL：颜色测试探究”中提到的区域），这种方法效果很好（半径为 16dp）。但是，当使用较大的半径时，在折叠状态下，只有属于图标的不透明像素没有边框，此时会出现 UI 问题。</p>
+
+<p>让我们用大于 36dp 的模糊值来测试一下：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*PSbFrsDXlC3JmyaWZcMaFA.gif" alt="亮度作为 alpha 通道（模糊半径 45dp）" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:584/1*APS4Fdja9DbZlsZNcx5SoA.png" alt="问题：底层垃圾桶图标可见。" /></p>
+
+<p>让我们创建一个名为 <code>adjustAlpha</code> 的辅助函数来动态调整 alpha 通道。该函数以当前的 alpha 值作为输入，并执行两个关键操作：</p>
+
+<ol>
+<li><p><strong>指数运算</strong>：将 alpha 值提升到 4 次方。此操作通过增强较高的 alpha 值并更快地降低较小的 alpha 值，来帮助平滑过渡。</p></li>
+<li><p><strong>阈值处理</strong>：指数运算后，函数会检查调整后的 alpha 值是否小于预定义的阈值（例如 <code>0.01</code>）。如果小于，则返回 <code>0.0</code>（完全透明）；否则，返回调整后的 alpha 值。</p></li>
+</ol>
+
+
+<p>这种操作组合确保即使是较小的 alpha 值也能平滑过渡到完全透明，而不会出现突兀的视觉瑕疵。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*s9nU3I1tSSW79jxUCTl9Uw.png" alt="调整 alpha 值" /></p>
+
+<p>通过使用此辅助函数，我可以轻松地平滑处理 alpha 过渡。</p>
+
+<p>此外，当调整后的透明度为 <code>0</code> 时，我们将 RGB 值设置为遮罩颜色（例如黑色）。如果不是 <code>0</code>，则函数会赋值 <code>rgbColor</code>。在当前示例中，<code>rgbColor</code> 也为黑色，但如果我们使用不同的颜色进行模糊处理，此逻辑可确保正确处理透明度。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*M6Xf-RuXN8kctauNGGavuw.png" alt="ajustAlpha() 辅助函数的使用。" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*2hy494VgjfI7aXgp0Wcr-g.gif" alt="最终解决方案。模糊半径 36dp" /></p>
+
+<p>完整的 AGSL 脚本：</p>
+
+<pre><code class="kotlin">@Language("AGSL")  
+const val ShaderSource_outlined_marker_color_and_marker_brightness = """  
+    uniform shader composable;  
+
+    uniform float cutoff_min; // Minimum cutoff value for transparency  
+    uniform float border_thickness; // Thickness of the border  
+    uniform float3 rgbColor;  // RGB color passed as a parameter  
+    uniform float3 rgbMarkerColor;  // Marker for Icon tint color  
+
+    // Constant for black (zero) RGB color  
+    const half3 BLACK_MASK_RGB = half3(0.0, 0.0, 0.0);  
+
+    // Helper function to adjust alpha dynamically  
+    float adjustAlpha(float alpha) {  
+        // Define the threshold value  
+        const float threshold = 0.01;  
+
+        // Calculate the alpha raised to the power of 4  
+        float adjustedAlpha = pow(alpha, 4.0);  
+
+        // Return either the adjusted alpha or 0 if below the threshold  
+        return adjustedAlpha &lt; threshold ? 0.0 : adjustedAlpha;  
+    }  
+
+    half4 main(float2 fragCoord) {  
+        half4 color = composable.eval(fragCoord);  
+
+        // Calculate cutoff_max dynamically using border_thickness  
+        float cutoff_max = cutoff_min + border_thickness;  
+
+        // If alpha is exactly 0.0 (fully transparent), do nothing  
+        if (color.a == 0.0) {  
+            // Do nothing  
+        }  
+        // If alpha is below the minimum cutoff, make it fully transparent and black  
+        else if (color.a &lt; cutoff_min) {  
+            color.rgb = BLACK_MASK_RGB; // Set to black  
+            color.a = 0.0; // Fully transparent  
+        }   
+        // If alpha is within the cutoff range (border area), make it the custom color  
+        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
+            color.rgb = rgbColor; // Set to custom color  
+            color.a = 1.0; // Fully opaque  
+        }   
+        // If alpha is above the maximum cutoff but less than fully opaque (outer area),  
+        // make it fully transparent and black  
+        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
+            color.rgb = BLACK_MASK_RGB; // Set to black  
+            color.a = 0.0; // Fully transparent  
+        }   
+        // Fully opaque case where alpha = 1  
+        else {  
+            if (color.rgb == rgbMarkerColor) {  
+                // Icon area  
+                color.rgb = rgbColor; // Set to Icon color  
+            } else if (color.rgb == rgbColor) {  
+                // Some black inner metaball area could be opaque - make it transparent  
+                color.rgb = BLACK_MASK_RGB;  
+                color.a = 0.0;  
+            } else {  
+                // Compute current brightness  
+                float brightness = (color.r + color.g + color.b) / 3.0;  
+                float adjustedBrightness = adjustAlpha(brightness);  
+
+                // Set brightness as the alpha channel  
+                color.a = adjustedBrightness;  
+
+                // Set RGB color based on adjusted brightness  
+                if (adjustedBrightness == 0) {  
+                    color.rgb = BLACK_MASK_RGB; // Fully transparent  
+                } else {  
+                    color.rgb = rgbColor; // Custom color  
+                }  
+            }  
+        }  
+
+        return color;  
+    }  
+"""
+</code></pre>
+
+<ul>
+<li><p>效果极佳。符合 UI 要求，确保当元球按钮靠近时，图标平滑消失。</p></li>
+<li><p><strong>复杂逻辑</strong>：此实现引入了更多复杂性，尤其是在处理亮度到透明度的计算方面，这可能会增加出现错误的可能性。</p></li>
+<li><p><strong>模糊半径限制</strong>：非常大的模糊半径值需要通过亮度（AGSL：<code>adjustAlpha()</code>）微调透明度计算，以保持预期行为。</p></li>
+<li><p><strong>可扩展性问题</strong>：当处理两个以上的元球元素时，可能需要对透明度计算函数进行额外调整。</p></li>
+<li><p><strong>标记和模糊颜色限制</strong>：标记颜色必须为纯白色，而模糊颜色必须为纯黑色，以避免混合不一致。</p></li>
+<li><p><strong>设计依赖性</strong>：所有必需的颜色，包括图标颜色、边框颜色和内部区域的透明度，都必须通过 AGSL 着色器显式设置，这增加了对着色器逻辑的依赖性。</p></li>
+</ul>
+
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/blob/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/gooey/blurConcept/ExampleRuntimeRenderEffectOutline.kt"><strong>当前可组合部分的 GitHub 链接</strong></a> <strong>以及</strong> <a href="https://github.com/yuriyskulskiy/android-compose-playground/blob/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/gooey/blurConcept/util/shader/OutlineAgslShader.kt"><strong>AGSL 着色器链接</strong></a><strong>。</strong></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Jetpack Compose中的富文本输入]]></title>
@@ -1433,668 +2041,6 @@ overlapHeight = 56dp
 <p><em>如果你有任何疑问或发现了 IntrinsicSize 的其他创意用法，请在下方留言！</em></p>
 
 <p><strong>关注我，获取更多 Android 开发技巧。</strong></p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Jetpack Compose重组稳定性分析器]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/01/30/compose-stability-analyzer/"/>
-    <updated>2026-01-30T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/01/30/compose-stability-analyzer</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Compose Stability Analyzer: Real-Time Stability Insights for Jetpack Compose」，原文链接<a href="https://medium.com/proandroiddev/compose-stability-analyzer-real-time-stability-insights-for-jetpack-compose-1399924a0a64">https://medium.com/proandroiddev/compose-stability-analyzer-real-time-stability-insights-for-jetpack-compose-1399924a0a64</a>，由Jaewoong Eum发布于2025年11月10日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/0*uLjBHnzVq5vM002Z" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>Jetpack Compose 以其声明式编程范式革新了 Android UI 开发，但这种简洁性背后却隐藏着复杂性：理解重组合行为。当一个可组合元素不必要地进行重组合时，就会造成性能损失，CPU 周期会浪费在重新渲染实际上并未改变的 UI 上。挑战不仅在于识别这些问题，更在于理解它们发生的<strong>原因</strong>。</p>
-
-<p>Compose 编译器一直在后台执行稳定性分析，确定哪些可组合元素在输入未发生变化时可以跳过重组合。但这种分析是在编译时静默进行的，开发者无法得知他们的可组合元素是否得到了优化。你可能编写出看似完美稳定的代码，但之后却发现类中一个 <code>var</code> 属性就足以导致整个代码不稳定，并波及整个 UI 树。</p>
-
-<p><a href="https://github.com/skydoves/compose-stability-analyzer">Compose Stability Analyzer</a> 将这种隐藏的分析揭示出来。它是一套全面的工具集，可在 IDE 中提供实时可视化反馈，通过注解进行运行时代码重组追踪，并在 CI 流水线中进行稳定性验证。无需等到性能问题在生产环境中出现，你就能在编码过程中获得即时反馈，使稳定性分析自然而然地融入你的开发工作流程。</p>
-
-<p>本文将探讨 Compose 稳定性分析器的工作原理，包括：IntelliJ 插件（为你的 IDE 提供可视化的稳定性指示器）、编译器插件（启用运行时重组跟踪）以及稳定性验证系统（防止回归问题影响生产环境）。</p>
-
-<h2>理解稳定性问题：为什么可组合函数会重组</h2>
-
-<p>在深入工具之前，值得了解 Compose 编译器实际上分析的内容。编译器会对每个可组合函数执行稳定性推断，回答两个问题：</p>
-
-<p><strong>1. 这个可组合函数可以跳过吗？</strong></p>
-
-<p>当编译器能够证明使用相同的输入重新组合该函数会产生相同的结果时，该可组合函数就是可跳过的。如果所有参数都是稳定的并且没有发生变化，可组合函数可以完全跳过重新组合，这是一个显著的性能优化。</p>
-
-<p><strong>2. 该可组合项是否可重启？</strong></p>
-
-<p>当一个可组合项可以独立重新组合而无需重新组合其父项时，该可组合项是可重启的。这使得重新组合更加细粒度。大多数可组合项都是可重启的，但带有某些修饰符的可组合项可能不是。</p>
-
-<p>这里的关键概念是<strong>参数稳定性</strong>。当 Compose 编译器能够可靠地检测到参数值是否发生变化时，该参数是稳定的。规则非常复杂，如果你想深入了解这些规则，可以参考稳定性研究<a href="https://github.com/skydoves/compose-stability-inference">Compose 稳定性推断</a>。</p>
-
-<h2>在 Android Studio 中进行可视化稳定性分析</h2>
-
-<p>Compose Stability Analyzer IntelliJ 插件可将稳定性分析直接集成到 Android Studio 和 IntelliJ IDEA 中，在你编写代码时提供四层可视化反馈。</p>
-
-<h3>安装和设置</h3>
-
-<p>安装插件非常简单：</p>
-
-<ol>
-<li><p>打开 <strong>Android Studio</strong> → <strong>设置</strong> → <strong>插件</strong> → <strong>应用市场</strong>。</p></li>
-<li><p>搜索“Compose Stability Analyzer”。</p></li>
-<li><p>点击 <strong>安装</strong> 并重启 IDE。</p></li>
-</ol>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*ukPWg_I6mOo9Drk0.png" alt="图1" /></p>
-
-<p>安装完成后，插件会立即开始分析你的代码。无需任何配置，它可与任何 Compose 项目开箱即用。</p>
-
-<h3>边栏图标：即时视觉反馈</h3>
-
-<p>最直观的功能是边栏图标，即出现在可组合函数左侧边栏的彩色圆点：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*r3BFUwBTNNRfa2Y7.png" alt="图2" /></p>
-
-<ul>
-<li><p><strong>绿点</strong>：此可组合函数可跳过。所有参数均稳定，编译器可以优化重新组合。</p></li>
-<li><p><strong>黄点</strong>：此可组合函数可重启，但不可跳过。它会在其父函数重新组合时重新组合。</p></li>
-<li><p><strong>红点</strong>：此可组合函数的参数不稳定，无法进行优化。</p></li>
-</ul>
-
-
-<p>这种即时视觉反馈是快速发现 Jetpack Compose 性能问题的最佳方法。只需快速浏览左侧边栏，即可了解哪些可组合函数需要关注。如果屏幕上布满红点，则说明需要进行一些优化工作。</p>
-
-<p>边栏图标的计算基于 Compose 编译器执行的相同稳定性分析。该插件会接入编译器的分析阶段并提取稳定性信息，然后在编辑器中以可视化的方式呈现。</p>
-
-<p>但请注意，目前<a href="https://developer.android.com/develop/ui/compose/performance/stability/strongskipping">强跳过模式</a>默认大多已启用，因此所有可组合函数默认都可以跳过。你可以在插件配置中启用或禁用强跳过模式检查（工具 > Compose 稳定性分析器），该功能自 0.5.0 版本起也默认启用。如果你希望更加关注稳定性问题，可以根据实际情况将其关闭。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*UGJB2Jx_JKIv3_l0xrMCoQ.png" alt="图3" /></p>
-
-<h3>悬停提示：了解原因</h3>
-
-<p>边栏图标告诉你<strong>哪里</strong>出了问题，而悬停提示则告诉你<strong>为什么</strong>。当你将鼠标悬停在可组合函数名称上时，会显示详细的提示信息：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*s_KwLNlhbLEsoBko.png" alt="图4" /></p>
-
-<p>提示信息显示：</p>
-
-<ul>
-<li><p>可组合函数是否可跳过和可重启</p></li>
-<li><p>稳定参数与不稳定参数的总数</p></li>
-<li><p>每个参数的详细稳定性信息</p></li>
-<li><p>接收器稳定性（针对扩展函数）</p></li>
-</ul>
-
-
-<p>这种细致的反馈对于调试至关重要。你无需猜测哪个参数导致了不稳定，而是可以准确地看到哪些参数存在问题。</p>
-
-<h3>内联参数提示：精细化可见性</h3>
-
-<p>工具提示会在鼠标悬停时提供详细信息，而内联参数提示则无需任何交互即可提供持续可见性：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*g1f1L5ZuagOSKrA8.png" alt="图5" /></p>
-
-<p>函数签名中每个参数类型旁边都会显示小徽章，指示该参数是稳定还是不稳定。这是最详细的反馈级别；每个参数的稳定性一目了然。</p>
-
-<p>对于参数众多的函数，这有助于你快速浏览并识别有问题的参数，而无需打开工具提示。颜色编码与稳定性状态相对应：</p>
-
-<ul>
-<li><p>绿色徽章：参数稳定</p></li>
-<li><p>红色徽章：参数不稳定</p></li>
-<li><p>黄色徽章：稳定性将在运行时决定（因此可能稳定也可能不稳定）</p></li>
-</ul>
-
-
-<h3>代码检查：自动建议</h3>
-
-<p>第四层反馈是主动代码检查。当插件检测到不稳定的组合体时，它可以：</p>
-
-<ol>
-<li><p><strong>用警告下划线突出显示问题</strong>。</p></li>
-<li><p><strong>通过 Alt+Enter 菜单提供快速修复建议</strong>。</p></li>
-<li><p><strong>提供添加注解（例如 <code>@TraceRecomposition</code>）</strong>以进行调试。</p></li>
-<li><p><strong>提供抑制选项</strong>（如果不稳定是故意的）。</p></li>
-</ol>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*o9_zJzFKaKfyLp_hiXCvoA.png" alt="图6" /></p>
-
-<p>插件在此开始主动出击。它不仅会指出问题，还会提供解决方案。在不稳定的组合体上按下 Alt+Enter，你可能会看到如下选项：</p>
-
-<ul>
-<li><p>添加 <code>@TraceRecomposition</code> 以监控重新组合。</p></li>
-<li><p>使用 <code>@Stable</code> 注解进行标记（请谨慎使用）。</p></li>
-<li><p>抑制此函数的稳定性警告。</p></li>
-</ul>
-
-
-<h3>稳定性浏览器：包级分析</h3>
-
-<p>除了单个函数分析之外，稳定性浏览器还提供整个代码库稳定性的概览：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*xPe6l50SxP3DQHEP.png" alt="图7" /></p>
-
-<p>启用方法：</p>
-
-<ol>
-<li><p>安装 Compose Stability Analyzer Gradle 插件（下一节将介绍）。</p></li>
-<li><p>转到“视图”→“工具窗口”→“Compose Stability Analyzer”。</p></li>
-<li><p>构建项目并单击刷新按钮。</p></li>
-</ol>
-
-
-<p>浏览器以树状视图显示包结构，每个可组合函数都带有其稳定性状态的注解。你可以快速深入查找整个代码库中不稳定的函数，从而轻松地确定优化工作的优先级。</p>
-
-<p>这在大型项目中尤其有用，因为手动检查每个可组合组件是不切实际的。该工具会为你的应用程序提供一份稳定性“成绩单”，显示哪些包存在最多的稳定性问题。</p>
-
-<h3>自定义配置</h3>
-
-<p>该插件具有高度可定制性。你可以调整颜色、启用或禁用特定的视觉指示器，并配置分析行为以满足你的偏好。</p>
-
-<p>前往“设置”→“工具”→“Compose Stability Analyzer”（组合稳定性分析器）访问配置选项：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/0*l2CoGtjreY7XNdyK.png" alt="图8" /></p>
-
-<p>你可以：</p>
-
-<ul>
-<li><p>更改边栏图标颜色以匹配你的 IDE 主题</p></li>
-<li><p>分别启用或禁用内联提示、警告和边栏图标</p></li>
-<li><p>配置强跳过模式分析</p></li>
-<li><p>添加忽略类型模式以从分析中排除某些类</p></li>
-<li><p>在测试源集中启用分析</p></li>
-<li><p>设置自定义稳定性配置文件</p></li>
-</ul>
-
-
-<p>这种灵活性确保插件能够自然地融入你现有的工作流程，无论你偏好最小的视觉干扰还是最大的信息密度。</p>
-
-<h2>Gradle 插件：运行时重组追踪</h2>
-
-<p>IntelliJ 插件提供编译时可见性，而 Gradle 插件则支持<strong>运行时分析</strong>，能够精确追踪可组合组件在运行中的重组时间和原因。这是通过 <code>@TraceRecomposition</code> 注解实现的，该注解是一个编译器插件，它会在可组合组件中添加日志代码。</p>
-
-<h3>安装和设置</h3>
-
-<p>将以下依赖项添加到 <code>libs.versions.toml</code> 文件中：</p>
-
-<pre><code class="toml">stability-analyzer = { id = "com.github.skydoves.compose.stability.analyzer", version = "0.5.0" }
-</code></pre>
-
-<p>接下来，将插件应用到根目录下的 <code>build.gradle.kts</code> 文件中，如下所示：</p>
-
-<pre><code class="kotlin">alias(libs.plugins.stability.analyzer)
-</code></pre>
-
-<p>完成！该插件会自动将编译器插件应用到项目中的所有 Kotlin 编译任务。基本用法无需额外配置。</p>
-
-<h3>Kotlin 版本兼容性</h3>
-
-<p>该插件与 Kotlin 编译器紧密耦合，因此版本一致性至关重要。截至撰写本文时，<strong>你至少应使用 Kotlin 2.2.21 版本</strong>。使用不匹配的版本可能会导致编译错误。请始终使用与你的稳定性分析器版本完全匹配的 Kotlin 版本。你可以参考 Kotlin 版本映射表（<a href="https://github.com/skydoves/compose-stability-analyzer?tab=readme-ov-file#kotlin-version-mapping%EF%BC%89%E8%8E%B7%E5%8F%96%E7%9B%B8%E5%85%B3%E4%BF%A1%E6%81%AF%E3%80%82">https://github.com/skydoves/compose-stability-analyzer?tab=readme-ov-file#kotlin-version-mapping%EF%BC%89%E8%8E%B7%E5%8F%96%E7%9B%B8%E5%85%B3%E4%BF%A1%E6%81%AF%E3%80%82</a></p>
-
-<h3>@TraceRecomposition 注解</h3>
-
-<p>安装插件后，你可以使用 <code>@TraceRecomposition</code> 注解任何可组合组件，以跟踪其重组行为：</p>
-
-<pre><code class="kotlin">@TraceRecomposition
-@Composable
-fun ProductCard(
-    product: Product,
-    onClick: () -&gt; Unit
-) {
-    Card(onClick = onClick) {
-        Text(product.name)
-        Text("$${product.price}")
-    }
-}
-</code></pre>
-
-<p>当此可组合组件重组时，你将在 Logcat 中看到详细的日志：</p>
-
-<pre><code class="bash">D/Recomposition: [Recomposition #1] ProductCard  
-D/Recomposition:   ├─ product: Product stable (Product@abc123)  
-D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)  
-D/Recomposition: [Recomposition #2] ProductCard  
-D/Recomposition:   ├─ product: Product changed (Product@abc123 → Product@def456)  
-D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)
-</code></pre>
-
-<p>日志显示：</p>
-
-<ul>
-<li><p><strong>重组次数</strong>：此实例已重组的次数</p></li>
-<li><p><strong>参数稳定性</strong>：每个参数是稳定还是不稳定</p></li>
-<li><p><strong>变更检测</strong>：哪些参数发生了更改，显示新旧值</p></li>
-<li><p><strong>身份跟踪</strong>：每个参数值的哈希码</p></li>
-</ul>
-
-
-<p>这些细粒度的信息对于调试至关重要。你可以准确地看到是哪个参数的更改触发了重组，从而帮助你了解应用程序的重组模式。</p>
-
-<h3>使用标签参数进行过滤</h3>
-
-<p>对于包含大量跟踪可组合组件的大型应用程序，日志可能会变得非常庞大。 <code>tag</code> 参数可以帮助你组织和筛选日志：</p>
-
-<pre><code class="kotlin">@TraceRecomposition(tag = "product-list")
-@Composable
-fun ProductCard(product: Product, onClick: () -&gt; Unit) {
-    // ...
-}
-
-@TraceRecomposition(tag = "user-profile")
-@Composable
-fun ProfileHeader(user: User) {
-    // ...
-}
-</code></pre>
-
-<p>现在日志包含以下标签：</p>
-
-<pre><code class="bash">D/Recomposition: [Recomposition #1] ProductCard (tag: product-list)
-D/Recomposition: [Recomposition #1] ProfileHeader (tag: user-profile)
-</code></pre>
-
-<p>你可以筛选 Logcat 以仅显示特定标签：</p>
-
-<ul>
-<li><p>按 <code>tag: product-list</code> 筛选，仅查看与产品相关的重组日志。</p></li>
-<li><p>按 <code>tag: user-profile</code> 筛选，仅查看与用户个人资料相关的重组日志。</p></li>
-</ul>
-
-
-<p>这在与自定义日志记录器（将在下文介绍）结合使用时尤其有用，因为你可能只想将某些标签发送到分析服务。</p>
-
-<h3>设置阈值以减少噪音</h3>
-
-<p>大多数可组合组件在初始设置期间会重新组合 1-2 次，这是预期行为，<strong>并非性能问题</strong>。<code>threshold</code> 参数可以过滤掉这些噪音：</p>
-
-<pre><code class="kotlin">@TraceRecomposition(threshold = 3)
-@Composable
-fun FrequentlyRecomposingScreen() {
-    // Logs will only appear after the 3rd recomposition
-}
-</code></pre>
-
-<p>这样可以将注意力集中在真正的问题上：用户交互期间不断重新组合的可组合组件，而不仅仅是初始设置。</p>
-
-<p>一个实际用例：设置一个较高的阈值，并在超过该阈值时发送分析事件：</p>
-
-<pre><code class="kotlin">@TraceRecomposition(tag = "checkout", threshold = 10)
-@Composable
-fun CheckoutScreen() {
-    // If this recomposes 10+ times, something is wrong
-}
-</code></pre>
-
-<p>然后在你的自定义日志记录器（参见下一节）中，你可以在超过阈值时发送 Firebase 事件，从而监控生产环境中的性能问题。</p>
-
-<h3>配置日志系统</h3>
-
-<p>默认情况下，<code>@TraceRecomposition</code> 不会记录任何日志，你需要在 <code>Application</code> 类中启用日志记录：</p>
-
-<pre><code class="kotlin">class MyApp : Application() {
-    override fun onCreate() {
-        super.onCreate()
-
-        // Enable only in debug builds
-        ComposeStabilityAnalyzer.setEnabled(BuildConfig.DEBUG)
-    }
-}
-</code></pre>
-
-<p>这一点非常重要，如果你没有自定义日志记录器，<strong>务必使用</strong> <code>**BuildConfig.DEBUG**</code> 包裹，以避免生产构建中潜在的安全问题。</p>
-
-<p><strong>自定义日志记录器：Logcat 之外的选择</strong> 默认日志记录器使用 Logcat，但你可以提供自定义实现，将日志发送到你想要的任何位置：</p>
-
-<pre><code class="kotlin">ComposeStabilityAnalyzer.setLogger(object : RecompositionLogger {  
-    override fun log(event: RecompositionEvent) {  
-        // Send to Firebase, Crashlytics, custom analytics, etc.  
-        if (event.recompositionCount &gt;= 10) {  
-            FirebaseAnalytics.getInstance(this).logEvent("excessive\_recomposition") {  
-                param("composable", event.composableName)  
-                param("count", event.recompositionCount)  
-                param("unstable\_params", event.unstableParameters.joinToString())  
-            }  
-        }  
-    }  
-})
-</code></pre>
-
-<p>因此，你甚至可以根据调试模式或发布模式设置不同的日志记录器。<code>RecompositionEvent</code> 包含：</p>
-
-<ul>
-<li><p><code>composableName</code>：函数名称。</p></li>
-<li><p><code>tag</code>：来自 <code>@TraceRecomposition</code> 的标签。</p></li>
-<li><p><code>recompositionCount</code>：重新组合的次数。</p></li>
-<li><p><code>parameterChanges</code>：包含稳定性信息的参数变更列表。</p></li>
-<li><p><code>unstableParameters</code>：不稳定参数名称列表。</p></li>
-</ul>
-
-
-<p>这支持强大的监控模式。你可以：</p>
-
-<ul>
-<li><p>针对过度重组的组合对象发送分析事件</p></li>
-<li><p>在生产环境中跟踪性能指标（并采取适当的隐私保护措施）</p></li>
-<li><p>构建显示重组模式的自定义仪表板</p></li>
-<li><p>在测试环境中出现性能下降时发出警报</p></li>
-</ul>
-
-
-<p>以下是一个使用标签过滤日志内容的更贴近实际的示例：</p>
-
-<pre><code class="kotlin">val tagsToLog = setOf("checkout", "product-list", "search")
-ComposeStabilityAnalyzer.setLogger(object : RecompositionLogger {
-    override fun log(event: RecompositionEvent) {
-        if (BuildConfig.DEBUG) {
-            // In debug, log everything
-            Log.d("Recomposition", formatEvent(event))
-        } else {
-            // In release, only log tagged composables that exceed threshold
-            if (event.tag in tagsToLog &amp;&amp; event.recompositionCount &gt;= 5) {
-                // Send to analytics
-                FirebaseAnalytics.getInstance(this).logEvent("recomposition_issue", ...)
-            }
-        }
-    }
-})
-</code></pre>
-
-<h3>理解日志</h3>
-
-<p>让我们一起来了解如何解读日志。请看以下示例：</p>
-
-<pre><code class="bash">D/Recomposition: [Recomposition #1] UserCard  
-D/Recomposition:   ├─ user: User stable (User@abc123)  
-D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)
-</code></pre>
-
-<p><strong>这意味着：</strong></p>
-
-<ul>
-<li><p>这是此 <code>UserCard</code> 实例的首次重组。</p></li>
-<li><p>两个参数都稳定。</p></li>
-<li><p>这是初始重组的预期行为。</p></li>
-</ul>
-
-
-<pre><code class="bash">D/Recomposition: [Recomposition #2] UserCard  
-D/Recomposition:   ├─ user: User changed (User@abc123 → User@def456)  
-D/Recomposition:   └─ onClick: () -&gt; Unit stable (Function@xyz789)
-</code></pre>
-
-<p><strong>这意味着：</strong></p>
-
-<ul>
-<li><p>第二次重组。</p></li>
-<li><p><code>user</code> 参数已更改（新实例）。</p></li>
-<li><p><code>onClick</code> 保持不变（相同的 lambda 实例）。</p></li>
-<li><p>这是正常现象，参数已更改，因此需要进行重组。</p></li>
-</ul>
-
-
-<pre><code class="bash">D/Recomposition: [Recomposition #3] UserCard (tag: user-profile)  
-D/Recomposition:   ├─ user: MutableUser unstable (MutableUser@xyz789)  
-D/Recomposition:   └─ Unstable parameters: [user]
-</code></pre>
-
-<p><strong>这意味着：</strong></p>
-
-<ul>
-<li><p>第三次重组。</p></li>
-<li><p><code>user</code> 参数<strong>不稳定</strong>（可能具有 <code>var</code> 属性）。</p></li>
-<li><p>即使 <code>user</code> 没有更改，此可组合对象也会在每次父级重组时重新组合。</p></li>
-<li><p><strong>需要采取的措施</strong>：将 <code>MutableUser</code> 类修复为不可变。</p></li>
-</ul>
-
-
-<h2>稳定性验证：防止 CI 中的性能退化</h2>
-
-<p>Compose 稳定性分析器最强大的功能并非可视化反馈或运行时跟踪，而是<strong>防止稳定性退化影响生产环境</strong>。稳定性验证系统的作用类似于 git diff，用于检查可组合组件的稳定性，如果稳定性下降，则 CI 构建失败。</p>
-
-<h3>问题：静默的性能退化</h3>
-
-<p>想象一下这样的场景：你花了数周时间优化你的应用。每个可组合组件都稳定、可跳过且运行速度快。然后，一位同事无意中修改了一个数据类：</p>
-
-<pre><code class="kotlin">// Before (stable)
-data class User(val name: String, val age: Int)
-
-// After (unstable)
-data class User(var name: String, var age: Int)
-</code></pre>
-
-<p>这一简单的更改会波及整个 UI 树。数十个原本可跳过的可组合组件变得不可跳过。性能退化了，但代码审查却未能发现，也没有任何明显的迹象表明出了问题。</p>
-
-<p>稳定性验证可以防止这种情况发生。它会跟踪你的可组合组件的稳定性随时间的变化，并在稳定性下降时自动构建失败，强制在合并之前解决问题。</p>
-
-<h3>工作原理：稳定性快照</h3>
-
-<p>验证系统通过两个 Gradle 任务运行：</p>
-
-<ul>
-<li><p><code>**stabilityDump**</code>：创建一个包含所有可组合组件稳定性状态的 <code>.stability</code> 文件。</p></li>
-<li><p><code>**stabilityCheck**</code>：将当前代码与基线进行比较，如果稳定性下降则构建失败。</p></li>
-</ul>
-
-
-<p>可以这样理解：</p>
-
-<ul>
-<li><p><code>stabilityDump</code> = &ldquo;保存当前状态&rdquo;</p></li>
-<li><p><code>stabilityCheck</code> = &ldquo;自上次保存以来是否有任何更改？&rdquo;</p></li>
-</ul>
-
-
-<h3>步骤 1：创建基线</h3>
-
-<p>编译项目后，运行：</p>
-
-<pre><code class="bash">./gradlew :app:compileDebugKotlin  
-./gradlew :app:stabilityDump
-</code></pre>
-
-<p>这将生成 <code>app/stability/app.stability</code> 文件：</p>
-
-<pre><code class="kotlin">@Composable  
-public fun com.example.UserCard(user: com.example.User): kotlin.Unit  
-  skippable: true  
-  restartable: true  
-  params:  
-    - user: STABLE (immutable data class)  
-
-@Composable  
-public fun com.example.ProductList(items: kotlin.collections.List&lt;com.example.Product\&gt;): kotlin.Unit  
-  skippable: true  
-  restartable: true  
-  params:  
-    - items: STABLE (immutable collection with stable elements)
-</code></pre>
-
-<p>此文件易于阅读，并准确显示了编译器对每个可组合组件的判断结果。它是应用程序稳定性状态的完整快照。</p>
-
-<p><strong>将此文件提交到 Git：</strong></p>
-
-<pre><code class="bash">git add app/stability/app.stability  
-git commit -m "Add stability baseline"  
-git push
-</code></pre>
-
-<p>现在，团队中的每个人都拥有相同的基线。</p>
-
-<h3>步骤 2：检查回归问题</h3>
-
-<p>在你的 CI 流水线中运行：</p>
-
-<pre><code class="bash">./gradlew :app:compileDebugKotlin  
-./gradlew :app:stabilityCheck
-</code></pre>
-
-<p>如果没有任何变化，任务成功：</p>
-
-<pre><code class="bash">✅ Stability check passed.
-</code></pre>
-
-<p>如果稳定性出现回归，任务失败：</p>
-
-<pre><code class="bash">❌ Stability check failed!  
-
-The following composables have changed stability:  
-
-~ com.example.UserCard(user): parameter 'user' changed from STABLE to UNSTABLE  
-
-If these changes are intentional, run './gradlew stabilityDump' to update the baseline.
-</code></pre>
-
-<p>构建失败，在问题修复或明确接受回归之前，拉取请求将无法合并。</p>
-
-<h3>检测到的变更类型</h3>
-
-<p>验证器会检测到四种类型的变更：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1374/1*IwkocOj8s1No8lIphL1JIQ.png" alt="图9" /></p>
-
-<p>这种全面的跟踪机制确保<strong>任何</strong>稳定性变更都清晰可见，并需要进行相应的决策。</p>
-
-<h3>CI/CD 集成</h3>
-
-<p>将稳定性验证添加到你的 GitHub Actions 工作流：</p>
-
-<pre><code class="bash">name: Android CI  
-
-on: [push, pull_request]  
-jobs:  
-  build:  
-    runs-on: ubuntu-latest  
-    steps:  
-      - uses: actions/checkout@v3  
-      - name: Set up JDK 17  
-        uses: actions/setup-java@v3  
-        with:  
-          java-version: '17'  
-          distribution: 'temurin'  
-      - name: Build project  
-        run: ./gradlew :app:compileDebugKotlin  
-  stability_check:  
-    name: Compose Stability Check  
-    runs-on: ubuntu-latest  
-    needs: build  
-    steps:  
-      - name: Check out code  
-        uses: actions/checkout@v5.0.0  
-      - name: Set up JDK  
-        uses: actions/setup-java@v5.0.0  
-        with:  
-          distribution: 'zulu'  
-          java-version: 21  
-      - name: Run stability check  
-        run: ./gradlew stabilityCheck
-</code></pre>
-
-<p>现在，每个拉取请求都会自动进行检查。如果稳定性下降，则拉取请求将无法合并。</p>
-
-<h3>配置选项</h3>
-
-<p>你可以自定义要跟踪的内容：</p>
-
-<pre><code class="kotlin">// In your build.gradle.kts
-composeStabilityAnalyzer {
-    stabilityValidation {
-        enabled.set(true)
-        outputDir.set(layout.projectDirectory.dir("stability"))
-        includeTests.set(false) // Exclude test code
-
-        // Ignore specific packages
-        ignoredPackages.set(listOf("com.example.internal"))
-        // Ignore specific classes (e.g., previews)
-        ignoredClasses.set(listOf("PreviewComposables"))
-        // Ignore entire modules
-        ignoredProjects.set(listOf("benchmarks", "examples"))
-    }
-}
-</code></pre>
-
-<p>这对于排除不需要稳定性跟踪的代码非常有用，例如预览组合或调试屏幕。</p>
-
-<h3>排除特定组合</h3>
-
-<p>使用 <code>@IgnoreStabilityReport</code> 从验证中排除单个组合：</p>
-
-<pre><code class="kotlin">@IgnoreStabilityReport
-@Preview
-@Composable
-fun UserCardPreview() {
-    UserCard(user = User("John", 30))
-}
-</code></pre>
-
-<p>预览组合不会出现在生产版本中，因此它们的稳定性无关紧要。排除它们可以减少稳定性报告中的噪音。</p>
-
-<h3>多模块项目</h3>
-
-<p>对于包含多个模块的项目，每个模块都会有自己的 <code>.stability</code> 文件：</p>
-
-<pre><code class="bash">project/  
-├── app/stability/app.stability  
-├── feature-auth/stability/feature-auth.stability  
-└── feature-profile/stability/feature-profile.stability
-</code></pre>
-
-<p>在根目录运行 <code>stabilityCheck</code> 来检查所有模块：</p>
-
-<pre><code class="bash">./gradlew stabilityCheck
-</code></pre>
-
-<p>或者检查单个模块：</p>
-
-<pre><code class="bash">./gradlew :feature-auth:stabilityCheck
-</code></pre>
-
-<h3>接受有意为之的回归</h3>
-
-<p>有时稳定性回归是有意为之的，例如你正在重构代码并暂时接受较低的稳定性。在这种情况下，请更新基线：</p>
-
-<pre><code class="bash">./gradlew :app:stabilityDump  
-git add app/stability/app.stability  
-git commit -m "Accept stability regression for UserCard (refactoring in progress)"  
-git push
-</code></pre>
-
-<p>这会在 Git 历史记录中创建一个<strong>已记录的决策</strong>。回归不再是默默进行的，而是明确且可跟踪的。</p>
-
-<h2>性能考量和最佳实践</h2>
-
-<p>虽然这些工具功能强大，但仍有一些性能特性和最佳实践需要注意。有人问我是否需要让<em>每个</em>类型都稳定，答案绝对是“不需要”。</p>
-
-<p>由于现在有了强跳过模式，每个可组合函数都可以跳过，这本身就能优化稳定性。即使这个插件可能会提示“不稳定”或“运行时稳定性”，但你实际上并不需要为每个可组合函数都进行修复。我们来看一个简单的例子。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*4ZtAbwb8_5tRAR112kL1HA.png" alt="图10" /></p>
-
-<p>如果你查看 compose-material3 库中的 <code>Icon</code> 可组合函数，这个插件会提示它不稳定，因为它包含运行时参数。但是，<code>painter</code> 参数通常是通过 <code>painterResource</code> 函数初始化的，如下所示：</p>
-
-<pre><code class="kotlin">val painter = painterResource(R.drawable.)
-Icon(painter = painter, contentDescription = null)
-</code></pre>
-
-<p>如果你查看 <code>painterResource</code> 的内部逻辑，你会发现它本质上是稳定的。它内部使用 <code>remember</code> 将值缓存到内存中，所以你可以把它看作是一个小小的权衡：<em>“我会用一点内存来存储这个不稳定的实例，这样我就不必触发不必要的重新组合。”</em></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*sRvsZMkusaZuOMjGskhz0A.png" alt="图11" /></p>
-
-<p>关于不可变集合还有一个常见的误解——认为仅仅使用 <code>ImmutableList</code> 而不是普通的 <code>List</code> 就能提升性能。 <strong>并非总是如此。</strong></p>
-
-<p>不妨这样想：如果你有一个包含 1000 个大型对象的列表，然后你将其转换为不可变列表，那么你的可组合组件就变得可以忽略了。但是，每次重新组合时，Compose 都会对列表中的每个元素运行 <code>equals()</code> 函数，以检查新实例是否与之前的实例匹配。在某些情况下，这实际上会比重新渲染一个只显示其中五个元素的轻量级 UI 更<strong>影响性能</strong>。</p>
-
-<p>因此，<strong>稳定性会根据具体情况产生截然不同的影响</strong>，试图让整个 UI 保持稳定通常是不必要的，也是徒劳的。我希望这个插件不会加重你对稳定性的担忧，而是能够帮助你更有效地调试实际的性能问题，并做出更明智、更数据驱动的决策，而无需过度考虑稳定性。</p>
-
-<h2>结论</h2>
-
-<p>在本文中，我们探索了 Compose 稳定性分析器 (Compose Stability Analyzer) (<a href="https://github.com/skydoves/compose-stability-analyzer">https://github.com/skydoves/compose-stability-analyzer</a>)，了解了它如何通过三个互补的工具将 Compose 隐藏的稳定性分析可视化：IntelliJ 插件用于在开发过程中提供可视化反馈，Gradle 插件用于运行时重组追踪，以及稳定性验证系统用于防止持续集成 (CI) 中的回归。</p>
-
-<p>IntelliJ 插件将稳定性从一个不可见的编译时概念转化为可感知的事物，通过边栏图标、工具提示和内联提示，使稳定性问题一目了然。<code>@TraceRecomposition</code> 注解弥合了编译时分析和运行时行为之间的鸿沟，让你可以准确地了解可组合组件何时以及为何重新组合。稳定性验证系统则起到安全网的作用，确保你精心设计的优化不会随着代码库的演进而悄然失效。</p>
-
-<p>这些工具共同作用，使稳定性分析成为你开发工作流程中自然而然的一部分。你无需等待性能问题显现，即可在编码过程中立即发现它们。你无需猜测哪个参数导致了重新组合——日志会准确地告诉你哪些参数发生了变化。你也无需手动审查每个 PR 是否存在稳定性回归，CI 流水线会自动完成这项工作。</p>
-
-<p>理解稳定性是编写高性能 Compose 应用程序的基础。借助 Compose 稳定性分析器，这种理解变得轻松、直观、即时且有效。</p>
-
-<p>祝你编码愉快！</p>
 ]]></content>
   </entry>
   
