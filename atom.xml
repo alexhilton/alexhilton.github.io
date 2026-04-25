@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-04-06T12:11:25+00:00</updated>
+  <updated>2026-04-25T12:33:23+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,699 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Compose中初始加载逻辑究竟应该放在哪里？]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/04/25/inital-load-in-compose/"/>
+    <updated>2026-04-25T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/04/25/inital-load-in-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Where Should Initial Load Logic Actually Live in Jetpack Compose?」，原文链接<a href="https://proandroiddev.com/where-should-initial-load-logic-actually-live-in-jetpack-compose-b59b73f97c79">https://proandroiddev.com/where-should-initial-load-logic-actually-live-in-jetpack-compose-b59b73f97c79</a>，由Sergey Nes发布于2026年3月11。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/04/25/inital-load-in-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*ihghtdOK4S-penHTPy3BzA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>永无休止的争论</h2>
+
+<p>我写了一篇 LinkedIn 帖子，称 <code>LaunchedEffect(Unit) { viewModel.loadData() }</code> 是一种代码异味。社区强烈反对。</p>
+
+<p>我又写了一篇后续帖子，力挺 <code>init{}</code> 作为一种更简洁的替代方案。社区的反对声浪更大。</p>
+
+<p>然后我又写了一篇关于 <code>.onStart</code> + <code>stateIn</code> 作为响应式方法的文章。结果还是一样。</p>
+
+<p>50 多位工程师在三篇帖子中发表了看法。有些人赞同，有些人强烈反对，还有一些人提出了我完全没有考虑过的模式。我花在评论上的时间比写文章的时间还多。</p>
+
+<p>我得出了一个令人不安的结论：<strong>它们都对。</strong></p>
+
+<p>并非因为每种模式都同样好（在特定情况下，有些模式确实比其他模式更优），而是因为答案取决于大多数文章完全忽略的限制条件。例如，你的团队规模、你的测试规范、是否需要重试、你的屏幕是响应式密集型还是简单的单次加载。</p>
+
+<p>关于这个主题的大多数现有内容可以归为以下三类：“使用 <code>LaunchedEffect(Unit)</code>”（老旧、幼稚）、“迁移到 <code>init{}</code>”（矫枉过正，缺乏细致分析）或“使用 <code>stateIn</code>”（片面，忽略了陷阱）。每一种都将单一模式作为<em>唯一</em>答案。</p>
+
+<p>本文则不同。它涵盖了所有实际存在的模式，并坦诚地权衡了各种方案，提供了一个实际的决策框架，而不是“视情况而定”，并通过生产环境和来自日常从事相关工作的工程师的社区反馈来验证所有内容。</p>
+
+<p>我们先来探讨一下为什么这个问题比看起来更难。</p>
+
+<h2>为什么这个问题比看起来更难</h2>
+
+<p>Android 开发有一系列独特的限制，使得这个问题确实很难回答。这并非是开发者想得太复杂，而是因为这个平台迫使你去思考其他平台上不存在的问题。</p>
+
+<p>根本矛盾在于：<strong>ViewModel 和 Composable 的生命周期不同。</strong></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*2Xw-tM_p98A0EpvCfqxKvw.png" alt="图 1.1：旋转（配置更改）" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*CZQVMWcPVoObj6JYFlq8kA.png" alt="图 1.2：返回栈导航" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*EKC9RfQ6vZRMHlFK4Y8eJQ.png" alt="图 1.3：进程终止 + 恢复" /></p>
+
+<p>ViewModel 的生命周期不会因配置更改而改变。Composable 的生命周期则会改变。当用户旋转手机时，Composable 对象会被销毁并重新创建，但 ViewModel 对象仍然存活。这是设计使然，也是 ViewModel 的核心价值所在，但这造成了一种不匹配，所有初始加载模式都必须面对这个问题。</p>
+
+<p>以下是生命周期中的主要挑战，迫使每种方法都必须做出权衡：</p>
+
+<ul>
+<li><p><strong>配置更改</strong>：Composable 对象会被销毁并重新创建，但 ViewModel 对象仍然存在。任何 <code>LaunchedEffect</code> 都会重新触发，而任何 <code>init{}</code> 都不会。</p></li>
+<li><p><strong>进程终止 + SavedStateHandle</strong>：系统可能会在后台终止你的应用。当用户返回时，ViewModel 对象会被重新创建。<code>SavedStateHandle</code> 是应对这种情况的机制，但并非所有模式都能完美地与之兼容。</p></li>
+<li><p><strong>返回栈</strong>：当用户导航到另一个屏幕时，该屏幕的 Composable 组件可能会完全退出组合，但 ViewModel 仍然存活（作用域限定在导航图内）。当用户返回时，Composable 组件会重新进入组合，效果再次触发。</p></li>
+<li><p><strong>协程单元测试</strong>：有些模式使测试变得简单直接；而另一些则需要使用 <code>TestScope</code>、<code>advanceUntilIdle()</code> 以及仔细的协程管理。</p></li>
+</ul>
+
+
+<p>每种模式都至少会与上述限制之一进行权衡。没有捷径可走。</p>
+
+<p>没错，<code>repeatOnLifecycle</code> 解决了集合层面的生命周期感知问题（当屏幕处于后台时停止收集），但它并没有解决加载触发器的位置问题。本文将探讨这个问题。</p>
+
+<h2>模式</h2>
+
+<p>以下每个模式都遵循相同的结构：它的外观、人们使用它的原因、真正的陷阱（不仅仅是“小心”），以及何时才是正确的选择。</p>
+
+<h3>模式 0 — 代码异味</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyScreen</span><span class="p">(</span><span class="n">viewModel</span><span class="p">:</span> <span class="n">MyViewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">loadData</span><span class="p">()</span>  <span class="c1">// Why here? What triggers this?</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="c1">// ... UI</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这是大多数教程都会教授的模式。它也是生产环境中最容易出问题的模式。</p>
+
+<p><strong>人们使用它的原因：</strong> 它很简单。当 Composable 进入组合状态时，它只运行一次。在理想情况下，它“开箱即用”。</p>
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>它将业务意图隐藏在 UI 底层机制之后。</strong> Composable 现在负责决定何时加载数据。这是一个伪装成生命周期事件的业务决策。</p></li>
+<li><p><strong>它会在重新进入组合状态时再次触发。</strong> 离开页面，然后再回来，<code>LaunchedEffect(Unit)</code> 会再次触发。旋转设备，再次触发。ViewModel 可能已经加载了数据，但 Composable 并不知道。最终会导致重复的网络调用、竞态条件和状态闪烁。</p></li>
+<li><p><strong>没有 Compose 测试框架，无法进行测试。</strong> 无法单独进行单元测试。加载触发器嵌入在 UI 层中。</p></li>
+<li><p><strong>不支持重试或刷新。</strong> 需要添加更多状态管理来处理重试，这会进一步混淆 UI 层和业务层。</p></li>
+</ul>
+
+
+<p><strong>更深层次的问题：</strong> <code>LaunchedEffect(Unit)</code> 是<strong>组合驱动的，而非 UI 驱动的。</strong> 组合（将 Composable 添加到树的过程）是渲染系统的实现细节，而不是语义事件。</p>
+
+<p>_ViewModel 应该响应业务语义：“屏幕打开”、“用户请求刷新”、“导航参数已更改”。它不应该对渲染机制做出反应：“这个可组合组件已添加到树中。”</p>
+
+<p>这就是根本的不匹配之处。组合恰好与屏幕出现同时发生，但这并不意味着它是构建的正确抽象。这只是巧合，而非约定，而基于巧合构建会导致出现仅在返回栈导航、标签页切换和配置更改时才会出现的 bug。</p>
+
+<p><strong>最佳用途：</strong> 任何情况都不适合。总有更好的选择。</p>
+
+<h3>模式 1 — init {}</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">init</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span> <span class="n">load</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">load</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// fetch data, update state</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>当人们意识到模式 0 存在问题时，这是他们的第一反应。将加载操作移到 <code>init{}</code> 中，现在 ViewModel 拥有了它。简洁，对吧？</p>
+
+<p><strong>人们喜欢它的原因：</strong> 加载操作在 ViewModel 创建时发生。它不会因配置更改而丢失（ViewModel 不会在屏幕旋转时重新创建）。完全没有组合的副作用。UI 只需观察状态即可。</p>
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>无法感知屏幕可见性。</strong> ViewModel 在导航图实例化时创建，这可能发生在用户看到屏幕之前。如果你预取了 ViewModel，即使用户从未导航到该屏幕，<code>init{}</code> 也会立即触发。</p></li>
+<li><p><strong>在单元测试中立即运行。</strong> 在测试中实例化 ViewModel 时，<code>init{}</code> 会立即触发。你需要使用 <code>TestScope</code> 和 <code>advanceUntilIdle()</code> 来控制时间，这会增加每个测试的复杂性。</p></li>
+<li><p><strong>失去条件加载控制。</strong> 使用 <code>init{}</code>，加载总是会发生。你无法根据导航参数、屏幕状态或用户意图有条件地跳过它。注意：<code>SavedStateHandle</code> 在这里通过构造函数注入可以正常工作，这不是问题所在。问题在于 <code>init{}</code> 是无条件的。</p></li>
+<li><p><strong>不支持重试或刷新。</strong> 与模式 0 一样，此模式没有内置的重试或下拉刷新机制。你需要添加一个单独的方法来实现这些功能，而这实际上已经接近模式 2 的一半了。</p></li>
+</ul>
+
+
+<p><strong>最适合：</strong> 简单的原型、无需重试的一次性屏幕，或能够接受这种权衡取舍的快速迭代团队。</p>
+
+<h3>模式 2 — 显式 Action 分发（Clean MVVM / TOAD）</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Composable: signals lifecycle, NOT business logic</span>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">MyScreen</span><span class="p">(</span><span class="n">viewModel</span><span class="p">:</span> <span class="n">MyViewModel</span> <span class="p">=</span> <span class="n">viewModel</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">onAction</span><span class="p">(</span><span class="n">Action</span><span class="p">.</span><span class="n">ScreenStarted</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">uiState</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">uiState</span><span class="p">.</span><span class="n">collectAsStateWithLifecycle</span><span class="p">()</span>
+</span><span class='line'>    <span class="c1">// ... render uiState</span>
+</span><span class='line'><span class="p">}</span><span class="c1">// ViewModel: stays idle until told to start</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_uiState</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">&lt;</span><span class="n">UiState</span><span class="p">&gt;(</span><span class="n">UiState</span><span class="p">.</span><span class="n">Idle</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">uiState</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">UiState</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">_uiState</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">onAction</span><span class="p">(</span><span class="n">action</span><span class="p">:</span> <span class="n">Action</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">when</span> <span class="p">(</span><span class="n">action</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Action</span><span class="p">.</span><span class="n">ScreenStarted</span> <span class="p">-&gt;</span> <span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span> <span class="n">load</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>            <span class="n">Action</span><span class="p">.</span><span class="n">Retry</span> <span class="p">-&gt;</span> <span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span> <span class="n">load</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">load</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">_uiState</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">UiState</span><span class="p">.</span><span class="n">Loading</span>
+</span><span class='line'>        <span class="c1">// fetch data, update _uiState</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span><span class="n">sealed</span> <span class="n">interface</span> <span class="n">Action</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">object</span> <span class="nc">ScreenStarted</span> <span class="p">:</span> <span class="n">Action</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">object</span> <span class="nc">Retry</span> <span class="p">:</span> <span class="n">Action</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>等等，这难道不是用了 <code>LaunchedEffect(Unit)</code> 吗？我刚才不是说它有问题吗？</p>
+
+<p>是的。但区别很重要：<strong>模式 0 将 LaunchedEffect 用作​​业务触发器。</strong> 模式 2 将其用作<strong>生命周期信号。</strong> Composable 组件并不决定加载什么或何时加载，它只是发出“屏幕现在可见”的信号。ViewModel 决定如何处理这个信号。</p>
+
+<p><strong>人们喜欢它的原因：</strong></p>
+
+<ul>
+<li><p><strong>显式且可审计。</strong> 每次状态更改都可以追溯到指定的 Action。你可以搜索代码库中的 <code>Action.ScreenStarted</code>，准确地找到加载发生的位置和原因。</p></li>
+<li><p><strong>易于测试。</strong> 在单元测试中，你可以直接调用 <code>viewModel.onAction(Action.ScreenStarted)</code>。无需 Compose 运行时、<code>LaunchedEffect</code> 或测试框架。</p></li>
+<li><p><strong>与 <code>SavedStateHandle.toRoute&lt;&gt;()</code> 完美兼容。</strong> 你可以在决定是否加载之前访问导航参数。</p></li>
+<li><p><strong>一流的重试和刷新功能。</strong> 只需在 <code>when</code> 代码块中添加一行代码即可添加 <code>Action.Retry</code> 或 <code>Action.PullToRefresh</code>。</p></li>
+</ul>
+
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>比 <code>init{}</code> 更繁琐。</strong> 你需要在 Composable 中使用 <code>Action</code> 密封接口、<code>onAction</code> 方法和 <code>LaunchedEffect</code>。对于简单的屏幕来说，这可能显得过于复杂。</p></li>
+<li><p><strong>这种模式值得投入。</strong>一旦你的应用拥有超过几个屏幕，这种模式带来的一致性和可测试性优势将远远超过投入本身。</p></li>
+</ul>
+
+
+<p>这种模式的一个更严格的变体是 <strong>TOAD</strong>（类型化对象操作分发），其中 ViewModel 将类型化的事件分发给外部处理类。它是一个纯粹的状态机，需要更高的规范性，学习曲线也更陡峭，但状态转换完全清晰明确。如果你的团队遵循 MVI 原则，那么 TOAD 就是模式 2 的逻辑极致体现。</p>
+
+<p><strong>最适合：</strong>大多数生产应用。除非你有特殊原因需要选择其他方案，否则这是默认推荐方案。</p>
+
+<h3>模式 3 — .onStart / .onSubscription + stateIn</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">uiState</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">UiState</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">repository</span><span class="p">.</span><span class="n">getDataFlow</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">onStart</span> <span class="p">{</span> <span class="n">emit</span><span class="p">(</span><span class="n">UiState</span><span class="p">.</span><span class="n">Loading</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">stateIn</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">scope</span> <span class="p">=</span> <span class="n">viewModelScope</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">started</span> <span class="p">=</span> <span class="n">SharingStarted</span><span class="p">.</span><span class="n">WhileSubscribed</span><span class="p">(</span><span class="m">5</span><span class="n">_000</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">initialValue</span> <span class="p">=</span> <span class="n">UiState</span><span class="p">.</span><span class="n">Loading</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这是响应式纯粹主义者的答案：完全不在 Composable 中使用 <code>LaunchedEffect</code>。当 UI 订阅 <code>StateFlow</code> 时，加载开始；当屏幕消失超过 5 秒时，加载停止。ViewModel 是一个纯响应式管道。</p>
+
+<p><strong>人们喜欢它的原因：</strong></p>
+
+<ul>
+<li><p><strong>零 Composable 副作用。</strong> Composable 只负责收集状态。没有 <code>LaunchedEffect</code>，没有生命周期信号，UI 层也没有命令式代码。</p></li>
+<li><p><strong>UI 观察时立即开始。</strong> 加载由订阅触发，而非显式调用。这在语义上很清晰：如果没有人观察，则不会发生任何事情。</p></li>
+<li><p><strong>屏幕消失时停止。</strong> <code>WhileSubscribed(5_000)</code> 表示在最后一个订阅者消失 5 秒后，上游流将被取消。不会有后台运行的幽灵网络调用。</p></li>
+<li><p><strong>自然融入响应式链。</strong> 如果你的屏幕已经使用了 <code>.combine</code>、<code>.flatMapLatest</code> 或 <code>SavedStateHandle.getStateFlow</code>，那么添加 <code>.onStart</code> 只需一行代码，不会破坏响应式流程。</p></li>
+</ul>
+
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>热→冷→热语义可能会让你措手不及。</strong> 当最后一个订阅者消失且超时到期时，流程会进入冷状态。当新的订阅者出现时，<code>.onStart</code> 会再次触发，这意味着加载可能会重新触发。对于大多数屏幕来说，这没问题（甚至很理想），但它会让用户措手不及。</p></li>
+<li><p><strong>多个订阅者可能会触发两次 <code>onStart</code>。</strong> 如果两个 Composable 对象观察同一个 <code>StateFlow</code>，<code>onStart</code> 会为该流程触发一次，但基于 <code>SharedFlow</code> 的链的行为可能会有所不同。这时，<code>.onSubscription</code> 就派上用场了。</p></li>
+<li><p><strong>没有内置重试机制。</strong> 你无法从外部向冷流发送请求。如果用户点击“重试”，则需要单独的机制，这通常意味着需要使用模式 4。</p></li>
+<li><p><strong>测试时序细节。</strong> 你需要使用 <code>advanceUntilIdle()</code> 来让流管道在单元测试中稳定下来。</p></li>
+</ul>
+
+
+<p><strong>onStart 与 onSubscription：</strong> 实际上，在 <code>stateIn(WhileSubscribed)</code> 和单个 UI 收集器的情况下，它们的行为完全相同。当可能附加多个收集器时，<code>.onSubscription</code> 在语义上更精确，因为它按订阅者触发，而不是按流启动触发。社区工程师报告称，在生产环境中使用 <code>.onSubscription</code> 没有出现任何问题。选择与你的流拓扑结构相匹配的即可。</p>
+
+<p><strong>最适合：</strong> 具有多个上游流的响应式密集型屏幕、对任何 Compose 副作用过敏的团队以及纯粹的转换管道 ViewModel。</p>
+
+<h3>模式 4 — 触发模式</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">MyViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">retryTrigger</span> <span class="p">=</span> <span class="n">MutableSharedFlow</span><span class="p">&lt;</span><span class="n">Unit</span><span class="p">&gt;(</span>
+</span><span class='line'>        <span class="n">extraBufferCapacity</span> <span class="p">=</span> <span class="m">1</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">uiState</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">UiState</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">retryTrigger</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">onStart</span> <span class="p">{</span> <span class="n">emit</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">}</span>  <span class="c1">// auto-trigger on first subscription</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">transformLatest</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">emit</span><span class="p">(</span><span class="n">UiState</span><span class="p">.</span><span class="n">Loading</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">result</span> <span class="p">=</span> <span class="n">repository</span><span class="p">.</span><span class="n">loadData</span><span class="p">()</span>
+</span><span class='line'>            <span class="n">emit</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">fold</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">onSuccess</span> <span class="p">=</span> <span class="p">{</span> <span class="n">UiState</span><span class="p">.</span><span class="n">Success</span><span class="p">(</span><span class="n">it</span><span class="p">)</span> <span class="p">},</span>
+</span><span class='line'>                <span class="n">onFailure</span> <span class="p">=</span> <span class="p">{</span> <span class="n">UiState</span><span class="p">.</span><span class="n">Error</span><span class="p">(</span><span class="n">it</span><span class="p">.</span><span class="n">message</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">))</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">stateIn</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">scope</span> <span class="p">=</span> <span class="n">viewModelScope</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">started</span> <span class="p">=</span> <span class="n">SharingStarted</span><span class="p">.</span><span class="n">WhileSubscribed</span><span class="p">(</span><span class="m">5</span><span class="n">_000</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">initialValue</span> <span class="p">=</span> <span class="n">UiState</span><span class="p">.</span><span class="n">Loading</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="k">fun</span> <span class="nf">retry</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">retryTrigger</span><span class="p">.</span><span class="n">tryEmit</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这是模式 3 的升级版。它结合了 <code>.onStart + stateIn</code> 的响应式优势，以及一流的重试和刷新支持，所有这些都集成在一个响应式管道中。</p>
+
+<p><strong>人们喜欢它的原因：</strong></p>
+
+<ul>
+<li><p><strong>所有操作都在同一个管道中完成。</strong> 初始加载、重试和下拉刷新都通过同一个 <code>transformLatest</code> 代码块进行。没有单独的方法，也没有重复的逻辑。</p></li>
+<li><p><code>transformLatest</code> <strong>会取消正在进行的调用。</strong> 如果用户在之前的加载仍在进行时点击重试，则之前的协程会自动取消。避免竞态条件。</p></li>
+<li><p><strong>Compose 中无需使用 <code>LaunchedEffect</code>。</strong> 与模式 3 的优势相同，UI 只需收集状态即可。</p></li>
+<li><p><strong>声明式。</strong> 整个加载生命周期都以流程转换的形式表达，而不是命令式的方法调用。</p></li>
+</ul>
+
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>更复杂的思维模型。</strong> 如果你的团队不熟悉 <code>transformLatest</code>、<code>SharedFlow</code> 和响应式流程操作符，那么这种模式的学习曲线比模式 2 更陡峭。</p></li>
+<li><p><strong>不要在外部链中添加额外的 <code>onStart</code>。</strong> 一个常见的错误是在 <code>transformLatest</code> 之后的外部链中添加 <code>.onStart { emit(UiState.Loading) }</code>，这会导致重复的事件触发。</p></li>
+</ul>
+
+
+<p><strong>最适合：</strong> 需要重试、下拉刷新或定期重新加载的屏幕，并结合响应式上游流程。</p>
+
+<h2>决策框架</h2>
+
+<p>这是我当初开始写这个系列时希望看到的流程图：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Bcd6Z5k5I3jtDxPEJ16Tug.png" alt="图 2：决策流程图" /></p>
+
+<p><strong>屏幕出现时是否需要加载数据？</strong> 是 → 请继续。</p>
+
+<p><strong>问题 1：是否需要重试/下拉刷新/多次重新加载触发器？</strong></p>
+
+<ul>
+<li><p>是 → <strong>模式 2</strong>（显式操作分发）或 <strong>模式 4</strong>（基于触发器的响应式）。</p></li>
+<li><p>否 → 请继续查看问题 2。</p></li>
+</ul>
+
+
+<p><strong>问题 2：你的屏幕是否大量使用响应式操作？</strong>（多个上游流程，<code>.combine</code>、<code>.flatMapLatest</code>、<code>SavedStateHandle.getStateFlow</code>）</p>
+
+<ul>
+<li><p>是 → <strong>模式 3</strong>（<code>.onStart</code> + <code>stateIn</code>）。自然地融入响应式流程。</p></li>
+<li><p>否 → 继续执行问题 3。</p></li>
+</ul>
+
+
+<p><strong>问题 3：你的团队是否注重严格的可审计性，确保每次状态更改都可追溯到指定的意图？</strong></p>
+
+<ul>
+<li><p>是 → <strong>模式 2</strong>，使用 MVVM 或 TOAD。<code>LaunchedEffect(Unit) { onAction(ScreenStarted) }</code> 在这里是安全且符合预期的。</p></li>
+<li><p>否 → 继续执行问题 4。</p></li>
+</ul>
+
+
+<p><strong>问题 4：这是一个简单的、一次性的加载操作，没有重试，并且团队规模较小或发展迅速吗？</strong></p>
+
+<ul>
+<li><p>是 → <strong>模式 1</strong>（<code>init{}</code>）。接受权衡：更难的单元测试，无法控制屏幕可见性。</p></li>
+<li><p>否 → 默认使用<strong>模式 2</strong>。仪式是值得的。</p></li>
+</ul>
+
+
+<h2>对比表</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Mw8r8Z6kLmXcm34d-7i3vA.png" alt="Ghost-free = 屏幕不在屏幕内或处于返回栈时不会进行网络调用。SavedState = 可与 SavedStateHandle / toRoute&lt;&gt;() 完美配合" /></p>
+
+<h2>元教训</h2>
+
+<p>真正的代码异味并非来自 <code>LaunchedEffect</code> 本身。</p>
+
+<p>而是<strong>将 UI 层用作命令式业务触发器</strong>。</p>
+
+<p>解决方案并非单一模式，而是一个清晰的约定：</p>
+
+<ul>
+<li><p><strong>ViewModel</strong> 拥有状态和逻辑。</p></li>
+<li><p><strong>Composable</strong> 观察状态并发出生命周期信号。</p></li>
+</ul>
+
+
+<p>一旦明确了这一点，即使是 <code>LaunchedEffect(Unit)</code> 也可以很简洁，只要它发送的是生命周期信号（例如 <code>Action.ScreenStarted</code>），而不是直接触发业务逻辑。</p>
+
+<p>这就是 <code>Pattern 2</code> 的优势所在。<code>LaunchedEffect</code> 仍然存在，但它承担着截然不同的功能。它是 Composable 组件发出“我现在在屏幕上”的信号，而不是“请去获取用户个人资料”。</p>
+
+<p><code>Pattern 3</code> 和 <code>Pattern 4</code> 更进一步，完全消除了生命周期信号。ViewModel 响应的是订阅，而不是显式调用。两种方法都遵循相同的约定：ViewModel 拥有逻辑，UI 只负责显示。</p>
+
+<h2>你真的需要 ViewModel 吗？</h2>
+
+<p>这是整个系列中最尖锐的批评：</p>
+
+<blockquote><p>“如果剥离[ViewModel]的用途……你可能根本就不需要ViewModel，而可以用其他方式加载数据。”</p></blockquote>
+
+<p>这是一个合理的挑战，值得认真回答。</p>
+
+<p><strong>保留ViewModel的理由：</strong></p>
+
+<ul>
+<li><p><strong>配置变更的持久性。</strong> ViewModel在轮换后仍然存在；Composable则不然。如果没有它，每次配置更改都需要重新获取数据。</p></li>
+<li><p><strong>进程终止 + SavedStateHandle。</strong> 仅靠响应式流程无法在进程终止后序列化状态。ViewModel + <code>SavedStateHandle</code> 的组合才能实现这一点。</p></li>
+<li><p><strong>可测试性边界。</strong> ViewModel是单元测试中用虚拟存储库替换真实存储库的分界线。移除它，你的测试边界就会转移到Composable，或者完全消失。</p></li>
+<li><p><strong>共享状态。</strong> 当同一屏幕上的多个 Composable 组件需要相同的数据时，ViewModel 自然而然地成为唯一的所有者。</p></li>
+</ul>
+
+
+<p><strong>质疑 ViewModel 的理由：</strong></p>
+
+<ul>
+<li><p>对于真正无状态、只读且无副作用的屏幕，ViewModel 只是一种形式主义。</p></li>
+<li><p>对于简单的场景，使用简单的 <code>produceState</code> 或支持 Compose 的库（例如 <a href="https://github.com/cashapp/molecule"><strong>Molecule</strong></a> 或 <a href="https://github.com/slackhq/circuit"><strong>Circuit</strong></a>）会更简洁。</p></li>
+<li><p>ViewModel 是一种模式，而非强制性要求。</p></li>
+</ul>
+
+
+<p><strong>客观评价：</strong> 模式 3 和 4 并没有剥夺 ViewModel 的用途，它们只是将加载逻辑保留在 ViewModel 内部，并以响应式而非命令式的方式触发。这仍然是 ViewModel 在履行其职责。问题仅仅在于它如何决定开始工作，而不是它是否拥有状态。</p>
+
+<p>这种区别很重要。响应式模式并非证明 ViewModel 不必要，而是证明 ViewModel 可以更智能地决定何时开始工作。</p>
+
+<h2>结论</h2>
+
+<p>没有万全之策。Android 的限制、配置变更、进程终止、回退栈、重构等机制，都保证了每种模式都有其优缺点。任何告诉你并非如此的人，要么是在开发一个简单的应用，要么就是还没遇到过极端情况。</p>
+
+<p>但“视情况而定”这种说法远远不够。这就是决策框架存在的意义：它将模糊的架构问题转化为四个具体的“是/否”判断，从而引导你找到合适的模式。</p>
+
+<p>正确的模式应该是你的团队在六个月后仍然能够阅读、测试和理解的模式。它不是 Twitter 上流行的模式，也不是教程里教你的模式，而是符合你自身限制的模式。</p>
+
+<p>如果你不确定，可以从“模式 2”开始。显式 action dispatch 方法适用于大多数生产应用，可扩展性强，并且如果你以后需要响应式重试，它能为你提供一条清晰的路径过渡到“模式 4”。虽然过程比较繁琐，但当你第一次调试到与负载相关的 bug 并能够准确追踪其触发原因时，它的价值就显而易见了。</p>
+
+<p>感谢所有在本系列文章评论区提出宝贵意见的朋友们。正是你们的帮助，才使得这篇指南比我独自撰写的任何版本都更加完善。</p>
+
+<p><strong>本文源自四篇 LinkedIn 文章系列。如果你想阅读简短版本：</strong></p>
+
+<ul>
+<li><p>文章 1 — <a href="https://lnkd.in/eJPVeMw6">LaunchedEffect 代码异味</a></p></li>
+<li><p>文章 2 — <a href="https://lnkd.in/egN89zK7">init{} 的细微差别 + MVVM/TOAD</a></p></li>
+<li><p>文章 3 — <a href="https://www.linkedin.com/posts/sergey-neskoromny_androiddev-jetpackcompose-kotlin-activity-7434991472355143680-NWX5">.onStart + stateIn 之争</a></p></li>
+<li><p>文章 4 — <a href="https://www.linkedin.com/posts/sergey-neskoromny_androiddev-jetpackcompose-kotlin-activity-7434991472355143680-NWX5">决策指南</a></p></li>
+<li><p>文章 4 — [决策指南] （总结）](<a href="https://www.linkedin.com/posts/sergey-neskoromny_decision-guide-activity-7436799659295080448-9KyO?utm_source=share&amp;utm_medium=member_desktop&amp;rcm=ACoAAAI6ck4B-Yf3V8NgQYV95lsnc383Vue4hBM">https://www.linkedin.com/posts/sergey-neskoromny_decision-guide-activity-7436799659295080448-9KyO?utm_source=share&amp;utm_medium=member_desktop&amp;rcm=ACoAAAI6ck4B-Yf3V8NgQYV95lsnc383Vue4hBM</a>)</p></li>
+</ul>
+
+
+<h2>参考资料</h2>
+
+<p><strong>Android / Jetpack</strong></p>
+
+<ul>
+<li><p><a href="https://developer.android.com/jetpack/compose">Jetpack Compose</a> — Android 的现代声明式 UI 工具包。</p></li>
+<li><p><a href="https://developer.android.com/topic/libraries/architecture/viewmodel">ViewModel</a> — 生命周期感知组件，即使配置发生更改也能继续运行。</p></li>
+<li><p><a href="https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate">SavedStateHandle</a> — 通过保存状态机制在进程终止后仍然有效的键值映射。</p></li>
+<li><p><a href="https://developer.android.com/kotlin/flow/stateflow-and-sharedflow">StateFlow / SharedFlow</a> — Kotlin 协程，用于可观察状态和事件流。</p></li>
+<li><p><a href="https://developer.android.com/develop/ui/compose/side-effects#launchedeffect">LaunchedEffect</a> — Compose 的副作用 API，在进入组合时运行一个挂起代码块。</p></li>
+<li><p><a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#(kotlinx.coroutines.flow.StateFlow).collectAsStateWithLifecycle(androidx.lifecycle.Lifecycle,androidx.lifecycle.Lifecycle.State,kotlin.coroutines.CoroutineContext)">collectAsStateWithLifecycle</a> — Compose 的生命周期感知 Flow 收集器。</p></li>
+<li><p><a href="https://developer.android.com/topic/libraries/architecture/coroutines#repeatonlifecycle">repeatOnLifecycle</a> — 每次生命周期达到目标状态（例如，<code>STARTED</code>）时运行一个代码块。</p></li>
+<li><p><a href="https://developer.android.com/develop/ui/compose/side-effects#producestate">produceState</a> — Compose API，用于将非 Compose 状态转换为 Compose <code>State</code>。</p></li>
+<li><p><a href="https://developer.android.com/jetpack/compose/navigation">Navigation Compose</a> — 为 Compose 提供类型安全的导航，包括用于参数解析的 <code>toRoute&lt;&gt;()</code>。</p></li>
+</ul>
+
+
+<p><strong>其他架构库</strong></p>
+
+<ul>
+<li><p><a href="https://github.com/cashapp/molecule">Molecule</a> (Cash App) — 使用 Compose 运行时构建 <code>StateFlow</code> 流，无需 UI 树。适用于完全在 Compose 中管理展示逻辑/状态。</p></li>
+<li><p><a href="https://github.com/slackhq/circuit">Circuit</a> (Slack) — 面向 Kotlin/Android 的 Compose 优先架构库：包含 presenter、screens、导航等。基于与 Molecule 类似的理念，但是一个更完整的应用框架。 <a href="https://slackhq.github.io/circuit/">文档</a></p></li>
+<li><p><a href="https://proandroiddev.com/@aumaidkh/toad-a-kotlin-first-architecture-pattern-that-finally-made-my-viewmodels-boring-b615a9ab6c30">TOAD — Typed Object Action Dispatch</a> (Murtaza Khursheed) — 一种 Kotlin 优先架构模式，它将复杂性从臃肿的 ViewModel 转移到类型化的、可分发的 Action 对象。这是模式 2 的逻辑极致体现。</p></li>
+<li><p><a href="https://github.com/orbit-mvi/orbit-mvi">Orbit MVI</a> — 一个简单、类型安全的 Kotlin MVI 框架，具有出色的多平台支持（包括通过 KMP 支持 iOS）。它是最流行且备受推荐的 MVI 库之一。</p></li>
+<li><p><a href="https://github.com/arkivanov/MVIKotlin">MVIKotlin</a> (Arkadii Ivanov) — 成熟且久经考验的 MVI 框架，具备时间旅行调试功能，并着重于 KMP（Kotlin 跨平台管理）。广泛应用于 Kotlin 多平台项目。<a href="https://arkivanov.github.io/MVIKotlin/">文档</a></p></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack Compose元球边缘效果]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect/"/>
+    <updated>2026-04-18T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Jetpack Compose Metaball Edge Effect — Final Part」，原文链接<a href="https://proandroiddev.com/jetpack-compose-metaball-edge-effect-final-part-ac8a4cc7a425">https://proandroiddev.com/jetpack-compose-metaball-edge-effect-final-part-ac8a4cc7a425</a>，由Yuriy Skul发布于2026年3月21日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*oKSE6UFKtEYhxgmqDBv7mw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>背景</h2>
+
+<p>我探索了几种 Metaball 交互方法——都不算太复杂，只是模糊和 alpha 阈值。</p>
+
+<p>但由于 <code>blur()</code>（API 31+）和 <code>RenderEffect</code>（API 31+）有最低 API 级别要求，而用于 alpha 过滤的运行时着色器（AGSL）仅在 API 33 及更高版本中可用，因此我也探索了适用于旧版 Android 的替代方案。</p>
+
+<p>我还尝试在两个带轮廓的圆形按钮之间实现 Metaball 效果——方法相同，但使用的是描边而不是填充形状。与颜色矩阵不同，AGSL 允许在特定的 alpha 范围内进行过滤，这使得渲染成为可能（参见 Supra 部分的底部）：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:600/1*BcYrSQMs8ZhimgPIN791DA.gif" alt="跨 API 的 Metaball 效果" /></p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/gooey">跨 API 的 Metaball 效果的 GitHub 链接</a></p>
+
+<p><a href="https://medium.com/@yuriyskul/compose-agsl-shader-gooey-outline-metaball-effect-with-transparent-background-cb8b0e72286c">Medium “Supra” 概述文章链接</a></p>
+
+<p>但后来我突然想到一个简单而优雅的想法——实现滚动内容与屏幕边缘之间的元球交互方式相同。在我看来，它看起来非常简洁美观，就像物体之间的元球交互一样。</p>
+
+<p>这个概念验证非常简单——只需在顶部和底部边缘附近添加垂直渐变带，模糊圆形对象，并应用常规的 alpha 阈值过滤：<a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAndText/tabs/edge">github 链接“Gooey Edge”选项卡</a>:</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:500/1*_UK9XXKiySTuVavXyjetIA.gif" alt="POC（元球边缘效果）" /></p>
+
+<p>对文本进行简单探索后发现，根据模糊半径、alpha 阈值和文本大小的不同，结果会有所不同——从一大块实心斑点到一小块，甚至在 alpha 过滤后完全没有效果。</p>
+
+<p>文本替换动画的一个好方法是，将模糊效果从 0 动画到某个值，交换文本，然后再动画回来。</p>
+
+<p>有趣的是，根据你调整元球参数的方式，你可以得到几种不同的行为：</p>
+
+<ul>
+<li><p>文本先变成元球，然后再变成另一段文本</p></li>
+<li><p>文本变成元球，缩小并消失，然后这个过程反向进行，变成一段新的文本</p></li>
+<li><p>文本立即融化，然后出现一段新的文本（我不喜欢这种效果）</p></li>
+</ul>
+
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAndText/tabs/text">GitHub 链接 “文本融化”选项卡</a></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:700/1*nPWAVvYCNYqdLTg_zRYsnA.gif" alt="文本变形概念" /></p>
+
+<blockquote><p>也许很多人（包括我自己）都做过类似的事情，但第一个公开分享的人是…… <strong>Sinasamaki</strong> 以简洁明了的方式分享了这一概念，因此将这一理念引入 Android 平台是理所应当的。他的所有作品都是杰作——纯粹的艺术作品。</p>
+
+<p><a href="https://www.sinasamaki.com/5-metaball-animations-in-jetpack-compose/"><strong>Sinasamaki — metaball 教程</strong></a></p></blockquote>
+
+<p>滚动文本的 metaball 效果的主要问题在于，模糊效果是以 <code>RenderEffect</code> 的形式应用于整个可组合对象（包含文本的滚动列）。结果，所有文本都会变得模糊，metaball 的交互不再局限于预期的区域（顶部和底部边缘附近）。</p>
+
+<p>相反，整个内容变成了一大块黑色的色块。你越是想让 metaball 效果更强烈、更吸引眼球，情况就越糟糕——因为文本首先会与自身交互，然后才会（以微弱的方式）与屏幕边缘交互。</p>
+
+<p>首先，我尝试构建一个变通方案——在原始文本上方同步渲染相同的文本，然后叠加顶部和底部区域，对其进行模糊处理，最后应用相同的效果。最终，我得到了一个可行的解决方案，但仍然不够完善，而且充满了各种变通方法。</p>
+
+<p>因此，我得出结论，我需要一个 <strong>自定义模糊效果，可以局部应用于所需区域（顶部和底部边缘），并且模糊强度随着靠近边缘而增加。</strong></p>
+
+<p>我围绕仅使用 alpha 通道的模糊效果进行了一系列测试和实验（因为元球效果不需要 RGB 模糊）。我比较了线性模糊和高斯模糊两种方法，并尝试了不同的内核质量——16dp（约17次点击）左右效果不错，但超过这个值就需要多次渲染（约61次点击）。使用更高的值（100次以上点击）很快就会变得过于耗费资源。</p>
+
+<p><a href="https://medium.com/@yuriyskul/agsl-alpha-blur-with-local-regions-and-dynamic-radius-linear-and-gaussian-17-61-101-taps-3a36198c9567">我的文章介绍了使用动态半径的自定义AGSL局部模糊。</a></p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/customAlphaBlur">自定义Alpha模糊实验的GitHub链接</a>.</p>
+
+<p>对于元球效果，我选择了以下结果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:700/1*hSsNmOQP9-tQUwYS9u76JA.gif" alt="自定义高斯 AGSL alpha 模糊" /></p>
+
+<p>我已经准备好了……</p>
+
+<h2>垂直滚动解决方案</h2>
+
+<p>实现起来相对简单。</p>
+
+<p>滚动文本放置在一个 <code>Column</code> 元素内，并仅对顶部和底部区域应用自定义模糊效果。随着内容接近滚动容器边缘，模糊强度逐渐增强。</p>
+
+<p>当处理像文本这样非常小的元素（笔画宽度只有几个 dp）时，所有 metaball 配置参数——例如自定义局部模糊区域的高度或渐变带——也都会变得非常小。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:864/1*mJhhmhq7DbEkkOtG3ReFgw.png" alt="添加局部模糊以实现“融化”效果" /></p>
+
+<p>为了实现“黏糊糊”效果，添加了高度为 16dp 的小型渐变带，垂直渐变范围为 0.4 到 0。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:856/1*toHSAwCjRt_hahUyMdEL4w.png" alt="添加局部模糊和垂直渐变带以实现“黏糊糊”效果" /></p>
+
+<p>根据之前对文本及其变换的实验，观察到两种现象：文本要么消失，要么变成一团模糊的色块。</p>
+
+<p>边缘附近的消失可以称为“融化”效果，而与边缘融合也可以称为“黏糊糊”效果。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*doBo1WfYpy9_f1sikUHrAw.gif" alt="结果：文字融化效果" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*CKR3sa0_hxJIPNYTyMf8lg.gif" alt="结果：文字粘稠效果" /></p>
+
+<p>问题解决了——但我并不满意。这和我预想的完全不一样。它看起来没有我想象中那么干净利落，也没有那么惊艳。</p>
+
+<p>为了获得至少像样的效果，需要对所有这些参数进行大量调整：模糊程度、AGSL 应用区域、透明度阈值以及渐变带中的最大透明度。所有这些都与文本大小有关，而如果文本大小以 <code>sp</code> 为单位定义，则不稳定，甚至行间距也可能导致画面模糊。</p>
+
+<p>此外，由于 <code>RenderEffect</code> 的存在，我们仍然依赖于 API 级别。无论我如何尝试，自定义 alpha 模糊的效果都不如系统自带的模糊效果高效可靠，而且可能会引入瑕疵，尤其是在边缘处。</p>
+
+<p>另外，字母与边缘的融合（这是我们想要的效果）也存在一个缺点——字母之间会相互融合，导致形状变成模糊的色块。遗憾的是，目前还没有彻底消除这些副作用的方法。</p>
+
+<p>虽然无法阻止字母自身融合，但在水平滚动的情况下，相邻字母之间不会发生融合。</p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAdvanced"><strong>GitHub 链接：垂直滚动解决方案</strong></a></p>
+
+<h2>水平滚动解决方案</h2>
+
+<p>对于相对于模糊半径而言较大的对象，例如带有图标的大型圆形元素，或者更粗更大的图标，可以获得更稳定的效果。此外，即使是巨大的单行文本水平滚动时，效果也会更好。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">//left/right custom blur local zones width and gradient edge boxes width</span>
+</span><span class='line'><span class="k">val</span> <span class="py">effectMagnitude</span> <span class="p">=</span> <span class="m">56.</span><span class="n">dp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">blurRadius</span> <span class="p">=</span> <span class="m">30.</span><span class="n">dp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">alphaThresholdEffect</span> <span class="p">=</span> <span class="n">alphaThreshold50PercentEffect</span>
+</span><span class='line'><span class="c1">// Max horizontal gradient</span>
+</span><span class='line'><span class="k">val</span> <span class="py">edgeAlpha</span> <span class="p">=</span> <span class="m">0.5f</span>
+</span><span class='line'><span class="k">val</span> <span class="py">circleSize</span> <span class="p">=</span> <span class="m">72.</span><span class="n">dp</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*2-gmg2aux2EE91HyxKHj1w.gif" alt="带有圆形元素的水平滚动元球" /></p>
+
+<p>对于大型图标，效果仍然对小型和细元素非常敏感——请注意搜索、勾选和加号图标的情况。对于这些图标，需要降低透明度阈值并减小模糊半径。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">effectMagnitude</span> <span class="p">=</span> <span class="m">56.</span><span class="n">dp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">blurRadius</span> <span class="p">=</span> <span class="m">30.</span><span class="n">dp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">alphaThresholdEffect</span> <span class="p">=</span> <span class="n">alphaThreshold50PercentEffect</span>
+</span><span class='line'><span class="k">val</span> <span class="py">edgeAlpha</span> <span class="p">=</span> <span class="m">0.5f</span>
+</span><span class='line'><span class="k">val</span> <span class="py">iconSize</span> <span class="p">=</span> <span class="m">56.</span><span class="n">dp</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*x650hs9weqrghnkSUbLEnA.gif" alt="Plain Icons meaball edge effect — very sensitive for small and thin elements" /></p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">effectMagnitude</span> <span class="p">=</span> <span class="m">30.</span><span class="n">dp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">blurRadius</span> <span class="p">=</span> <span class="m">20.</span><span class="n">dp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">alphaThresholdEffect</span> <span class="p">=</span> <span class="n">alphaThreshold30PercentEffect</span>
+</span><span class='line'><span class="k">val</span> <span class="py">edgeAlpha</span> <span class="p">=</span> <span class="m">0.3f</span>
+</span><span class='line'><span class="c1">//use dp instead of sp for stable effect</span>
+</span><span class='line'><span class="k">val</span> <span class="py">HorizontalTextSize</span> <span class="p">=</span> <span class="m">56.</span><span class="n">sp</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*WL1n3it2q2fV0EpzJhpq0g.gif" alt="Metaball Edge Horizo​​ntal Text" /></p>
+
+<p><strong>自定义模糊效果可以替换为常规模糊效果吗？</strong> 可以，但这会引入一个关键问题：整个内容都会变得模糊，并且到处都会出现不必要的 Metaball 交互。在之前的文章中，我们已经探讨并解决了这个问题。</p>
+
+<p><strong>我们可以避免使用 RenderEffect 模糊或自定义模糊吗？</strong></p>
+
+<p>可以。在我之前的文章中，我探讨了绘制发光光晕边框的六种不同方法，同样的思路也适用于这里——在圆形元素周围绘制模糊蒙版滤镜或光晕渐变。这样，圆形元素的内部就不会变形。</p>
+
+<p>然而，你仍然需要解决相邻元素通过其“透明度”相互交叉的问题，从而导致重叠区域可见。一个简单的办法是检测最左侧和最右侧的元素，并仅对它们应用效果。</p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgeHorizo%E2%80%8B%E2%80%8BntalScroll"><strong>GitHub 链接：水平滚动解决方案</strong></a></p>
+
+<h2><strong>结论</strong></h2>
+
+<p><strong>是的，局部自定义模糊可以显著简化问题。</strong> 然而，它并不能解决视觉上的“污渍”问题。内容往往先变成一团模糊的色块，然后才开始与边缘互动。</p>
+
+<p>元球效果与液态玻璃（玻璃变形）等效果的主要区别在于，<strong>元球效果发生在元素之间</strong>。这种效果发生在用户界面元素之外，在它们之间的空间中，那里可能存在许多其他元素。</p>
+
+<p>相比之下，玻璃变形在视觉上<strong>被包含在单个组件内</strong>。</p>
+
+<p>因此，液态玻璃通常看起来干净利落，而元球效果在涉及多个元素时很容易变得杂乱无章。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[在Compose中用Shader实现透明的粘稠元球效果]]></title>
@@ -5082,7 +5775,7 @@
 
 <p>如有任何疑问，欢迎随时联系：</p>
 
-<p>📧 <strong>邮箱：</strong> <a href="&#x6d;&#97;&#105;&#x6c;&#116;&#x6f;&#58;&#100;&#101;&#110;&#x69;&#115;&#111;&#x76;&#x2e;&#115;&#x68;&#117;&#x72;&#101;&#x67;&#x40;&#103;&#x6d;&#x61;&#105;&#x6c;&#x2e;&#99;&#111;&#109;">&#x64;&#101;&#x6e;&#x69;&#x73;&#111;&#x76;&#x2e;&#115;&#x68;&#x75;&#x72;&#101;&#103;&#64;&#103;&#109;&#97;&#x69;&#108;&#46;&#99;&#111;&#x6d;</a></p>
+<p>📧 <strong>邮箱：</strong> <a href="&#109;&#x61;&#x69;&#x6c;&#116;&#111;&#x3a;&#x64;&#101;&#x6e;&#x69;&#x73;&#111;&#x76;&#46;&#x73;&#104;&#117;&#114;&#101;&#103;&#x40;&#x67;&#109;&#x61;&#x69;&#x6c;&#46;&#99;&#111;&#x6d;">&#x64;&#x65;&#x6e;&#105;&#115;&#x6f;&#x76;&#x2e;&#x73;&#104;&#117;&#114;&#x65;&#x67;&#64;&#103;&#109;&#97;&#105;&#108;&#46;&#99;&#x6f;&#109;</a></p>
 
 <p>🔗 <strong>领英：</strong> <a href="https://www.linkedin.com/in/aleks-denisov/">Sasha Denisov</a></p>
 ]]></content>
@@ -12067,671 +12760,6 @@
 <p>无论你是构建需要频繁更新布局的内容密集型应用、需要快速 A/B 测试的电子商务平台，还是需要快速迭代的企业级工具，RemoteCompose 都能为真正动态的 UI 提供架构基础。该框架处理了序列化、传输和渲染的复杂性，因此你可以专注于设计卓越的用户体验。</p>
 
 <p>你可以观看他们最近关于<a href="https://speakerdeck.com/camaelon/introducing-remotecompose-break-your-ui-out-of-the-app-sandbox">RemoteCompose 简介：将你的 UI 从应用程序沙盒中解放出来</a>的演讲。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[深入理解withContext和launch的真正区别]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch/"/>
-    <updated>2025-12-05T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「The Real Difference Between withContext(Dispatchers.IO) and launch(Dispatchers.IO)」，原文链接<a href="https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2">https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2</a>，由
-Anatolii Frolov发布于2025年11月20日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*nHuLhSAjZIEbeLHiFdMeSA.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在使用 Kotlin 协程时，很容易遇到两种看起来几乎相同的模式。它们都使用了 <code>Dispatchers.IO</code>。它们都将工作移出主线程。它们都出现在不同团队编写的仓库、服务层和 ViewModel 代码中。</p>
-
-<p>但相似之处仅限于表面。它们的行为截然不同——这种差异会影响实际 Android 项目中的顺序、正确性，甚至线程安全。当后台操作影响 UI 状态或共享数据时，这一点尤为重要。</p>
-
-<p>这种困惑不难理解。它们的语法几乎相同，并且都在同一个调度器上运行。但一个会暂停直到工作完成，而另一个会启动并行工作并立即返回。这创建了不同的执行路径，很容易被忽略。</p>
-
-<p>本文解释了 <code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 之间的真正区别，通过实际代码展示了它们的行为差异，并重点介绍了这种差异在生产环境 Android 应用中的重要性。</p>
-
-<h2>看似相同的代码行为却截然不同</h2>
-
-<p>以下两段代码看起来几乎一样：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// work</span>
-</span><span class='line'><span class="p">}</span><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// work</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>它们运行在同一个调度器上。它们都将工作转移到后台线程。但它们的行为<strong>并不</strong>相同。</p>
-
-<p>以下是并排运行它们的结果：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">main</span><span class="p">()</span> <span class="p">=</span> <span class="n">runBlocking</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;Start&quot;</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">100</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;Inside launch&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">delay</span><span class="p">(</span><span class="m">50</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">println</span><span class="p">(</span><span class="s">&quot;Inside withContext&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">println</span><span class="p">(</span><span class="s">&quot;End&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>输出：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>Start
-</span><span class='line'>Inside withContext
-</span><span class='line'>End
-</span><span class='line'>Inside launch
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这展示了关键区别。</p>
-
-<p><code>withContext</code> 会等待其工作完成才会继续执行。</p>
-
-<p><code>launch</code> 则完全不等待——它并行运行，并在稍后完成。</p>
-
-<h2>为什么会发生这种情况</h2>
-
-<p><code>withContext</code> 是一个挂起函数。这意味着当前协程会在该行暂停，切换到 <code>Dispatchers.IO</code>，执行代码块，然后从中断的地方继续执行。这里的关键词是<strong>等待</strong>。在该行之后的任何代码都会等待代码块执行完毕。</p>
-
-<p><code>launch</code> 会创建一个新的协程并立即返回。当前协程会立即继续执行，而新创建的代码块会独立执行。这是一种“触发并继续”模式。除非你显式地对新创建的协程调用 <code>join()</code>，否则不会有等待。</p>
-
-<p>这不是一个 bug，而是协程构建器的设计决策。</p>
-
-<p><code>withContext</code> 确保单个协程内部的执行顺序。</p>
-
-<p><code>launch</code> 的设计本身就引入了并发性。</p>
-
-<p>这种视觉上的相似性掩盖了行为上的差异。前者保持代码的可预测顺序，而后者引入了并行工作，这些工作可能会根据调度和负载情况随时完成。</p>
-
-<h2>这种差异在实际项目中的重要性</h2>
-
-<p>在许多 Android 场景中，任务完成的确切时间至关重要。哪怕是顺序上的细微差别，都可能导致一些难以察觉的 bug，直到生产环境才会被发现。</p>
-
-<h3>1. 后台任务完成后更新 UI</h3>
-
-<p>在 ViewModel 中：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">user</span> <span class="p">=</span> <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">userRepository</span><span class="p">.</span><span class="n">loadUser</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="n">_state</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">user</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>输出（概念图）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>User loaded first
-</span><span class='line'>UI updated second
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>由于 <code>withContext</code> 会等待，因此 UI 只有在加载完成后才会更新。</p>
-
-<p>但如果将其替换为 <code>launch(Dispatchers.IO)</code>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">result</span><span class="p">:</span> <span class="n">User</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">result</span> <span class="p">=</span> <span class="n">userRepository</span><span class="p">.</span><span class="n">loadUser</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="n">_state</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="n">result</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>输出（概念图）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>UI updated first
-</span><span class='line'>User loaded later
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这里，UI 在后台任务完成之前就更新了。语法上的视觉相似性掩盖了执行顺序的不同。</p>
-
-<h3>2.协调多步骤后台操作</h3>
-
-<p>在自定义仓库代码中，你可能需要操作严格按照顺序执行。例如，先保存数据，然后写入日志：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">fileWriter</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">logWriter</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="s">&quot;Saved&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>suspend</code> 保证了操作顺序。日志写入必须在保存完成后才能进行。</p>
-
-<p>但使用 <code>launch</code> 则：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">fileWriter</span><span class="p">.</span><span class="n">save</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">logWriter</span><span class="p">.</span><span class="n">write</span><span class="p">(</span><span class="s">&quot;Saved&quot;</span><span class="p">)</span> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这两个操作可以以任意顺序执行。在负载较高的情况下，日志写入可能早于保存操作。这听起来似乎无关紧要，但一旦调试或审计变得困难，就会造成问题。</p>
-
-<h3>3. 访问共享状态</h3>
-
-<p>使用 <code>withContext</code> 进行顺序执行在更新共享对象时更安全：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">cache</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>使用 <code>launch</code>，两个更新操作可以同时运行：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">cache</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">item1</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">cache</span><span class="p">.</span><span class="n">update</span><span class="p">(</span><span class="n">item2</span><span class="p">)</span> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>除非缓存本身是线程安全的，否则并行写入可能会导致竞态条件。</p>
-
-<h2>为什么这种差异容易被忽略</h2>
-
-<p>主要原因是语法。两者都使用相同的括号。两者都显示 <code>Dispatchers.IO</code>。两者都将代码包裹在代码块中。人们的注意力会集中在调度器上，而不是协程构建器上。</p>
-
-<p>另一个原因是许多现代库已经在内部处理线程。Room DAO 方法和 Retrofit 的挂起函数不需要 <code>withContext(Dispatchers.IO)</code>。由于这些库减少了手动切换调度器，开发者看到的协程构建器之间的明显差异较少。</p>
-
-<p>这可能会造成一种错觉，即所有调度器的用法都可以互换，但对于自定义操作来说并非如此。</p>
-
-<h2>与 async/await 的深入比较</h2>
-
-<p>为了进一步突出差异，请比较以下三个示例：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">deferred</span> <span class="p">=</span> <span class="n">async</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">loadData</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span><span class="k">val</span> <span class="py">result</span> <span class="p">=</span> <span class="n">deferred</span><span class="p">.</span><span class="n">await</span><span class="p">()</span>
-</span><span class='line'><span class="n">println</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>输出（概念图）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>loadData completes
-</span><span class='line'>result printed
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>async</code> 的行为类似于 <code>launch</code>，但返回 <code>Deferred</code>。</p>
-
-<p><code>await()</code> 会将其转换为顺序行为——就像 <code>withContext</code> 一样。</p>
-
-<p>关键点：<strong>顺序行为仅在显式等待时发生。</strong></p>
-
-<h2>异常处理行为</h2>
-
-<p><code>withContext</code> 直接在调用协程中抛出异常。它们不会被延迟或存储。</p>
-
-<p><code>launch</code> 将异常报告给其父作用域。如果该作用域有 supervisor 或自定义异常处理程序，则效果不同。异常不会立即中断调用者的执行路径。</p>
-
-<p>这意味着：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">error</span><span class="p">(</span><span class="s">&quot;Boom&quot;</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'><span class="n">println</span><span class="p">(</span><span class="s">&quot;Next&quot;</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>崩溃会在“Next”执行之前停止协程。</p>
-
-<p>但使用 <code>launch</code>：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">launch</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">error</span><span class="p">(</span><span class="s">&quot;Boom&quot;</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'><span class="n">println</span><span class="p">(</span><span class="s">&quot;Next&quot;</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>“Next”仍然会打印。启动的协程会自行崩溃。</p>
-
-<h2>需要记住的内容</h2>
-
-<ul>
-<li><p><code>withContext</code> <strong>等待</strong>代码块执行完毕后才会继续执行。</p></li>
-<li><p><code>launch</code> 会启动<strong>并行</strong>工作并立即返回。</p></li>
-<li><p>当<strong>结果或顺序</strong>至关重要时，请使用 <code>withContext</code>。</p></li>
-<li><p>当你需要<strong>并发工作</strong>且无需阻塞调用者时，请使用 <code>launch</code>。</p></li>
-<li><p>视觉上的相似性掩盖了行为上的差异——协程构建器定义了语义，而不是调度器。</p></li>
-</ul>
-
-
-<h2>总结</h2>
-
-<p><code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 看起来相似，但行为却不同。前者会暂停并确保顺序执行，而后者会创建并发并立即继续执行。当工作顺序、共享状态、UI 更新或异常处理依赖于工作完成时间时，这种差异至关重要。</p>
-
-<p>理解这种区别可以使协程代码更易于预测，并避免那些只有在实际应用中才会显现的细微错误。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Jetpack Compose中的阴影艺术]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/11/24/the-art-of-shadows-in-jetpack-compose/"/>
-    <updated>2025-11-24T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/11/24/the-art-of-shadows-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「The Art of Shadows in Jetpack Compose」，原文链接<a href="https://medium.com/proandroiddev/the-art-of-shadows-in-jetpack-compose-63a75070882f">https://medium.com/proandroiddev/the-art-of-shadows-in-jetpack-compose-63a75070882f</a>，由Stefano Natali发布于2025年10月4日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2025/11/24/the-art-of-shadows-in-jetpack-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*UjyqMyVg002OIDJ1Hdee8Q.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>UI 中的阴影发挥着至关重要的作用：它们在视觉上<strong>提升</strong>元素，指示着<strong>交互性</strong>，并提供用户操作的即时<strong>反馈</strong>。多年来，我们一直依赖于<strong>高度</strong>属性，但 Jetpack Compose 现在提供了一套强大的工具，可以对<strong>阴影渲染</strong>进行精细控制。</p>
-
-<p>Google 最近新增了一个<a href="https://developer.android.com/develop/ui/compose/graphics/draw/shadows">文档页面</a>，其中包含一系列有趣的用例。本文将探索 Compose 中的主要阴影修改器，并深入讲解创建渐变和炫酷特效等高级技巧，从而提升应用的风格。</p>
-
-<p>本文讨论的所有技巧的完整代码示例都可以在我的 GitHub 仓库 <a href="https://github.com/stefanoq21/ComposePlayground"><strong>Compose Playground</strong></a> 中找到。</p>
-
-<h2>阴影修改器（Shadow Modifiers）</h2>
-
-<p>添加阴影最简单但自定义程度最低的方法是使用 <strong>Modifier.shadow()</strong>。与以往一样，它的行为依赖于<strong>基于高度的阴影</strong>，模拟来自上方的光源，阴影深度直接取决于你提供的高度值。其主要限制在于阴影始终被裁剪到可合成对象的形状内，并且你无法自定义扩展、颜色色调或偏移等属性。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">Modifier</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="m">100.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">shadow</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">elevation</span> <span class="p">=</span> <span class="m">10.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">shape</span> <span class="p">=</span> <span class="n">RectangleShape</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>        <span class="p">.</span><span class="n">background</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">)</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:704/1*7Nkm6z8Ls4FyvDqCcKToDw.png" alt="" /></p>
-
-<p>让我们从一些新功能开始，这些功能赋予我们更强大的力量。使用 <strong>dropShadow()</strong>，我们可以在内容后面创建自定义阴影。这个修饰符是创建复杂阴影的关键，它允许对内容后面的阴影进行精细控制，使元素看起来像是被抬升了一样。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'> <span class="p">.</span><span class="n">dropShadow</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">),</span> <span class="n">shadow</span> <span class="p">=</span> <span class="n">Shadow</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">radius</span> <span class="p">=</span> <span class="m">6.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">spread</span> <span class="p">=</span> <span class="m">2.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="m">0.3f</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">offset</span> <span class="p">=</span> <span class="n">DpOffset</span><span class="p">(</span><span class="m">2.</span><span class="n">dp</span><span class="p">,</span> <span class="m">2.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>              <span class="p">)</span>
-</span><span class='line'>            <span class="p">)</span>
-</span><span class='line'> <span class="p">.</span><span class="n">background</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:990/1*kENF6x3L985dO65DSY0Zng.png" alt="" /></p>
-
-<p>它使用 <strong>Shadow</strong> 参数，可以精确控制视觉效果。这个参数允许你使用几个关键属性来塑造阴影。 <strong>半径</strong> 决定了边缘的柔和度和扩散（模糊）程度。<strong>扩散</strong> 值控制阴影几何形状相对于可组合元素大小的扩展或收缩。最后，<strong>偏移</strong> 沿 <strong>X 轴和 Y 轴</strong>定位阴影，从而确定光源的视觉方向。结合阴影的<strong>颜色</strong>，这些属性可以实现完全自定义。</p>
-
-<p>💡 <strong>顺序很重要：</strong>在修改器链中，<strong>dropShadow()</strong> 修改器必须出现在 <strong>background()</strong> 修改器<strong>之前</strong>，因为阴影先绘制，背景绘制在其上方。</p>
-
-<p><strong>innerShadow()</strong> 修改器是 <strong>dropShadow()</strong> 的逆操作，它在可组合元素边界的<strong>内部</strong>创建阴影，从而实现元素凹陷或压入表面的视觉效果。与它的对应项一样，它也使用可自定义的<strong>Shadow</strong>对象，允许你使用<strong>半径</strong>、<strong>颜色</strong>、<strong>偏移</strong>和<strong>扩散</strong>来微调效果。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">.</span><span class="n">background</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'><span class="p">.</span><span class="n">innerShadow</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">20.</span><span class="n">dp</span><span class="p">),</span> <span class="n">shadow</span> <span class="p">=</span> <span class="n">Shadow</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">radius</span> <span class="p">=</span> <span class="m">6.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">spread</span> <span class="p">=</span> <span class="m">2.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Black</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="m">0.3f</span><span class="p">),</span>
-</span><span class='line'>        <span class="n">offset</span> <span class="p">=</span> <span class="n">DpOffset</span><span class="p">(</span><span class="m">2.</span><span class="n">dp</span><span class="p">,</span> <span class="m">2.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1108/1*a7KFFaTXCk4KC-sm9AYUoQ.png" alt="" /></p>
-
-<p>💡<strong>再次强调，顺序很重要：</strong><strong>innerShadow()</strong>修改器<strong>必须</strong>放在<strong>background()</strong>修改器<strong>之后</strong>。如果将其放在背景之前，内容将绘制在阴影之上，完全遮盖阴影。</p>
-
-<p>这些修改器的真正强大之处在于它们的自定义和组合。通过叠加<strong>innerShadow()</strong>和<strong>dropShadow()</strong>，你可以创建复杂而逼真的视觉效果。我们来看一些高级用例。</p>
-
-<h2>高级技巧：组合和自定义阴影</h2>
-
-<h3>自定义阴影</h3>
-
-<p>当你在 <strong>dropShadow()</strong> 函数中将 <strong>Brush</strong> 对象而非纯色传递给 <strong>Shadow</strong> 对象时，自定义的强大功能便显而易见。此功能允许你使用 <strong>Brush.sweepGradient</strong> 创建渐变效果。此外，无论你使用标准形状还是完全自定义的几何体，阴影始终会贴合可组合对象的形状。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">.</span><span class="n">dropShadow</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">shape</span> <span class="p">=</span> <span class="n">MaterialShapes</span><span class="p">.</span><span class="n">Cookie12Sided</span><span class="p">.</span><span class="n">toShape</span><span class="p">(),</span> <span class="n">shadow</span> <span class="p">=</span> <span class="n">Shadow</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">radius</span> <span class="p">=</span> <span class="m">10.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">spread</span> <span class="p">=</span> <span class="m">6.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">brush</span> <span class="p">=</span> <span class="n">Brush</span><span class="p">.</span><span class="n">sweepGradient</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">listOf</span><span class="p">(</span><span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">,</span> <span class="n">Color</span><span class="p">.</span><span class="n">Blue</span><span class="p">,</span> <span class="n">Color</span><span class="p">.</span><span class="n">Yellow</span><span class="p">,</span> <span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">),</span>
-</span><span class='line'>        <span class="n">offset</span> <span class="p">=</span> <span class="n">DpOffset</span><span class="p">(</span><span class="m">2.</span><span class="n">dp</span><span class="p">,</span> <span class="m">2.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'><span class="p">.</span><span class="n">background</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">shape</span> <span class="p">=</span> <span class="n">MaterialShapes</span><span class="p">.</span><span class="n">Cookie12Sided</span><span class="p">.</span><span class="n">toShape</span><span class="p">(),</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1122/1*a8xMvXOb3hS6icdGU0p1gg.png" alt="" /></p>
-
-<h3>新粗犷主义阴影</h3>
-
-<p>这种风格完美地展现了 <strong>dropShadow()</strong> 修改器在实现极致高对比度效果方面的强大功能。要实现新粗犷主义（Neobrutalism）那种粗犷、棱角分明的视觉效果，你必须使用 <code>dropShadow()</code> 函数，并设置模糊度为零，偏移量要明显，通常还要配合粗边框。具体来说，你需要同时设置 <code>radius = 0.dp</code> 和 <code>spread = 0.dp</code> 来消除扩散，然后应用鲜艳的色彩，并设置一个明显的偏移量，从而创建出标志性的锐利轮廓。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'> <span class="p">.</span><span class="n">dropShadow</span><span class="p">(</span>
-</span><span class='line'>     <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">0.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>     <span class="n">shadow</span> <span class="p">=</span> <span class="n">Shadow</span><span class="p">(</span>
-</span><span class='line'>        <span class="n">radius</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">spread</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">color</span> <span class="p">=</span> <span class="n">dropShadowColor</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">offset</span> <span class="p">=</span> <span class="n">DpOffset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">,</span> <span class="m">8.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'> <span class="p">.</span><span class="n">border</span><span class="p">(</span>
-</span><span class='line'>    <span class="m">8.</span><span class="n">dp</span><span class="p">,</span> <span class="n">borderColor</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'> <span class="p">.</span><span class="n">background</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">White</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">0.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*bdPpm0XYPfTXMuoNrVQuZw.png" alt="" /></p>
-
-<h3>具有动效的阴影</h3>
-
-<p>阴影并非只是静态的；它们可以制作成动画，从而提供即时的用户反馈。我们将要探索的最后一个高级技巧是创建交互式阴影，使其在特定操作（例如点击或按下）时平滑过渡。这项技术对于模拟物理交互至关重要，它能直观地确认元素的抬升或状态发生了变化。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-<span class='line-number'>51</span>
-<span class='line-number'>52</span>
-<span class='line-number'>53</span>
-<span class='line-number'>54</span>
-<span class='line-number'>55</span>
-<span class='line-number'>56</span>
-<span class='line-number'>57</span>
-<span class='line-number'>58</span>
-<span class='line-number'>59</span>
-<span class='line-number'>60</span>
-<span class='line-number'>61</span>
-<span class='line-number'>62</span>
-<span class='line-number'>63</span>
-<span class='line-number'>64</span>
-<span class='line-number'>65</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'> <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">interactionSource</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">MutableInteractionSource</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">isPressed</span> <span class="k">by</span> <span class="n">interactionSource</span><span class="p">.</span><span class="n">collectIsPressedAsState</span><span class="p">()</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">// Create transition with pressed state</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">transition</span> <span class="p">=</span> <span class="n">updateTransition</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">targetState</span> <span class="p">=</span> <span class="n">isPressed</span><span class="p">,</span> <span class="n">label</span> <span class="p">=</span> <span class="s">&quot;button_press_transition&quot;</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">T</span><span class="p">&gt;</span> <span class="n">buttonPressAnimation</span><span class="p">()</span> <span class="p">=</span> <span class="n">tween</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;(</span>
-</span><span class='line'>            <span class="n">durationMillis</span> <span class="p">=</span> <span class="m">400</span><span class="p">,</span> <span class="n">easing</span> <span class="p">=</span> <span class="n">Ease</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">// Animate all properties using the transition</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">shadowAlpha</span> <span class="k">by</span> <span class="n">transition</span><span class="p">.</span><span class="n">animateFloat</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">label</span> <span class="p">=</span> <span class="s">&quot;shadow_alpha&quot;</span><span class="p">,</span> <span class="n">transitionSpec</span> <span class="p">=</span> <span class="p">{</span> <span class="n">buttonPressAnimation</span><span class="p">()</span> <span class="p">})</span> <span class="p">{</span> <span class="n">pressed</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">pressed</span><span class="p">)</span> <span class="m">0f</span> <span class="k">else</span> <span class="m">1f</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">//to animate the color</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">colorDropShadow</span> <span class="k">by</span> <span class="n">transition</span><span class="p">.</span><span class="n">animateColor</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">label</span> <span class="p">=</span> <span class="s">&quot;shadow_color&quot;</span><span class="p">,</span> <span class="n">transitionSpec</span> <span class="p">=</span> <span class="p">{</span> <span class="n">buttonPressAnimation</span><span class="p">()</span> <span class="p">})</span> <span class="p">{</span> <span class="n">pressed</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">pressed</span><span class="p">)</span> <span class="n">Color</span><span class="p">.</span><span class="n">Transparent</span> <span class="k">else</span> <span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="p">(</span><span class="m">0.5f</span><span class="p">))</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">innerShadowAlpha</span> <span class="k">by</span> <span class="n">transition</span><span class="p">.</span><span class="n">animateFloat</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">label</span> <span class="p">=</span> <span class="s">&quot;inner_shadow_alpha&quot;</span><span class="p">,</span> <span class="n">transitionSpec</span> <span class="p">=</span> <span class="p">{</span> <span class="n">buttonPressAnimation</span><span class="p">()</span> <span class="p">})</span> <span class="p">{</span> <span class="n">pressed</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="k">if</span> <span class="p">(!</span><span class="n">pressed</span><span class="p">)</span> <span class="m">0f</span> <span class="k">else</span> <span class="m">1f</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">Box</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">Modifier</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">clickable</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">interactionSource</span><span class="p">,</span> <span class="n">indication</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>                <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="c1">//...</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">width</span><span class="p">(</span><span class="m">300.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">200.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">align</span><span class="p">(</span><span class="n">Alignment</span><span class="p">.</span><span class="n">Center</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">dropShadow</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">70.</span><span class="n">dp</span><span class="p">),</span> <span class="n">shadow</span> <span class="p">=</span> <span class="n">Shadow</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">radius</span> <span class="p">=</span> <span class="m">10.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">spread</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="p">(</span><span class="m">0.5f</span><span class="p">)),</span>
-</span><span class='line'>                        <span class="n">offset</span> <span class="p">=</span> <span class="n">DpOffset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span> <span class="m">0.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>                        <span class="n">alpha</span> <span class="p">=</span> <span class="n">shadowAlpha</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>                <span class="c1">// note that the background needs to be defined before defining the inner shadow</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">background</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFFFFFFFF</span><span class="p">),</span> <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">70.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>                <span class="p">.</span><span class="n">innerShadow</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">shape</span> <span class="p">=</span> <span class="n">RoundedCornerShape</span><span class="p">(</span><span class="m">70.</span><span class="n">dp</span><span class="p">),</span> <span class="n">shadow</span> <span class="p">=</span> <span class="n">Shadow</span><span class="p">(</span>
-</span><span class='line'>                        <span class="n">radius</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">spread</span> <span class="p">=</span> <span class="m">4.</span><span class="n">dp</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">color</span> <span class="p">=</span> <span class="n">Color</span><span class="p">.</span><span class="n">Green</span><span class="p">.</span><span class="n">copy</span><span class="p">(</span><span class="n">alpha</span> <span class="p">=</span> <span class="p">(</span><span class="m">0.5f</span><span class="p">)),</span>
-</span><span class='line'>                        <span class="n">alpha</span> <span class="p">=</span> <span class="n">innerShadowAlpha</span><span class="p">,</span>
-</span><span class='line'>                        <span class="n">offset</span> <span class="p">=</span> <span class="n">DpOffset</span><span class="p">(</span><span class="n">x</span> <span class="p">=</span> <span class="m">0.</span><span class="n">dp</span><span class="p">,</span> <span class="m">0.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>                    <span class="p">)</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">//...</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*idzAQ4lII7JweFZdCyfNqg.gif" alt="" /></p>
-
-<p>好的，我们已经了解了如何使用 <strong>updateTransition</strong> API 来创建流畅的交互反馈。它首先使用 <strong>MutableInteractionSource</strong> 跟踪按下状态。该状态会驱动一个 <strong>400 毫秒的过渡动画</strong>，同时为两个方向相反的阴影添加动画效果。外部的 <strong>dropShadow</strong> 在按下时会淡出，而内部的 <strong>innerShadow</strong> 则会淡入。这种双阴影动画使组件从 <strong>抬升</strong> 状态平滑过渡到 <strong>凹陷</strong> 状态，从而在用户交互时提供清晰且动态的反馈。</p>
-
-<h2>结论</h2>
-
-<p>Compose 全新的阴影 API 标志着对传统 <strong>elevation</strong> 属性局限性的重大突破。它将核心概念拆分为 <strong>dropShadow()</strong> 和 <strong>innerShadow()</strong>，并赋予我们对 <strong>Shadow</strong> 对象属性的完全控制权。</p>
-
-<p>无论你是打造简单的渐变效果、模拟物理深度，还是实现新粗野主义的高对比度视觉冲击，这种全新的自定义程度都意味着你的 <strong>UI 终于可以充分展现你设计的艺术愿景</strong>。</p>
-
-<p>不妨尝试这些修饰符，为你的 Jetpack Compose 应用注入全新的创意维度！</p>
-
-<p>如果你觉得这篇文章有趣，欢迎关注我，获取更多关于 Android 开发和 Jetpack Compose 的精彩内容。我会定期发布相关主题的文章。欢迎随时分享你的评论，或通过 <a href="https://bsky.app/profile/stefanoq21.bsky.social"><strong>Bluesky</strong></a> 或 <a href="http://www.linkedin.com/in/stefano-natali-q21"><strong>LinkedIn</strong></a> 与我联系，进行更深入的讨论。</p>
-
-<p>祝你开心，编程快乐！</p>
 ]]></content>
   </entry>
   

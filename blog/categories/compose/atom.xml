@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-04-06T12:11:25+00:00</updated>
+  <updated>2026-04-25T12:33:23+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,594 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Compose中初始加载逻辑究竟应该放在哪里？]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/04/25/inital-load-in-compose/"/>
+    <updated>2026-04-25T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/04/25/inital-load-in-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Where Should Initial Load Logic Actually Live in Jetpack Compose?」，原文链接<a href="https://proandroiddev.com/where-should-initial-load-logic-actually-live-in-jetpack-compose-b59b73f97c79">https://proandroiddev.com/where-should-initial-load-logic-actually-live-in-jetpack-compose-b59b73f97c79</a>，由Sergey Nes发布于2026年3月11。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*ihghtdOK4S-penHTPy3BzA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>永无休止的争论</h2>
+
+<p>我写了一篇 LinkedIn 帖子，称 <code>LaunchedEffect(Unit) { viewModel.loadData() }</code> 是一种代码异味。社区强烈反对。</p>
+
+<p>我又写了一篇后续帖子，力挺 <code>init{}</code> 作为一种更简洁的替代方案。社区的反对声浪更大。</p>
+
+<p>然后我又写了一篇关于 <code>.onStart</code> + <code>stateIn</code> 作为响应式方法的文章。结果还是一样。</p>
+
+<p>50 多位工程师在三篇帖子中发表了看法。有些人赞同，有些人强烈反对，还有一些人提出了我完全没有考虑过的模式。我花在评论上的时间比写文章的时间还多。</p>
+
+<p>我得出了一个令人不安的结论：<strong>它们都对。</strong></p>
+
+<p>并非因为每种模式都同样好（在特定情况下，有些模式确实比其他模式更优），而是因为答案取决于大多数文章完全忽略的限制条件。例如，你的团队规模、你的测试规范、是否需要重试、你的屏幕是响应式密集型还是简单的单次加载。</p>
+
+<p>关于这个主题的大多数现有内容可以归为以下三类：“使用 <code>LaunchedEffect(Unit)</code>”（老旧、幼稚）、“迁移到 <code>init{}</code>”（矫枉过正，缺乏细致分析）或“使用 <code>stateIn</code>”（片面，忽略了陷阱）。每一种都将单一模式作为<em>唯一</em>答案。</p>
+
+<p>本文则不同。它涵盖了所有实际存在的模式，并坦诚地权衡了各种方案，提供了一个实际的决策框架，而不是“视情况而定”，并通过生产环境和来自日常从事相关工作的工程师的社区反馈来验证所有内容。</p>
+
+<p>我们先来探讨一下为什么这个问题比看起来更难。</p>
+
+<h2>为什么这个问题比看起来更难</h2>
+
+<p>Android 开发有一系列独特的限制，使得这个问题确实很难回答。这并非是开发者想得太复杂，而是因为这个平台迫使你去思考其他平台上不存在的问题。</p>
+
+<p>根本矛盾在于：<strong>ViewModel 和 Composable 的生命周期不同。</strong></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*2Xw-tM_p98A0EpvCfqxKvw.png" alt="图 1.1：旋转（配置更改）" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*CZQVMWcPVoObj6JYFlq8kA.png" alt="图 1.2：返回栈导航" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*EKC9RfQ6vZRMHlFK4Y8eJQ.png" alt="图 1.3：进程终止 + 恢复" /></p>
+
+<p>ViewModel 的生命周期不会因配置更改而改变。Composable 的生命周期则会改变。当用户旋转手机时，Composable 对象会被销毁并重新创建，但 ViewModel 对象仍然存活。这是设计使然，也是 ViewModel 的核心价值所在，但这造成了一种不匹配，所有初始加载模式都必须面对这个问题。</p>
+
+<p>以下是生命周期中的主要挑战，迫使每种方法都必须做出权衡：</p>
+
+<ul>
+<li><p><strong>配置更改</strong>：Composable 对象会被销毁并重新创建，但 ViewModel 对象仍然存在。任何 <code>LaunchedEffect</code> 都会重新触发，而任何 <code>init{}</code> 都不会。</p></li>
+<li><p><strong>进程终止 + SavedStateHandle</strong>：系统可能会在后台终止你的应用。当用户返回时，ViewModel 对象会被重新创建。<code>SavedStateHandle</code> 是应对这种情况的机制，但并非所有模式都能完美地与之兼容。</p></li>
+<li><p><strong>返回栈</strong>：当用户导航到另一个屏幕时，该屏幕的 Composable 组件可能会完全退出组合，但 ViewModel 仍然存活（作用域限定在导航图内）。当用户返回时，Composable 组件会重新进入组合，效果再次触发。</p></li>
+<li><p><strong>协程单元测试</strong>：有些模式使测试变得简单直接；而另一些则需要使用 <code>TestScope</code>、<code>advanceUntilIdle()</code> 以及仔细的协程管理。</p></li>
+</ul>
+
+
+<p>每种模式都至少会与上述限制之一进行权衡。没有捷径可走。</p>
+
+<p>没错，<code>repeatOnLifecycle</code> 解决了集合层面的生命周期感知问题（当屏幕处于后台时停止收集），但它并没有解决加载触发器的位置问题。本文将探讨这个问题。</p>
+
+<h2>模式</h2>
+
+<p>以下每个模式都遵循相同的结构：它的外观、人们使用它的原因、真正的陷阱（不仅仅是“小心”），以及何时才是正确的选择。</p>
+
+<h3>模式 0 — 代码异味</h3>
+
+<pre><code class="kotlin">@Composable
+fun MyScreen(viewModel: MyViewModel = viewModel()) {
+    LaunchedEffect(Unit) {
+        viewModel.loadData()  // Why here? What triggers this?
+    }
+    // ... UI
+}
+</code></pre>
+
+<p>这是大多数教程都会教授的模式。它也是生产环境中最容易出问题的模式。</p>
+
+<p><strong>人们使用它的原因：</strong> 它很简单。当 Composable 进入组合状态时，它只运行一次。在理想情况下，它“开箱即用”。</p>
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>它将业务意图隐藏在 UI 底层机制之后。</strong> Composable 现在负责决定何时加载数据。这是一个伪装成生命周期事件的业务决策。</p></li>
+<li><p><strong>它会在重新进入组合状态时再次触发。</strong> 离开页面，然后再回来，<code>LaunchedEffect(Unit)</code> 会再次触发。旋转设备，再次触发。ViewModel 可能已经加载了数据，但 Composable 并不知道。最终会导致重复的网络调用、竞态条件和状态闪烁。</p></li>
+<li><p><strong>没有 Compose 测试框架，无法进行测试。</strong> 无法单独进行单元测试。加载触发器嵌入在 UI 层中。</p></li>
+<li><p><strong>不支持重试或刷新。</strong> 需要添加更多状态管理来处理重试，这会进一步混淆 UI 层和业务层。</p></li>
+</ul>
+
+
+<p><strong>更深层次的问题：</strong> <code>LaunchedEffect(Unit)</code> 是<strong>组合驱动的，而非 UI 驱动的。</strong> 组合（将 Composable 添加到树的过程）是渲染系统的实现细节，而不是语义事件。</p>
+
+<p>_ViewModel 应该响应业务语义：“屏幕打开”、“用户请求刷新”、“导航参数已更改”。它不应该对渲染机制做出反应：“这个可组合组件已添加到树中。”</p>
+
+<p>这就是根本的不匹配之处。组合恰好与屏幕出现同时发生，但这并不意味着它是构建的正确抽象。这只是巧合，而非约定，而基于巧合构建会导致出现仅在返回栈导航、标签页切换和配置更改时才会出现的 bug。</p>
+
+<p><strong>最佳用途：</strong> 任何情况都不适合。总有更好的选择。</p>
+
+<h3>模式 1 — init {}</h3>
+
+<pre><code class="kotlin">class MyViewModel : ViewModel() {
+    init {
+        viewModelScope.launch { load() }
+    }
+
+    private suspend fun load() {
+        // fetch data, update state
+    }
+}
+</code></pre>
+
+<p>当人们意识到模式 0 存在问题时，这是他们的第一反应。将加载操作移到 <code>init{}</code> 中，现在 ViewModel 拥有了它。简洁，对吧？</p>
+
+<p><strong>人们喜欢它的原因：</strong> 加载操作在 ViewModel 创建时发生。它不会因配置更改而丢失（ViewModel 不会在屏幕旋转时重新创建）。完全没有组合的副作用。UI 只需观察状态即可。</p>
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>无法感知屏幕可见性。</strong> ViewModel 在导航图实例化时创建，这可能发生在用户看到屏幕之前。如果你预取了 ViewModel，即使用户从未导航到该屏幕，<code>init{}</code> 也会立即触发。</p></li>
+<li><p><strong>在单元测试中立即运行。</strong> 在测试中实例化 ViewModel 时，<code>init{}</code> 会立即触发。你需要使用 <code>TestScope</code> 和 <code>advanceUntilIdle()</code> 来控制时间，这会增加每个测试的复杂性。</p></li>
+<li><p><strong>失去条件加载控制。</strong> 使用 <code>init{}</code>，加载总是会发生。你无法根据导航参数、屏幕状态或用户意图有条件地跳过它。注意：<code>SavedStateHandle</code> 在这里通过构造函数注入可以正常工作，这不是问题所在。问题在于 <code>init{}</code> 是无条件的。</p></li>
+<li><p><strong>不支持重试或刷新。</strong> 与模式 0 一样，此模式没有内置的重试或下拉刷新机制。你需要添加一个单独的方法来实现这些功能，而这实际上已经接近模式 2 的一半了。</p></li>
+</ul>
+
+
+<p><strong>最适合：</strong> 简单的原型、无需重试的一次性屏幕，或能够接受这种权衡取舍的快速迭代团队。</p>
+
+<h3>模式 2 — 显式 Action 分发（Clean MVVM / TOAD）</h3>
+
+<pre><code class="kotlin">// Composable: signals lifecycle, NOT business logic
+@Composable
+fun MyScreen(viewModel: MyViewModel = viewModel()) {
+    LaunchedEffect(Unit) {
+        viewModel.onAction(Action.ScreenStarted)
+    }
+
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // ... render uiState
+}// ViewModel: stays idle until told to start
+class MyViewModel : ViewModel() {
+    private val _uiState = MutableStateFlow&lt;UiState&gt;(UiState.Idle)
+    val uiState: StateFlow&lt;UiState&gt; = _uiState.asStateFlow()
+
+    fun onAction(action: Action) {
+        when (action) {
+            Action.ScreenStarted -&gt; viewModelScope.launch { load() }
+            Action.Retry -&gt; viewModelScope.launch { load() }
+        }
+    }
+
+    private suspend fun load() {
+        _uiState.value = UiState.Loading
+        // fetch data, update _uiState
+    }
+}sealed interface Action {
+    data object ScreenStarted : Action
+    data object Retry : Action
+}
+</code></pre>
+
+<p>等等，这难道不是用了 <code>LaunchedEffect(Unit)</code> 吗？我刚才不是说它有问题吗？</p>
+
+<p>是的。但区别很重要：<strong>模式 0 将 LaunchedEffect 用作​​业务触发器。</strong> 模式 2 将其用作<strong>生命周期信号。</strong> Composable 组件并不决定加载什么或何时加载，它只是发出“屏幕现在可见”的信号。ViewModel 决定如何处理这个信号。</p>
+
+<p><strong>人们喜欢它的原因：</strong></p>
+
+<ul>
+<li><p><strong>显式且可审计。</strong> 每次状态更改都可以追溯到指定的 Action。你可以搜索代码库中的 <code>Action.ScreenStarted</code>，准确地找到加载发生的位置和原因。</p></li>
+<li><p><strong>易于测试。</strong> 在单元测试中，你可以直接调用 <code>viewModel.onAction(Action.ScreenStarted)</code>。无需 Compose 运行时、<code>LaunchedEffect</code> 或测试框架。</p></li>
+<li><p><strong>与 <code>SavedStateHandle.toRoute&lt;&gt;()</code> 完美兼容。</strong> 你可以在决定是否加载之前访问导航参数。</p></li>
+<li><p><strong>一流的重试和刷新功能。</strong> 只需在 <code>when</code> 代码块中添加一行代码即可添加 <code>Action.Retry</code> 或 <code>Action.PullToRefresh</code>。</p></li>
+</ul>
+
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>比 <code>init{}</code> 更繁琐。</strong> 你需要在 Composable 中使用 <code>Action</code> 密封接口、<code>onAction</code> 方法和 <code>LaunchedEffect</code>。对于简单的屏幕来说，这可能显得过于复杂。</p></li>
+<li><p><strong>这种模式值得投入。</strong>一旦你的应用拥有超过几个屏幕，这种模式带来的一致性和可测试性优势将远远超过投入本身。</p></li>
+</ul>
+
+
+<p>这种模式的一个更严格的变体是 <strong>TOAD</strong>（类型化对象操作分发），其中 ViewModel 将类型化的事件分发给外部处理类。它是一个纯粹的状态机，需要更高的规范性，学习曲线也更陡峭，但状态转换完全清晰明确。如果你的团队遵循 MVI 原则，那么 TOAD 就是模式 2 的逻辑极致体现。</p>
+
+<p><strong>最适合：</strong>大多数生产应用。除非你有特殊原因需要选择其他方案，否则这是默认推荐方案。</p>
+
+<h3>模式 3 — .onStart / .onSubscription + stateIn</h3>
+
+<pre><code class="kotlin">class MyViewModel : ViewModel() {
+    val uiState: StateFlow&lt;UiState&gt; = repository.getDataFlow()
+        .onStart { emit(UiState.Loading) }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = UiState.Loading
+        )
+}
+</code></pre>
+
+<p>这是响应式纯粹主义者的答案：完全不在 Composable 中使用 <code>LaunchedEffect</code>。当 UI 订阅 <code>StateFlow</code> 时，加载开始；当屏幕消失超过 5 秒时，加载停止。ViewModel 是一个纯响应式管道。</p>
+
+<p><strong>人们喜欢它的原因：</strong></p>
+
+<ul>
+<li><p><strong>零 Composable 副作用。</strong> Composable 只负责收集状态。没有 <code>LaunchedEffect</code>，没有生命周期信号，UI 层也没有命令式代码。</p></li>
+<li><p><strong>UI 观察时立即开始。</strong> 加载由订阅触发，而非显式调用。这在语义上很清晰：如果没有人观察，则不会发生任何事情。</p></li>
+<li><p><strong>屏幕消失时停止。</strong> <code>WhileSubscribed(5_000)</code> 表示在最后一个订阅者消失 5 秒后，上游流将被取消。不会有后台运行的幽灵网络调用。</p></li>
+<li><p><strong>自然融入响应式链。</strong> 如果你的屏幕已经使用了 <code>.combine</code>、<code>.flatMapLatest</code> 或 <code>SavedStateHandle.getStateFlow</code>，那么添加 <code>.onStart</code> 只需一行代码，不会破坏响应式流程。</p></li>
+</ul>
+
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>热→冷→热语义可能会让你措手不及。</strong> 当最后一个订阅者消失且超时到期时，流程会进入冷状态。当新的订阅者出现时，<code>.onStart</code> 会再次触发，这意味着加载可能会重新触发。对于大多数屏幕来说，这没问题（甚至很理想），但它会让用户措手不及。</p></li>
+<li><p><strong>多个订阅者可能会触发两次 <code>onStart</code>。</strong> 如果两个 Composable 对象观察同一个 <code>StateFlow</code>，<code>onStart</code> 会为该流程触发一次，但基于 <code>SharedFlow</code> 的链的行为可能会有所不同。这时，<code>.onSubscription</code> 就派上用场了。</p></li>
+<li><p><strong>没有内置重试机制。</strong> 你无法从外部向冷流发送请求。如果用户点击“重试”，则需要单独的机制，这通常意味着需要使用模式 4。</p></li>
+<li><p><strong>测试时序细节。</strong> 你需要使用 <code>advanceUntilIdle()</code> 来让流管道在单元测试中稳定下来。</p></li>
+</ul>
+
+
+<p><strong>onStart 与 onSubscription：</strong> 实际上，在 <code>stateIn(WhileSubscribed)</code> 和单个 UI 收集器的情况下，它们的行为完全相同。当可能附加多个收集器时，<code>.onSubscription</code> 在语义上更精确，因为它按订阅者触发，而不是按流启动触发。社区工程师报告称，在生产环境中使用 <code>.onSubscription</code> 没有出现任何问题。选择与你的流拓扑结构相匹配的即可。</p>
+
+<p><strong>最适合：</strong> 具有多个上游流的响应式密集型屏幕、对任何 Compose 副作用过敏的团队以及纯粹的转换管道 ViewModel。</p>
+
+<h3>模式 4 — 触发模式</h3>
+
+<pre><code class="kotlin">class MyViewModel : ViewModel() {
+    private val retryTrigger = MutableSharedFlow&lt;Unit&gt;(
+        extraBufferCapacity = 1
+    )
+
+    val uiState: StateFlow&lt;UiState&gt; = retryTrigger
+        .onStart { emit(Unit) }  // auto-trigger on first subscription
+        .transformLatest {
+            emit(UiState.Loading)
+            val result = repository.loadData()
+            emit(result.fold(
+                onSuccess = { UiState.Success(it) },
+                onFailure = { UiState.Error(it.message) }
+            ))
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = UiState.Loading
+        )
+
+        fun retry() {
+        retryTrigger.tryEmit(Unit)
+    }
+}
+</code></pre>
+
+<p>这是模式 3 的升级版。它结合了 <code>.onStart + stateIn</code> 的响应式优势，以及一流的重试和刷新支持，所有这些都集成在一个响应式管道中。</p>
+
+<p><strong>人们喜欢它的原因：</strong></p>
+
+<ul>
+<li><p><strong>所有操作都在同一个管道中完成。</strong> 初始加载、重试和下拉刷新都通过同一个 <code>transformLatest</code> 代码块进行。没有单独的方法，也没有重复的逻辑。</p></li>
+<li><p><code>transformLatest</code> <strong>会取消正在进行的调用。</strong> 如果用户在之前的加载仍在进行时点击重试，则之前的协程会自动取消。避免竞态条件。</p></li>
+<li><p><strong>Compose 中无需使用 <code>LaunchedEffect</code>。</strong> 与模式 3 的优势相同，UI 只需收集状态即可。</p></li>
+<li><p><strong>声明式。</strong> 整个加载生命周期都以流程转换的形式表达，而不是命令式的方法调用。</p></li>
+</ul>
+
+
+<p><strong>真正的陷阱：</strong></p>
+
+<ul>
+<li><p><strong>更复杂的思维模型。</strong> 如果你的团队不熟悉 <code>transformLatest</code>、<code>SharedFlow</code> 和响应式流程操作符，那么这种模式的学习曲线比模式 2 更陡峭。</p></li>
+<li><p><strong>不要在外部链中添加额外的 <code>onStart</code>。</strong> 一个常见的错误是在 <code>transformLatest</code> 之后的外部链中添加 <code>.onStart { emit(UiState.Loading) }</code>，这会导致重复的事件触发。</p></li>
+</ul>
+
+
+<p><strong>最适合：</strong> 需要重试、下拉刷新或定期重新加载的屏幕，并结合响应式上游流程。</p>
+
+<h2>决策框架</h2>
+
+<p>这是我当初开始写这个系列时希望看到的流程图：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Bcd6Z5k5I3jtDxPEJ16Tug.png" alt="图 2：决策流程图" /></p>
+
+<p><strong>屏幕出现时是否需要加载数据？</strong> 是 → 请继续。</p>
+
+<p><strong>问题 1：是否需要重试/下拉刷新/多次重新加载触发器？</strong></p>
+
+<ul>
+<li><p>是 → <strong>模式 2</strong>（显式操作分发）或 <strong>模式 4</strong>（基于触发器的响应式）。</p></li>
+<li><p>否 → 请继续查看问题 2。</p></li>
+</ul>
+
+
+<p><strong>问题 2：你的屏幕是否大量使用响应式操作？</strong>（多个上游流程，<code>.combine</code>、<code>.flatMapLatest</code>、<code>SavedStateHandle.getStateFlow</code>）</p>
+
+<ul>
+<li><p>是 → <strong>模式 3</strong>（<code>.onStart</code> + <code>stateIn</code>）。自然地融入响应式流程。</p></li>
+<li><p>否 → 继续执行问题 3。</p></li>
+</ul>
+
+
+<p><strong>问题 3：你的团队是否注重严格的可审计性，确保每次状态更改都可追溯到指定的意图？</strong></p>
+
+<ul>
+<li><p>是 → <strong>模式 2</strong>，使用 MVVM 或 TOAD。<code>LaunchedEffect(Unit) { onAction(ScreenStarted) }</code> 在这里是安全且符合预期的。</p></li>
+<li><p>否 → 继续执行问题 4。</p></li>
+</ul>
+
+
+<p><strong>问题 4：这是一个简单的、一次性的加载操作，没有重试，并且团队规模较小或发展迅速吗？</strong></p>
+
+<ul>
+<li><p>是 → <strong>模式 1</strong>（<code>init{}</code>）。接受权衡：更难的单元测试，无法控制屏幕可见性。</p></li>
+<li><p>否 → 默认使用<strong>模式 2</strong>。仪式是值得的。</p></li>
+</ul>
+
+
+<h2>对比表</h2>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*Mw8r8Z6kLmXcm34d-7i3vA.png" alt="Ghost-free = 屏幕不在屏幕内或处于返回栈时不会进行网络调用。SavedState = 可与 SavedStateHandle / toRoute&lt;&gt;() 完美配合" /></p>
+
+<h2>元教训</h2>
+
+<p>真正的代码异味并非来自 <code>LaunchedEffect</code> 本身。</p>
+
+<p>而是<strong>将 UI 层用作命令式业务触发器</strong>。</p>
+
+<p>解决方案并非单一模式，而是一个清晰的约定：</p>
+
+<ul>
+<li><p><strong>ViewModel</strong> 拥有状态和逻辑。</p></li>
+<li><p><strong>Composable</strong> 观察状态并发出生命周期信号。</p></li>
+</ul>
+
+
+<p>一旦明确了这一点，即使是 <code>LaunchedEffect(Unit)</code> 也可以很简洁，只要它发送的是生命周期信号（例如 <code>Action.ScreenStarted</code>），而不是直接触发业务逻辑。</p>
+
+<p>这就是 <code>Pattern 2</code> 的优势所在。<code>LaunchedEffect</code> 仍然存在，但它承担着截然不同的功能。它是 Composable 组件发出“我现在在屏幕上”的信号，而不是“请去获取用户个人资料”。</p>
+
+<p><code>Pattern 3</code> 和 <code>Pattern 4</code> 更进一步，完全消除了生命周期信号。ViewModel 响应的是订阅，而不是显式调用。两种方法都遵循相同的约定：ViewModel 拥有逻辑，UI 只负责显示。</p>
+
+<h2>你真的需要 ViewModel 吗？</h2>
+
+<p>这是整个系列中最尖锐的批评：</p>
+
+<blockquote><p>“如果剥离[ViewModel]的用途……你可能根本就不需要ViewModel，而可以用其他方式加载数据。”</p></blockquote>
+
+<p>这是一个合理的挑战，值得认真回答。</p>
+
+<p><strong>保留ViewModel的理由：</strong></p>
+
+<ul>
+<li><p><strong>配置变更的持久性。</strong> ViewModel在轮换后仍然存在；Composable则不然。如果没有它，每次配置更改都需要重新获取数据。</p></li>
+<li><p><strong>进程终止 + SavedStateHandle。</strong> 仅靠响应式流程无法在进程终止后序列化状态。ViewModel + <code>SavedStateHandle</code> 的组合才能实现这一点。</p></li>
+<li><p><strong>可测试性边界。</strong> ViewModel是单元测试中用虚拟存储库替换真实存储库的分界线。移除它，你的测试边界就会转移到Composable，或者完全消失。</p></li>
+<li><p><strong>共享状态。</strong> 当同一屏幕上的多个 Composable 组件需要相同的数据时，ViewModel 自然而然地成为唯一的所有者。</p></li>
+</ul>
+
+
+<p><strong>质疑 ViewModel 的理由：</strong></p>
+
+<ul>
+<li><p>对于真正无状态、只读且无副作用的屏幕，ViewModel 只是一种形式主义。</p></li>
+<li><p>对于简单的场景，使用简单的 <code>produceState</code> 或支持 Compose 的库（例如 <a href="https://github.com/cashapp/molecule"><strong>Molecule</strong></a> 或 <a href="https://github.com/slackhq/circuit"><strong>Circuit</strong></a>）会更简洁。</p></li>
+<li><p>ViewModel 是一种模式，而非强制性要求。</p></li>
+</ul>
+
+
+<p><strong>客观评价：</strong> 模式 3 和 4 并没有剥夺 ViewModel 的用途，它们只是将加载逻辑保留在 ViewModel 内部，并以响应式而非命令式的方式触发。这仍然是 ViewModel 在履行其职责。问题仅仅在于它如何决定开始工作，而不是它是否拥有状态。</p>
+
+<p>这种区别很重要。响应式模式并非证明 ViewModel 不必要，而是证明 ViewModel 可以更智能地决定何时开始工作。</p>
+
+<h2>结论</h2>
+
+<p>没有万全之策。Android 的限制、配置变更、进程终止、回退栈、重构等机制，都保证了每种模式都有其优缺点。任何告诉你并非如此的人，要么是在开发一个简单的应用，要么就是还没遇到过极端情况。</p>
+
+<p>但“视情况而定”这种说法远远不够。这就是决策框架存在的意义：它将模糊的架构问题转化为四个具体的“是/否”判断，从而引导你找到合适的模式。</p>
+
+<p>正确的模式应该是你的团队在六个月后仍然能够阅读、测试和理解的模式。它不是 Twitter 上流行的模式，也不是教程里教你的模式，而是符合你自身限制的模式。</p>
+
+<p>如果你不确定，可以从“模式 2”开始。显式 action dispatch 方法适用于大多数生产应用，可扩展性强，并且如果你以后需要响应式重试，它能为你提供一条清晰的路径过渡到“模式 4”。虽然过程比较繁琐，但当你第一次调试到与负载相关的 bug 并能够准确追踪其触发原因时，它的价值就显而易见了。</p>
+
+<p>感谢所有在本系列文章评论区提出宝贵意见的朋友们。正是你们的帮助，才使得这篇指南比我独自撰写的任何版本都更加完善。</p>
+
+<p><strong>本文源自四篇 LinkedIn 文章系列。如果你想阅读简短版本：</strong></p>
+
+<ul>
+<li><p>文章 1 — <a href="https://lnkd.in/eJPVeMw6">LaunchedEffect 代码异味</a></p></li>
+<li><p>文章 2 — <a href="https://lnkd.in/egN89zK7">init{} 的细微差别 + MVVM/TOAD</a></p></li>
+<li><p>文章 3 — <a href="https://www.linkedin.com/posts/sergey-neskoromny_androiddev-jetpackcompose-kotlin-activity-7434991472355143680-NWX5">.onStart + stateIn 之争</a></p></li>
+<li><p>文章 4 — <a href="https://www.linkedin.com/posts/sergey-neskoromny_androiddev-jetpackcompose-kotlin-activity-7434991472355143680-NWX5">决策指南</a></p></li>
+<li><p>文章 4 — [决策指南] （总结）](<a href="https://www.linkedin.com/posts/sergey-neskoromny_decision-guide-activity-7436799659295080448-9KyO?utm_source=share&amp;utm_medium=member_desktop&amp;rcm=ACoAAAI6ck4B-Yf3V8NgQYV95lsnc383Vue4hBM">https://www.linkedin.com/posts/sergey-neskoromny_decision-guide-activity-7436799659295080448-9KyO?utm_source=share&amp;utm_medium=member_desktop&amp;rcm=ACoAAAI6ck4B-Yf3V8NgQYV95lsnc383Vue4hBM</a>)</p></li>
+</ul>
+
+
+<h2>参考资料</h2>
+
+<p><strong>Android / Jetpack</strong></p>
+
+<ul>
+<li><p><a href="https://developer.android.com/jetpack/compose">Jetpack Compose</a> — Android 的现代声明式 UI 工具包。</p></li>
+<li><p><a href="https://developer.android.com/topic/libraries/architecture/viewmodel">ViewModel</a> — 生命周期感知组件，即使配置发生更改也能继续运行。</p></li>
+<li><p><a href="https://developer.android.com/topic/libraries/architecture/viewmodel/viewmodel-savedstate">SavedStateHandle</a> — 通过保存状态机制在进程终止后仍然有效的键值映射。</p></li>
+<li><p><a href="https://developer.android.com/kotlin/flow/stateflow-and-sharedflow">StateFlow / SharedFlow</a> — Kotlin 协程，用于可观察状态和事件流。</p></li>
+<li><p><a href="https://developer.android.com/develop/ui/compose/side-effects#launchedeffect">LaunchedEffect</a> — Compose 的副作用 API，在进入组合时运行一个挂起代码块。</p></li>
+<li><p><a href="https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary#(kotlinx.coroutines.flow.StateFlow).collectAsStateWithLifecycle(androidx.lifecycle.Lifecycle,androidx.lifecycle.Lifecycle.State,kotlin.coroutines.CoroutineContext)">collectAsStateWithLifecycle</a> — Compose 的生命周期感知 Flow 收集器。</p></li>
+<li><p><a href="https://developer.android.com/topic/libraries/architecture/coroutines#repeatonlifecycle">repeatOnLifecycle</a> — 每次生命周期达到目标状态（例如，<code>STARTED</code>）时运行一个代码块。</p></li>
+<li><p><a href="https://developer.android.com/develop/ui/compose/side-effects#producestate">produceState</a> — Compose API，用于将非 Compose 状态转换为 Compose <code>State</code>。</p></li>
+<li><p><a href="https://developer.android.com/jetpack/compose/navigation">Navigation Compose</a> — 为 Compose 提供类型安全的导航，包括用于参数解析的 <code>toRoute&lt;&gt;()</code>。</p></li>
+</ul>
+
+
+<p><strong>其他架构库</strong></p>
+
+<ul>
+<li><p><a href="https://github.com/cashapp/molecule">Molecule</a> (Cash App) — 使用 Compose 运行时构建 <code>StateFlow</code> 流，无需 UI 树。适用于完全在 Compose 中管理展示逻辑/状态。</p></li>
+<li><p><a href="https://github.com/slackhq/circuit">Circuit</a> (Slack) — 面向 Kotlin/Android 的 Compose 优先架构库：包含 presenter、screens、导航等。基于与 Molecule 类似的理念，但是一个更完整的应用框架。 <a href="https://slackhq.github.io/circuit/">文档</a></p></li>
+<li><p><a href="https://proandroiddev.com/@aumaidkh/toad-a-kotlin-first-architecture-pattern-that-finally-made-my-viewmodels-boring-b615a9ab6c30">TOAD — Typed Object Action Dispatch</a> (Murtaza Khursheed) — 一种 Kotlin 优先架构模式，它将复杂性从臃肿的 ViewModel 转移到类型化的、可分发的 Action 对象。这是模式 2 的逻辑极致体现。</p></li>
+<li><p><a href="https://github.com/orbit-mvi/orbit-mvi">Orbit MVI</a> — 一个简单、类型安全的 Kotlin MVI 框架，具有出色的多平台支持（包括通过 KMP 支持 iOS）。它是最流行且备受推荐的 MVI 库之一。</p></li>
+<li><p><a href="https://github.com/arkivanov/MVIKotlin">MVIKotlin</a> (Arkadii Ivanov) — 成熟且久经考验的 MVI 框架，具备时间旅行调试功能，并着重于 KMP（Kotlin 跨平台管理）。广泛应用于 Kotlin 多平台项目。<a href="https://arkivanov.github.io/MVIKotlin/">文档</a></p></li>
+</ul>
+
+]]></content>
+  </entry>
+  
+  <entry>
+    <title type="html"><![CDATA[Jetpack Compose元球边缘效果]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect/"/>
+    <updated>2026-04-18T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Jetpack Compose Metaball Edge Effect — Final Part」，原文链接<a href="https://proandroiddev.com/jetpack-compose-metaball-edge-effect-final-part-ac8a4cc7a425">https://proandroiddev.com/jetpack-compose-metaball-edge-effect-final-part-ac8a4cc7a425</a>，由Yuriy Skul发布于2026年3月21日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*oKSE6UFKtEYhxgmqDBv7mw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<h2>背景</h2>
+
+<p>我探索了几种 Metaball 交互方法——都不算太复杂，只是模糊和 alpha 阈值。</p>
+
+<p>但由于 <code>blur()</code>（API 31+）和 <code>RenderEffect</code>（API 31+）有最低 API 级别要求，而用于 alpha 过滤的运行时着色器（AGSL）仅在 API 33 及更高版本中可用，因此我也探索了适用于旧版 Android 的替代方案。</p>
+
+<p>我还尝试在两个带轮廓的圆形按钮之间实现 Metaball 效果——方法相同，但使用的是描边而不是填充形状。与颜色矩阵不同，AGSL 允许在特定的 alpha 范围内进行过滤，这使得渲染成为可能（参见 Supra 部分的底部）：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:600/1*BcYrSQMs8ZhimgPIN791DA.gif" alt="跨 API 的 Metaball 效果" /></p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/gooey">跨 API 的 Metaball 效果的 GitHub 链接</a></p>
+
+<p><a href="https://medium.com/@yuriyskul/compose-agsl-shader-gooey-outline-metaball-effect-with-transparent-background-cb8b0e72286c">Medium “Supra” 概述文章链接</a></p>
+
+<p>但后来我突然想到一个简单而优雅的想法——实现滚动内容与屏幕边缘之间的元球交互方式相同。在我看来，它看起来非常简洁美观，就像物体之间的元球交互一样。</p>
+
+<p>这个概念验证非常简单——只需在顶部和底部边缘附近添加垂直渐变带，模糊圆形对象，并应用常规的 alpha 阈值过滤：<a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAndText/tabs/edge">github 链接“Gooey Edge”选项卡</a>:</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:500/1*_UK9XXKiySTuVavXyjetIA.gif" alt="POC（元球边缘效果）" /></p>
+
+<p>对文本进行简单探索后发现，根据模糊半径、alpha 阈值和文本大小的不同，结果会有所不同——从一大块实心斑点到一小块，甚至在 alpha 过滤后完全没有效果。</p>
+
+<p>文本替换动画的一个好方法是，将模糊效果从 0 动画到某个值，交换文本，然后再动画回来。</p>
+
+<p>有趣的是，根据你调整元球参数的方式，你可以得到几种不同的行为：</p>
+
+<ul>
+<li><p>文本先变成元球，然后再变成另一段文本</p></li>
+<li><p>文本变成元球，缩小并消失，然后这个过程反向进行，变成一段新的文本</p></li>
+<li><p>文本立即融化，然后出现一段新的文本（我不喜欢这种效果）</p></li>
+</ul>
+
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAndText/tabs/text">GitHub 链接 “文本融化”选项卡</a></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:700/1*nPWAVvYCNYqdLTg_zRYsnA.gif" alt="文本变形概念" /></p>
+
+<blockquote><p>也许很多人（包括我自己）都做过类似的事情，但第一个公开分享的人是…… <strong>Sinasamaki</strong> 以简洁明了的方式分享了这一概念，因此将这一理念引入 Android 平台是理所应当的。他的所有作品都是杰作——纯粹的艺术作品。</p>
+
+<p><a href="https://www.sinasamaki.com/5-metaball-animations-in-jetpack-compose/"><strong>Sinasamaki — metaball 教程</strong></a></p></blockquote>
+
+<p>滚动文本的 metaball 效果的主要问题在于，模糊效果是以 <code>RenderEffect</code> 的形式应用于整个可组合对象（包含文本的滚动列）。结果，所有文本都会变得模糊，metaball 的交互不再局限于预期的区域（顶部和底部边缘附近）。</p>
+
+<p>相反，整个内容变成了一大块黑色的色块。你越是想让 metaball 效果更强烈、更吸引眼球，情况就越糟糕——因为文本首先会与自身交互，然后才会（以微弱的方式）与屏幕边缘交互。</p>
+
+<p>首先，我尝试构建一个变通方案——在原始文本上方同步渲染相同的文本，然后叠加顶部和底部区域，对其进行模糊处理，最后应用相同的效果。最终，我得到了一个可行的解决方案，但仍然不够完善，而且充满了各种变通方法。</p>
+
+<p>因此，我得出结论，我需要一个 <strong>自定义模糊效果，可以局部应用于所需区域（顶部和底部边缘），并且模糊强度随着靠近边缘而增加。</strong></p>
+
+<p>我围绕仅使用 alpha 通道的模糊效果进行了一系列测试和实验（因为元球效果不需要 RGB 模糊）。我比较了线性模糊和高斯模糊两种方法，并尝试了不同的内核质量——16dp（约17次点击）左右效果不错，但超过这个值就需要多次渲染（约61次点击）。使用更高的值（100次以上点击）很快就会变得过于耗费资源。</p>
+
+<p><a href="https://medium.com/@yuriyskul/agsl-alpha-blur-with-local-regions-and-dynamic-radius-linear-and-gaussian-17-61-101-taps-3a36198c9567">我的文章介绍了使用动态半径的自定义AGSL局部模糊。</a></p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/customAlphaBlur">自定义Alpha模糊实验的GitHub链接</a>.</p>
+
+<p>对于元球效果，我选择了以下结果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:700/1*hSsNmOQP9-tQUwYS9u76JA.gif" alt="自定义高斯 AGSL alpha 模糊" /></p>
+
+<p>我已经准备好了……</p>
+
+<h2>垂直滚动解决方案</h2>
+
+<p>实现起来相对简单。</p>
+
+<p>滚动文本放置在一个 <code>Column</code> 元素内，并仅对顶部和底部区域应用自定义模糊效果。随着内容接近滚动容器边缘，模糊强度逐渐增强。</p>
+
+<p>当处理像文本这样非常小的元素（笔画宽度只有几个 dp）时，所有 metaball 配置参数——例如自定义局部模糊区域的高度或渐变带——也都会变得非常小。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:864/1*mJhhmhq7DbEkkOtG3ReFgw.png" alt="添加局部模糊以实现“融化”效果" /></p>
+
+<p>为了实现“黏糊糊”效果，添加了高度为 16dp 的小型渐变带，垂直渐变范围为 0.4 到 0。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:856/1*toHSAwCjRt_hahUyMdEL4w.png" alt="添加局部模糊和垂直渐变带以实现“黏糊糊”效果" /></p>
+
+<p>根据之前对文本及其变换的实验，观察到两种现象：文本要么消失，要么变成一团模糊的色块。</p>
+
+<p>边缘附近的消失可以称为“融化”效果，而与边缘融合也可以称为“黏糊糊”效果。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*doBo1WfYpy9_f1sikUHrAw.gif" alt="结果：文字融化效果" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:900/1*CKR3sa0_hxJIPNYTyMf8lg.gif" alt="结果：文字粘稠效果" /></p>
+
+<p>问题解决了——但我并不满意。这和我预想的完全不一样。它看起来没有我想象中那么干净利落，也没有那么惊艳。</p>
+
+<p>为了获得至少像样的效果，需要对所有这些参数进行大量调整：模糊程度、AGSL 应用区域、透明度阈值以及渐变带中的最大透明度。所有这些都与文本大小有关，而如果文本大小以 <code>sp</code> 为单位定义，则不稳定，甚至行间距也可能导致画面模糊。</p>
+
+<p>此外，由于 <code>RenderEffect</code> 的存在，我们仍然依赖于 API 级别。无论我如何尝试，自定义 alpha 模糊的效果都不如系统自带的模糊效果高效可靠，而且可能会引入瑕疵，尤其是在边缘处。</p>
+
+<p>另外，字母与边缘的融合（这是我们想要的效果）也存在一个缺点——字母之间会相互融合，导致形状变成模糊的色块。遗憾的是，目前还没有彻底消除这些副作用的方法。</p>
+
+<p>虽然无法阻止字母自身融合，但在水平滚动的情况下，相邻字母之间不会发生融合。</p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAdvanced"><strong>GitHub 链接：垂直滚动解决方案</strong></a></p>
+
+<h2>水平滚动解决方案</h2>
+
+<p>对于相对于模糊半径而言较大的对象，例如带有图标的大型圆形元素，或者更粗更大的图标，可以获得更稳定的效果。此外，即使是巨大的单行文本水平滚动时，效果也会更好。</p>
+
+<pre><code class="kotlin">//left/right custom blur local zones width and gradient edge boxes width
+val effectMagnitude = 56.dp 
+val blurRadius = 30.dp
+val alphaThresholdEffect = alphaThreshold50PercentEffect
+// Max horizontal gradient
+val edgeAlpha = 0.5f
+val circleSize = 72.dp
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*2-gmg2aux2EE91HyxKHj1w.gif" alt="带有圆形元素的水平滚动元球" /></p>
+
+<p>对于大型图标，效果仍然对小型和细元素非常敏感——请注意搜索、勾选和加号图标的情况。对于这些图标，需要降低透明度阈值并减小模糊半径。</p>
+
+<pre><code class="kotlin">val effectMagnitude = 56.dp
+val blurRadius = 30.dp
+val alphaThresholdEffect = alphaThreshold50PercentEffect
+val edgeAlpha = 0.5f
+val iconSize = 56.dp
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*x650hs9weqrghnkSUbLEnA.gif" alt="Plain Icons meaball edge effect — very sensitive for small and thin elements" /></p>
+
+<pre><code class="kotlin">val effectMagnitude = 30.dp
+val blurRadius = 20.dp
+val alphaThresholdEffect = alphaThreshold30PercentEffect
+val edgeAlpha = 0.3f
+//use dp instead of sp for stable effect
+val HorizontalTextSize = 56.sp 
+</code></pre>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*WL1n3it2q2fV0EpzJhpq0g.gif" alt="Metaball Edge Horizo​​ntal Text" /></p>
+
+<p><strong>自定义模糊效果可以替换为常规模糊效果吗？</strong> 可以，但这会引入一个关键问题：整个内容都会变得模糊，并且到处都会出现不必要的 Metaball 交互。在之前的文章中，我们已经探讨并解决了这个问题。</p>
+
+<p><strong>我们可以避免使用 RenderEffect 模糊或自定义模糊吗？</strong></p>
+
+<p>可以。在我之前的文章中，我探讨了绘制发光光晕边框的六种不同方法，同样的思路也适用于这里——在圆形元素周围绘制模糊蒙版滤镜或光晕渐变。这样，圆形元素的内部就不会变形。</p>
+
+<p>然而，你仍然需要解决相邻元素通过其“透明度”相互交叉的问题，从而导致重叠区域可见。一个简单的办法是检测最左侧和最右侧的元素，并仅对它们应用效果。</p>
+
+<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgeHorizo%E2%80%8B%E2%80%8BntalScroll"><strong>GitHub 链接：水平滚动解决方案</strong></a></p>
+
+<h2><strong>结论</strong></h2>
+
+<p><strong>是的，局部自定义模糊可以显著简化问题。</strong> 然而，它并不能解决视觉上的“污渍”问题。内容往往先变成一团模糊的色块，然后才开始与边缘互动。</p>
+
+<p>元球效果与液态玻璃（玻璃变形）等效果的主要区别在于，<strong>元球效果发生在元素之间</strong>。这种效果发生在用户界面元素之外，在它们之间的空间中，那里可能存在许多其他元素。</p>
+
+<p>相比之下，玻璃变形在视觉上<strong>被包含在单个组件内</strong>。</p>
+
+<p>因此，液态玻璃通常看起来干净利落，而元球效果在涉及多个元素时很容易变得杂乱无章。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[在Compose中用Shader实现透明的粘稠元球效果]]></title>
@@ -1140,907 +1728,6 @@ ContentScale.None
 <p>现在去发布一些正确缩放的图像吧。</p>
 
 <p>如果这篇文章让你免于陷入 StackOverflow 的无底洞，那真是太感谢了。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[深度解析Compose中的BoxWithConstraints]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose/"/>
-    <updated>2026-03-26T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「BoxWithConstraints in Jetpack Compose: The Complete Deep Dive」，原文链接<a href="https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7">https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7</a>，由Sehaj kahlon发布于2026年2月15日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*MLsQmsCtobQD5EhMRB1jFg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>关键点：这个组件存在的意义是什么？</h2>
-
-<p>让我来描述一下你可能经历过的场景。</p>
-
-<p>你正在构建一个卡片组件。在手机上，它应该垂直堆叠：图片在上，文字在下。在平板电脑上，它应该水平拉伸：图片在左，文字在右。需求很简单，对吧？</p>
-
-<p>你的第一反应可能是：</p>
-
-<pre><code class="kotlin">@Composable
-fun AdaptiveCard() {
-    val configuration = LocalConfiguration.current
-    if (configuration.screenWidthDp &lt; 600) {
-        VerticalCard()
-    } else {
-        HorizontalCard()
-    }
-}
-</code></pre>
-
-<p><strong>这种方法存在缺陷。</strong> 原因如下。</p>
-
-<p><code>LocalConfiguration.current.screenWidthDp</code> 返回的是屏幕宽度。但如果你的卡片位于 <code>NavigationRail</code> 中呢？或者在分屏应用中？或者在 ChromeOS 的可调整大小的窗口中呢？你的卡片并不关心屏幕大小——它只关心<strong>实际分配给它的空间</strong>。</p>
-
-<p>这就是 <code>BoxWithConstraints</code> 解决的根本问题：<strong>它告诉你父元素分配给你的空间大小，而不是屏幕大小。</strong></p>
-
-<p>可以这样理解：</p>
-
-<ul>
-<li><p><code>LocalConfiguration</code> = &ldquo;房间有多大？&rdquo;</p></li>
-<li><p><code>BoxWithConstraints</code> = &ldquo;你把我放在的盒子有多大？&rdquo;</p></li>
-</ul>
-
-
-<p>相框并不关心你的房子有多大。它只关心分配给它的墙面空间。</p>
-
-<h2>内部机制：底层工作原理</h2>
-
-<h3>Compose 执行模型（以及 BoxWithConstraints 为何会破坏它）</h3>
-
-<p>要理解 <code>BoxWithConstraints</code>，你必须首先了解 Compose 的执行流程：</p>
-
-<pre><code class="bash">Composition → Measurement → Layout → Drawing
-</code></pre>
-
-<p>在标准的 Compose 代码中：</p>
-
-<ol>
-<li><p><strong>组合</strong>：你声明 UI 树（<code>Column { Text("Hello") }</code>）</p></li>
-<li><p><strong>测量</strong>：系统测量每个节点</p></li>
-<li><p><strong>布局</strong>：节点定位</p></li>
-<li><p><strong>绘制</strong>：像素绘制到屏幕上</p></li>
-</ol>
-
-
-<p>这个顺序<strong>不可更改</strong>。组合先于测量。你无法测量尚未组合的内容。</p>
-
-<p>但是 <code>BoxWithConstraints</code> 提出了一个不寻常的问题：<em>“我能否在决定组合内容之前就知道我的约束条件？”</em></p>
-
-<p>这就像要求厨师在烹饪之前先摆盘一样。</p>
-
-<h2>引入子组合：Compose 的延迟组合机制</h2>
-
-<p><code>BoxWithConstraints</code> 通过<strong>子组合</strong>实现此功能，该机制将组合操作延迟到测量时执行。</p>
-
-<p>以下是实际实现（为清晰起见已简化）：</p>
-
-<pre><code class="kotlin">@Composable
-fun BoxWithConstraints(
-    modifier: Modifier = Modifier,
-    contentAlignment: Alignment = Alignment.TopStart,
-    propagateMinConstraints: Boolean = false,
-    content: @Composable BoxWithConstraintsScope.() -&gt; Unit,
-) {
-    SubcomposeLayout(modifier) { constraints -&gt;
-        // We're NOW in the measurement phase, but we can compose!
-        val scope = BoxWithConstraintsScopeImpl(this, constraints)
-        val measurables = subcompose(Unit) { scope.content() }
-
-        // Standard Box measurement logic follows...
-        with(measurePolicy) { measure(measurables, constraints) }
-    }
-}
-</code></pre>
-
-<p>关键在于 <code>SubcomposeLayout</code>。它反转了正常的流程：</p>
-
-<pre><code class="bash">Normal:
-
-Composition → Measurement
-Subcompose: Measurement → Composition (of children) → Measurement (of children)
-</code></pre>
-
-<p>当父元素请求 <code>BoxWithConstraints</code> 测量自身时，它会：</p>
-
-<ol>
-<li><p>接收约束条件</p></li>
-<li><p><strong>创建一个包含这些约束条件的作用域</strong></p></li>
-<li><p><strong>此时组合子元素</strong></p></li>
-<li><p>测量已组合的子元素</p></li>
-<li><p>返回测量结果</p></li>
-</ol>
-
-
-<p>这就是为什么 <code>BoxWithConstraints</code> 被认为是“重量级”的原因。它在测量阶段执行组合操作。</p>
-
-<h2>三层节点架构</h2>
-
-<p>在内部，<code>SubcomposeLayout</code> 将子节点分为三个不同的区域进行管理：</p>
-
-<pre><code class="bash">[Active nodes] [Reusable nodes] [Precomposed nodes]
-     ↑
-
-     ↑
-
-     ↑
-  Currently
-
-  "Recycled"
-
-  Pre-composed
-    used
-
-    for reuse
-
-    ahead of time
-</code></pre>
-
-<p><strong>活动节点</strong>：当前测量阶段正在使用的插槽。</p>
-
-<p><strong>可重用节点</strong>：之前已激活但仍保留的插槽（类似于 RecyclerView 的可回收视图）。当需要类似内容时，这些插槽会被“重新激活”，而不是创建新的组合。</p>
-
-<p><strong>预组合节点</strong>：通过 <code>precompose()</code> 预先组合的插槽（惰性列表内部使用此功能在即将显示的项目可见之前进行组合）。</p>
-
-<p>正是这种架构使得 <code>LazyColumn</code> 能够流畅滚动。它不会创建和销毁组合，而是在这三个节点池之间进行节点的轮换。</p>
-
-<h2>约束：深入解析</h2>
-
-<p>在 <code>BoxWithConstraintsScope</code> 中，你可以访问四个属性：</p>
-
-<pre><code class="kotlin">interface BoxWithConstraintsScope : BoxScope {
-    val minWidth: Dp
-    val maxWidth: Dp
-    val minHeight: Dp
-    val maxHeight: Dp
-    val constraints: Constraints  // The raw pixel-based constraints
-}
-</code></pre>
-
-<h3>这些属性的实际含义是什么？</h3>
-
-<p><code>**maxWidth**</code> <strong>/</strong> <code>**maxHeight**</code>：父元素提供的最大空间。如果为 <code>Dp.Infinity</code>，则表示父元素允许你“随意使用”（通常来自可滚动容器）。</p>
-
-<p><code>**minWidth**</code> <strong>/</strong> <code>**minHeight**</code>：父元素期望的最小高度。通常为 <code>0.dp</code>，但如果父元素使用了 <code>propagateMinConstraints = true</code> 或你使用的是基于 <code>weight</code> 的布局，则该值可能不为零。</p>
-
-<h2>屏幕尺寸陷阱</h2>
-
-<pre><code class="kotlin">BoxWithConstraints {
-    // These are NOT the screen dimensions!
-    val width = maxWidth   // Space YOUR PARENT gave YOU
-    val height = maxHeight // Space YOUR PARENT gave YOU
-}
-</code></pre>
-
-<p>考虑以下层级结构：</p>
-
-<pre><code class="kotlin">Row(Modifier.fillMaxSize()) {
-    NavigationRail { /* 80.dp wide */ }
-    BoxWithConstraints(Modifier.weight(1f)) {
-        // maxWidth here is (screenWidth - 80.dp)
-        // NOT screenWidth!
-    }
-}
-</code></pre>
-
-<p>这正是 <code>BoxWithConstraints</code> 存在的意义。<code>LocalConfiguration</code> 会给出错误的答案。</p>
-
-<h2>有界约束与无界约束</h2>
-
-<p>这里有一个容易引起混淆的细微差别：</p>
-
-<pre><code class="kotlin">LazyColumn {
-    item {
-        BoxWithConstraints {
-            // maxHeight == Dp.Infinity !!!
-            // Because LazyColumn offers infinite vertical space
-        }
-
-        }
-</code></pre>
-
-<p><code>maxHeight</code> 的值为 <code>Infinity</code>，因为 <code>LazyColumn</code> 不会限制其子元素的高度，它会滚动。这是预期行为，但这意味着你不能在可滚动容器内使用 <code>maxHeight</code> 来进行响应式布局。</p>
-
-<h2>实际用例</h2>
-
-<h3>用例 1：响应式卡片布局</h3>
-
-<p>此卡片会根据<strong>可用空间</strong>（而非屏幕方向）在垂直和水平布局之间切换：</p>
-
-<pre><code class="kotlin">@Composable
-fun ResponsiveProductCard(
-    imageUrl: String,
-    title: String,
-    description: String,
-    modifier: Modifier = Modifier
-) {
-    BoxWithConstraints(modifier = modifier) {
-        val isWide = maxWidth &gt; 400.dp
-
-        if (isWide) {
-            // Horizontal layout: image left, text right
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .weight(0.4f)
-                        .aspectRatio(1f)
-                )
-                Column(
-                    modifier = Modifier.weight(0.6f),
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(title, style = MaterialTheme.typography.headlineSmall)
-                    Spacer(Modifier.height(8.dp))
-                    Text(description, style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        } else {
-            // Vertical layout: image top, text bottom
-            Column {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                )
-                Spacer(Modifier.height(12.dp))
-                Text(title, style = MaterialTheme.typography.headlineSmall)
-                Spacer(Modifier.height(4.dp))
-                Text(description, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-    }
-}
-</code></pre>
-
-<p><strong>为什么这比检查屏幕尺寸更好</strong>：将此卡片放入双列网格中，即使在平板电脑上，它也会自动显示垂直布局。它真正实现了对<em>其</em>容器的响应式布局。</p>
-
-<h3>用例 2：动态文本大小</h3>
-
-<p>自动调整文本大小以适应可用宽度：</p>
-
-<pre><code class="kotlin">@Composable
-fun AutoSizeTitle(
-    text: String,
-    modifier: Modifier = Modifier
-) {
-    BoxWithConstraints(modifier = modifier) {
-        val fontSize = when {
-            maxWidth &lt; 200.dp -&gt; 14.sp
-            maxWidth &lt; 300.dp -&gt; 18.sp
-            maxWidth &lt; 400.dp -&gt; 24.sp
-            else -&gt; 32.sp
-        }
-
-        Text(
-            text = text,
-            fontSize = fontSize,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
-</code></pre>
-
-<h3>用例 3：基于宽度的网格项数</h3>
-
-<p>动态计算网格列数：</p>
-
-<pre><code class="kotlin">@Composable
-fun AdaptiveGrid(
-    items: List&lt;Item&gt;,
-    modifier: Modifier = Modifier
-) {
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val columns = maxOf(1, (maxWidth / 160.dp).toInt())
-
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(columns),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(items) { item -&gt;
-                GridItem(item)
-            }
-        }
-    }
-}
-</code></pre>
-
-<h2>性能陷阱和最佳实践</h2>
-
-<h3>何时不应使用 BoxWithConstraints</h3>
-
-<p><strong>1. 当一个简单的修饰符就足够时</strong></p>
-
-<pre><code class="kotlin">// ❌ Overkill
-BoxWithConstraints {
-    Box(Modifier.size(maxWidth * 0.5f, maxHeight * 0.5f))
-}
-</code></pre>
-
-<pre><code class="kotlin">// ✅ Just use fillMaxSize with a fraction
-Box(Modifier.fillMaxSize(0.5f))
-</code></pre>
-
-<p><strong>2. 当你只是检查屏幕方向时</strong></p>
-
-<pre><code class="kotlin">// ❌ Using BoxWithConstraints for screen-level decisions
-BoxWithConstraints {
-    if (maxWidth &gt; maxHeight) LandscapeLayout() else PortraitLayout()
-}
-</code></pre>
-
-<pre><code class="kotlin">// ✅ Use LocalConfiguration for screen-level decisions
-val configuration = LocalConfiguration.current
-if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-    LandscapeLayout()
-} else {
-    PortraitLayout()
-}
-</code></pre>
-
-<p><strong>3.在 LazyColumn/LazyRow 元素内部</strong></p>
-
-<p>这是一个常见的错误：</p>
-
-<pre><code class="kotlin">// ❌ Performance issue
-LazyColumn {
-    items(1000) { index -&gt;
-        BoxWithConstraints {  // Subcomposition per item!
-            ItemContent(index)
-        }
-    }
-}
-</code></pre>
-
-<p>每个元素都会触发子组合。如果元素数量为 1000，则在滚动过程中会重复执行子组合。相反，将 <code>BoxWithConstraints</code> 提升到父级：</p>
-
-<pre><code class="kotlin">// ✅ Single subcomposition
-BoxWithConstraints {
-    val itemHeight = if (maxWidth &gt; 400.dp) 120.dp else 80.dp
-    LazyColumn {
-        items(1000) { index -&gt;
-            ItemContent(index, height = itemHeight)
-        }
-    }
-}
-</code></pre>
-
-<h2>更轻量级的替代方案</h2>
-
-<p><strong>基于百分比的尺寸：</strong></p>
-
-<pre><code class="kotlin">// Use Modifier.fillMaxWidth(fraction)
-Box(Modifier.fillMaxWidth(0.8f))
-</code></pre>
-
-<pre><code class="kotlin">// Use Modifier.weight in Row/Column
-Row {
-    Box(Modifier.weight(1f))  // 25%
-    Box(Modifier.weight(3f))  // 75%
-}For aspect ratio:
-</code></pre>
-
-<pre><code class="kotlin">Box(Modifier.aspectRatio(16f / 9f))
-</code></pre>
-
-<p><strong>不使用子组件的自定义尺寸逻辑：</strong></p>
-
-<pre><code class="kotlin">// Custom Layout is lighter than SubcomposeLayout
-Layout(
-    content = { /* your content */ }
-) { measurables, constraints -&gt;
-    // Full control over measurement without subcomposition cost
-    // But you can't make composition decisions here
-}
-</code></pre>
-
-<p><strong>窗口尺寸类（屏幕级响应式）：</strong></p>
-
-<pre><code class="kotlin">// Material3's adaptive APIs
-val windowSizeClass = calculateWindowSizeClass(activity)
-when (windowSizeClass.widthSizeClass) {
-    WindowWidthSizeClass.Compact -&gt; CompactLayout()
-    WindowWidthSizeClass.Medium -&gt; MediumLayout()
-    WindowWidthSizeClass.Expanded -&gt; ExpandedLayout()
-}
-</code></pre>
-
-<h2>重要陷阱和边界情况</h2>
-
-<h3>1. 固有尺寸不起作用</h3>
-
-<p>这将导致崩溃：</p>
-
-<pre><code class="kotlin">Row {
-    Text(
-        "Hello",
-        modifier = Modifier.height(IntrinsicSize.Min)
-    )
-    BoxWithConstraints {
-        // CRASH: "Asking for intrinsic measurements of 
-        // SubcomposeLayout layouts is not supported"
-    }
-}
-</code></pre>
-
-<p><code>SubcomposeLayout</code> 无法回答“你的固有尺寸是多少？”因为它在接收到实际约束之前无法确定要组合的内容。</p>
-
-<p><strong>解决方法</strong>：为 <code>BoxWithConstraints</code> 添加显式的大小修饰符：</p>
-
-<pre><code class="kotlin">BoxWithConstraints(Modifier.height(100.dp)) {
-    // Now intrinsic measurement isn't needed
-}
-</code></pre>
-
-<h3>2. 首次组合时序</h3>
-
-<p>在首次组合时，<code>BoxWithConstraints</code> 还没有约束。子元素会先使用占位符值进行组合，然后再使用实际约束重新组合。这意味着：</p>
-
-<ul>
-<li><p>内部的 <code>LaunchedEffect</code> 等效果可能会触发两次</p></li>
-<li><p>基于约束的初始状态计算可能需要保护</p></li>
-</ul>
-
-
-<p><strong>最佳实践</strong>：保护基于约束的逻辑：</p>
-
-<pre><code class="kotlin">BoxWithConstraints {
-    if (constraints.hasBoundedWidth) {
-        val columns = (maxWidth / 160.dp).toInt()
-        // Safe to use
-    }
-}
-</code></pre>
-
-<h3>3. 通常不需要嵌套 <code>BoxWithConstraints</code></h3>
-
-<p>如果你发现自己需要嵌套它们：</p>
-
-<pre><code class="kotlin">BoxWithConstraints {
-    BoxWithConstraints {  // Usually unnecessary
-        // ...
-    }
-}
-</code></pre>
-
-<p>内部的 <code>BoxWithConstraints</code> 具有相同的约束（除非被修改）。只需使用外部作用域即可。</p>
-
-<h3>4. 状态提升的重要性（详见此处）</h3>
-
-<p>由于测量期间内容会被子组合，因此在 <code>BoxWithConstraints</code> 内部创建的状态具有特殊的生命周期特征：</p>
-
-<pre><code class="kotlin">BoxWithConstraints {
-    // This state is created during MEASUREMENT, not composition
-    var count by remember { mutableStateOf(0) }
-
-    // If parent re-measures without recomposing, this state persists
-    // But if the slot is "recycled", it might reset
-}
-</code></pre>
-
-<p><strong>最佳实践</strong>：将重要状态提升到 <code>BoxWithConstraints</code> 之上：</p>
-
-<pre><code class="kotlin">var count by remember { mutableStateOf(0) }
-</code></pre>
-
-<pre><code class="kotlin">BoxWithConstraints {
-    // count is stable regardless of subcomposition lifecycle
-    Text("Count: $count")
-}
-</code></pre>
-
-<h3>5. propagateMinConstraints 参数</h3>
-
-<pre><code class="kotlin">BoxWithConstraints(propagateMinConstraints = true) {
-    // Children now MUST be at least minWidth x minHeight
-    // This can cause unexpected overflow if children 
-    // have their own size requirements
-}
-</code></pre>
-
-<p>仅当你明确希望强制子元素具有最小尺寸时才使用此参数。</p>
-
-<h2>总结：何时使用 BoxWithConstraints</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*ReLZsAjntRlcLXMJlYEUbw.png" alt="" /></p>
-
-<h2>结语</h2>
-
-<p><code>BoxWithConstraints</code> 是一个表面看似简单，但当你理解其底层机制后，会发现它蕴含着丰富的内涵。它不仅仅是一个<strong>“告诉你自身大小的盒子”</strong>，而是一种允许元素组合决策依赖于布局信息的机制。</p>
-
-<p>当你真正需要<strong>容器感知响应式布局</strong>时，请使用它。如果更简单的修饰符就能满足需求，则应避免使用它。永远记住：<strong>它会带来额外的开销，因为它本质上与常规代码合成不同。</strong></p>
-
-<p><strong>最好的代码并非使用最复杂的 API，而是使用最适合当前任务的 API。</strong></p>
-
-<p><strong>如果这篇深度解析对你有所帮助，请考虑与你的团队分享。知识共享才能促进 Android 社​​区的发展。</strong></p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Compose中的IntrinsicSize实战指南]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/02/02/mastering-intrisnicsize/"/>
-    <updated>2026-02-02T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/02/02/mastering-intrisnicsize</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Mastering IntrinsicSize in Jetpack Compose: A Real-World Guide」，原文链接<a href="https://proandroiddev.com/mastering-intrinsicsize-in-jetpack-compose-a-real-world-guide-a57ab90c6556">https://proandroiddev.com/mastering-intrinsicsize-in-jetpack-compose-a-real-world-guide-a57ab90c6556</a>，由Sehaj kahlon发布于2026年1月24日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*5575GBQlUI38hH2ThTnGBQ.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>如果你一直在使用 Jetpack Compose，你可能遇到过布局行为与预期不符的令人沮丧的情况。也许是 <code>Box</code> 中的 <code>weight()</code> 修饰符导致了奇怪的行为，或者你的分层 UI 元素大小不正确。</p>
-
-<p>这时 <strong><code>IntrinsicSize</code></strong> 就派上用场了——相信我，一旦你理解了它，它将成为你 Compose 工具箱中最强大的工具之一。</p>
-
-<h2>问题：一个真实的生产场景</h2>
-
-<p>最近，我正在为一个应用程序构建详情页面。设计要求：</p>
-
-<ol>
-<li><p>顶部放置一张<strong>标题图片</strong></p></li>
-<li><p>一张<strong>卡片</strong>，与标题图片重叠 56dp</p></li>
-<li><p>从标题图片到柔和灰色背景的<strong>平滑过渡</strong></p></li>
-</ol>
-
-
-<p>我们想要实现的效果如下：</p>
-
-<blockquote><p><strong><em>💡 设计目标：</em></strong> <em>创建一个卡片，使其优雅地与标题图片重叠，并实现无缝的背景过渡。</em></p></blockquote>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:904/1*7wqxO7TLyV_oaH9wQxz6pw.png" alt="" /></p>
-
-<h2>挑战</h2>
-
-<p>我需要创建一个包含两层的“盒子Box”：</p>
-
-<ul>
-<li><p><strong>图层 1（背景）：</strong> 顶部 56dp 的透明区域，然后是柔和的灰色背景</p></li>
-<li><p><strong>图层 2（卡片）：</strong> 绘制在顶部的实际卡片内容</p></li>
-</ul>
-
-
-<p>这是我的第一个作品尝试：</p>
-
-<pre><code class="kotlin">@Composable
-fun OverlappingCardContent(overlapHeight: Dp) {
-    Box(modifier = Modifier.fillMaxWidth()) {
-        // Layer 1: Background
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Spacer(modifier = Modifier.height(overlapHeight)) // 56dp transparent
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)  // Fill remaining space with soft background
-                    .background(color = Color.LightGray)
-            )
-        }
-
-        // Layer 2: Card
-        Card(modifier = Modifier.fillMaxWidth()) {
-            // Card content...
-        }
-    }
-}
-</code></pre>
-
-<p><strong>但是这行不通！</strong> 😩</p>
-
-<p><code>weight(1f)</code>修饰符导致了问题。布局要么意外地折叠，要么意外地展开。</p>
-
-<h2>了解根本原因</h2>
-
-<p>为了理解为什么会失败，我们先回顾一下 Compose 布局的工作原理。</p>
-
-<h3>Compose 布局：单遍系统</h3>
-
-<p>为了提高性能，Compose 布局采用<strong>单次遍历</strong>方式测量布局。每个可组合元素：</p>
-
-<ol>
-<li><p>从父元素接收约束</p></li>
-<li><p>测量其子元素</p></li>
-<li><p>确定自身大小</p></li>
-<li><p>放置其子元素</p></li>
-</ol>
-
-
-<p>问题在于：当像 <code>Box</code> 这样的父元素测量其子元素时，每个子元素都不知道其他子元素的大小。它们是独立测量的。</p>
-
-<h2>为什么 <code>weight(1f)</code> 会失败</h2>
-
-<p><code>weight()</code> 修饰符表示：“占据剩余空间的 X 倍。”</p>
-
-<p>但是剩余空间指的是<strong>什么</strong>？<code>Box</code> 元素尚未确定自身高度——它正在等待子元素告知其自身大小。这会造成循环依赖：</p>
-
-<pre><code class="bash">Box: "Children, how tall are you?"
-  ├─ Column: "I need 56dp + whatever weight(1f) gives me"
-  │
-
-  "But weight depends on your height, Box!"
-  └─ Card: "I need ~180dp for my content"  Box: "I'm confused..." 🤯
-</code></pre>
-
-<h2>引入 IntrinsicSize：打破循环依赖</h2>
-
-<p><code>IntrinsicSize</code> 是 Compose 在实际测量之前向子元素询问一个<strong>假设性问题</strong> 的方式：</p>
-
-<blockquote><p><strong><em>“如果我给你无限的空间，你需要的最小（或最大）高度是多少？”</em></strong></p></blockquote>
-
-<h2>IntrinsicSize.Min 与 IntrinsicSize.Max</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*IUoEVdIal11Nwn3WFG6w0A.png" alt="" /></p>
-
-<h2>修复</h2>
-
-<pre><code class="kotlin">Box(
-    modifier = Modifier
-        .fillMaxWidth()
-        .height(IntrinsicSize.Min)  // ← The magic line!
-) {
-    // Layer 1: Background
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Spacer(modifier = Modifier.height(56.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .background(color = Color.LightGray)
-        )
-    }
-
-    // Layer 2: Card
-    Card(modifier = Modifier.fillMaxWidth()) {
-        // Card content...
-    }
-}
-</code></pre>
-
-<p>现在布局正常了！原因如下：</p>
-
-<h2>IntrinsicSize.Min 如何解决冲突</h2>
-
-<p>当 <code>Box</code> 使用 <code>height(IntrinsicSize.Min)</code> 时，它会询问每个子元素：</p>
-
-<p><strong>列的最小固有高度：</strong></p>
-
-<pre><code class="bash">Spacer: 56dp (fixed)
-Weighted Box: 0dp (minimum, can shrink to nothing)
-Total: 56dp
-</code></pre>
-
-<p><strong>卡片的最小固有高度：</strong></p>
-
-<pre><code class="bash">Status row + Title + Subtitle + Button + Padding = ~180dp
-Total: ~180dp
-</code></pre>
-
-<p><strong>Box 选择：</strong> <code>max(56dp, 180dp)</code> = <strong>180dp</strong></p>
-
-<p>为什么是 <code>max()</code>？因为 Box 的高度需要足以容纳<strong>所有</strong>子元素！</p>
-
-<p>现在布局完全知道如何高度要合适，<code>weight(1f)</code> 可以正常工作：</p>
-
-<ul>
-<li><p>盒子高度：180dp</p></li>
-<li><p>间距：56dp</p></li>
-<li><p>加权背景盒子：180dp — 56dp = <strong>124dp</strong></p></li>
-</ul>
-
-
-<h2>完整解决方案：重叠卡片式 UI</h2>
-
-<p>以下是支持此 UI 的最终代码：</p>
-
-<pre><code class="kotlin">private val OVERLAP_HEIGHT = 56.dp
-</code></pre>
-
-<pre><code class="kotlin">@Composable
-fun HeaderWithOverlappingCard(imageHeight: Dp) {
-    LazyColumn {
-        // Create overlap: position content before header ends
-        item { 
-            Spacer(modifier = Modifier.height(imageHeight - OVERLAP_HEIGHT)) 
-        }
-
-        item {
-            OverlappingCardContent(overlapHeight = OVERLAP_HEIGHT)
-        }
-    }
-}
-</code></pre>
-
-<pre><code class="kotlin">@Composable
-fun OverlappingCardContent(overlapHeight: Dp) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-    ) {
-        // Layer 1: Background transition
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Spacer(modifier = Modifier.height(overlapHeight)) // Transparent over header
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(color = SoftGrayBackground)
-            )
-        }
-
-        // Layer 2: Card content (drawn on top)
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                Text("✓ Success", color = Color.Green)
-                Text("₹100 Cashback", style = MaterialTheme.typography.h4)
-                Text("Transaction complete")
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = {}) { Text("View Details") }
-            }
-        }
-    }
-}
-</code></pre>
-
-<h2>可视化分解</h2>
-
-<pre><code class="kotlin">imageHeight = 200dp
-overlapHeight = 56dp
-</code></pre>
-
-<pre><code class="bash">LazyColumn positions:
-├─ Spacer: 144dp (200 - 56)
-└─ OverlappingCardContent starts at Y = 144dp
-</code></pre>
-
-<pre><code class="bash">Inside OverlappingCardContent (height = 180dp via IntrinsicSize.Min):
-├─ Column Layer:
-│   ├─ Spacer: 56dp (transparent, header shows through)
-│   └─ Background Box: 124dp (soft gray)
-└─ Card Layer: 180dp (drawn from top, overlaps header)
-</code></pre>
-
-<h2>IntrinsicSize 的常见用例</h2>
-
-<h3>1. 一行中高度相同的按钮</h3>
-
-<p><strong>问题：</strong> 文本长度不同的按钮最终高度也不同。</p>
-
-<p><strong>解决方案：</strong></p>
-
-<pre><code class="kotlin">Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-    Button(
-        modifier = Modifier.weight(1f).fillMaxHeight(),
-        onClick = {}
-    ) { Text("Short") }
-
-    Button(
-        modifier = Modifier.weight(1f).fillMaxHeight(),
-        onClick = {}
-    ) { Text("This is a much\nlonger button\nwith more text") }
-}
-</code></pre>
-
-<p><strong>结果：</strong> 两个按钮的高度都与最高的按钮高度相同。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*IubiRLP4sFk4rl-uvLwwKA.png" alt="" /></p>
-
-<h3>2. 分隔线与父元素高度匹配</h3>
-
-<p><strong>问题：</strong> 分隔线无法拉伸以匹配多行内容。</p>
-
-<p><strong>解决方案：</strong></p>
-
-<pre><code class="kotlin">Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-    Text("Left content\nwith multiple\nlines")
-
-    Divider(
-        modifier = Modifier
-            .fillMaxHeight()
-            .width(1.dp)
-    )
-
-    Text("Right")
-}
-</code></pre>
-
-<p><strong>结果：</strong> 分隔线可以拉伸以匹配多行文本的高度。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*nFJrnQVIaT7Kfh70JDofOA.png" alt="" /></p>
-
-<h3>3. 带有动态内容和固定覆盖层的卡片</h3>
-
-<p><strong>问题：</strong> 覆盖层需要与卡片宽度匹配，但卡片宽度是动态的。</p>
-
-<p><strong>解决方案：</strong></p>
-
-<pre><code class="kotlin">Box(modifier = Modifier.width(IntrinsicSize.Max)) {
-    Card {
-        Column {
-            Text("Dynamic content here...")
-            // More content
-        }
-    }
-
-    // Badge that should match card width
-    Badge(
-        modifier = Modifier
-            .align(Alignment.TopEnd)
-            .fillMaxWidth()
-    )
-}
-</code></pre>
-
-<h2>性能相关注意事项 ⚠️</h2>
-
-<p><code>IntrinsicSize</code> 会触发<strong>两遍测量</strong>：</p>
-
-<ol>
-<li><p>第一遍：查询固有尺寸</p></li>
-<li><p>第二遍：实际测量和布局</p></li>
-</ol>
-
-
-<p>这会带来一定的性能开销。谨慎使用：</p>
-
-<h2>✅ 适用场景</h2>
-
-<ul>
-<li><p>复杂的分层 UI（例如我们的重叠卡片）</p></li>
-<li><p>使同级元素大小一致</p></li>
-<li><p>使分隔符/分隔线与内容匹配</p></li>
-<li><p>需要子元素协调大小时</p></li>
-</ul>
-
-
-<h2>❌ 避免使用场景</h2>
-
-<ul>
-<li><p>在可能会重复数百次的 <code>LazyColumn</code>/<code>LazyRow</code> 元素中</p></li>
-<li><p>深度嵌套的固有尺寸</p></li>
-<li><p>当固定尺寸或 <code>wrapContentHeight()</code> 可以满足需求时</p></li>
-<li><p>在性能关键路径中</p></li>
-</ul>
-
-
-<h2>要点</h2>
-
-<ol>
-<li><p><strong><code>IntrinsicSize.Min</code></strong> = &ldquo;使用子元素所需的最小高度&rdquo;</p></li>
-<li><p><strong><code>IntrinsicSize.Max</code></strong> = &ldquo;使用子元素可能需要的最大高度&rdquo;</p></li>
-<li><p>它解决了父元素和子元素尺寸之间的循环依赖关系</p></li>
-<li><p>对于子元素使用 <code>weight()</code> 或 <code>fillMaxHeight()</code> 的分层 UI 至关重要</p></li>
-<li><p>会带来性能开销——请谨慎使用</p></li>
-</ol>
-
-
-<h2>结论</h2>
-
-<p><code>IntrinsicSize</code> 看似是一个小众的 API，但它对于在 Compose 中构建复杂的 UI 至关重要。我们构建的重叠卡片模式只是其中一个例子——当你需要协调同级元素的大小，或者当分层布局需要“统一”尺寸时，你会发现它非常实用。</p>
-
-<p>下次当你的 Compose 布局在使用 <code>weight()</code> 或 <code>fillMaxHeight()</code> 时出现异常行为时，请记住：<strong>IntrinsicSize 或许能帮你解决问题</strong>。</p>
-
-<p><em>如果你有任何疑问或发现了 IntrinsicSize 的其他创意用法，请在下方留言！</em></p>
-
-<p><strong>关注我，获取更多 Android 开发技巧。</strong></p>
 ]]></content>
   </entry>
   
