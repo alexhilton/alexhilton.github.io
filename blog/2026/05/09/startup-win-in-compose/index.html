@@ -1,0 +1,937 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>揭密：Compose应用如何做到启动提升34% - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="本文讲述了作者如何通过重组分析，严格模式(StrictMode)以及基线性能分析来把一个Compose应用的启动性能提升了34%。">
+  <meta name="keywords" content="Compose, Startup, StrictMode, Performance">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/05/09/startup-win-in-compose">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">揭密：Compose应用如何做到启动提升34%</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-05-09'><span class='date'><span class='date-month'>May</span> <span class='date-day'>9</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「How I Found a 34% Startup Win in a Modern Compose App」，原文链接<a href="https://levelup.gitconnected.com/how-i-found-a-34-startup-win-in-a-modern-compose-app-84953f77ae52">https://levelup.gitconnected.com/how-i-found-a-34-startup-win-in-a-modern-compose-app-84953f77ae52</a>，由James Cullimore发布于2026年3月16日。</p></blockquote>
+
+<p><a href="/blog/2026/05/09/startup-win-in-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*MncHM6rnM_rMwefyiw8Hzg.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>人们很容易认为，一旦 Android 应用变得现代化、使用 Compose、结构合理且运行流畅，那么大幅提升启动速度的潜力就已经发挥出来了。我最初也是这么想的。</p>
+
+<p>但事实证明我错了。</p>
+
+<p>我当时正在开发一款现代化的 Compose 应用，它有两种截然不同的启动路径：初始设置流程和直接启动到主操作界面。这款应用本身已经具备很多优势：支持基线配置文件、启动基准测试、跟踪功能，以及代码库也并非一团糟。</p>
+
+<p>然而，我仍然有 34% 的启动速度提升空间。</p>
+
+<p>有趣的是，最终的成果并非来自单一的灵丹妙药。我添加了重组检测功能，使 UI 更易于理解，然后又通过 StrictMode 模式优化了启动和设置行为。基线性能分析很有帮助。宏基准测试也帮我验证了这一点。但最大的绝对收益来自于一些并非一开始就以“性能优化”为目的的清理工作。</p>
+
+<p>这也不是我第一次做这类工作。我曾在四个不同的应用程序上进行过类似的启动和基线性能分析调查。这一点很重要，因为人们很容易把性能工具的使用误认为，只要添加了推荐的组件，结果就总是可以预测的。事实并非如此。在其中一个应用程序中，基线性能分析实际上反而减慢了启动速度。因此，虽然本文以一个项目为例，但结论来自对不同代码库的反复尝试，而不是某个偶然的结果。</p>
+
+<p>简而言之：</p>
+
+<ul>
+<li><p>基线性能分析的效果清晰且可重复。</p></li>
+<li><p>宏基准测试很重要，因为启动过程并非单一流程。</p></li>
+<li><p>重构插桩比原始启动数据更能提高可见性。</p></li>
+<li><p>后续由严格模式和产品完整性检查触发的清理操作，最终使启动速度提升了 18% 到 34%，尽管它最初并非一项启动优化任务。</p></li>
+</ul>
+
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*ZPbZSU0E8d_hbr0XcQ0pdQ.png" alt="" /></p>
+
+<h2>启动故事分阶段展开</h2>
+
+<p>基于日期的图表之所以会产生误导，其中一个原因是它们将工作简化为日历上的点，而不是工程阶段。</p>
+
+<p>实际情况更接近于以下阶段：</p>
+
+<ul>
+<li><p>第一阶段：验证基准配置是否对当前应用的行为模式有实质性的帮助</p></li>
+<li><p>第二阶段：在严格模式的指导下进行清理和产品强化，然后再次进行基准测试，以查看启动过程的绝对变化</p></li>
+</ul>
+
+
+<p>这种区别至关重要，因为后期的收益并非“更多的基准配置工作”。基准配置仍然有效，但更大的绝对变化来自于对启动路径周围行为的清理。</p>
+
+<p>因此，当我在本文中比较两个基准测试快照时，我实际上并非在比较日期。我正在比较两个技术阶段：</p>
+
+<ul>
+<li><p><code>阶段 1</code>：在之前的版本树上验证了基线配置文件的优势</p></li>
+<li><p><code>阶段 2</code>：基线配置文件仍然存在，但现在是在严格模式/产品强化阶段的启动清理之上</p></li>
+</ul>
+
+
+<h2>基线配置文件是最容易预测的优势</h2>
+
+<p>最容易论证的是基线配置文件的影响，因为测量设置使比较变得明确。</p>
+
+<p>基准测试脚本在一次运行中测量应用程序的两种编译模式：</p>
+
+<ul>
+<li><p><code>before</code>：使用 <code>verify</code> 编译的包</p></li>
+<li><p><code>after</code>：使用 <code>speed-profile</code> 编译的包</p></li>
+</ul>
+
+
+<p>这意味着每次运行都会告诉我基线配置文件在当前版本树上的作用，而不仅仅是启动是否由于某些无关原因而发生变化。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c">#!/usr/bin/env bash</span>
+</span><span class='line'><span class="nb">set</span> -euo pipefail
+</span><span class='line'>
+</span><span class='line'><span class="nv">PKG</span><span class="o">=</span><span class="s2">&quot;dev.jamescullimore.app&quot;</span>
+</span><span class='line'><span class="nv">ACTIVITY</span><span class="o">=</span><span class="s2">&quot;dev.jamescullimore.app/.MainActivity&quot;</span>
+</span><span class='line'><span class="nv">ITERATIONS</span><span class="o">=</span>16
+</span><span class='line'><span class="nv">INSTALL_APP</span><span class="o">=</span>0
+</span><span class='line'><span class="nv">ONLY_SCENARIO</span><span class="o">=</span><span class="s2">&quot;&quot;</span>
+</span><span class='line'>
+</span><span class='line'>collect_times<span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>  <span class="nb">local </span><span class="nv">scenario</span><span class="o">=</span><span class="s2">&quot;$1&quot;</span>
+</span><span class='line'>  <span class="nb">local </span><span class="nv">mode_label</span><span class="o">=</span><span class="s2">&quot;$2&quot;</span>
+</span><span class='line'>  <span class="nb">local </span><span class="nv">onboarding</span><span class="o">=</span><span class="s2">&quot;$3&quot;</span>
+</span><span class='line'>  <span class="nb">local </span><span class="nv">compile_mode</span><span class="o">=</span><span class="s2">&quot;$4&quot;</span>
+</span><span class='line'>
+</span><span class='line'>  adb shell am force-stop <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span><span class='line'>  adb shell pm clear <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span><span class='line'>  adb shell cmd package compile --reset <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span><span class='line'>  adb shell cmd package compile -f -m <span class="s2">&quot;$compile_mode&quot;</span> <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span><span class='line'>
+</span><span class='line'>  adb shell am start -S -W <span class="se">\</span>
+</span><span class='line'>    -a android.intent.action.MAIN <span class="se">\</span>
+</span><span class='line'>    -c android.intent.category.LAUNCHER <span class="se">\</span>
+</span><span class='line'>    -n <span class="s2">&quot;$ACTIVITY&quot;</span> <span class="se">\</span>
+</span><span class='line'>    --ez perf_onboarding_done <span class="s2">&quot;$onboarding&quot;</span>
+</span><span class='line'><span class="o">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在“阶段 1”，主要近期变更在于基线配置文件验证和刷新，基准测试结果显示：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*GR9Rma32kgZGFpdxtcMtNw.png" alt="" /></p>
+
+<p>在“阶段 2”，经过严格模式引导的清理和产品强化后，基准测试结果仍然显示出显著的基线配置文件效果：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*ERbzi317Wc58AHke57afmQ.png" alt="" /></p>
+
+<p>这种一致性至关重要。基线配置文件并非一次性优势，不会随着应用程序的变更而消失。即使在启动路径的其他部分得到改进之后，它仍然有效。</p>
+
+<p>这也阐明了两个阶段之间的变化。基线配置文件的效果基本保持不变。绝对启动时间有所改善，是因为应用程序本身在首帧加载和早期交互方面变得更加流畅。</p>
+
+<p>此外，必须明确指出一个令人不安的事实：基准配置文件并非万能，生成它并不意味着就能自动提升性能。在我进行过类似工作的四个应用程序中，有一个启用基准配置文件后启动速度反而变慢了。正因如此，我才如此重视在实际应用程序中测量优化前后的性能，而不是将基准配置文件视为一种盲目添加的工具。</p>
+
+<p>这也是为什么我喜欢展示基准测试流程图，而不仅仅是最终的图表。该脚本足够简单，便于审核。它会强制停止应用程序，清除包状态，使用特定模式进行编译，使用 <code>am start -S -W</code> 命令启动，并在汇总中位数之前存储原始的 <code>TotalTime</code> 样本。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>adb shell pm clear <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span><span class='line'>adb shell cmd package compile - reset <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span><span class='line'>adb shell cmd package compile -f -m <span class="s2">&quot;$compile_mode&quot;</span> <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>虽然这并不华丽，但它让整个过程更加务实。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*9lHqIagJSLl0o6SfZsaHTA.png" alt="" /></p>
+
+<h2>启动并非单一流程，因此基准测试也并非单一测试</h2>
+
+<p>许多启动工作都被简化为单一的启动器指标。但这对于这款应用来说并不可靠。</p>
+
+<p>有两个重要的启动路径：</p>
+
+<ul>
+<li><p><code>setup_flow</code>，此时用户引导尚未完成</p></li>
+<li><p><code>main_flow</code>，此时应用直接启动到主屏幕</p></li>
+</ul>
+
+
+<p>基准测试模块明确地测量了这两种路径：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">dev.jamescullimore.app.benchmark</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.benchmark.macro.CompilationMode</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.benchmark.macro.StartupMode</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.benchmark.macro.StartupTimingMetric</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.benchmark.macro.junit4.MacrobenchmarkRule</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.junit.Rule</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.junit.Test</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">StartupBenchmarks</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@get</span><span class="p">:</span><span class="n">Rule</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">benchmarkRule</span> <span class="p">=</span> <span class="n">MacrobenchmarkRule</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">coldStartupWithoutProfile_setupFlow</span><span class="p">()</span> <span class="p">=</span> <span class="n">measureColdStart</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">compilationMode</span> <span class="p">=</span> <span class="n">CompilationMode</span><span class="p">.</span><span class="n">None</span><span class="p">(),</span>
+</span><span class='line'>        <span class="n">onboardingDone</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">coldStartupWithBaselineProfile_mainFlow</span><span class="p">()</span> <span class="p">=</span> <span class="n">measureColdStart</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">compilationMode</span> <span class="p">=</span> <span class="n">CompilationMode</span><span class="p">.</span><span class="n">Partial</span><span class="p">(),</span>
+</span><span class='line'>        <span class="n">onboardingDone</span> <span class="p">=</span> <span class="k">true</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">measureColdStart</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">compilationMode</span><span class="p">:</span> <span class="n">CompilationMode</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">onboardingDone</span><span class="p">:</span> <span class="n">Boolean</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">=</span> <span class="n">benchmarkRule</span><span class="p">.</span><span class="n">measureRepeated</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">packageName</span> <span class="p">=</span> <span class="s">&quot;dev.jamescullimore.app&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">metrics</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span><span class="n">StartupTimingMetric</span><span class="p">()),</span>
+</span><span class='line'>        <span class="n">startupMode</span> <span class="p">=</span> <span class="n">StartupMode</span><span class="p">.</span><span class="n">COLD</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">compilationMode</span> <span class="p">=</span> <span class="n">compilationMode</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">iterations</span> <span class="p">=</span> <span class="m">10</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">launchForStartup</span><span class="p">(</span><span class="n">onboardingDone</span> <span class="p">=</span> <span class="n">onboardingDone</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这是一个小细节，但它改变了我对启动工作的看法。如果我只测量了正常启动路径的情况，我就会忽略这样一个事实：设置启动和直接启动都值得追踪，而且它们对更改的响应略有不同。</p>
+
+<p>这也使得最终的基准测试数据更具说服力。当两种情况都得到改善时，结果就很难被简单地归咎于路径特定的偶然因素。</p>
+
+<h2>标准工具有所帮助，但并非完全可靠</h2>
+
+<p>工作中有一部分比我预想的要棘手得多：基线配置文件的生成本身。</p>
+
+<p>在这个设备上，常用的 <code>BaselineProfileRule</code> 路径无法稳定返回结果。我升级了 AndroidX 基准测试组件，减少了空闲等待时间，并更严格地隔离了生成测试。但运行仍然卡在“0/1 已完成”的状态。</p>
+
+<p>这很可能导致团队耸耸肩，对已提交的配置文件置之不理，然后继续讨论基线配置文件，仿佛工作流程已经稳定。我不想看到这种情况发生。</p>
+
+<p>因此，项目最终采用了手动回退生成器，它会启动相关场景，触发 <code>androidx.profileinstaller.action.SAVE_PROFILE</code>，导出 ART 配置文件，并将其过滤到 <code>baseline-prof.txt</code> 文件中。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c">#!/usr/bin/env bash</span>
+</span><span class='line'><span class="nb">set</span> -euo pipefail
+</span><span class='line'>
+</span><span class='line'><span class="nv">PKG</span><span class="o">=</span><span class="s2">&quot;dev.jamescullimore.app&quot;</span>
+</span><span class='line'><span class="nv">ACTIVITY</span><span class="o">=</span><span class="s2">&quot;dev.jamescullimore.app/.MainActivity&quot;</span>
+</span><span class='line'><span class="nv">RECEIVER</span><span class="o">=</span><span class="s2">&quot;dev.jamescullimore.app/androidx.profileinstaller.ProfileInstallReceiver&quot;</span>
+</span><span class='line'><span class="nv">REMOTE_PROFILE</span><span class="o">=</span><span class="s2">&quot;/data/misc/profman/${PKG}-primary.prof.txt&quot;</span>
+</span><span class='line'>
+</span><span class='line'>run_scenario<span class="o">()</span> <span class="o">{</span>
+</span><span class='line'>  <span class="nb">local </span><span class="nv">onboarding</span><span class="o">=</span><span class="s2">&quot;$1&quot;</span>
+</span><span class='line'>  adb shell am start -S -W -n <span class="s2">&quot;$ACTIVITY&quot;</span> --ez perf_onboarding_done <span class="s2">&quot;$onboarding&quot;</span> &gt;/dev/null
+</span><span class='line'>  sleep 5
+</span><span class='line'>  adb shell am broadcast -a androidx.profileinstaller.action.SAVE_PROFILE <span class="s2">&quot;$RECEIVER&quot;</span> &gt;/dev/null
+</span><span class='line'><span class="o">}</span>
+</span><span class='line'>
+</span><span class='line'>run_scenario <span class="nb">false</span>
+</span><span class='line'>run_scenario <span class="nb">true</span>
+</span><span class='line'>
+</span><span class='line'>adb shell pm dump-profiles --dump-classes-and-methods <span class="s2">&quot;$PKG&quot;</span> &gt;/dev/null
+</span><span class='line'>adb <span class="nb">exec</span>-out cat <span class="s2">&quot;$REMOTE_PROFILE&quot;</span> &gt;/tmp/app-baseline-raw.prof.txt
+</span><span class='line'>python3 scripts/filter_baseline_profile.py /tmp/app-baseline-raw.prof.txt app/src/main/baseline-prof.txt
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我不会把它描述为理想的工作流程，但我会把它描述为最真实的工作流程。官方工具仍然是首选，但如果它在你的环境中不稳定，你需要一个能够保持信心的备用方案，而不是回避问题。</p>
+
+<p>这也是性能优化中不可或缺的一部分。有时，难点不在于找到优化点，而在于创建一个足够可靠、可以持续使用的工作流程。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*i8jn4QejYJNem_q1hdGpYA.png" alt="" /></p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*RB7AI1gPLRr2MxQJZ_onfg.png" alt="" /></p>
+
+<h2>重组检测更多的是为了提高可见性而非直接提升启动速度</h2>
+
+<p>我还希望更好地了解主 Compose 界面启动后正在执行的操作。这促使我在主屏幕上添加了一个仅供调试使用的小型重构检测叠加层。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">RecomposeDebugOverlay</span><span class="p">(</span><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(!</span><span class="n">BuildConfig</span><span class="p">.</span><span class="n">DEBUG</span><span class="p">)</span> <span class="k">return</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="k">val</span> <span class="py">counts</span> <span class="k">by</span> <span class="n">RecomposeDebugTracker</span><span class="p">.</span><span class="n">counts</span><span class="p">.</span><span class="n">collectAsStateWithLifecycle</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">var</span> <span class="py">expanded</span> <span class="k">by</span> <span class="n">rememberSaveable</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">Surface</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">clickable</span> <span class="p">{</span> <span class="n">expanded</span> <span class="p">=</span> <span class="p">!</span><span class="n">expanded</span> <span class="p">})</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">horizontal</span> <span class="p">=</span> <span class="m">12.</span><span class="n">dp</span><span class="p">,</span> <span class="n">vertical</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Recompose ${if (expanded) &quot;</span><span class="n">hide</span><span class="s">&quot; else &quot;</span><span class="n">show</span><span class="s">&quot;}&quot;</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">expanded</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">counts</span><span class="p">.</span><span class="n">toList</span><span class="p">().</span><span class="n">sortedBy</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">first</span> <span class="p">}.</span><span class="n">forEach</span> <span class="p">{</span> <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">count</span><span class="p">)</span> <span class="p">-&gt;</span>
+</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;$name: $count&quot;</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>                <span class="n">TextButton</span><span class="p">(</span><span class="n">onClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">RecomposeDebugTracker</span><span class="p">.</span><span class="n">reset</span><span class="p">()</span> <span class="p">})</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">stringResource</span><span class="p">(</span><span class="n">id</span> <span class="p">=</span> <span class="n">R</span><span class="p">.</span><span class="n">string</span><span class="p">.</span><span class="n">clear</span><span class="p">))</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">DebugRecomposeCounter</span><span class="p">(</span><span class="n">section</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(!</span><span class="n">BuildConfig</span><span class="p">.</span><span class="n">DEBUG</span><span class="p">)</span> <span class="k">return</span>
+</span><span class='line'>    <span class="n">SideEffect</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">count</span> <span class="p">=</span> <span class="n">RecomposeDebugTracker</span><span class="p">.</span><span class="n">increment</span><span class="p">(</span><span class="n">section</span><span class="p">)</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">count</span> <span class="p">%</span> <span class="m">25</span> <span class="p">==</span> <span class="m">0</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="s">&quot;Recompose&quot;</span><span class="p">,</span> <span class="s">&quot;$section recomposed $count times&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>该叠加层会跟踪节级别的重构操作，并在 UI 中显示出来：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">DebugRecomposeCounter</span><span class="p">(</span><span class="n">section</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>   <span class="p">...</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>由于仅供调试使用的工具在长期未使用后容易失效，因此我们还编写了一个 Android 测试，该测试会展开叠加层，检查行是否出现，清除行，并验证行是否重置。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@RunWith</span><span class="p">(</span><span class="n">AndroidJUnit4</span><span class="o">::</span><span class="k">class</span><span class="p">)</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">MainScreenRecompositionOverlayTest</span> <span class="p">{</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@get</span><span class="p">:</span><span class="n">Rule</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">composeRule</span> <span class="p">=</span> <span class="n">createAndroidComposeRule</span><span class="p">&lt;</span><span class="n">ComponentActivity</span><span class="p">&gt;()</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">overlay_expandShowsCounters_and_clearResetsRows</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">assumeTrue</span><span class="p">(</span><span class="n">BuildConfig</span><span class="p">.</span><span class="n">DEBUG</span><span class="p">)</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">composeRule</span><span class="p">.</span><span class="n">setContent</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">MainScreen</span><span class="p">(</span><span class="n">viewModel</span> <span class="p">=</span> <span class="n">MainViewModel</span><span class="p">())</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">composeRule</span><span class="p">.</span><span class="n">onNodeWithText</span><span class="p">(</span><span class="s">&quot;Recompose show&quot;</span><span class="p">).</span><span class="n">performClick</span><span class="p">()</span>
+</span><span class='line'>        <span class="n">composeRule</span><span class="p">.</span><span class="n">onNodeWithText</span><span class="p">(</span><span class="s">&quot;Clear&quot;</span><span class="p">).</span><span class="n">performClick</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">composeRule</span><span class="p">.</span><span class="n">onAllNodesWithText</span><span class="p">(</span><span class="s">&quot;TopBar:&quot;</span><span class="p">,</span> <span class="n">substring</span> <span class="p">=</span> <span class="k">true</span><span class="p">).</span><span class="n">assertCountEquals</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">composeRule</span><span class="p">.</span><span class="n">onAllNodesWithText</span><span class="p">(</span><span class="s">&quot;ConnectivitySection:&quot;</span><span class="p">,</span> <span class="n">substring</span> <span class="p">=</span> <span class="k">true</span><span class="p">).</span><span class="n">assertCountEquals</span><span class="p">(</span><span class="m">0</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这部分内容需要仔细阐述。重构检测本身并不能完全解释启动速度的提升。它并非基线性能提升 20% 的原因，也不是后来启动速度绝对提升的主要原因。</p>
+
+<p>它确实让用户界面更加清晰明了。它让我能够更快地判断状态切片和用户界面更新在最重要的屏幕上是否运行正常。这种可见性至关重要，即使最终的收益是信心而非基准测试数据。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*xbSd5q059RApIfsi0dAxBQ.png" alt="" /></p>
+
+<h2>第二阶段并非“更多基准性能分析工作”</h2>
+
+<p>如果图表只显示数字而不说明具体变化，这部分内容很容易被误解。</p>
+
+<p>“第二阶段”的改进并非来自第二轮性能分析优化，而是来自一次清理工作，减少了启动时不必要的工作和不稳定性。严格模式有助于将这些工作呈现出来，但真正的收益来自于后续的代码和产品变更。</p>
+
+<p>最重要的改进包括：</p>
+
+<ul>
+<li><p>移除由接收器驱动的 UI 重启路径，该路径会导致生命周期不稳定</p></li>
+<li><p>将显示设置和提供程序读取操作从关键 UI 路径中移除</p></li>
+<li><p>将阻塞事件报告进程的 I/O 操作从内联执行中移除，并为其提供备用路径</p></li>
+<li><p>阻止特权设置屏幕在交互期间频繁调用不可用的操作</p></li>
+</ul>
+
+
+<p>这就是为什么第二阶段在两种编译模式下的性能指标都有所提升的原因。如果此次改进仅仅基于基线性能分析，我预期“速度分析”模式下的性能提升会大于“验证”模式下的性能提升。但实际上，由于底层启动路径更加健康，两种模式下的性能都得到了提升。</p>
+
+<h2>严格模式并未发现大量典型的启动违规，但仍然加快了启动速度</h2>
+
+<p>这是这项工作中最有趣的部分。我添加了仅用于调试的严格模式配置，预期会得到通常的结果：在主线程上找到明显的磁盘或网络操作，修复它们，然后就完成了启动优化。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">internal</span> <span class="k">object</span> <span class="nc">StrictModeInitializer</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">enableIfDebuggable</span><span class="p">(</span><span class="n">application</span><span class="p">:</span> <span class="n">Application</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">isDebuggable</span> <span class="p">=</span>
+</span><span class='line'>            <span class="p">(</span><span class="n">application</span><span class="p">.</span><span class="n">applicationInfo</span><span class="p">.</span><span class="n">flags</span> <span class="n">and</span> <span class="n">ApplicationInfo</span><span class="p">.</span><span class="n">FLAG_DEBUGGABLE</span><span class="p">)</span> <span class="p">!=</span> <span class="m">0</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(!</span><span class="n">isDebuggable</span><span class="p">)</span> <span class="k">return</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">StrictMode</span><span class="p">.</span><span class="n">setThreadPolicy</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">StrictMode</span><span class="p">.</span><span class="n">ThreadPolicy</span><span class="p">.</span><span class="n">Builder</span><span class="p">()</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">detectAll</span><span class="p">()</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">penaltyLog</span><span class="p">()</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">build</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但实际情况并非如此。严格模式并没有暴露出大量由应用程序引起的重大启动违规。它所做的，是将一系列相关的质量问题暴露出来：</p>
+
+<ul>
+<li><p>启动接收器会从后台事件重新启动 UI</p></li>
+<li><p>设置屏幕即使在没有所需权限的情况下也看起来是交互式的</p></li>
+<li><p>事件报告中阻塞进程 I/O</p></li>
+<li><p>提供程序和首选项读取操作位于关键 UI 路径上</p></li>
+</ul>
+
+
+<p>这些问题乍一看并不像是“启动优化”。但一旦清理干净，启动速度就显著提升了。</p>
+
+<p>为了隔离该阶段，我将第二阶段的代码树与一个临时副本进行了比较，该临时副本仅还原了清理阶段的文件。这样就实现了一个实用的 A/B 对比，而无需重写本地历史记录。</p>
+
+<p>结果比我预期的要大：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*xe-iNoL6fN5KRy18CNu1jA.png" alt="" /></p>
+
+<p>这时，我才明白文章标题的意义所在。问题不再是“基线配置文件是否有帮助？”答案是肯定的。更有价值的问题是：究竟是什么真正改善了这款应用的启动速度？</p>
+
+<p>部分答案在于基线配置文件。部分在于严格的测量规范。但还有一部分原因在于产品强化工作，这些工作消除了启动混乱，降低了主线程初始化的压力，并在应用生命周期的早期阶段停止了那些有问题的操作。</p>
+
+<p>其中两项改动尤其具有代表性。</p>
+
+<p>启动接收器不再强制启动 UI，现在只启动服务：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">BootReceiver</span> <span class="p">:</span> <span class="n">BroadcastReceiver</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onReceive</span><span class="p">(</span><span class="n">context</span><span class="p">:</span> <span class="n">Context</span><span class="p">,</span> <span class="n">intent</span><span class="p">:</span> <span class="n">Intent</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">when</span> <span class="p">(</span><span class="n">intent</span><span class="p">.</span><span class="n">action</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Intent</span><span class="p">.</span><span class="n">ACTION_BOOT_COMPLETED</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">Intent</span><span class="p">.</span><span class="n">ACTION_LOCKED_BOOT_COMPLETED</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">Intent</span><span class="p">.</span><span class="n">ACTION_MY_PACKAGE_REPLACED</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">SystemEventService</span><span class="p">.</span><span class="n">start</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>显示设置状态不再在首次合成时进行完整的内联读取，现在在第一帧之后异步加载：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">withFrameNanos</span> <span class="p">{</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">displaySettings</span> <span class="p">=</span> <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span> <span class="n">readDisplaySettingsState</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="n">observeDisplaySettings</span> <span class="p">=</span> <span class="k">true</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这两项更改都不算特别引人注目。它们都属于那种通常被归类为产品完整性或工程质量而非性能优化的清理工作。实际上，它们仍然改变了启动路径。</p>
+
+<h2>行之有效的实用工作流程</h2>
+
+<p>最终，我们认为可行的性能优化工作流程比完整的流程要简单得多：</p>
+
+<ol>
+<li><p>测量多个启动路径。</p></li>
+<li><p>保留基线配置文件，因为它们可以重复验证并取得成功。</p></li>
+<li><p>在 UI 不够透明的地方添加轻量级检测。</p></li>
+<li><p>将严格模式用作质量工具，而不仅仅是违规计数器。</p></li>
+<li><p>在完成一些并非明显属于“性能优化”的清理工作后，再次进行基准测试。</p></li>
+</ol>
+
+
+<p>最后一步是我最想强调的。</p>
+
+<p>如果我只在基线配置更改后进行基准测试，我虽然能了解到一些正确但并不完整的信息。如果我只进行清理工作而不进行基准测试，我虽然能得到一个更漂亮的架构描述，但证据却不够充分。只有将两者结合起来，才能真正体现其价值。</p>
+
+<h2>结语</h2>
+
+<p>这个故事的简单版本是：基线配置改善了启动速度，宏基准测试证实了这一点，而重构工具则帮助优化了 Compose 的行为。这没错，但并不完整。</p>
+
+<p>在这个应用中，基线配置带来的提升是最显而易见的。宏基准测试之所以重要，是因为启动过程并非只有一条路径。重构工具帮助我了解主屏幕的运行情况。但最令人惊讶的是，由严格模式 (StrictMode) 主导的清理操作，其对绝对启动速度的提升甚至超过了某些明确以性能为导向的优化工作。</p>
+
+<p>这正是我会在下一个应用中沿用的部分。性能优化不仅仅在于你设定的优化目标。有时，它来自于使用合适的工具来发现那些早已存在于启动路径上的产品和生命周期问题。</p>
+
+<p>这也是为什么我不再把基线配置当作一个可有可无的选项。我已经在四个应用中进行了这项工作，结果并不相同。在这个应用中，基线配置确实带来了显著的提升。而在另一个应用中，它却让启动速度变得更慢了。常见的原则并非“基准配置文件总有帮助”，而是“衡量你实际拥有的应用，然后只保留那些能改进应用的功能”。</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-05-09'><span class='date'><span class='date-month'>May</span> <span class='date-day'>9</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/05/05/scanner-in-compose/" title="Previous Post: Compose中的CameraX二维码扫描器">&laquo; Compose中的CameraX二维码扫描器</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
