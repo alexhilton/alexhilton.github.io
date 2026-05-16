@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-05-09T13:20:54+00:00</updated>
+  <updated>2026-05-16T14:44:36+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,320 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[如何用Perfetto来对启动优化去伪存真]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/05/16/perfetto-real-startup/"/>
+    <updated>2026-05-16T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/05/16/perfetto-real-startup</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「How I Used Perfetto to Separate Real Startup Improvements From Plausible Ones」，原文链接<a href="https://levelup.gitconnected.com/how-i-used-perfetto-to-separate-real-startup-improvements-from-plausible-ones-d5497b25544c">https://levelup.gitconnected.com/how-i-used-perfetto-to-separate-real-startup-improvements-from-plausible-ones-d5497b25544c</a>，由James Cullimore发布于2026年4月21日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*zpbAbI_8a1lwD938CkykEw.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>当我打开 Perfetto 时，应用的速度已经提升了。</p>
+
+<p>问题就在这里。</p>
+
+<p>启动优化工作最简单的情况是应用明显运行过载，基准测试结果惨不忍睹，几乎任何合理的清理都能带来一些提升。而更难的情况则出现在应用已经运行良好之后，此时下一轮的改动很容易被合理化。</p>
+
+<p>我当时就处于这种情况。</p>
+
+<p>我已经有了启动基准测试数据，也已经有了基准性能数据。一次全面的清理已经显著缩短了启动时间。图表看起来已经足够好了，我可以就此打住，讲述一个现代 Android 应用速度提升的精彩故事。</p>
+
+<p>但我对剩余的启动路径并不完全信任，所以没有停止。</p>
+
+<p>我可以测量它，但却无法总是解释它。有些工作似乎发生在“启动前后”，却无法明确判断它究竟是阻塞了首次绘制、安全地延迟执行、重复执行，还是仅仅发生在不恰当的时间点。这种不确定性正是性能改进效果不佳的根源。你开始修改代码，并非因为证据确凿，而是因为代码的结构让某种理论听起来合情合理。</p>
+
+<p>Perfetto 正是在这个时候出现的。</p>
+
+<p>它并非救世主，也并非最大的胜利，而是我不再将看似合理的解释视为证据的转折点。</p>
+
+<p>如果你读过之前那篇关于启动的文章，那么这篇文章是它的后续，而非替代品。第一篇文章是关于如何在现代 Compose 应用中找到一个有意义的启动优势，并用基准测试来验证它。而这篇文章则探讨了之后出现的一个更有趣的问题：</p>
+
+<blockquote><p>哪些工作真正值得保留？</p></blockquote>
+
+<h2>这是对实际创业工作的后续跟进，而非起点</h2>
+
+<p>重要的背景是，Perfetto 并非与糟糕的基准进行比较。它是在前两个阶段已经完成实际工作之后推出的：</p>
+
+<ul>
+<li><p>基准测试结果已经展现出可重复的成功</p></li>
+<li><p>更广泛的清理工作已经大幅降低了创业成本</p></li>
+</ul>
+
+
+<p>这一点至关重要，因为它改变了标准。</p>
+
+<p>在创业初期，几乎任何合理的改进都会让人兴奋。但在创业后期，兴奋感就显得廉价了。你需要一种方法来区分“这看起来可行”和“这经得起衡量”。</p>
+
+<p>这正是我在此重视 Perfetto 的真正原因。</p>
+
+<p>如果你想了解这款应用是如何发展到如今的，请先阅读之前的文章：</p>
+
+<p><a href="https://juejin.cn/post/7636050861055672358">我是如何打造一款现代作文应用，并最终获得 34% 的启动成功</a></p>
+
+<p>这篇后续文章将探讨第一篇文章中略有提及的一个更具体的问题：当应用速度已经提升之后，追踪功能还能带来什么好处？</p>
+
+<h2>在 Perfetto 出现之前，基准测试结果已经相当不错</h2>
+
+<p>在跟踪流程之前，启动过程已经呈现出可观的趋势。</p>
+
+<p>在最初验证过的流程树中，仅基线分析就节省了：</p>
+
+<ul>
+<li><p>主流程：112 毫秒</p></li>
+<li><p>设置流程：126 毫秒</p></li>
+</ul>
+
+
+<p>两条启动路径合计节省了 238 毫秒。</p>
+
+<p>随后，更广泛的清理流程生效，启动时间的绝对值发生了显著变化。相对于之前的验证状态，分析后的启动时间中位数又下降了 248 毫秒。</p>
+
+<p>这已经是一个相当可观的结果了。本来可以就此止步，将数据整理成简洁的图表，然后就此结束。</p>
+
+<p>但我仍然对剩余的启动路径不够信任，所以没有就此止步。</p>
+
+<p>仍然存在一些地方，感觉这款应用在“启动前后”执行着一些工作，但却没有明确解释这些工作是否在关键路径上、是否被安全地推迟、是否重复执行，或者只是在不恰当的时机出现。</p>
+
+<p>正是这种不确定性导致了后续工作的糟糕表现。</p>
+
+<h2>Perfetto 恰好出现在最容易被滥用的阶段</h2>
+
+<p>我认为性能优化文章很少提及这一点。</p>
+
+<p>当应用已经运行良好时，跟踪功能最容易被滥用。</p>
+
+<p>这时，你打开跟踪日志，看到某个服务提前启动、进行了网络检查或执行了回调序列，就很容易说服自己进行看似技术严谨、规范的“巧妙”生命周期重写。有时这确实是个好改动。有时，这只是制造新的不确定性的花哨手段。</p>
+
+<p>这就是这里存在的风险。</p>
+
+<p>在这个阶段，我的确做了一些看似合理但最终被放弃的改动。这并非流程的失败。这就是流程运作的方式。</p>
+
+<p>真正有用的结果并非“Perfetto 向我展示了一个巨大的隐藏瓶颈”。而有用的结果是：</p>
+
+<ul>
+<li><p>它展示了在第一次抽签之前哪些工作真正发生了</p></li>
+<li><p>它验证了某些检查可以在第一次抽签之后安全地进行</p></li>
+<li><p>它展示了何时某个服务端的想法仍然过于嘈杂或结论不明确，以至于无法保留</p></li>
+</ul>
+
+
+<p>这比仅仅依靠图表所能展现的要成熟得多。它在幻灯片上可能不够吸引人，但在实际代码库中却实用得多。</p>
+
+<p>跟踪标签本身很简单：</p>
+
+<pre><code class="kotlin">trace("AppStartup") {
+    registerEarlyListeners()
+    resolveInitialState()
+    renderRootUi()
+}
+
+trace("RuntimeConnect") {
+    startLocalWatchers()
+    createRuntimeClient()
+    openRuntimeConnection()
+}
+
+trace("TransportConnect") {
+    bindInputChannel()
+    bindOutputChannel()
+    beginReceiveLoop()
+}
+</code></pre>
+
+<p>这并非复杂的工具。它只是提供了足够的结构，让我们不再空泛地谈论“启动工作”，而是开始询问在第一次抽签之前究竟是哪些工作真正完成了。</p>
+
+<h2>最佳的 Perfetto 驱动改进是微小、具体且不起眼的</h2>
+
+<p>最站得住脚的基于追踪的优化并非大规模的架构重写。</p>
+
+<p>而是将一组主屏幕启动检查从可见的启动路径中移除：</p>
+
+<ul>
+<li><p>初始文件监视器</p></li>
+<li><p>初始网络验证</p></li>
+<li><p>首次服务器 ping</p></li>
+</ul>
+
+
+<p>这些检查仍然重要。它们只是不需要与首次绘制争用。</p>
+
+<p>追踪到位后，问题就变得简单多了：</p>
+
+<p>这些检查是否出于正当理由而阻止可见的启动，还是仅仅因为从未强制执行而提前执行？</p>
+
+<p>答案是后者。</p>
+
+<p>因此，改进之处在于让第一帧落地，报告已完全绘制，然后启用第一轮监控和连接工作。改进后的正常追踪显示，这些切片出现在它们应该在的位置：首次绘制之后，而不是之前。</p>
+
+<p>该更改的伪代码版本如下：</p>
+
+<pre><code class="kotlin">var postDrawWorkEnabled by remember { mutableStateOf(false) }
+
+onFirstFrameRendered {
+    markStartupComplete()
+    postDrawWorkEnabled = true
+}
+
+onScreenVisible(postDrawWorkEnabled) {
+    updateConnectivityFlags()
+    if (postDrawWorkEnabled) {
+        probePeripheralState()
+        validateNetworkState()
+    }
+}
+
+when(postDrawWorkEnabled &amp;&amp; networkIsAvailable) {
+    runInitialServerCheck()
+}
+</code></pre>
+
+<p>这种优化不会在社交媒体上引起轰动。但它恰恰是那种经得起现实考验的优化。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*mTyH65mLxUvSDi4Pd7iCxw.png" alt="" /></p>
+
+<h2>Perfetto 最有价值的贡献在于拒绝工作</h2>
+
+<p>这对我来说才是真正的教训。</p>
+
+<p>最终 Perfetto 指导的迭代带来的性能提升是正的，但比之前的阶段要小：</p>
+
+<ul>
+<li><p><code>verify</code> 端总共节省了 142 毫秒</p></li>
+<li><p><code>speed-profile</code> 端总共节省了 44.5 毫秒</p></li>
+</ul>
+
+
+<p>如果只看这些数字，你可能会觉得 Perfetto 可有可无。但我认为这忽略了重点。</p>
+
+<p>到这个阶段，应用已经运行得更加稳定了。剩下的工作不再是寻找新的突破，而是确保上一轮工作的有效性。</p>
+
+<p>Perfetto 在这方面发挥了作用，它让我们能够做出以下判断：</p>
+
+<ul>
+<li><p>这项更改明显地将工作从关键路径中移开，保留它</p></li>
+<li><p>这项更改在不改变行为的前提下改进了归因，保留它</p></li>
+<li><p>这项服务生命周期调整没有产生足够清晰的结果，撤销它</p></li>
+</ul>
+
+
+<p>最后一类更改的一个例子是延迟运行时启动路径，它在理论上看起来合理：</p>
+
+<pre><code class="kotlin">onStartupRouteReady {
+    postToNextUiTurn {
+        waitBrieflyForFirstFrameToSettle()
+
+        trace("DeferredRuntimeStartup") {
+            startBackgroundService()
+            requestMissingStorageAccessIfNeeded()
+            initializeFileWatcher()
+            connectRuntimeClient()
+        }
+    }
+}
+</code></pre>
+
+<p>这类更改正是追踪功能发挥作用的地方。很容易就能想出一个简洁的解释来说明为什么将服务和客户端启动时间推迟会有帮助。但要证明由此产生的追踪结果更清晰、更稳定，并且值得增加生命周期的复杂性，就困难得多。在这种情况下，这个标准比想法听起来是否严谨更重要。</p>
+
+<p>这就是为什么我不会把这个阶段描述为“Perfetto 让启动速度更快”。清理工作已经完成了更多类似的工作。基线分析也已经完成了更多类似的工作。</p>
+
+<p>我会这样描述：</p>
+
+<blockquote><p>Perfetto 严格控制了剩余的启动工作，确保只有那些站得住脚的改动才能保留下来。</p></blockquote>
+
+<p>这听起来并不花哨，但这正是后期性能优化工作所需要的。后期工作很少需要惊天动地的壮举，而是要让系统更难被欺骗。</p>
+
+<h2>逐步比较比最终结果更有意思</h2>
+
+<p>最终的启动数据固然不错，但步骤顺序更重要。</p>
+
+<p>步骤顺序表明，不同的工具以不同的方式发挥了作用：</p>
+
+<ul>
+<li><p>基准配置文件带来了第一个清晰、可衡量的成果</p></li>
+<li><p>清理工作带来了最大的绝对节省</p></li>
+<li><p>Perfetto 带来的直接收益较小，但决策质量却大大提高</p></li>
+</ul>
+
+
+<p>这正是我希望其他团队能够借鉴的部分。</p>
+
+<p>人们往往会认为故事中最后一个工具的功劳最大。这就是为什么人们最终会把追踪过程当作优化本身。</p>
+
+<p>事实并非如此。</p>
+
+<p>追踪过程的作用在于提供足够的可见性，让你能够判断优化是否真的有必要。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*t7cyNzM0b5JMHZIeI4IzEQ.png" alt="" /></p>
+
+<h2>这篇后续文章改变了我的想法</h2>
+
+<p>之前那篇关于创业的文章让我得出了一个总体结论：很多有意义的创业工作并非始于“创业优化”。</p>
+
+<p>这篇后续文章又补充了第二个结论：</p>
+
+<blockquote><p>一旦取得重大进展，最难的部分往往是拒绝保留那些看似明智的改动。</p></blockquote>
+
+<p>因此，我现在不再把 Perfetto 看作一个“寻找瓶颈”的工具，而更像是后期绩效工作的“吐真剂”。</p>
+
+<p>当然，在更早期阶段它仍然有用。但它的价值不在于揭示了什么惊人的秘密，而在于它提高了标准。</p>
+
+<p>它迫使最后一轮的改动去回答更棘手的问题：</p>
+
+<ul>
+<li><p>这些改动真的能把工作往后推进吗？</p></li>
+<li><p>它优化了关键路径，还是仅仅重新排列了代码？</p></li>
+<li><p>基准测试结果是否有所提升？</p></li>
+<li><p>如果跟踪信息仍然不明确，我为什么要保留它？</p></li>
+</ul>
+
+
+<p>这些问题让我避免保留更多无关紧要的更改，而这些更改实际上并没有直接保存以毫秒为单位的跟踪信息。这或许是对跟踪价值最诚实的描述，尤其是在那些显而易见的优势消失之​​后。</p>
+
+<h2>下次我会重复的步骤</h2>
+
+<p>如果我在另一个应用上再次进行这项工作，我会遵循以下步骤：</p>
+
+<ol>
+<li><p>对真实的启动路径进行基准测试，而不仅仅是针对某个启动器。</p></li>
+<li><p>验证基线配置文件，而不是想当然地认为它们会有帮助。</p></li>
+<li><p>进行清理工作，使启动路径更加健康。</p></li>
+<li><p>当下一个问题不再是“启动慢吗？”而是“为什么这里仍然会出现这种情况？”时，添加跟踪功能。</p></li>
+<li><p>只保留那些能够显著改善启动时间或启动清晰度，并足以证明其复杂性的更改。</p></li>
+</ol>
+
+
+<p>最后一点至关重要。</p>
+
+<p>我认为并非每个性能更改都需要以毫秒级的提升来衡量。有些更改值得保留，因为它们使系统更容易理解，也更容易发现未来的回归问题。</p>
+
+<p>但即便如此，我仍然希望它们能够真正发挥作用。</p>
+
+<p>Perfetto 就是如此。</p>
+
+<p>这并非因为它是创业初期最大的成功案例，而是因为它有助于使最终的创业故事更具说服力。</p>
+
+<h2>结语</h2>
+
+<p>我认为，性能优化案例往往过于简化这一部分。我们喜欢那种“某项技术胜出，一张图表证明其有效性，然后结论完美契合”的版本。</p>
+
+<p>但这次的体验并非如此。</p>
+
+<p>这次的体验更像是先获得显而易见的提升，然后发现最后阶段的性能优化工作与其说是寻找新的“奇迹”，不如说是拒绝自欺欺人。拒绝因为某些改动听起来很高级就保留它们。拒绝将那些并未真正节省成本的追踪数据归功于自身。拒绝将“可能更好”等同于“经过测量和解释”。</p>
+
+<p>这就是为什么我仍然认为 Perfetto 是值得的，即使它并非启动阶段节省成本的最大来源。</p>
+
+<p>基线配置文件首先实现了干净编译的提升。清理工作完成了大部分繁重的工作。Perfetto 使最后一轮工作足够严格，让我能够信任最终保留下来的部分。</p>
+
+<p>从长远来看，这或许才是更有价值的结果。</p>
+
+<p>启动速度快固然好，但启动路径清晰易懂则更好。能够帮助你明确哪些改动是真正必要的流程，才是你在开发下一个应用时能够继续沿用的部分。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[揭密：Compose应用如何做到启动提升34%]]></title>
@@ -1876,614 +2190,6 @@ val HorizontalTextSize = 56.sp
 <p>相比之下，玻璃变形在视觉上<strong>被包含在单个组件内</strong>。</p>
 
 <p>因此，液态玻璃通常看起来干净利落，而元球效果在涉及多个元素时很容易变得杂乱无章。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[在Compose中用Shader实现透明的粘稠元球效果]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/04/06/transparent-metaball/"/>
-    <updated>2026-04-06T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/04/06/transparent-metaball</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Compose AGSL Shader: Gooey Outline Metaball Effect with Transparent Background」，原文链接<a href="https://medium.com/@yuriyskul/compose-agsl-shader-gooey-outline-metaball-effect-with-transparent-background-cb8b0e72286c">https://medium.com/@yuriyskul/compose-agsl-shader-gooey-outline-metaball-effect-with-transparent-background-cb8b0e72286c</a>，由Yuriy Skul发布于2024年12月2日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1200/1*sTO1Btb7Di56_kZK9JKJkA.gif" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>本文探讨如何通过两个圆形之间的简单交互创建<strong>元球效果</strong>。<strong>元球形状带有边框，而背景保持完全透明</strong>，从而确保底层内容的可见性。元球内部的图标也保持可见。此效果是通过对整个容器应用高级<strong>AGSL 着色器</strong>，并结合对每个交互元素应用模糊效果来实现的。</p>
-
-<p>创建带有轮廓效果的透明边框元球背景的概念可以参考这篇文章：在 Jetpack Compose 中使用模糊和 AGSL 运行时渲染效果链创建带有轮廓描边边框的透明元球背景。</p>
-
-<p>圆形按钮的 Gooey Metaball 特效：</p>
-
-<ul>
-<li><p><strong>第一部分</strong>：<a href="/@yuriyskul/gooey-metaball-effects-on-android-with-jetpack-compose-blurring-and-alpha-filtering-concepts-63f1cf879257">使用 Jetpack Compose 在 Android 上实现 Gooey（Metaball）特效：跨所有 API 级别的模糊和 Alpha 过滤概念。</a></p></li>
-<li><p><strong>第二部分</strong>：<a href="/@yuriyskul/compose-gooey-metaball-button-effect-fixing-blur-mask-issues-on-pre-android-10-devices-with-d8f3fadc2680">使用渐变光晕和图标简化修复 Android 10 之前设备上的模糊蒙版问题。</a></p></li>
-<li><p><strong>第三部分</strong>：<a href="/@yuriyskul/jetpack-compose-gooey-metaball-interaction-using-agsl-shader-and-blur-fixing-coloring-issues-c70affdcde0f">Jetpack Compose：使用 AGSL 着色器和模糊效果实现 Gooey（元球）交互——修复颜色问题。</a></p></li>
-<li><p><strong>第四部分</strong>：当前状态。</p></li>
-</ul>
-
-
-<p>需求：</p>
-
-<ul>
-<li><p><strong>不透明边框</strong>：元球形状应具有特定颜色的不透明边框，例如<strong>黑色</strong>。</p></li>
-<li><p><strong>透明内背景</strong>：元球的内背景应完全透明，以确保整个区域的背景完全不受影响且可见。</p></li>
-<li><p><strong>可见按钮图标</strong>：元球内部的图标必须保持完全<strong>不透明</strong>，并具有定义的颜色且可见。</p></li>
-<li><p><strong>处理折叠后的元球</strong>：当元球折叠成一个点时，应仅保留<strong>最顶部的图标</strong>可见，以确保折叠状态下的清晰度。</p></li>
-</ul>
-
-
-<p>让我们从<a href="/@yuriyskul/gooey-metaball-effects-on-android-with-jetpack-compose-blurring-and-alpha-filtering-concepts-63f1cf879257"><strong>第一部分</strong></a>中的第一个AGSL基础示例的代码开始。在这个示例中，我们将<strong>AGSL着色器效果</strong>应用于父级<strong>MetaballBox</strong>，并为每个圆形按钮添加了模糊效果：</p>
-
-<p>正如我在<a href="/@yuriyskul/chaining-blur-and-agsl-runtime-rendereffects-to-create-transparent-metaball-backgrounds-with-15680ad1e1a9"><strong>创建透明边框metaball背景的概念</strong></a>中所述，为metaball创建边框的思路是在AGSL脚本中使用<strong>阈值透明度范围</strong>进行过滤。透明度值落在指定范围内的像素将被设置为<strong>完全不透明颜色</strong>，而所有其他像素则被设置为<strong>完全透明</strong>，从而形成清晰锐利的边界效果。</p>
-
-<p>这并非本文的主要关注点。然而，由于元球形状内部包含不透明图标，因此会出现一些问题。为了解决这些问题，本文将探讨一些变通方法和技巧，以满足上述要求。</p>
-
-<h2>AGSL：颜色测试探究</h2>
-
-<p>让我们运行测试着色器，并根据每个点的输入<strong>alpha</strong>值为其分配特定颜色。着色器逻辑应用以下规则：</p>
-
-<ul>
-<li><strong>如果 alpha = 0.0</strong>：</li>
-</ul>
-
-
-<p>该点<strong>完全透明</strong>，为了便于调试，被标记为<strong>黄色</strong>。</p>
-
-<ul>
-<li><strong>如果 alpha &lt; cutoff_min</strong>：</li>
-</ul>
-
-
-<p>该点位于元球的<strong>内部区域</strong>，并被标记为<strong>绿色</strong>以示区别。</p>
-
-<ul>
-<li><strong>如果 alpha 介于 cutoff_min 和 cutoff_max 之间</strong>：</li>
-</ul>
-
-
-<p>该点位于<strong>边界区域</strong>，并被标记为<strong>黑色</strong>，以标记过渡区域。</p>
-
-<ul>
-<li><strong>如果 alpha > cutoff_max 但小于 1.0</strong>：</li>
-</ul>
-
-
-<p>该点位于<strong>外部混合区域</strong>，透明度开始逐渐减弱。它被标记为<strong>蓝色</strong>以表示此范围。</p>
-
-<ul>
-<li><strong>如果 alpha = 1.0</strong>：</li>
-</ul>
-
-
-<p>该点<strong>完全不透明</strong>，并以<strong>红色</strong>标记其最大不透明度。</p>
-
-<pre><code class="kotlin">cutoff_min = 0.5f  
-cutoff_max = 0.6f
-
-@Language("AGSL")  
-const val ShaderSource_outlined_color_test_1 = """  
-    uniform shader composable;  
-
-    uniform float cutoff_min; // Minimum cutoff value for transparency  
-    uniform float border_thickness; // Thickness of the border  
-    uniform float3 rgbColor;  // Custom RGB color (not directly used in this logic)  
-
-    half4 main(float2 fragCoord) {  
-        half4 color = composable.eval(fragCoord);  
-
-        // Calculate cutoff_max dynamically using border_thickness  
-        float cutoff_max = cutoff_min + border_thickness;  
-
-        // If alpha is exactly 0.0 (fully transparent), set it to yellow  
-        if (color.a == 0.0) {  
-            color.rgb = half3(1.0, 1.0, 0.0); // Yellow for fully transparent  
-        }  
-        // If alpha is below the minimum cutoff, make it green  
-        else if (color.a &lt; cutoff_min) {  
-            color.rgb = half3(0.0, 1.0, 0.0); // Green  
-        }   
-        // If alpha is within the cutoff range (border area), make it black  
-        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
-            color.rgb = half3(0.0, 0.0, 0.0); // Black  
-        }   
-        // If alpha is above the maximum cutoff but less than fully opaque (outer area), make it blue  
-        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
-            color.rgb = half3(0.0, 0.0, 1.0); // Blue  
-        }   
-        // Fully opaque case where alpha = 1, make it red  
-        else {  
-            color.rgb = half3(1.0, 0.0, 0.0); // Red  
-        }  
-
-        // Ensure alpha is fully opaque for all cases  
-        color.a = 1.0;  
-
-        return color;  
-    }  
-"""
-</code></pre>
-
-<p>模糊半径 = 16dp 时的结果（元球大小 = 100dp）</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*f0t_6j6AZqr74cWtWWTkbQ.gif" alt="模糊半径 16dp (R = 50dp)" /></p>
-
-<p>如前所述，本文的重点并非创建边框（黑色区域），而是解决与内部透明部分相关的额外要求，同时保持图标不透明。难点在于如何根据透明度进行过滤，以确定给定点属于图标还是背景。</p>
-
-<p>但在解决这个问题之前，我们先来了解一下为什么在图像内部会看到一个红色圆圈（一个完全不透明的像素）。</p>
-
-<p>假设我们有一个半径为 50 dp 的某种颜色的完全不透明的圆，并应用一个半径很小的模糊效果（1-2 像素），结果会显示这个完全不透明的圆会比原来的 50 dp 半径略小一些。需要强调的是，“完全不透明的圆”指的是圆内所有 alpha 值恰好为 1.0（完全不透明）的点，而 alpha 值小于 1.0（半透明或完全透明）的点则不属于这个圆。模糊半径越大，得到的完全不透明的圆就越小。本质上，模糊效果起到了一种柔化或扩散的作用，从而缩小了模糊圆的尺寸。</p>
-
-<p>如果模糊半径大于不透明圆的半径会发生什么呢？在这种情况下，圆内将不再存在完全不透明的像素，因为模糊会将不透明度完全分散到整个区域，只留下半透明像素。</p>
-
-<p>实际上，要完全模糊一个完全不透明的圆并移除所有不透明像素，我们需要应用一个大于 Metaball 圆形形状的<strong>半径/2</strong>的模糊半径。</p>
-
-<p>在这种情况下，Metaball 背景将不再包含任何完全不透明的像素。但是，由于图标渲染在一个单独的图层上（参见<strong>MetaballBox</strong>的实现），该图层未应用模糊效果，因此图标像素的不透明度将保持不变，<strong>alpha = 1.0</strong>。</p>
-
-<p>Metaball 圆形按钮 = 100 dp，因此 R = 50 dp。</p>
-
-<p>让我们设置一个大于 R/2 + 1 dp = 25 dp 的模糊半径。</p>
-
-<p>对于 <strong>25 dp</strong> 的模糊半径，仍然会存在一个小的内部不透明点。为了确保不留下任何完全不透明的像素，我们将模糊半径设置为 <strong>26.dp</strong>。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*9xZ9Py3k9Dyd52lpF74T3g.gif" alt="模糊半径 26.dp (R = 50.dp)" /></p>
-
-<p>越来越接近目标了！在按钮展开状态下，我们可以使用 <code>alpha = 1</code> 来过滤图标。但是，当按钮折叠时，模糊的元球层会产生<strong>累积效应</strong>，在给定的模糊半径下，最终完全不透明像素的区域会变大。我不确定具体的计算公式，而且这并不特别重要，因为我会在文章后面提出不同的解决方案。现在，我们先采用一个<strong>变通方法</strong>，进一步增大模糊半径。</p>
-
-<p>应用模糊半径 = 36.dp:</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*zyEJpSm3eq9ixMPbj6my5w.gif" alt="模糊半径 36.dp (R = 50.dp)" /></p>
-
-<h2>简易 AGSL：按 Alpha 值过滤区域</h2>
-
-<p>我们来设置输入 RGB 颜色，并将 Alpha 值设为 1，用于<strong>红色</strong>区域（<strong>图标</strong>）和<strong>黑色</strong>区域（<strong>边框</strong>）。</p>
-
-<p>然后，将透明度（Alpha = 0）应用于所有其他区域。但这里有个小细节：</p>
-
-<p>在我的示例中，我使用黑色作为圆形按钮的颜色，但需要注意的是，黑色是“零”色 (0, 0, 0)。如果圆形按钮的背景色是任何非“零”色，例如绿色，那么我们通过将 Alpha 通道设置为 0 来使其完全透明的模糊半透明区域仍然会影响混合效果。这种混合效果的出现是因为颜色分量（RGB）的值不为零，从而导致出现意想不到的视觉效果，例如：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1136/1*BXNddgNOlwNZqNvBJVdCZQ.png" alt="绿色背景圆形按钮示例。" /></p>
-
-<p>因此，如果我们希望某个像素完全透明，并且<strong>背景图层不受影响，不会产生任何副作用</strong>，我们不仅应该将 <code>alpha = 0</code> 设置为 0，还应该将 <strong>“零”RGB 颜色</strong> 设置为黑色 (<code>0, 0, 0</code>)。</p>
-
-<p>之前，我使用的边框粗细为 <strong>0.1f</strong>。为了使边框更细，我们将其减小到 <strong>0.05f</strong>。</p>
-
-<pre><code class="kotlin">@Language("AGSL")  
-const val ShaderSource_outlined_simple = """  
-    uniform shader composable;  
-
-    uniform float cutoff_min; // Minimum cutoff value for transparency  
-    uniform float border_thickness; // Thickness of the border  
-    uniform float3 rgbColor;  // RGB color passed as parameter  
-
-     // Constant for black (zero) RGB color  
-    const half3 BLACK_MASK_RGB = half3(0.0, 0.0, 0.0);  
-
-    half4 main(float2 fragCoord) {  
-        half4 color = composable.eval(fragCoord);  
-
-        // Calculate cutoff_max dynamically using border_thickness  
-        float cutoff_max = cutoff_min + border_thickness;  
-
-        // If alpha is exactly 0.0 (fully transparent), do nothing  
-        if (color.a == 0.0) {  
-            // Do nothing  
-        }  
-        // If alpha is below the minimum cutoff,  
-        // make it fully transparent and black  
-        else if (color.a &lt; cutoff_min) {  
-            color.rgb = BLACK_MASK_RGB; // Set to black  
-            color.a = 0.0; // Fully transparent  
-        }   
-        // If alpha is within the cutoff range (border area),   
-        // make it the custom color  
-        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
-            color.rgb = rgbColor; // Set to custom color  
-            color.a = 1.0; // Fully opaque  
-        }   
-        // If alpha is above the maximum cutoff but less than   
-        //  fully opaque (outer area), make it fully transparent and black  
-        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
-            color.rgb = BLACK_MASK_RGB; // Set to black  
-            color.a = 0.0; // Fully transparent  
-        }   
-        // Fully opaque case where alpha = 1 (Icon area),  
-        // make it the custom color  
-        else {  
-            color.rgb = rgbColor; // Set to custom color  
-            color.a = 1.0; // Fully opaque  
-        }  
-
-        return color;  
-    }  
-"""
-</code></pre>
-
-<p>结果：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:892/1*s5cJYscet9Gr2Pzoil7WvA.gif" alt="简单 AGSL：仅按透明度值过滤区域" /></p>
-
-<p>由于内部背景是透明的，我们需要解决<strong>图标重叠问题</strong>。一个快速的解决方案是隐藏下方按钮的图标，同时保持上方按钮的图标可见。</p>
-
-<p>我们可以跟踪按钮的偏移量，当偏移量小于<strong>20dp</strong>时，将下方图标的可见性状态设置为<strong>false</strong>。相反，当偏移量大于<strong>20dp</strong>时，将其设置为<strong>true</strong>。</p>
-
-<p>为了优化，将此逻辑封装在 <code>**derivedStateOf**</code> 中。此外，将按钮图标封装在 <code>**AnimatedVisibility**</code> 中。或者，你可以尝试根据按钮之间的偏移量手动更改 alpha 色调。</p>
-
-<p>但是，如果我们希望图标的可见性过渡平滑，这种方法就行不通了。在下面的代码片段中，我将展开动画的持续时间设置为 <strong>7 秒</strong>，将隐藏动画的持续时间设置为 <strong>4 秒</strong>。但由于 AGSL 会根据 alpha 值进行过滤，一旦图标的 alpha 值逐渐低于 <strong>1</strong>，它就会立即完全透明。在展开动画期间，图标不会逐渐淡入——它会一直保持不可见，直到 <strong>4 秒动画结束</strong>。此时，当 <code>AnimatedVisibility</code> 容器将其 alpha 值设置为完全不透明（<code>alpha = 1</code>）时，图标会立即弹出。</p>
-
-<pre><code class="kotlin">@Composable  
-fun ExampleAGSLOutlineContent(  
-    modifier: Modifier = Modifier  
-) {  
-        var isExpanded by remember { mutableStateOf(false) }  
-        val offsetDistance = (80).dp  
-        val buttonOffset by animateDpAsState(  
-            targetValue = if (isExpanded) offsetDistance else 0.dp,  
-            animationSpec = tween(durationMillis = 7000)  
-        )  
-
-        val color = Color.Black  
-
-        //test visibility start  
-        var isVisible by remember { mutableStateOf(false) } // Another state for visibility  
-        // Derived state to update visibility based on buttonOffset  
-        val derivedVisibility = remember(buttonOffset) {  
-            derivedStateOf { buttonOffset &gt; 40.dp }  
-        }  
-
-
-        // Observe derived state and update visibility  
-        LaunchedEffect(derivedVisibility.value) {  
-            isVisible = derivedVisibility.value  
-        }  
-
-//
-
-val blurRadius = 16.dp
-//
-
-val blurRadius = 26.dp
-        val blurRadius = 36.dp  
-
-
-        OutlineShaderMetaballBox(  
-            modifier = modifier,  
-            color = color  
-        ) {  
-
-            Box(  
-                contentAlignment = Alignment.Center,  
-                modifier = Modifier  
-                    .fillMaxWidth()  
-                    .padding(vertical = 24.dp)  
-            ) {  
-
-                BlurCircularButton(  
-                    Modifier.offset { IntOffset(x = -buttonOffset.roundToPx(), y = 0) },  
-                    onClick = { isExpanded = !isExpanded },  
-                    color = color,  
-                    blur = blurRadius,  
-                ) {  
-
-                    AnimatedVisibility(  
-                        visible = isVisible,  
-                        enter = fadeIn(animationSpec = tween(durationMillis = 4000)),  
-                        exit = fadeOut(animationSpec = tween(durationMillis = 4000)),  
-                    ) {  
-                        Icon(  
-                            modifier = Modifier.size(28.dp),  
-                            imageVector = Icons.Filled.Delete,  
-                            contentDescription = null,  
-                            tint = color,  
-                        )  
-                    }  
-                }  
-                BlurCircularButton(  
-                    Modifier  
-                        .offset { IntOffset(x = +buttonOffset.roundToPx(), y = 0) },  
-                    onClick = { isExpanded = !isExpanded },  
-                    color = color,  
-                    blur = blurRadius,  
-                ) {  
-                    Icon(  
-                        modifier = Modifier.size(28.dp),  
-                        imageVector = Icons.Filled.Build,  
-                        contentDescription = null,  
-                        tint = color,  
-                    )  
-                }  
-            }  
-        }  
-}
-</code></pre>
-
-<p>图标可见性过渡闪烁不流畅：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*QmmZVzScXVjnTz5ebteIiw.gif" alt="AGSL Alpha 通道过滤破坏了动画可见性过渡" /></p>
-
-<p>对于快速展开/折叠动画和可见性过渡的持续时间，例如 <strong>150 毫秒</strong> 或 <strong>300 毫秒</strong>，此问题可能不明显，并且可以正常工作。</p>
-
-<ul>
-<li><p>实现简单：AGSL 脚本非常简单，仅依赖于输入像素颜色的 Alpha 通道进行过滤。</p></li>
-<li><p>对最小模糊半径有严格的依赖性。合并的元素越多，就越难计算或通过实验确定稳定实现所需的最小可接受模糊半径。这使得该方法不可靠，不适合实现健壮稳定的效果。</p></li>
-<li><p>由于 AGSL 脚本中基于 alpha 通道的滤波特性，图标的平滑出现和消失难以实现。</p></li>
-<li><p>随着元球交互中涉及的元素数量增加，以及膨胀物理机制的复杂性提升，确定和实现图标出现或消失的精确时机变得困难，进一步增加了控制的复杂性和整体逻辑的复杂性。</p></li>
-</ul>
-
-
-<p>让我们寻找更好的解决方案：</p>
-
-<h2>中级 AGSL：按 Alpha 值和标记颜色过滤区域</h2>
-
-<p>让我们再次回到较小的模糊半径 16dp。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1084/1*AMLBHaITVM_8pT3SzURMbA.png" alt="Alpha = 1 的红色区域" /></p>
-
-<p>我们需要检测红色不透明区域中的像素是否属于图标。</p>
-
-<p>我建议使用一个额外的 RGB 颜色作为标记。唯一的要求是，对于应用 AGSL 效果的容器及其子元素，该颜色必须是唯一的。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*nubnETXkwfYHQlIEk0XQCw.png" alt="为 AGSL 着色器添加一个浮点型参数 markerColor。" /></p>
-
-<p>我们使用<strong>青色 RGB</strong>作为标记颜色。使用 <code>Color.Cyan</code> 为图标着色，并将相同的<strong>青色</strong>作为参数传递给 AGSL 脚本。</p>
-
-<p>在 AGSL 中定义以下参数：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*yq17jZov8ZTSQEspwqJ73Q.png" alt="添加新参数：rgbMarkerColor，类型为 uniform float3" /></p>
-
-<p>AGSL 着色器源代码的结构与上一章相同，唯一的区别在于最后一个 <code>else</code> 代码块，其中 alpha 值为 1，代表测试屏幕上的中心红色。</p>
-
-<p>在不透明部分，检查像素的 RGB 颜色是否等于 <code>markerColor</code>。如果为真，则它是图标像素——你可以将其着色为任何你想要的颜色。设置 <code>alpha = 1</code> 是多余的，因为我们已经在不透明的 <code>else</code> 语句块中了。</p>
-
-<p>否则，如果为假，则它肯定不是图标像素——通过将 RGB 值设置为黑色并将 <code>alpha = 0</code> 设置为 0 使其完全透明。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*HT2R2H2yKApfzo3EII58bA.png" alt="使用标记颜色检测像素是否属于图标" /></p>
-
-<p>完整的 AGSL 脚本：</p>
-
-<pre><code class="kotlin">@Language("AGSL")  
-const val ShaderSource_outlined_marker_color = """  
-    uniform shader composable;  
-
-    uniform float cutoff_min; // Minimum cutoff value for transparency  
-    uniform float border_thickness; // Thickness of the border  
-    uniform float3 rgbColor;  // RGB color passed as parameter  
-
-    uniform float3 rgbMarkerColor;  // marker for Icon tint color  
-
-     // Constant for black (zero) RGB color  
-    const half3 BLACK_MASK_RGB = half3(0.0, 0.0, 0.0);  
-
-    half4 main(float2 fragCoord) {  
-        half4 color = composable.eval(fragCoord);  
-
-        // Calculate cutoff_max dynamically using border_thickness  
-        float cutoff_max = cutoff_min + border_thickness;  
-
-        // If alpha is exactly 0.0 (fully transparent), do nothing  
-        if (color.a == 0.0) {  
-            // Do nothing  
-        }  
-        // If alpha is below the minimum cutoff,  
-        // make it fully transparent and black  
-        else if (color.a &lt; cutoff_min) {  
-            color.rgb = BLACK_MASK_RGB; // Set to black  
-            color.a = 0.0; // Fully transparent  
-        }   
-        // If alpha is within the cutoff range (border area),   
-        // make it the custom color  
-        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
-            color.rgb = rgbColor; // Set to custom color  
-            color.a = 1.0; // Fully opaque  
-        }   
-        // If alpha is above the maximum cutoff but less than   
-        //  fully opaque (outer area), make it fully transparent and black  
-        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
-            color.rgb = BLACK_MASK_RGB; // Set to black  
-            color.a = 0.0; // Fully transparent  
-        } else {  
-         // Fully opaque case where alpha = 1  
-             if(color.rgb == rgbMarkerColor){  
-             //Icon area  
-                color.rgb = rgbColor;  // Set to Icon color  
-             }else{  
-             //pixel is out of icon shape - make it transparent  
-                color.rgb = BLACK_MASK_RGB;  
-                color.a = 0.0;  
-            }  
-        }  
-
-        return color;  
-    }  
-"""
-</code></pre>
-
-<p>以下是三种情况的解决方案示例：</p>
-
-<ul>
-<li><p>当图标中心部分在折叠和展开状态下均存在不透明边框时（<strong>blurRadius = 16dp</strong>）。</p></li>
-<li><p>当图标在展开状态下仅形状不透明，但在折叠状态下仍然存在不透明边框时（<strong>blurRadius = 26dp</strong>）。</p></li>
-<li><p>当模糊半径足够大，以至于在展开和折叠状态下均不存在不透明边框时（<strong>blurRadius = 36dp</strong>）。</p></li>
-</ul>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*f-mqRDLEVi_iUsCEjl8J1A.gif" alt="blurRadius 16.dp" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*ucu3DGrhCrb2cuKJTe3_vQ.gif" alt="blurRadius 26.dp" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*lh0kitLN7mLi99BdNvu5mA.gif" alt="blurRadius 26.dp" /></p>
-
-<p>请注意，尽管所有示例均使用 <code>borderAlphaThickness = 0.05f</code> 执行，但增加 <code>blurRadius</code> 的值也会增加边框的粗细。</p>
-
-<ul>
-<li><p>AGSL 的实现相对简单，满足文章开头概述的要求。</p></li>
-<li><p>重叠部分会自动处理，因此折叠时无需手动隐藏底层图标。</p></li>
-<li><p>应该也能处理更多数量的元球。</p></li>
-<li><p>可以很好地适应不同的模糊半径。</p></li>
-<li><p>如果传递了额外的标记颜色参数但未正确设置为色调颜色，则该参数可能会成为潜在的错误来源。</p></li>
-<li><p>必须确保标记颜色具有唯一的 RGB 值，并且与用于模糊效果的颜色不同。</p></li>
-<li><p>消失的重叠图标就像一个不可见的透明图层。虽然这对于 Material 3（更抽象）来说没有问题，但对于 Material Design 2 的老用户来说，这可能会破坏设计理念。</p></li>
-</ul>
-
-
-<h2>高级 AGSL：按 Alpha 值、标记颜色和计算亮度过滤区域。</h2>
-
-<p>上一章的解决方案，持续时间更长，并略微放大：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*k3nkqjSeE-Z9tutJNYcRGg.gif" alt="图标突然消失（不平滑）" /></p>
-
-<p>左侧图标在清晰的、不可见的边框下方突然消失。我们通过使其在接近边框时平滑淡出，并在折叠状态下完全消失来修复此问题。</p>
-
-<p>基于上一章中 <code>else</code> 语句（本例中为 <code>alpha = 1</code>）检查是否与 <code>colorMarker</code> 值相等，我将进行修改，增加一项检查是否与黑色 RGB 值相等的检查，并将 <code>else</code> 语句留空：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*hW55iNq39TUn2BJZg-fcsQ.png" alt="" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*cN0p-qw9Nsm6224Ph7wtaQ.gif" alt="展开/折叠过程中，左侧图标被模糊区域覆盖" /></p>
-
-<p>在折叠过程中，我们看到左侧（后方）图标的颜色接近 <code>rgbMarkerColor</code>（Color.CYAN），该图标部分被顶部的元球形状覆盖。然而，情况略有不同，因此条件 <code>color.rgb == rgbMarkerColor</code> 不匹配。随着图标逐渐靠近，这种“接近标记颜色”的颜色会逐渐过渡到接近黑色（即用于模糊效果的元球圆形按钮背景色）。</p>
-
-<p>颜色并非完全是青色的原因在于混合效果。当左侧图标被右侧元球的模糊图层覆盖时，标记颜色会发生扭曲。根据标记颜色上方黑色模糊层的透明度，我们看到的颜色要么非常接近标记颜色，要么更接近黑色。</p>
-
-<p>从视频中，我们可以观察到颜色之间的平滑过渡。</p>
-
-<p>为了最大程度地增强亮度变化的效果，我们使用亮度最高的 <code>MarkerColor</code>——纯白色 <code>(1, 1, 1)</code>。最终颜色由用于模糊效果的圆形按钮背景色决定，在本例中为黑色——这非常适合接下来的解决方案。</p>
-
-<p><strong>将 <code>**MarkerColor**</code> </strong>更改为白色：**</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*hlfNRuBhjq8rnh0CADk8ng.gif" alt="从接近白色的不透明过渡到接近黑色的不透明。" /></p>
-
-<p>在最终的 GIF 动画中，当 <code>markerColor = (1, 1, 1)</code>（白色）时，我们可以看到，左侧图标在与右侧元球重叠并逐渐靠近的过程中，其 RGB 值从接近白色的完全不透明过渡到接近黑色的完全不透明。</p>
-
-<p>本章的解决方案是利用亮度从亮到暗的变化，并将这些变化转换​​为透明度从不透明到透明的变化。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*8CPstoAxFyCZYYsCnISZAw.png" alt="使用亮度作为 Alpha 通道" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*x_0aiGzvUnQfN71wBPJc3A.gif" alt="亮度作为 Alpha 通道（模糊半径 16dp）" /></p>
-
-<p>当模糊半径非常小时，元球中心呈现不透明的圆形（我在第一章“AGSL：颜色测试探究”中提到的区域），这种方法效果很好（半径为 16dp）。但是，当使用较大的半径时，在折叠状态下，只有属于图标的不透明像素没有边框，此时会出现 UI 问题。</p>
-
-<p>让我们用大于 36dp 的模糊值来测试一下：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*PSbFrsDXlC3JmyaWZcMaFA.gif" alt="亮度作为 alpha 通道（模糊半径 45dp）" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:584/1*APS4Fdja9DbZlsZNcx5SoA.png" alt="问题：底层垃圾桶图标可见。" /></p>
-
-<p>让我们创建一个名为 <code>adjustAlpha</code> 的辅助函数来动态调整 alpha 通道。该函数以当前的 alpha 值作为输入，并执行两个关键操作：</p>
-
-<ol>
-<li><p><strong>指数运算</strong>：将 alpha 值提升到 4 次方。此操作通过增强较高的 alpha 值并更快地降低较小的 alpha 值，来帮助平滑过渡。</p></li>
-<li><p><strong>阈值处理</strong>：指数运算后，函数会检查调整后的 alpha 值是否小于预定义的阈值（例如 <code>0.01</code>）。如果小于，则返回 <code>0.0</code>（完全透明）；否则，返回调整后的 alpha 值。</p></li>
-</ol>
-
-
-<p>这种操作组合确保即使是较小的 alpha 值也能平滑过渡到完全透明，而不会出现突兀的视觉瑕疵。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*s9nU3I1tSSW79jxUCTl9Uw.png" alt="调整 alpha 值" /></p>
-
-<p>通过使用此辅助函数，我可以轻松地平滑处理 alpha 过渡。</p>
-
-<p>此外，当调整后的透明度为 <code>0</code> 时，我们将 RGB 值设置为遮罩颜色（例如黑色）。如果不是 <code>0</code>，则函数会赋值 <code>rgbColor</code>。在当前示例中，<code>rgbColor</code> 也为黑色，但如果我们使用不同的颜色进行模糊处理，此逻辑可确保正确处理透明度。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*M6Xf-RuXN8kctauNGGavuw.png" alt="ajustAlpha() 辅助函数的使用。" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*2hy494VgjfI7aXgp0Wcr-g.gif" alt="最终解决方案。模糊半径 36dp" /></p>
-
-<p>完整的 AGSL 脚本：</p>
-
-<pre><code class="kotlin">@Language("AGSL")  
-const val ShaderSource_outlined_marker_color_and_marker_brightness = """  
-    uniform shader composable;  
-
-    uniform float cutoff_min; // Minimum cutoff value for transparency  
-    uniform float border_thickness; // Thickness of the border  
-    uniform float3 rgbColor;  // RGB color passed as a parameter  
-    uniform float3 rgbMarkerColor;  // Marker for Icon tint color  
-
-    // Constant for black (zero) RGB color  
-    const half3 BLACK_MASK_RGB = half3(0.0, 0.0, 0.0);  
-
-    // Helper function to adjust alpha dynamically  
-    float adjustAlpha(float alpha) {  
-        // Define the threshold value  
-        const float threshold = 0.01;  
-
-        // Calculate the alpha raised to the power of 4  
-        float adjustedAlpha = pow(alpha, 4.0);  
-
-        // Return either the adjusted alpha or 0 if below the threshold  
-        return adjustedAlpha &lt; threshold ? 0.0 : adjustedAlpha;  
-    }  
-
-    half4 main(float2 fragCoord) {  
-        half4 color = composable.eval(fragCoord);  
-
-        // Calculate cutoff_max dynamically using border_thickness  
-        float cutoff_max = cutoff_min + border_thickness;  
-
-        // If alpha is exactly 0.0 (fully transparent), do nothing  
-        if (color.a == 0.0) {  
-            // Do nothing  
-        }  
-        // If alpha is below the minimum cutoff, make it fully transparent and black  
-        else if (color.a &lt; cutoff_min) {  
-            color.rgb = BLACK_MASK_RGB; // Set to black  
-            color.a = 0.0; // Fully transparent  
-        }   
-        // If alpha is within the cutoff range (border area), make it the custom color  
-        else if (cutoff_min &lt;= color.a &amp;&amp; color.a &lt;= cutoff_max) {  
-            color.rgb = rgbColor; // Set to custom color  
-            color.a = 1.0; // Fully opaque  
-        }   
-        // If alpha is above the maximum cutoff but less than fully opaque (outer area),  
-        // make it fully transparent and black  
-        else if (cutoff_max &lt; color.a &amp;&amp; color.a &lt; 1.0) {  
-            color.rgb = BLACK_MASK_RGB; // Set to black  
-            color.a = 0.0; // Fully transparent  
-        }   
-        // Fully opaque case where alpha = 1  
-        else {  
-            if (color.rgb == rgbMarkerColor) {  
-                // Icon area  
-                color.rgb = rgbColor; // Set to Icon color  
-            } else if (color.rgb == rgbColor) {  
-                // Some black inner metaball area could be opaque - make it transparent  
-                color.rgb = BLACK_MASK_RGB;  
-                color.a = 0.0;  
-            } else {  
-                // Compute current brightness  
-                float brightness = (color.r + color.g + color.b) / 3.0;  
-                float adjustedBrightness = adjustAlpha(brightness);  
-
-                // Set brightness as the alpha channel  
-                color.a = adjustedBrightness;  
-
-                // Set RGB color based on adjusted brightness  
-                if (adjustedBrightness == 0) {  
-                    color.rgb = BLACK_MASK_RGB; // Fully transparent  
-                } else {  
-                    color.rgb = rgbColor; // Custom color  
-                }  
-            }  
-        }  
-
-        return color;  
-    }  
-"""
-</code></pre>
-
-<ul>
-<li><p>效果极佳。符合 UI 要求，确保当元球按钮靠近时，图标平滑消失。</p></li>
-<li><p><strong>复杂逻辑</strong>：此实现引入了更多复杂性，尤其是在处理亮度到透明度的计算方面，这可能会增加出现错误的可能性。</p></li>
-<li><p><strong>模糊半径限制</strong>：非常大的模糊半径值需要通过亮度（AGSL：<code>adjustAlpha()</code>）微调透明度计算，以保持预期行为。</p></li>
-<li><p><strong>可扩展性问题</strong>：当处理两个以上的元球元素时，可能需要对透明度计算函数进行额外调整。</p></li>
-<li><p><strong>标记和模糊颜色限制</strong>：标记颜色必须为纯白色，而模糊颜色必须为纯黑色，以避免混合不一致。</p></li>
-<li><p><strong>设计依赖性</strong>：所有必需的颜色，包括图标颜色、边框颜色和内部区域的透明度，都必须通过 AGSL 着色器显式设置，这增加了对着色器逻辑的依赖性。</p></li>
-</ul>
-
-
-<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/blob/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/gooey/blurConcept/ExampleRuntimeRenderEffectOutline.kt"><strong>当前可组合部分的 GitHub 链接</strong></a> <strong>以及</strong> <a href="https://github.com/yuriyskulskiy/android-compose-playground/blob/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/gooey/blurConcept/util/shader/OutlineAgslShader.kt"><strong>AGSL 着色器链接</strong></a><strong>。</strong></p>
 ]]></content>
   </entry>
   

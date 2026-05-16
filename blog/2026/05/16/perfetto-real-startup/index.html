@@ -1,0 +1,696 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>如何用Perfetto来对启动优化去伪存真 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="讲述一个现代Android应用速度提升的精彩故事，如何使用Perfetto来区分真正的启动优化和看似合理的优化。">
+  <meta name="keywords" content="Perfetto, Compose, Android">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/05/16/perfetto-real-startup">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">如何用Perfetto来对启动优化去伪存真</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-05-16'><span class='date'><span class='date-month'>May</span> <span class='date-day'>16</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「How I Used Perfetto to Separate Real Startup Improvements From Plausible Ones」，原文链接<a href="https://levelup.gitconnected.com/how-i-used-perfetto-to-separate-real-startup-improvements-from-plausible-ones-d5497b25544c">https://levelup.gitconnected.com/how-i-used-perfetto-to-separate-real-startup-improvements-from-plausible-ones-d5497b25544c</a>，由James Cullimore发布于2026年4月21日。</p></blockquote>
+
+<p><a href="/blog/2026/05/16/perfetto-real-startup/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*zpbAbI_8a1lwD938CkykEw.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>当我打开 Perfetto 时，应用的速度已经提升了。</p>
+
+<p>问题就在这里。</p>
+
+<p>启动优化工作最简单的情况是应用明显运行过载，基准测试结果惨不忍睹，几乎任何合理的清理都能带来一些提升。而更难的情况则出现在应用已经运行良好之后，此时下一轮的改动很容易被合理化。</p>
+
+<p>我当时就处于这种情况。</p>
+
+<p>我已经有了启动基准测试数据，也已经有了基准性能数据。一次全面的清理已经显著缩短了启动时间。图表看起来已经足够好了，我可以就此打住，讲述一个现代 Android 应用速度提升的精彩故事。</p>
+
+<p>但我对剩余的启动路径并不完全信任，所以没有停止。</p>
+
+<p>我可以测量它，但却无法总是解释它。有些工作似乎发生在“启动前后”，却无法明确判断它究竟是阻塞了首次绘制、安全地延迟执行、重复执行，还是仅仅发生在不恰当的时间点。这种不确定性正是性能改进效果不佳的根源。你开始修改代码，并非因为证据确凿，而是因为代码的结构让某种理论听起来合情合理。</p>
+
+<p>Perfetto 正是在这个时候出现的。</p>
+
+<p>它并非救世主，也并非最大的胜利，而是我不再将看似合理的解释视为证据的转折点。</p>
+
+<p>如果你读过之前那篇关于启动的文章，那么这篇文章是它的后续，而非替代品。第一篇文章是关于如何在现代 Compose 应用中找到一个有意义的启动优势，并用基准测试来验证它。而这篇文章则探讨了之后出现的一个更有趣的问题：</p>
+
+<blockquote><p>哪些工作真正值得保留？</p></blockquote>
+
+<h2>这是对实际创业工作的后续跟进，而非起点</h2>
+
+<p>重要的背景是，Perfetto 并非与糟糕的基准进行比较。它是在前两个阶段已经完成实际工作之后推出的：</p>
+
+<ul>
+<li><p>基准测试结果已经展现出可重复的成功</p></li>
+<li><p>更广泛的清理工作已经大幅降低了创业成本</p></li>
+</ul>
+
+
+<p>这一点至关重要，因为它改变了标准。</p>
+
+<p>在创业初期，几乎任何合理的改进都会让人兴奋。但在创业后期，兴奋感就显得廉价了。你需要一种方法来区分“这看起来可行”和“这经得起衡量”。</p>
+
+<p>这正是我在此重视 Perfetto 的真正原因。</p>
+
+<p>如果你想了解这款应用是如何发展到如今的，请先阅读之前的文章：</p>
+
+<p><a href="https://juejin.cn/post/7636050861055672358">我是如何打造一款现代作文应用，并最终获得 34% 的启动成功</a></p>
+
+<p>这篇后续文章将探讨第一篇文章中略有提及的一个更具体的问题：当应用速度已经提升之后，追踪功能还能带来什么好处？</p>
+
+<h2>在 Perfetto 出现之前，基准测试结果已经相当不错</h2>
+
+<p>在跟踪流程之前，启动过程已经呈现出可观的趋势。</p>
+
+<p>在最初验证过的流程树中，仅基线分析就节省了：</p>
+
+<ul>
+<li><p>主流程：112 毫秒</p></li>
+<li><p>设置流程：126 毫秒</p></li>
+</ul>
+
+
+<p>两条启动路径合计节省了 238 毫秒。</p>
+
+<p>随后，更广泛的清理流程生效，启动时间的绝对值发生了显著变化。相对于之前的验证状态，分析后的启动时间中位数又下降了 248 毫秒。</p>
+
+<p>这已经是一个相当可观的结果了。本来可以就此止步，将数据整理成简洁的图表，然后就此结束。</p>
+
+<p>但我仍然对剩余的启动路径不够信任，所以没有就此止步。</p>
+
+<p>仍然存在一些地方，感觉这款应用在“启动前后”执行着一些工作，但却没有明确解释这些工作是否在关键路径上、是否被安全地推迟、是否重复执行，或者只是在不恰当的时机出现。</p>
+
+<p>正是这种不确定性导致了后续工作的糟糕表现。</p>
+
+<h2>Perfetto 恰好出现在最容易被滥用的阶段</h2>
+
+<p>我认为性能优化文章很少提及这一点。</p>
+
+<p>当应用已经运行良好时，跟踪功能最容易被滥用。</p>
+
+<p>这时，你打开跟踪日志，看到某个服务提前启动、进行了网络检查或执行了回调序列，就很容易说服自己进行看似技术严谨、规范的“巧妙”生命周期重写。有时这确实是个好改动。有时，这只是制造新的不确定性的花哨手段。</p>
+
+<p>这就是这里存在的风险。</p>
+
+<p>在这个阶段，我的确做了一些看似合理但最终被放弃的改动。这并非流程的失败。这就是流程运作的方式。</p>
+
+<p>真正有用的结果并非“Perfetto 向我展示了一个巨大的隐藏瓶颈”。而有用的结果是：</p>
+
+<ul>
+<li><p>它展示了在第一次抽签之前哪些工作真正发生了</p></li>
+<li><p>它验证了某些检查可以在第一次抽签之后安全地进行</p></li>
+<li><p>它展示了何时某个服务端的想法仍然过于嘈杂或结论不明确，以至于无法保留</p></li>
+</ul>
+
+
+<p>这比仅仅依靠图表所能展现的要成熟得多。它在幻灯片上可能不够吸引人，但在实际代码库中却实用得多。</p>
+
+<p>跟踪标签本身很简单：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">trace</span><span class="p">(</span><span class="s">&quot;AppStartup&quot;</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">registerEarlyListeners</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">resolveInitialState</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">renderRootUi</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">trace</span><span class="p">(</span><span class="s">&quot;RuntimeConnect&quot;</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">startLocalWatchers</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">createRuntimeClient</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">openRuntimeConnection</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">trace</span><span class="p">(</span><span class="s">&quot;TransportConnect&quot;</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">bindInputChannel</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">bindOutputChannel</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">beginReceiveLoop</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这并非复杂的工具。它只是提供了足够的结构，让我们不再空泛地谈论“启动工作”，而是开始询问在第一次抽签之前究竟是哪些工作真正完成了。</p>
+
+<h2>最佳的 Perfetto 驱动改进是微小、具体且不起眼的</h2>
+
+<p>最站得住脚的基于追踪的优化并非大规模的架构重写。</p>
+
+<p>而是将一组主屏幕启动检查从可见的启动路径中移除：</p>
+
+<ul>
+<li><p>初始文件监视器</p></li>
+<li><p>初始网络验证</p></li>
+<li><p>首次服务器 ping</p></li>
+</ul>
+
+
+<p>这些检查仍然重要。它们只是不需要与首次绘制争用。</p>
+
+<p>追踪到位后，问题就变得简单多了：</p>
+
+<p>这些检查是否出于正当理由而阻止可见的启动，还是仅仅因为从未强制执行而提前执行？</p>
+
+<p>答案是后者。</p>
+
+<p>因此，改进之处在于让第一帧落地，报告已完全绘制，然后启用第一轮监控和连接工作。改进后的正常追踪显示，这些切片出现在它们应该在的位置：首次绘制之后，而不是之前。</p>
+
+<p>该更改的伪代码版本如下：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">var</span> <span class="py">postDrawWorkEnabled</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">onFirstFrameRendered</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">markStartupComplete</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">postDrawWorkEnabled</span> <span class="p">=</span> <span class="k">true</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="n">onScreenVisible</span><span class="p">(</span><span class="n">postDrawWorkEnabled</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">updateConnectivityFlags</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">postDrawWorkEnabled</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">probePeripheralState</span><span class="p">()</span>
+</span><span class='line'>        <span class="n">validateNetworkState</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">when</span><span class="p">(</span><span class="n">postDrawWorkEnabled</span> <span class="p">&amp;&amp;</span> <span class="n">networkIsAvailable</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">runInitialServerCheck</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这种优化不会在社交媒体上引起轰动。但它恰恰是那种经得起现实考验的优化。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*mTyH65mLxUvSDi4Pd7iCxw.png" alt="" /></p>
+
+<h2>Perfetto 最有价值的贡献在于拒绝工作</h2>
+
+<p>这对我来说才是真正的教训。</p>
+
+<p>最终 Perfetto 指导的迭代带来的性能提升是正的，但比之前的阶段要小：</p>
+
+<ul>
+<li><p><code>verify</code> 端总共节省了 142 毫秒</p></li>
+<li><p><code>speed-profile</code> 端总共节省了 44.5 毫秒</p></li>
+</ul>
+
+
+<p>如果只看这些数字，你可能会觉得 Perfetto 可有可无。但我认为这忽略了重点。</p>
+
+<p>到这个阶段，应用已经运行得更加稳定了。剩下的工作不再是寻找新的突破，而是确保上一轮工作的有效性。</p>
+
+<p>Perfetto 在这方面发挥了作用，它让我们能够做出以下判断：</p>
+
+<ul>
+<li><p>这项更改明显地将工作从关键路径中移开，保留它</p></li>
+<li><p>这项更改在不改变行为的前提下改进了归因，保留它</p></li>
+<li><p>这项服务生命周期调整没有产生足够清晰的结果，撤销它</p></li>
+</ul>
+
+
+<p>最后一类更改的一个例子是延迟运行时启动路径，它在理论上看起来合理：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">onStartupRouteReady</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">postToNextUiTurn</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">waitBrieflyForFirstFrameToSettle</span><span class="p">()</span>
+</span><span class='line'>
+</span><span class='line'>        <span class="n">trace</span><span class="p">(</span><span class="s">&quot;DeferredRuntimeStartup&quot;</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">startBackgroundService</span><span class="p">()</span>
+</span><span class='line'>            <span class="n">requestMissingStorageAccessIfNeeded</span><span class="p">()</span>
+</span><span class='line'>            <span class="n">initializeFileWatcher</span><span class="p">()</span>
+</span><span class='line'>            <span class="n">connectRuntimeClient</span><span class="p">()</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这类更改正是追踪功能发挥作用的地方。很容易就能想出一个简洁的解释来说明为什么将服务和客户端启动时间推迟会有帮助。但要证明由此产生的追踪结果更清晰、更稳定，并且值得增加生命周期的复杂性，就困难得多。在这种情况下，这个标准比想法听起来是否严谨更重要。</p>
+
+<p>这就是为什么我不会把这个阶段描述为“Perfetto 让启动速度更快”。清理工作已经完成了更多类似的工作。基线分析也已经完成了更多类似的工作。</p>
+
+<p>我会这样描述：</p>
+
+<blockquote><p>Perfetto 严格控制了剩余的启动工作，确保只有那些站得住脚的改动才能保留下来。</p></blockquote>
+
+<p>这听起来并不花哨，但这正是后期性能优化工作所需要的。后期工作很少需要惊天动地的壮举，而是要让系统更难被欺骗。</p>
+
+<h2>逐步比较比最终结果更有意思</h2>
+
+<p>最终的启动数据固然不错，但步骤顺序更重要。</p>
+
+<p>步骤顺序表明，不同的工具以不同的方式发挥了作用：</p>
+
+<ul>
+<li><p>基准配置文件带来了第一个清晰、可衡量的成果</p></li>
+<li><p>清理工作带来了最大的绝对节省</p></li>
+<li><p>Perfetto 带来的直接收益较小，但决策质量却大大提高</p></li>
+</ul>
+
+
+<p>这正是我希望其他团队能够借鉴的部分。</p>
+
+<p>人们往往会认为故事中最后一个工具的功劳最大。这就是为什么人们最终会把追踪过程当作优化本身。</p>
+
+<p>事实并非如此。</p>
+
+<p>追踪过程的作用在于提供足够的可见性，让你能够判断优化是否真的有必要。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*t7cyNzM0b5JMHZIeI4IzEQ.png" alt="" /></p>
+
+<h2>这篇后续文章改变了我的想法</h2>
+
+<p>之前那篇关于创业的文章让我得出了一个总体结论：很多有意义的创业工作并非始于“创业优化”。</p>
+
+<p>这篇后续文章又补充了第二个结论：</p>
+
+<blockquote><p>一旦取得重大进展，最难的部分往往是拒绝保留那些看似明智的改动。</p></blockquote>
+
+<p>因此，我现在不再把 Perfetto 看作一个“寻找瓶颈”的工具，而更像是后期绩效工作的“吐真剂”。</p>
+
+<p>当然，在更早期阶段它仍然有用。但它的价值不在于揭示了什么惊人的秘密，而在于它提高了标准。</p>
+
+<p>它迫使最后一轮的改动去回答更棘手的问题：</p>
+
+<ul>
+<li><p>这些改动真的能把工作往后推进吗？</p></li>
+<li><p>它优化了关键路径，还是仅仅重新排列了代码？</p></li>
+<li><p>基准测试结果是否有所提升？</p></li>
+<li><p>如果跟踪信息仍然不明确，我为什么要保留它？</p></li>
+</ul>
+
+
+<p>这些问题让我避免保留更多无关紧要的更改，而这些更改实际上并没有直接保存以毫秒为单位的跟踪信息。这或许是对跟踪价值最诚实的描述，尤其是在那些显而易见的优势消失之​​后。</p>
+
+<h2>下次我会重复的步骤</h2>
+
+<p>如果我在另一个应用上再次进行这项工作，我会遵循以下步骤：</p>
+
+<ol>
+<li><p>对真实的启动路径进行基准测试，而不仅仅是针对某个启动器。</p></li>
+<li><p>验证基线配置文件，而不是想当然地认为它们会有帮助。</p></li>
+<li><p>进行清理工作，使启动路径更加健康。</p></li>
+<li><p>当下一个问题不再是“启动慢吗？”而是“为什么这里仍然会出现这种情况？”时，添加跟踪功能。</p></li>
+<li><p>只保留那些能够显著改善启动时间或启动清晰度，并足以证明其复杂性的更改。</p></li>
+</ol>
+
+
+<p>最后一点至关重要。</p>
+
+<p>我认为并非每个性能更改都需要以毫秒级的提升来衡量。有些更改值得保留，因为它们使系统更容易理解，也更容易发现未来的回归问题。</p>
+
+<p>但即便如此，我仍然希望它们能够真正发挥作用。</p>
+
+<p>Perfetto 就是如此。</p>
+
+<p>这并非因为它是创业初期最大的成功案例，而是因为它有助于使最终的创业故事更具说服力。</p>
+
+<h2>结语</h2>
+
+<p>我认为，性能优化案例往往过于简化这一部分。我们喜欢那种“某项技术胜出，一张图表证明其有效性，然后结论完美契合”的版本。</p>
+
+<p>但这次的体验并非如此。</p>
+
+<p>这次的体验更像是先获得显而易见的提升，然后发现最后阶段的性能优化工作与其说是寻找新的“奇迹”，不如说是拒绝自欺欺人。拒绝因为某些改动听起来很高级就保留它们。拒绝将那些并未真正节省成本的追踪数据归功于自身。拒绝将“可能更好”等同于“经过测量和解释”。</p>
+
+<p>这就是为什么我仍然认为 Perfetto 是值得的，即使它并非启动阶段节省成本的最大来源。</p>
+
+<p>基线配置文件首先实现了干净编译的提升。清理工作完成了大部分繁重的工作。Perfetto 使最后一轮工作足够严格，让我能够信任最终保留下来的部分。</p>
+
+<p>从长远来看，这或许才是更有价值的结果。</p>
+
+<p>启动速度快固然好，但启动路径清晰易懂则更好。能够帮助你明确哪些改动是真正必要的流程，才是你在开发下一个应用时能够继续沿用的部分。</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-05-16'><span class='date'><span class='date-month'>May</span> <span class='date-day'>16</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/05/09/startup-win-in-compose/" title="Previous Post: 揭密：Compose应用如何做到启动提升34%">&laquo; 揭密：Compose应用如何做到启动提升34%</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
