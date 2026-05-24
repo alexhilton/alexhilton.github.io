@@ -1,0 +1,778 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Android上的ZeroMQ：用发布/订阅模式连接Linux服务 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="在本文中，我将详细介绍我们如何使用 ZeroMQ 通过简单的 PUB/SUB 设置将 Linux 服务连接到 Android 应用。我们将探讨我们实际交付的客户端实现、其结构设计的原因以及我们在此过程中遇到的权衡取舍。">
+  <meta name="keywords" content="ZeroMQ, Pub, Sub, Android">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/05/23/android-using-zeromq">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Android上的ZeroMQ：用发布/订阅模式连接Linux服务</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-05-23'><span class='date'><span class='date-month'>May</span> <span class='date-day'>23</span><span class='date-suffix'>rd</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「ZeroMQ on Android: Bridging a Linux Service with PUB SUB」，原文链接<a href="https://levelup.gitconnected.com/zeromq-on-android-bridging-a-linux-service-with-pub-sub-43ecf52209fa">https://levelup.gitconnected.com/zeromq-on-android-bridging-a-linux-service-with-pub-sub-43ecf52209fa</a>，由James Cullimore发布于2026年3月9日。</p></blockquote>
+
+<p><a href="/blog/2026/05/23/android-using-zeromq/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*jKF0CYHnFn0_HY4YdXRiuQ.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在最近的一个项目中，我们遇到了一个看似简单却又充满挑战的需求。我们需要在一个基于 Linux 的小型服务和一个 Android 应用之间建立可靠、低延迟的通信。没有云组件，没有 HTTP API，也没有长期运行的后端基础设施。只有同一台机器上的两个进程需要高效且持续地进行通信。</p>
+
+<p>传统的 REST 或 gRPC 等方法对于我们面临的问题来说显得过于繁琐。我们不需要请求/响应语义，也不想承担序列化格式、连接管理或重试逻辑带来的额外开销。我们真正需要的是一个轻量级的消息传递层，能够在数据可用时推送消息，并允许 Android 应用在需要时发布消息。</p>
+
+<p>这时，ZeroMQ 就派上了用场。</p>
+
+<p>ZeroMQ 不是消息代理，也不是框架。它是一个底层消息库，提供 PUB/SUB、PUSH/PULL 和 REQ/REP 等构建模块，并允许你根据系统需求将它们组合起来。它完全在进程内运行，使用纯 TCP 协议，并且可以在包括 Linux 和 Android 在内的不同平台上良好运行。</p>
+
+<p>在本文中，我将详细介绍我们如何使用 ZeroMQ 通过简单的 PUB/SUB 设置将 Linux 服务连接到 Android 应用。我们将探讨我们实际交付的客户端实现、其结构设计的原因以及我们在此过程中遇到的权衡取舍。</p>
+
+<h2>架构概述和消息模型</h2>
+
+<p>在编写任何代码之前，我们花时间确定了 Linux 服务和 Android 应用应该如何通信。这两个进程将在同一设备上运行，并通过 localhost 进行通信。不需要加密、身份验证或消息持久化。最重要的是简单性、可预测性和低延迟。</p>
+
+<p>ZeroMQ 的消息传递模式使这一决策变得非常简单。</p>
+
+<p>我们为主要数据流选择了发布/订阅（PUB/SUB）模型。Linux 服务充当发布者，在新数据可用时广播消息。Android 应用充当订阅者，持续监听并响应更新。这种模式非常适合传输状态变化、传感器数据或状态更新，而无需轮询。</p>
+
+<p>同时，Android 应用需要一种向 Linux 服务发送消息的方式。我们没有引入第二个协议或不同的传输方式，而是使用了反向的第二个 ZeroMQ 套接字。在 Android 端，该套接字发布消息，Linux 服务订阅这些消息。虽然这不是严格的请求/响应机制，但它保持了通信模型的对称性，并且易于理解。</p>
+
+<p>从 Android 应用的角度来看，这会产生两个独立的连接：</p>
+
+<ul>
+<li><p>一个连接到 Linux 服务发布端口的订阅套接字，用于接收消息</p></li>
+<li><p>一个连接到 Linux 服务订阅端口的发布套接字，用于发送消息</p></li>
+</ul>
+
+
+<p>两个套接字都运行在本地主机上的 TCP 协议下，每个套接字都绑定到一个专用端口。这种分离方式保持了消息流的清晰性，避免了将不相关的功能耦合到同一个通道中。</p>
+
+<p>其余的实现工作都围绕着在 Android 上安全地管理这些套接字展开。这意味着要以一种不会泄漏资源或阻塞主线程的方式来处理线程、生命周期、连接状态和清理工作。然而，核心思想依然很简单：连接、订阅、接收消息，并在需要时发布响应。</p>
+
+<h2>Android 设置和 ZeroMQ 注意事项</h2>
+
+<p>在 Android 上使用 ZeroMQ 有一些值得提前注意的实际问题。虽然 ZeroMQ 本身是平台无关的，但 Android 的运行时、线程模型和生命周期限制会影响你将其集成到实际应用程序中的方式。</p>
+
+<p>在我们的案例中，我们依赖于 Java ZeroMQ 绑定，它公开了熟悉的 ZContext 和 ZMQ.Socket API。这些绑定在 Android 上运行良好，但它们不具备生命周期感知能力。一旦创建了上下文或套接字，你就需要显式地管理其生命周期。否则，很容易导致线程泄漏或本地资源的生命周期超过创建它们的组件。</p>
+
+<p>线程是第二个主要问题。ZeroMQ 套接字默认是阻塞的。在主线程上调用 recv 或 send 是不可行之选，即使是短暂的操作，如果处理不当，也可能导致卡顿或 ANR（应用程序无响应）。因此，所有套接字创建和消息处理都被推到后台线程进行。</p>
+
+<p>Kotlin 协程非常适合这里。它们允许我们将工作卸载到 Dispatchers.IO，保持代码的可读性，并在需要时将状态更改协调回主线程。稍后你将看到的客户端实现使用协程来管理连接建立、消息接收和清理，而无需将线程问题暴露给应用程序的其他部分。</p>
+
+<p>另一个重要的细节是，如果出现问题，ZeroMQ 不会自动重新连接套接字。如果连接断开或套接字发生故障，你需要决定如何应对。在我们的设置中，我们有意保持简单。客户端通过回调报告连接状态更改，并将重新连接策略留给调用者。这使得 ZeroMQ 客户端专注于通信，而不是策略。</p>
+
+<p>考虑到这些限制，我们将所有与 ZeroMQ 相关的逻辑封装在一个类中。该类拥有上下文、套接字和协程，并向应用程序的其他部分公开了一个简洁明了的 API。</p>
+
+<h2>将 ZeroMQ 添加到 Android 项目</h2>
+
+<p>要在 Android 上使用 ZeroMQ，我们依赖于<strong>JeroMQ</strong>，它是 ZeroMQ 的纯 Java 实现。这是一个重要的区别。JeroMQ 不需要原生二进制文件或 NDK 集成，这使得设置过程非常简单，并避免了 ABI 相关问题。</p>
+
+<p>在这个项目中，依赖项使用版本目录进行管理。ZeroMQ 依赖项只需定义一次，即可在所有模块中保持一致的引用。</p>
+
+<p>首先，我们声明版本：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='toml'><span class='line'><span class="n">jeromq</span> <span class="o">=</span> <span class="s">&quot;0.6.0&quot;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>接下来，我们定义实际的库入口：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='toml'><span class='line'><span class="n">jeromq</span> <span class="o">=</span> <span class="p">{</span> <span class="n">group</span> <span class="o">=</span> <span class="s">&quot;org.zeromq&quot;</span><span class="p">,</span> <span class="n">name</span> <span class="o">=</span> <span class="s">&quot;jeromq&quot;</span><span class="p">,</span> <span class="n">version</span><span class="p">.</span><span class="n">ref</span> <span class="o">=</span> <span class="s">&quot;jeromq&quot;</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>完成这些步骤后，就可以像添加其他库一样，将依赖项添加到 Android 模块中：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">implementation</span><span class="p">(</span><span class="n">libs</span><span class="p">.</span><span class="n">jeromq</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用 JeroMQ 意味着 ZeroMQ 上下文和套接字完全运行在 JVM 中。这与 Android 的进程模型非常契合，并使资源管理更加可预测。这样做的缺点是无法使用 ZeroMQ 的原生实现，但对于本地低延迟通信而言，这种方法已经绰绰有余。</p>
+
+<p>添加依赖项后，无需其他配置。你可以创建 <code>ZContext</code>，打开套接字，并立即开始发送或接收消息。</p>
+
+<h2>ZeroMqClient 类及其职责</h2>
+
+<p>Android 端实现的核心是一个名为 <code>ZeroMqClient</code> 的类。它的作用是将所有 ZeroMQ 特有的细节隐藏在一个简洁、可预测的 API 之后，以便应用程序的其他部分可以安全地与之交互。</p>
+
+<p>该类负责：</p>
+
+<ul>
+<li><p>创建并拥有 ZeroMQ 上下文</p></li>
+<li><p>管理一个用于接收消息的 SUB 套接字</p></li>
+<li><p>管理一个用于发送消息的 PUB 套接字</p></li>
+<li><p>在主线程之外运行阻塞式套接字操作</p></li>
+<li><p>公开消息和连接状态的回调函数</p></li>
+<li><p>确定性地清理所有资源</p></li>
+</ul>
+
+
+<p>该类没有直接公开套接字，而是采用了一种配置驱动的方法。订阅和发布端口是可选的，这使得客户端可以根据使用场景以仅接收、仅发送或双向模式运行。</p>
+
+<p>以下是项目中完整的类定义：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.CoroutineScope</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.Dispatchers</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.Job</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.launch</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.SocketType</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.ZContext</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.ZMQ</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.ZMQException</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">java.io.Closeable</span>
+</span><span class='line'>
+</span><span class='line'><span class="k">class</span> <span class="nc">ZeroMqClient</span><span class="p">(</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">subPort</span><span class="p">:</span> <span class="n">Int</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span> <span class="c1">// eg. 54054,</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">pubPort</span><span class="p">:</span> <span class="n">Int</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span> <span class="c1">// eg. 54055,</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">messageCallback</span><span class="p">:</span> <span class="p">((</span><span class="n">String</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">onConnectionChanged</span><span class="p">:</span> <span class="p">((</span><span class="n">Boolean</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">Closeable</span> <span class="p">{</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">context</span><span class="p">:</span> <span class="n">ZContext</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">subSocket</span><span class="p">:</span> <span class="n">ZMQ</span><span class="p">.</span><span class="n">Socket</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">pubSocket</span><span class="p">:</span> <span class="n">ZMQ</span><span class="p">.</span><span class="n">Socket</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">isRunning</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">receiveJob</span><span class="p">:</span> <span class="n">Job</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>该类实现了 <code>Closeable</code> 接口，使其生命周期清晰可见。调用 <code>close</code> 函数时，预期所有后台工作都会停止，所有原生资源都会被释放。这一点在之后将客户端与 Android 组件生命周期绑定时尤为重要。</p>
+
+<p><code>subPort</code> 和 <code>pubPort</code> 参数可以为空。这使得客户端可以根据调用者的需求有条件地创建套接字，而无需引入多个实现或标志。</p>
+
+<p>回调函数也以传入的方式传递，而不是作为流或可观察对象公开。这是为了保持客户端轻量级且不依赖框架而特意做出的选择。应用程序中的更高层可以根据需要将这些回调函数适配到 StateFlow、LiveData 或任何其他抽象层。</p>
+
+<p>最后，ZeroMQ 上下文、套接字和协程作业等内部状态都是私有的。应用程序的其他部分无需了解消息是如何接收或发送的，只需知道消息正在接收或发送即可。</p>
+
+<h2>连接和初始化套接字</h2>
+
+<p><code>connect()</code> 函数用于将客户端从一个普通对象转换为一个活跃的 ZeroMQ 参与者。目标很简单：创建一个上下文，创建所需的套接字，将它们连接到本地主机，并在配置了 SUB 端口后开始接收消息。</p>
+
+<p>实现过程中受到以下几个限制：</p>
+
+<ul>
+<li><p>我们绝不阻塞主线程。</p></li>
+<li><p>我们希望 SUB 和 PUB 套接字是可选的。</p></li>
+<li><p>我们希望应用程序的其他部分能够知道连接是否成功。</p></li>
+</ul>
+
+
+<p>以下是 <code>connect()</code> 函数的实现：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">connect</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">isRunning</span><span class="p">)</span> <span class="k">return</span>
+</span><span class='line'>  <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">context</span> <span class="p">=</span> <span class="n">ZContext</span><span class="p">()</span>
+</span><span class='line'>      <span class="n">subPort</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">subSocket</span> <span class="p">=</span> <span class="n">context</span><span class="o">?.</span><span class="n">createSocket</span><span class="p">(</span><span class="n">SocketType</span><span class="p">.</span><span class="n">SUB</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">subSocket</span><span class="o">?.</span><span class="n">subscribe</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">.</span><span class="n">toByteArray</span><span class="p">())</span>
+</span><span class='line'>        <span class="n">subSocket</span><span class="o">?.</span><span class="n">connect</span><span class="p">(</span><span class="s">&quot;tcp://127.0.0.1:$subPort&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Subbing to $subPort&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">startReceiving</span><span class="p">()</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>      <span class="n">pubPort</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">pubSocket</span> <span class="p">=</span> <span class="n">context</span><span class="o">?.</span><span class="n">createSocket</span><span class="p">(</span><span class="n">SocketType</span><span class="p">.</span><span class="n">PUB</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">pubSocket</span><span class="o">?.</span><span class="n">connect</span><span class="p">(</span><span class="s">&quot;tcp://127.0.0.1:$pubPort&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Pubbing to $pubPort&quot;</span><span class="p">)</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>      <span class="n">isRunning</span> <span class="p">=</span> <span class="n">subSocket</span> <span class="p">!=</span> <span class="k">null</span> <span class="p">||</span> <span class="n">pubSocket</span> <span class="p">!=</span> <span class="k">null</span>
+</span><span class='line'>      <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">invoke</span><span class="p">(</span><span class="k">true</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error connecting to server: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</span><span class='line'>      <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">invoke</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>      <span class="n">close</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>提前返回的 <code>if (isRunning) return</code> 可以防止重复连接。如果没有这个保护机制，很容易创建多个上下文和套接字，这很快就会导致混乱的行为和资源泄漏。</p>
+
+<p>所有设置都在 <code>Dispatchers.IO</code> 中启动。套接字创建和 <code>connect()</code> 调用都不是应该在主线程上运行的操作。这也让我们可以在以后添加重试或超时机制，而无需更改调用代码。</p>
+
+<p>当客户端配置了 <code>subPort</code> 时，它会创建一个 <code>SocketType.SUB</code> 套接字并立即进行订阅：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">subSocket</span><span class="o">?.</span><span class="n">subscribe</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">.</span><span class="n">toByteArray</span><span class="p">())</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>使用空前缀订阅意味着：订阅所有内容。这保持了客户端的灵活性。如果你之后引入了基于主题的过滤，你可以将其替换为特定的前缀，并保持其余代码不变。</p>
+
+<p>两个套接字都连接到 <code>tcp://127.0.0.1:&lt;port&gt;</code>。这是最初需求的关键部分：Linux 服务和 Android 应用之间的本地通信。</p>
+
+<p>最后，连接回调函数在主调度器上被调用。即使回调函数只是切换状态，从后台线程更新 UI 状态也常常会导致一些难以察觉的问题，因此需要显式地处理。</p>
+
+<p>如果在设置过程中出现任何错误，代码会记录错误，报告连接失败，并调用 <code>close()</code> 以确保部分创建的资源不会残留。</p>
+
+<h2>使用协程接收消息</h2>
+
+<p>SUB 套接字连接成功后，下一个问题虽然简单却至关重要：如何在不阻塞应用程序的情况下持续监听，并将接收到的消息传递给代码的其他部分。</p>
+
+<p>这就是 <code>startReceiving()</code> 的作用。它会在后台调度器上运行一个循环，阻塞在 <code>recvStr()</code> 上，并将接收到的每条消息通过回调函数转发出去。</p>
+
+<p>以下是具体的实现：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">startReceiving</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>  <span class="n">receiveJob</span> <span class="p">=</span> <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>      <span class="k">while</span> <span class="p">(</span><span class="n">isRunning</span> <span class="p">&amp;&amp;</span> <span class="n">subSocket</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">message</span> <span class="p">=</span> <span class="n">subSocket</span><span class="o">?.</span><span class="n">recvStr</span><span class="p">()</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">message</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>          <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Server received message: $message&quot;</span><span class="p">)</span>
+</span><span class='line'>          <span class="n">messageCallback</span><span class="o">?.</span><span class="n">invoke</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>      <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>      <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error receiving message: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>recvStr()</code> 是一个阻塞调用。在这里没问题，因为这个协程运行在 <code>Dispatchers.IO</code> 上。线程可以等待消息而不会影响 UI 的响应速度。</p>
+
+<p>循环条件会检查 <code>isRunning</code> 和 <code>subSocket != null</code>。这样，当客户端关闭或套接字意外被清理时，就可以快速、清晰地停止接收消息。结合 <code>close()</code> 中的 <code>receiveJob?.cancel()</code>，它提供了两层停止行为：基于状态的退出和协程取消。</p>
+
+<p>消息通过 <code>messageCallback</code> 向上传递。这使得该类专注于传输问题，而不是消息的解析方式。实际上，应用程序可以在回调中解析 JSON、更新 <code>StateFlow</code> 或将事件路由到应用程序的更深层。</p>
+
+<p>一个关于日志的小提示：日志标签显示“服务器已收到消息”，但这段代码位于客户端，接收来自服务器的消息。如果保持现状，它仍然可以工作，但在调试时可能会产生误导。是否要调整这一点取决于代码风格，但值得注意。</p>
+
+<p>错误会被捕获并记录，但协程不会自动重启。这符合客户端的轻量级设计。如有需要，可以在上一层实现连接策略（重试、重新连接、退避）。</p>
+
+<h2>使用 <code>sendMessage()</code> 发送消息</h2>
+
+<p>接收消息只是成功的一半。Android 应用还需要一种简单的方法将消息发布回 Linux 服务。</p>
+
+<p><code>sendMessage()</code> 函数特意设计得非常简洁。它会验证客户端是否正在运行以及 PUB 套接字是否存在，然后发送消息并记录结果。</p>
+
+<p>以下是实际使用的实现：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">sendMessage</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>  <span class="k">if</span> <span class="p">(!</span><span class="n">isRunning</span> <span class="p">||</span> <span class="n">pubSocket</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Cannot send message, client not connected&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">return</span>
+</span><span class='line'>   <span class="p">}</span>
+</span><span class='line'>  <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">pubSocket</span><span class="o">?.</span><span class="n">send</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Sent message to server: $message&quot;</span><span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">ZMQException</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error sending message or receiving response: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>首先，该方法预先处理了常见的误用情况。如果客户端创建时没有指定 <code>pubPort</code>，或者 <code>connect()</code> 尚未建立 PUB 套接字，我们会快速失败并记录清晰的日志消息。这避免了应用“以为”已发送消息但实际上并未发送任何消息的静默丢失。</p>
+
+<p>其次，该方法直接使用 <code>pubSocket?.send(message)</code>。在 PUB/SUB 架构中，不会立即收到确认或响应。send 调用要么在本地成功，要么抛出异常。实际的数据传输语义取决于对方是否已订阅并已连接。</p>
+
+<p>第三，错误被限定为 <code>ZMQException</code>。这样可以确保捕获的异常只针对套接字发送操作的实际预期结果，而不是吞掉所有异常。</p>
+
+<p>如果之后将其扩展为请求响应模式，API 的结构就会发生改变。在 Android 端，你可能需要将 PUB 替换为 REQ，并引入阻塞式接收或返回值的挂起函数。对于当前的设计而言，即发即弃的发送方式最为合适。</p>
+
+<h2>清理、生命周期以及安全地关闭客户端</h2>
+
+<p>在 Android 上，资源管理至关重要。ZeroMQ 上下文及其套接字可能在底层持有原生资源，除非你主动关闭，否则接收循环可能会在创建它的 UI 组件消失后继续运行很长时间。</p>
+
+<p>因此，此客户端实现了 <code>Closeable</code> 接口，并将所有清理逻辑放在 <code>close()</code> 函数中。</p>
+
+<p>以下是实际使用的实现：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">close</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>       <span class="k">try</span> <span class="p">{</span>
+</span><span class='line'>           <span class="n">isRunning</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'>           <span class="n">receiveJob</span><span class="o">?.</span><span class="n">cancel</span><span class="p">()</span>
+</span><span class='line'>           <span class="n">subSocket</span><span class="o">?.</span><span class="n">close</span><span class="p">()</span>
+</span><span class='line'>           <span class="n">pubSocket</span><span class="o">?.</span><span class="n">close</span><span class="p">()</span>
+</span><span class='line'>           <span class="n">context</span><span class="o">?.</span><span class="n">close</span><span class="p">()</span>
+</span><span class='line'>           <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Disconnected from server&quot;</span><span class="p">)</span>
+</span><span class='line'>           <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">invoke</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>       <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>           <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error disconnecting from server: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
+</span><span class='line'>       <span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
+</span><span class='line'>           <span class="n">receiveJob</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>           <span class="n">subSocket</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>           <span class="n">pubSocket</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>           <span class="n">context</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>       <span class="p">}</span>
+</span><span class='line'>   <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>停止接收循环</h3>
+
+<p>第一行代码设置了 <code>isRunning = false</code>。这足以使 <code>startReceiving()</code> 中的 <code>while (isRunning &amp;&amp; subSocket != null)</code> 循环自然退出。</p>
+
+<p>然后，<code>receiveJob?.cancel()</code> 添加了第二个关闭机制。取消操作至关重要，因为 <code>recvStr()</code> 是阻塞的。实际上，取消操作和关闭套接字同时进行，有助于协程展开，而不是无限期地等待。</p>
+
+<h3>释放套接字和上下文</h3>
+
+<p>套接字会先关闭，然后是上下文：</p>
+
+<ul>
+<li><p><code>subSocket?.close()</code></p></li>
+<li><p><code>pubSocket?.close()</code></p></li>
+<li><p><code>context?.close()</code></p></li>
+</ul>
+
+
+<p>这样的顺序保证了清理过程的可预测性。在这样的系统中，需要避免在上下文已经消失后，套接字仍然处于活动状态。</p>
+
+<h3>在主线程上报告状态变更</h3>
+
+<p>断开连接后，客户端通过以下方式报告连接状态：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">invoke</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这与 <code>connect()</code> 中使用的方法一致：状态更新会路由回主调度器，以便调用者可以安全地更新 UI 状态。</p>
+
+<p>最后，<code>finally</code> 代码块会将引用设置为 null。这与其说是为了确保正确性，不如说是为了明确地“关闭”对象，使其可以被垃圾回收，而不会留下残留引用。</p>
+
+<h2>结论</h2>
+
+<p>这种设置之所以有效，是因为它缩小了问题的范围，并将消息传递视为基础设施，而不是架构声明。我们有一个需要广播更新的 Linux 服务，以及一个需要快速响应并偶尔发布消息的 Android 应用。ZeroMQ 以极低的开销满足了我们的需求，无需引入代理、HTTP 层或更复杂的 RPC 栈。</p>
+
+<p><code>ZeroMqClient</code> 的设计非常精简。它拥有 ZeroMQ 上下文和套接字，所有阻塞操作都在 <code>Dispatchers.IO</code> 上完成，并且只暴露应用其他部分所需的功能：<code>connect()</code>、<code>sendMessage()</code>、消息回调和连接状态回调。生命周期通过 <code>Closeable</code> 显式控制，清理工作也集中进行，因此套接字不会在创建它们的组件之后仍然存在。</p>
+
+<p>如果你正在考虑类似的方案，需要记住的主要权衡是，发布/订阅模式并非请求/响应。你优化的是流式更新和松耦合，而不是确认和保证交付。这非常适合本地低延迟通信，但这仍然是一个需要你有意做出的设计选择。</p>
+
+<p>在我们的案例中，这个选择是值得的。我们在 Linux 服务和 Android 应用之间建立了一个简洁、轻量级的通道，并且我们保持了实现的简洁性，使其易于调试和维护。</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-05-23'><span class='date'><span class='date-month'>May</span> <span class='date-day'>23</span><span class='date-suffix'>rd</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/05/16/perfetto-real-startup/" title="Previous Post: 如何用Perfetto来对启动优化去伪存真">&laquo; 如何用Perfetto来对启动优化去伪存真</a>
+      
+      
+        <a class="basic-alignment right" href="/blog/2026/05/24/google-io-2026/" title="Next Post: 面向Android开发者的Google I/O 2026">面向Android开发者的Google I/O 2026 &raquo;</a>
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
