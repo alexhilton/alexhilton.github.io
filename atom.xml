@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-05-24T14:53:20+00:00</updated>
+  <updated>2026-06-06T11:46:16+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,200 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[车载系统中的可扩展UI：从UI嵌入到系统窗口编排]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android/"/>
+    <updated>2026-06-06T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Scalable UI in Android Automotive OS: From UI Embedding to System Window Orchestration」，原文链接<a href="https://medium.com/proandroiddev/scalable-ui-in-aaos-from-ui-embedding-to-system-window-orchestration-dae03b335eee">https://medium.com/proandroiddev/scalable-ui-in-aaos-from-ui-embedding-to-system-window-orchestration-dae03b335eee</a>，由Daniel Georg发布于20264月23日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android/"><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*9Xu2aaQTu6ecj9iVhBWkfA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在 Android Automotive 的原生主屏幕上，所有内容都位于同一个 Activity 中。CarLauncher 会同时绘制地图、媒体卡片和状态小部件。切换应用意味着需要替换整个 UI。 <a href="https://source.android.com/docs/automotive/scalableui">Scalable UI</a> 框架采用了不同的方法：每个面板都拥有自己独立的 Activity，所有 Activity 并排运行，完全由 RRO 覆盖层中的声明式 XML 驱动。</p>
+
+<p>这源于另一个问题。在我之前的<a href="https://medium.com/@passenger6/remote-compose-in-android-automotive-os-embed-rich-ui-without-the-usual-pain-90b857d59d8c">文章</a>中，我探讨了远程组合 (Remote Compose) 作为在 AAOS 中跨应用边界共享 UI 的新方法。它提供了一种解决方案，避免了通常的跨进程开销和耦合。然而，来自 <a href="https://www.linkedin.com/in/ralph-thomas"><strong>Ralph Thomas</strong></a> <strong>(Google)</strong> 的一条<a href="https://www.linkedin.com/feed/update/urn:li:activity:7444753922419761152?commentUrn=urn%3Ali%3Acomment%3A%28activity%3A7444753922419761152%2C7444763415753060352%29&amp;dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287444763415753060352%2Curn%3Ali%3Aactivity%3A7444753922419761152%29">评论</a> 改变了我的想法更广阔的视野引领我深入探索，彻底改变了我的视角。</p>
+
+<p>我一直密切关注着可扩展用户界面（Scalable UI），但那条评论让我停下来思考另一个问题。远程配置（Remote Compose）解决了嵌入外部用户界面而不耦合的问题，但如果<strong>嵌入本身</strong>是一种错误的抽象方式呢？</p>
+
+<blockquote><p>我们不再需要在启动器内部构建组件，因为在可扩展用户界面时代，应用程序<strong>本身就是组件</strong>。</p></blockquote>
+
+<p>OEM厂商现在不再使用启动器来协调嵌入的内容，而是通过RRO覆盖层在系统UI配置中声明布局。传统意义上的“主页”Activity已不复存在，因为系统本身就成为了启动器。每个应用程序都拥有自己的域，独立运行，无需共享界面、进程间通信（IPC）或嵌入。</p>
+
+<p>在这种模式下，包括面板大小、Activity位置和过渡效果在内的所有配置都用XML声明。从 OEM 的角度来看，这意味着无需编写任何 Java/Kotlin 代码，只需 XML 覆盖层，即可实现复杂的窗口行为。</p>
+
+<p>可扩展 UI 背后的完整愿景有一个名称，至少我个人认为它应该叫：<strong>状态驱动的驾驶舱编排</strong>。整个驾驶舱，包括应用程序、系统栏、HUN 和覆盖层，都变成了一个协调一致的界面，在同步状态之间切换，而不是一系列独立管理的窗口。系统 UI 在 XML 中声明状态；窗口管理器驱动每个应用程序、每个系统栏和每个覆盖层同步完成状态转换。</p>
+
+<p>本文的其余部分将介绍这在实践中是如何实现的：构建模块、完全使用 XML 构建的概念验证仪表板，以及这种架构带来的权衡取舍。我还会介绍我开发的用于创建可扩展 UI 的可视化编辑器，无需手动编写 XML。</p>
+
+<p>沉重的遗留问题：启动器为何沦为噩梦</p>
+
+<p>当标准的嵌入技术无法满足复杂的多窗口布局需求时，下一步就是深入系统内部，例如，创建一个 CustomDisplayAreaProvider 并直接编排 TaskDisplayArea (TDA)。</p>
+
+<p>我花了几个月的时间来实现这种自定义的底层窗口逻辑。要实际放置和动画化这些显示区域，你必须在系统 UI 中注册一个自定义的 TaskDisplayAreaOrganizer。设置布局需要一个 WindowContainerTransaction 来告知 WindowManager 新的 TDA 边界，而动画则必须逐帧驱动，直接使用 SurfaceControl.Transaction 控制显示区域的边界。</p>
+
+<p>每个过渡效果都是一个手动编写的 ValueAnimator，它插值边界并将其应用到 SurfaceFlinger，可以直接应用，也可以通过扩展 WMShell 过渡框架并添加自定义的 TransitionHandler 来实现。到了这一步，你不再是在编写应用程序代码，而是在编写窗口管理管道的一部分。</p>
+
+<p>WinScope 成了你在这个过程中唯一的帮手。它是唯一能让你直观地理解窗口管理器中层、焦点转移和可见性标志等复杂机制的工具。没有它，你基本上就是在盲目摸索。</p>
+
+<p>经过数月的工程开发，你终于运行了兼容性测试套件 (CTS)。几个小时后，结果显示你的信息娱乐系统不再符合 CTS 标准。这标志着一场痛苦的 bug 修复马拉松的开始，每次修复 Google 强制测试中的 bug 都会破坏你自定义的 UX。自定义窗口管理逻辑是一把双刃剑，很容易导致认证进度被打乱。</p>
+
+<p>在分析了旧方法失效的原因之后，下一个问题显而易见：是否存在更好的抽象方案？</p>
+
+<p>编排 vs. 嵌入</p>
+
+<p>具体来说，可扩展 UI 由四个基本元素构成，全部以 XML 声明。“驾驶舱状态”是唯一的数据源——你不再需要编写动画代码，而是定义：</p>
+
+<ul>
+<li><strong>任务面板：</strong> 矩形容器，映射到专用的根任务栈，用于承载完整的应用程序（导航或媒体），作为功能性组件。</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;TaskPanel</span> <span class="na">id=</span><span class="s">&quot;navigation&quot;</span> <span class="na">defaultVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">displayId=</span><span class="s">&quot;0&quot;</span><span class="nt">&gt;</span>
+</span><span class='line'><span class="nt">&lt;/TaskPanel&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ul>
+<li><strong>装饰面板：</strong> 用于注入自定义 UI/覆盖层的通用容器，可与应用程序任务完美同步。</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;DecorPanel</span> <span class="na">id=</span><span class="s">&quot;navigation_decor&quot;</span> <span class="na">defaultVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">displayId=</span><span class="s">&quot;0&quot;</span><span class="nt">&gt;</span>
+</span><span class='line'><span class="nt">&lt;/DecorPanel&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<ul>
+<li><strong>变体：</strong> 管理精确边界、Z 轴顺序和可见性的视觉状态。</li>
+</ul>
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;Variant</span> <span class="na">id=</span><span class="s">&quot;@+id/base&quot;</span><span class="nt">&gt;</span> <span class="nt">&lt;/Variant&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>过渡：</strong> 由窗口管理器协调的同步动画，用于根据系统事件在变体之间切换面板。 OEM 厂商还可以定义自己的自定义事件，并通过面板控制器触发这些事件，或将其绑定到意图，从而将系统扩展到内置的 <em>System</em>* 事件之外。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;Transitions&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Transition</span> <span class="na">onEvent=</span><span class="s">&quot;_System_TaskOpenEvent&quot;</span> <span class="na">fromVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">toVariant=</span><span class="s">&quot;@id/open&quot;</span> <span class="na">duration=</span><span class="s">&quot;300&quot;</span> <span class="na">interpolator=</span><span class="s">&quot;@android:anim/accelerate_decelerate_interpolator&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'> <span class="nt">&lt;/Transitions&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>以下是一个导航面板的实际示例，该面板定义了两种视觉状态（变体）和一个动画过渡：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;TaskPanel</span> <span class="na">id=</span><span class="s">&quot;navigation&quot;</span> <span class="na">defaultVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">displayId=</span><span class="s">&quot;0&quot;</span><span class="nt">&gt;</span>
+</span><span class='line'>    <span class="nt">&lt;Variant</span> <span class="na">id=</span><span class="s">&quot;@+id/base&quot;</span><span class="nt">&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Layer</span> <span class="na">layer=</span><span class="s">&quot;2&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Visibility</span> <span class="na">isVisible=</span><span class="s">&quot;true&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Alpha</span> <span class="na">alpha=</span><span class="s">&quot;1.0&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Bounds</span> <span class="na">left=</span><span class="s">&quot;0dp&quot;</span> <span class="na">top=</span><span class="s">&quot;0dp&quot;</span> <span class="na">right=</span><span class="s">&quot;850dp&quot;</span> <span class="na">bottom=</span><span class="s">&quot;1600dp&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>    <span class="nt">&lt;/Variant&gt;</span>
+</span><span class='line'>    <span class="nt">&lt;Variant</span> <span class="na">id=</span><span class="s">&quot;@+id/open&quot;</span><span class="nt">&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Layer</span> <span class="na">layer=</span><span class="s">&quot;2&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Visibility</span> <span class="na">isVisible=</span><span class="s">&quot;true&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Alpha</span> <span class="na">alpha=</span><span class="s">&quot;1.0&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Bounds</span> <span class="na">left=</span><span class="s">&quot;0dp&quot;</span> <span class="na">top=</span><span class="s">&quot;0dp&quot;</span> <span class="na">right=</span><span class="s">&quot;2480dp&quot;</span> <span class="na">bottom=</span><span class="s">&quot;1600dp&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>    <span class="nt">&lt;/Variant&gt;</span>
+</span><span class='line'>    <span class="nt">&lt;Transitions&gt;</span>
+</span><span class='line'>        <span class="nt">&lt;Transition</span> <span class="na">onEvent=</span><span class="s">&quot;_System_TaskOpenEvent&quot;</span> <span class="na">fromVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">toVariant=</span><span class="s">&quot;@id/open&quot;</span> <span class="na">duration=</span><span class="s">&quot;300&quot;</span> <span class="na">interpolator=</span><span class="s">&quot;@android:anim/accelerate_decelerate_interpolator&quot;</span><span class="nt">/&gt;</span>
+</span><span class='line'>    <span class="nt">&lt;/Transitions&gt;</span>
+</span><span class='line'><span class="nt">&lt;/TaskPanel&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><strong>重要性：</strong> 请注意，计算 850dp 和 2480dp 之间的插值无需任何代码。<strong>可扩展 UI</strong> 框架基于此 XML 协调过渡，确保窗口管理器能够与容器完美同步地缩放底层任务。</p>
+
+<p>这就是 <strong>状态驱动的驾驶舱编排</strong> 的实际应用——系统栏和 HUN 也是可扩展 UI 面板，由与应用程序相同的驾驶舱状态驱动。</p>
+
+<p>这直接解决了之前提到的 CTS 问题。由于该框架已预先通过认证并符合 CTS 标准，因此消除了后期测试失败的主要风险。过去需要数月时间进行自定义窗口逻辑设置以及可能出现的认证回归才能实现的功能，现在<strong>开箱即用</strong>。</p>
+
+<p>以上是核心组件。我不会在这里重写手册——如果你需要完整的技术规格、库源代码，或者想了解它是如何集成到 SystemUI 中的，请查看以下资源：</p>
+
+<ul>
+<li><p><strong>官方文档：</strong> <a href="https://source.android.com/docs/automotive/scalableui">带有可扩展 UI 的高级窗口</a></p></li>
+<li><p><strong>库：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/systemlibs/car-scalable-ui-lib/">car-scalable-ui-lib</a>（声明式核心）</p></li>
+<li><p><strong>窗口 Shell：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/services/Car/libs/car-wm-shell-lib/">car-wm-shell-lib</a>（核心任务布局和内边距管理）</p></li>
+<li><p><strong>SystemUI 集成：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/SystemUI/src/com/android/systemui/car/wm/scalableui/">可缩放 UI 窗口管理器逻辑</a></p></li>
+<li><p><strong>代码实验室和示例：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/References/scalable-ui/">参考实现</a></p></li>
+</ul>
+
+
+<p>验证：无需 Kotlin/Java 代码即可实现的 3 列仪表盘</p>
+
+<p>一旦所有三个部分都就位，框架就会启动，发现你的面板清单，并开始进行编排。你现在可以构建自己的自定义多窗口信息娱乐系统了。</p>
+
+<p>完整的 PoC，包括配置叠加层和所有面板 XML，也可以在我的 <a href="https://github.com/passenger6/MultiPanelLandscapeRRO">GitHub</a> 上找到。</p>
+
+<p>超越 XML：面板控制器</p>
+
+<p>任何设计都存在权衡取舍，而我想在此深入探讨的，是你在决定使用 Scalable UI 构建生产级控制面板之前，务必了解的一点。我通过自身实验观察到的行为，可能是出于有意设计，也可能是集中式编排带来的副作用。我并不总是能确定究竟是哪一种，而且在实践中，区分二者远不如理解它如何影响实际部署重要。</p>
+
+<p><strong>系统 UI 成为单点故障</strong></p>
+
+<p>这种架构转变从根本上改变了控制面板的故障模型。由于系统本身充当了编排器的角色，系统 UI 实际上成为了整个 UI 的单点故障。</p>
+
+<p>在 Scalable UI 出现之前，启动器崩溃可能会导致主屏幕消失，但状态栏、HVAC 控制、通知和自定义 OEM SystemUIOverlayWindows 仍会继续独立运行。相反，系统 UI 崩溃会导致这些系统界面瘫痪，而启动器和托管应用程序则“幸存”下来。</p>
+
+<p>使用 Scalable UI 时，当系统 UI 崩溃时，框架会移除系统 UI 作为 TaskOrganizer 创建的所有面板根任务。这些面板内的所有应用，无论是导航、电话、设置还是其他正在运行的活动，都会连同其任务一起被终止。系统 UI 会快速重启，但由于 Scalable UI 不会保存上次的活动状态，它会从初始配置而非用户离开时的状态重建面板布局。只有配置为自动启动的应用才会自动重启，并且只会重启到其默认的面板位置。所有应用状态、导航历史记录和滚动位置都会丢失。例如，在我的概念验证中，无论用户重新排列了哪些面板或哪个面板处于活动状态，系统始终以三列布局重启。</p>
+
+<p>对于 OEM 厂商而言，这改变了系统 UI 故障时的风险。添加到系统 UI 的每个新功能、每个面板控制器、过渡动画器和事件分发器都会扩大单次崩溃的影响范围。面板控制器中一个未被捕获的异常，不仅会导致驾驶员失去状态栏，还会导致整个信息娱乐体验的丧失。</p>
+
+<p><strong>我希望添加的功能</strong></p>
+
+<p>除了上述权衡之外，我还希望 Scalable UI 能添加以下几个功能：</p>
+
+<ul>
+<li><p><strong>Scalable UI 配置的热重载。</strong> 目前，应用更新后的面板布局需要终止 System UI，这会销毁所有面板根任务并终止其中托管的所有应用程序。如果有一种热重载机制，能够在不重启 System UI 的情况下获取新的面板定义、变体更改和过渡更新，那么 OEM 厂商就可以在运行时更新其仪表板布局，而无需终止正在运行的会话。</p></li>
+<li><p><strong>面板动画的缩放和矩阵变换。</strong> <em>SurfaceControl.Transaction</em> 已经在框架级别支持 <em>setScale()</em> 和 <em>setMatrix()</em>，但 Scalable UI 框架并未公开这些方法。如果在 Variant 模型和 Panel 接口中添加缩放和旋转属性，就可以在过渡期间实现缩放、缩小和倾斜效果，而无需自定义窗口管理技巧。</p></li>
+<li><p><strong>每个属性的动画时序。</strong> 目前，所有动画属性共享同一个持续时间和插值器。框架的自定义动画路径虽然存在，但由于缺少属性设置器、缺少起始值/目标值注入以及任务预定位，因此对边界动画不起作用。修复这三个问题将允许每个属性的交错过渡，例如边界滑动时带有过冲，而透明度则线性淡入淡出。</p></li>
+<li><p><strong>同步应用过渡。</strong> Scalable UI 在内部处理所有任务过渡，没有为外部动画参与者提供钩子。集成 <em>RemoteAnimationAdapter</em> 支持将允许 OEM 启动器在应用进入面板时为其表面添加动画，例如将应用从控件图标变形到目标面板，而不是简单地出现在目标边界处。</p></li>
+<li><p><strong>重启后的状态持久性。</strong> Scalable UI 不会持久化上次活动的变体状态。每次重启后，每个面板都会恢复到其默认配置。为每个面板保留当前变体可以让信息娱乐系统从用户离开的地方继续运行。</p></li>
+</ul>
+
+
+<p><strong>隆重推出 Scalable UI 编辑器</strong></p>
+
+<p>在过去几个月使用 Scalable UI 的过程中，我发现一个问题反复出现：手动编写 Scalable UI 意味着需要在多个 XML 文件中处理变体、Z 图层和过渡效果，而且只有在刷入 RRO 并重启 SystemUI 后才能看到效果。工作流程并没有跟上框架的强大功能。</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*TBlXAvuYmRG4dFD2E-02iA.png" alt="captionless image" /></p>
+
+<p>因此，我开始开发自己的工具——一个 Scalable UI 可视化编辑器，可以直接从布局设计导出 RRO 项目。你可以将 TaskPanel 放置在画布上，切换变体来定义状态，并调整过渡效果，所有操作均可实时预览。只需单击一下，即可将 RRO 直接写入正在运行的模拟器或设备。输出为标准的 RRO 文件，与手动工作流程完全兼容。</p>
+
+<p>如果你的团队正在基于 Scalable UI 进行开发，欢迎与我们联系。</p>
+
+<p><strong>结语</strong></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[面向Android开发者的Google I/O 2026]]></title>
@@ -8597,7 +8791,7 @@
 
 <p>如有任何疑问，欢迎随时联系：</p>
 
-<p>📧 <strong>邮箱：</strong> <a href="&#x6d;&#97;&#105;&#108;&#116;&#x6f;&#58;&#100;&#x65;&#110;&#105;&#x73;&#x6f;&#x76;&#46;&#115;&#104;&#x75;&#x72;&#101;&#103;&#x40;&#x67;&#x6d;&#97;&#105;&#x6c;&#46;&#99;&#x6f;&#x6d;">&#100;&#x65;&#x6e;&#105;&#115;&#111;&#118;&#46;&#x73;&#104;&#117;&#x72;&#x65;&#x67;&#x40;&#x67;&#x6d;&#x61;&#x69;&#x6c;&#x2e;&#99;&#111;&#109;</a></p>
+<p>📧 <strong>邮箱：</strong> <a href="&#x6d;&#x61;&#105;&#108;&#x74;&#x6f;&#x3a;&#x64;&#101;&#x6e;&#x69;&#115;&#x6f;&#118;&#46;&#x73;&#104;&#117;&#114;&#101;&#x67;&#x40;&#x67;&#x6d;&#x61;&#x69;&#x6c;&#x2e;&#99;&#111;&#x6d;">&#x64;&#101;&#110;&#x69;&#x73;&#x6f;&#118;&#46;&#115;&#x68;&#x75;&#114;&#101;&#x67;&#64;&#103;&#x6d;&#97;&#105;&#108;&#46;&#x63;&#x6f;&#x6d;</a></p>
 
 <p>🔗 <strong>领英：</strong> <a href="https://www.linkedin.com/in/aleks-denisov/">Sasha Denisov</a></p>
 ]]></content>
@@ -11403,211 +11597,6 @@
 <p><img src="https://miro.medium.com/v2/resize:fit:1232/1*Eh3q8fmkEx9BdA5FNR11CA.jpeg" alt="" /></p>
 
 <p>这是我的<a href="https://bento.me/mightyseal">bento</a>，如果你想联系我、聊天或讨论，欢迎来找我！</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Jetpack Compose内部的不同节点类型]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose/"/>
-    <updated>2026-01-12T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「The Different Node Types in Jetpack Compose」，原文链接<a href="https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/">https://www.grokkingandroid.com/the-different-node-types-in-jetpack-compose/</a>，由Wolfram Rittmeyer发布于2025年12月30日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/01/12/node-types-in-jetpack-compose/"><img src="https://www.grokkingandroid.com/wordpress/wp-content/uploads/2025/12/ComposeUiNode-700x389.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>如果你仔细观察 Compose，你会发现它很奇怪。你会发现很多函数都没有返回值。然而，<a href="https://developer.android.com/develop/ui/compose/mental-model">Android 文档</a>却说：</p>
-
-<blockquote><p>可组合函数会生成 UI 层级结构。</p></blockquote>
-
-<p>这到底是什么意思呢？从函数式编程的角度来看，你那些看似无害的无状态可组合函数实际上会产生大量的<em>副作用[1]</em>。其中就包括创建节点。</p>
-
-<p>有时你可能会创建一些可组合函数来自己创建节点。但更多时候，你会直接委托给其他可组合函数来<em>创建节点[2]</em>。</p>
-
-<p>那么，让我们来看看有哪些节点，它们的创建位置以及它们的用途：</p>
-
-<ul>
-<li>ComposeUiNode</li>
-<li>LayoutNode</li>
-<li>Modifier.Node</li>
-<li>SemanticsNode</li>
-</ul>
-
-
-<h2>ComposeUiNode</h2>
-
-<p>当你深入研究<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/layout/package-summary#Layout(androidx.compose.ui.Modifier,androidx.compose.ui.layout.MeasurePolicy)"><code>Layout</code></a>可组合对象时，你会发现它调用了<code>ReusableComposeNode[3]</code>:</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="n">@UiComposable</span>
-</span><span class='line'><span class="n">inline</span> <span class="k">fun</span> <span class="nf">Layout</span><span class="p">(</span><span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span> <span class="n">measurePolicy</span><span class="p">:</span> <span class="n">MeasurePolicy</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">compositeKeyHash</span> <span class="p">=</span> <span class="n">currentCompositeKeyHash</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">materialized</span> <span class="p">=</span> <span class="n">currentComposer</span><span class="p">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">modifier</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">localMap</span> <span class="p">=</span> <span class="n">currentComposer</span><span class="p">.</span><span class="n">currentCompositionLocalMap</span>
-</span><span class='line'>    <span class="n">ReusableComposeNode</span><span class="p">&lt;</span><span class="n">ComposeUiNode</span><span class="p">,</span> <span class="n">Applier</span><span class="p">&gt;(</span>
-</span><span class='line'>        <span class="n">factory</span> <span class="p">=</span> <span class="n">ComposeUiNode</span><span class="p">.</span><span class="n">Constructor</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">update</span> <span class="p">=</span> <span class="p">{</span>
-</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">measurePolicy</span><span class="p">,</span> <span class="n">SetMeasurePolicy</span><span class="p">)</span>
-</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">localMap</span><span class="p">,</span> <span class="n">SetResolvedCompositionLocals</span><span class="p">)</span>
-</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">materialized</span><span class="p">,</span> <span class="n">SetModifier</span><span class="p">)</span>
-</span><span class='line'>            <span class="k">set</span><span class="p">(</span><span class="n">compositeKeyHash</span><span class="p">,</span> <span class="n">SetCompositeKeyHash</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">},</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong><code>ReusableComposeNode</code>本身并不是一个节点。</strong> 上面的代码中并没有构造函数调用，而是对另一个可组合对象的调用。第八行的工厂参数看似无关紧要，但实际上非常重要。因为最终会创建节点的就是这个函数。它会创建一个 <code>ComposeUiNode</code>。</p>
-
-<p><code>ReusableComposeNode</code> Composable 与 Compose 运行时紧密相关。这段代码告诉 Composer 应该启动一个 <code>GroupKind.ReusableNode</code> 类型的新组，然后代码会创建一个新节点，或者在重新组合时重用现有节点。最后，当使用 update 函数参数时，它会设置节点的内容：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="n">inline</span> <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">T</span> <span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="k">reified</span> <span class="n">E</span> <span class="p">:</span> <span class="n">Applier</span><span class="p">&gt;</span> <span class="n">ReusableComposeNode</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">noinline</span> <span class="n">factory</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">T</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">update</span><span class="p">:</span> <span class="n">@DisallowComposableCalls</span> <span class="n">Updater</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">currentComposer</span><span class="p">.</span><span class="n">applier</span> <span class="p">!</span><span class="k">is</span> <span class="n">E</span><span class="p">)</span> <span class="n">invalidApplier</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">currentComposer</span><span class="p">.</span><span class="n">startReusableNode</span><span class="p">()</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">currentComposer</span><span class="p">.</span><span class="n">inserting</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">currentComposer</span><span class="p">.</span><span class="n">createNode</span><span class="p">(</span><span class="n">factory</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">currentComposer</span><span class="p">.</span><span class="n">useNode</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>    <span class="n">Updater</span><span class="p">(</span><span class="n">currentComposer</span><span class="p">).</span><span class="n">update</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">currentComposer</span><span class="p">.</span><span class="n">endNode</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>我们看到工厂被传递给了 <code>createNode()</code> 调用。此调用会安排在所有插入操作处理完毕后创建节点。Compose 运行时内部会延迟执行许多操作以实现优化。这里我们并不关心具体何时发生，只需知道它<em>将会</em>发生即可。当它发生时，工厂将被调用。</p>
-
-<p>现在让我们更仔细地看一下工厂本身：<code>ComposeUiNode.Constructor</code> 看起来像是 <code>ComposeUiNode</code> 的构造函数。但事实并非如此。实际上，<code>ComposeUiNode</code> 是一个接口，它本身并不执行任何操作。它实际上是 <code>LayoutNode</code> 使用的基接口。至于这个接口和构造函数的用途，在接口声明上方的注释中已经给出：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="cm">/** Interface extracted from LayoutNode to not mark the whole LayoutNode class as @PublishedApi. */</span>
-</span><span class='line'><span class="n">@PublishedApi</span>
-</span><span class='line'><span class="k">internal</span> <span class="n">interface</span> <span class="n">ComposeUiNode</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'>    <span class="cm">/** Object of pre-allocated lambdas used to make use with ComposeNode allocation-less. */</span>
-</span><span class='line'>    <span class="n">companion</span> <span class="k">object</span> <span class="err">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">Constructor</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">ComposeUiNode</span> <span class="p">=</span> <span class="n">LayoutNode</span><span class="p">.</span><span class="n">Constructor</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">VirtualConstructor</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">ComposeUiNode</span> <span class="p">=</span> <span class="p">{</span> <span class="n">LayoutNode</span><span class="p">(</span><span class="n">isVirtual</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>        <span class="c1">// ...</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>所以 <code>ComposeUiNode</code> 只是 <code>LayoutNode</code> 的一个抽象。</strong></p>
-
-<h2>布局节点（LayoutNode）</h2>
-
-<p>在上一节中，我们已经了解了 <code>LayoutNode</code> 的实际创建时间。基本上，每当调用 <code>Layout</code> 可组合组件时，都会创建 <code>LayoutNode</code>。<code>LayoutNode</code> 是树状结构中的元素，代表屏幕上的内容。它需要被测量，可以在其边界内放置子元素，也可以绘制内容。</p>
-
-<p>每个 <code>LayoutNode</code> 都知道它的子元素和父元素。因此，<code>LayoutNode</code> 构成了一个节点树，代表了已发出的内容。需要明确的是：Compose 创建的树状结构与其他 UI 框架一样——但 Google 更倾向于使用一些更高级的命名方式。<strong>因此，每当你听到/读到有关可组合组件发出内容时，请将其理解为一个 LayoutNode 被创建并插入到树中。</strong></p>
-
-<p><code>LayoutNode</code> 类实际上非常有趣，因此值得单独撰写一篇博文，我将在其中更详细地介绍它的一些方面。</p>
-
-<p>这里有两点值得一提：</p>
-
-<ul>
-<li><code>Applier</code> 是调用 <code>LayoutNode</code> 相应树状结构处理方法的实例。 - <code>LayoutNode</code> 持有对 <code>Owner</code> 的引用。</li>
-</ul>
-
-
-<p>由于 <code>Applier</code> 和 <code>Owner</code> 在 Compose 中都是非常重要的概念，我将在单独的博文中分别介绍它们。</p>
-
-<h3>LayoutNode 的用途</h3>
-
-<p><code>LayoutNode</code> 构成 UI 树，并跟踪其父节点和子节点。UI 树本身的管理由 <code>Applier</code> 完成，我将在另一篇文章中介绍它。</p>
-
-<p>另外，需要记住的一点是，<code>LayoutNode</code> 存储在 <code>SlotTable[4]</code> 中。因此，在重新组合时，如果运行时认为树的这一部分不需要更改，则可以重用现有的 <code>LayoutNode</code>。</p>
-
-<p><code>LayoutNode</code> 还会保存其修饰符（参见下一节），并委托这些修饰符来决定该 <code>LayoutNode</code> 需要多少空间（测量）、在屏幕上放置元素的位置（布局）以及最终在屏幕上显示什么内容（绘制）。</p>
-
-<p>还有更多内容——但正如我提到的，那是另一篇文章的一部分。</p>
-
-<h2>Modifier.Node</h2>
-
-<p>修饰符在内部由 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node"><code>Modifier.Node</code></a> 对象表示。<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier.Node">根据文档</a>，它是“为应用于 androidx.compose.ui.layout.Layout 的每个 Modifier.Element 创建的生命周期更长的对象”。</p>
-
-<p>这个“生命周期更长”很有意思。基本上，只要 <code>Modifier.Node</code> 属于 <code>LayoutNode</code> 的修饰符链，它就会一直存在。 <code>LayoutNode</code> 持有一个 <code>NodeChain</code> 类型的对象，该对象内部维护着一个修饰符列表，并检查该列表是否发生更改，以及 <code>Modifier.Node</code> 的生命周期方法（例如 <code>onAttach()</code>）是否被调用。</p>
-
-<p><code>Modifier.Node</code> 有许多现有的子类型，例如 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode"><code>LayoutModifierNode</code></a>（见下文）或 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/DrawModifierNode?hl=en"><code>DrawModifierNode</code></a>。后者负责实际在屏幕上绘制内容，我计划在另一篇文章中详细介绍。</p>
-
-<p>由于 <code>LayoutNode</code> 是 <code>SlotTable</code> 的一部分，因此附加到 <code>LayoutNode</code> 的 <code>NodeChain</code> 对象的 <code>Modifier.Node</code> 显然也是 <code>SlotTable</code> 的一部分。</p>
-
-<h3>特殊子类型：<code>LayoutModifierNode</code></h3>
-
-<p><code>LayoutModifierNode</code>（<a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C">https://developer.android.com/reference/kotlin/androidx/compose/ui/node/LayoutModifierNode%EF%BC%89%E6%98%AF%E5%AE%9E%E9%99%85%E8%BF%9B%E8%A1%8C%E6%B5%8B%E9%87%8F%E7%9A%84%E8%8A%82%E7%82%B9%EF%BC%8C%E5%9B%A0%E4%B8%BA%E5%AE%83%E4%BB%AC%E4%BC%9A%E5%BD%B1%E5%93%8D%E5%B1%8F%E5%B9%95%E4%B8%8A%E5%85%83%E7%B4%A0%E7%9A%84%E5%A4%A7%E5%B0%8F%E5%92%8C%E4%BD%8D%E7%BD%AE%E3%80%82%E6%AD%A3%E5%A6%82%E6%96%87%E6%A1%A3%E6%89%80%E8%BF%B0%EF%BC%9A%E2%80%9C</a><code>LayoutModifierNode</code> 会改变其包裹内容的测量和布局方式。”。因此，在测量和布局过程中，每当遍历 <code>ModifierNode</code> 链时，这些节点实际上都会开始进行测量。</p>
-
-<p>因此，所有想要改变其子元素位置或对整个 Composable 元素大小产生任何影响的修饰符都需要实现 <code>LayoutModifierNode</code> 接口。例如，<code>SizeNode</code> 就是一个实现 <code>LayoutModifierNode</code> 接口的例子，它是 <code>height()</code>、<code>width()</code> 或 <code>size()</code> 等修饰符实际使用的节点。</p>
-
-<h2>SemanticsNode</h2>
-
-<p>当你想要向设备的<em>辅助功能服务[5]</em>传递一些信息时，你可以使用 Compose 中的 <a href="https://developer.android.com/reference/kotlin/androidx/compose/ui/Modifier#(androidx.compose.ui.Modifier).semantics(kotlin.Boolean,kotlin.Function1)"><code>semantics</code></a> 修饰符来告知系统要向用户传达哪些语义属性。</p>
-
-<p>但是辅助功能服务并不了解 Compose。在其他平台上，这一点显而易见，但考虑到 Compose 向后兼容（而且它并非 Android 框架的组成部分），在 Android 上也是如此。</p>
-
-<p>对于辅助功能，前面提到的 <code>Owner</code> 再次发挥作用。它持有一个 <code>SemanticsOwner</code>，该 <code>SemanticsOwner</code> 充当了与相应平台语义框架之间的桥梁。</p>
-
-<p>为此，<code>SemanticsOwner</code> 维护着一个 <code>SemanticNode</code> 对象树，用于向辅助功能服务的用户描述屏幕内容。这也是我未来会更详细介绍的内容之一。</p>
-
-<p>敬请期待更多关于 Compose 内部运作机制的见解。祝你编码愉快！</p>
-
-<h2>脚注</h2>
-
-<ul>
-<li>[1] 我在本段中使用“副作用”一词，是因为它在<a href="https://en.wikipedia.org/wiki/Side_effect_(computer_science)">计算机科学和函数式编程</a>中由来已久。我这里指的并非官方 Compose 文档中提到的<a href="https://developer.android.com/develop/ui/compose/side-effects">副作用</a>。Compose 文档至少在过去有时会提及副作用的这种用法——尽管实际上 Compose 函数并非纯函数。</li>
-<li>[2] 如果在 Compose Compiler 插件完成工作后查看 Composable，你会发现它不仅创建了节点，而且你的函数还会进行大量调用，从而改变应用程序的全局状态。但这些调用并不会实际绘制任何内容。它们最多只会创建一些绘制操作，这些操作会被记录下来，并在系统认为需要绘制时，于未来的某个时间点被调用。我将在以后的两篇文章中分别介绍绘制过程以及编译器对代码所做的更改。</li>
-<li>[3] 实际上，布局可组合对象共有三个。但它们最终都会调用 <code>ReusableComposeNode</code>。其他变体的示例也与之非常相似。</li>
-<li>[4] 本系列文章中我可能不会介绍 SlotTable。我推荐 Richard Leland 的这篇关于 compose 的文章（<a href="https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A">https://medium.com/androiddevelopers/under-the-hood-of-jetpack-compose-part-2-of-2-37b2c20c6cdd%EF%BC%89%EF%BC%8C%E4%BB%A5%E5%8F%8A</a> Mohit Sarveiya 的关于 slotTable 的视频（<a href="https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8">https://codingwithmohit.com/%EF%BC%89%EF%BC%8C%E8%BF%99%E4%BA%9B%E8%A7%86%E9%A2%91%E8%AE%B2%E8%A7%A3%E4%BA%86%E5%A6%82%E4%BD%95%E6%AD%A3%E7%A1%AE%E4%BD%BF%E7%94%A8</a> slotTable。</li>
-<li>[5] 设备上的辅助功能服务在 Android 系统中是 AccessibilityService 的实现，但在 iOS、桌面或 Web 端则有所不同，因此我在本文中使用“辅助功能服务”这个通用术语。</li>
-</ul>
-
 ]]></content>
   </entry>
   
