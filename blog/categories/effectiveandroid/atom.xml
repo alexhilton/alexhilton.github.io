@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-06-06T11:46:16+00:00</updated>
+  <updated>2026-06-13T15:01:31+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,522 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[AppFunctions：让你的Android应用更容易被AI智能体发现]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/06/13/appfunctions/"/>
+    <updated>2026-06-13T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/06/13/appfunctions</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「AppFunctions: Making Your Android App Discoverable by AI Agents」，原文链接<a href="https://proandroiddev.com/appfunctions-making-your-android-app-discoverable-by-ai-agents-fbfbeddf8103">https://proandroiddev.com/appfunctions-making-your-android-app-discoverable-by-ai-agents-fbfbeddf8103</a>，由Ioannis Anifantakis发布于2026年5月25日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Dn57jNq0tE2pyme711CuQw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>简介</p>
+
+<p>如果你之前没有使用过 <strong>模型上下文协议 (MCP)</strong>，那么一页入门将使接下来的一切变得更加容易。</p>
+
+<p><strong>MCP</strong> 是一项开放标准，最初由 Anthropic 于 2024 年末发布，现已被越来越多的人工智能产品采用，它定义了人工智能代理连接到外部<strong>工具</strong>和<strong>数据源</strong>的单一方式。该模型很简单：</p>
+
+<ul>
+<li><strong>MCP 服务器</strong> 是一个公开工具列表的小进程。每个工具都有一个名称、一个简单语言描述以及一个描述其参数和返回值的 JSON 架构。</li>
+<li><strong>MCP 客户端</strong>（通常是 AI 代理）连接到服务器，询问“你有什么工具？”，阅读说明，并根据用户的请求决定调用哪个工具。</li>
+<li>它们之间的对话是<strong>JSON-RPC</strong>，通过<strong>stdio</strong>（对于本地服务器）或HTTP（对于远程服务器）进行。</li>
+</ul>
+
+
+<p>在 MCP 之前，每个集成都是定制的。也就是说，每个人工智能产品都有自己的连接工具的方法。借助 MCP，任何兼容 MCP 的代理都可以使用公开“搜索我的电子邮件”的单个服务器，而无需在任何一方进行集成更改。</p>
+
+<p><strong>挑战在于</strong>传统的 MCP 服务器在你的应用程序之外**运行，通常作为单独的进程或云服务。他们缺乏对你应用程序状态的特权访问权限。如果你想要一个 MCP 风格的工具来读取笔记应用程序中未发送的草稿，你要么需要通过 API 公开该草稿，要么在应用程序自己的进程中运行 MCP 服务器。这两种选择在移动设备上都不方便。</p>
+
+<p><strong>这就是 AppFunctions 填补的空白。</strong></p>
+
+<p>AppFunction 实际上是什么</p>
+
+<p>基础应用程序是一个小型 Compose 应用程序，它使用 Ktor 从远程源获取笑话并让用户标记收藏夹。它使用 Room 进行离线缓存和本地收藏夹存储以及典型的分层架构：DAO、数据源、存储库、视图模型、屏幕。这里没有什么不寻常的。它与大多数 Android 应用程序的骨架相同。</p>
+
+<p>我故意添加的第一个功能很小：<strong>清除所有最喜欢的笑话</strong>。可以通过两种方式获得完全相同的功能：</p>
+
+<ul>
+<li>用户可以点击顶栏中的菜单项。</li>
+<li>AI 代理可以调用​​ <code>clearFavorites</code> AppFunction。</li>
+</ul>
+
+
+<p>两条路径最终都会调用相同的存储库方法。在我们看代码之前，这是我想告诉你的原则：<strong>AppFunction 是普通应用程序逻辑的薄壳，绝不是它的副本</strong>。</p>
+
+<p>我们从这一个函数开始，然后在基础知识就位后添加另外两个函数，“getFavorites”和“setFavorite”。</p>
+
+<p>第 1 步——依赖关系</p>
+
+<p>操作系统在安装时需要知道两件事：</p>
+
+<ol>
+<li>在哪里读取应用程序的 AppFunction 元数据，</li>
+<li>当代理想要执行你的某个功能时要绑定哪个服务。</li>
+</ol>
+
+
+<p>两者都位于“AndroidManifest.xml”中的“<application>”内部：</p>
+
+<pre><code class="xml">&lt;application
+    ...&gt;
+&lt;property
+        android:name="android.app.appfunctions.app_metadata"
+        android:resource="@xml/app_metadata" /&gt;
+    &lt;service
+        android:name="androidx.appfunctions.service.PlatformAppFunctionService"
+        android:permission="android.permission.BIND_APP_FUNCTION_SERVICE"
+        android:exported="true"
+        tools:targetApi="36"&gt;
+        &lt;intent-filter&gt;
+            &lt;action android:name="android.app.appfunctions.AppFunctionService" /&gt;
+        &lt;/intent-filter&gt;
+    &lt;/service&gt;
+    &lt;!-- your activities here --&gt;
+&lt;/application&gt;
+</code></pre>
+
+<p>每件作品的作用：</p>
+
+<ul>
+<li><code>&lt;property&gt;</code> 元素将操作系统指向 <code>app_metadata.xml</code>，其中包含 <strong>应用程序级别</strong> 描述；这就是这个应用程序的整体用途，因此人工智能代理可以知道每个应用程序的用途。每个函数的描述是一个单独的问题：它们来自每个“@AppFunction”方法的 KDoc。</li>
+<li><code>&lt;service&gt;</code> 声明公开了 <code>PlatformAppFunctionService</code>，它是平台用来调用函数的桥梁。幸运的是，你<strong>不是</strong>自己编写此服务；它包含在“appfunctions-service”库中。你只需使用正确的权限和意图过滤器在清单中声明它，以便系统可以找到并绑定到它。</li>
+</ul>
+
+
+<p>“BIND_APP_FUNCTION_SERVICE”权限确保只有平台可以绑定到服务。你不需要请求“EXECUTE_APP_FUNCTIONS”；这是<strong>调用者</strong>的许可，而不是你的。</p>
+
+<p>第 3 步 — 在“app_metadata.xml”中描述应用程序本身</p>
+
+<p>在我们接触任何 AppFunctions 代码之前，我们通过现有层添加新的业务功能。我之前提出的观点<em>（AppFunction 是正常逻辑之上的一个薄壳）</em> 仅当正常逻辑首先存在时才有效。</p>
+
+<p><strong>DAO</strong>（<code>JokesDao.kt</code>）：</p>
+
+<pre><code class="kotlin">@Query("UPDATE joke SET isFavorite = 0")
+suspend fun clearAllFavorites()
+</code></pre>
+
+<p><strong>本地数据源</strong>（<code>LocalJokesDataSource.kt</code>及其实现）：</p>
+
+<pre><code class="kotlin">interface LocalJokesDataSource {
+    // ...
+    suspend fun clearAllFavorites()
+}
+
+class LocalJokesDataSourceImpl(/* ... */) : LocalJokesDataSource {
+    override suspend fun clearAllFavorites() {
+        database.clearAllFavorites()
+    }
+}
+</code></pre>
+
+<p><strong>存储库</strong>（<code>JokesRepository.kt</code> 及其实现）：</p>
+
+<pre><code class="kotlin">interface JokesRepository {
+    // ...
+    suspend fun clearAllFavorites(): Result&lt;Unit&gt;
+}
+
+class JokesRepositoryImpl(/* ... */) : JokesRepository {
+    override suspend fun clearAllFavorites(): Result&lt;Unit&gt; {
+        return safeCall {
+            localDataSource.clearAllFavorites()
+        }
+    }
+}
+</code></pre>
+
+<p>这里没有任何东西知道或关心 AppFunctions。这只是普通的 Android 架构，这就是重点。</p>
+
+<p>第 5 步——AppFunction 本身</p>
+
+<p><code>clearFavorites</code> 是一个故意最小化的“hello world”：没有参数，纯字符串返回，除了状态语句之外没有错误表面。</p>
+
+<p>大多数真正的 AppFunction 需要更多，而他们最常需要的三件事正是平台支持的开箱即用的三件事：</p>
+
+<ul>
+<li>结构化返回值，</li>
+<li>输入参数，</li>
+<li>和输入错误。</li>
+</ul>
+
+
+<p>同一类上的另外两个函数显示了所有这三个函数。</p>
+
+<h3>使用@AppFunctionSerialized返回结构化数据</h3>
+
+<p>当你希望代理接收数据时，它可以读取、计数或引用<em>（不仅仅是句子）</em>，返回可序列化类型而不是字符串。你用“<strong>@AppFunctionSerialized</strong>”注释一个普通数据类，并直接返回它<em>（或它的</em>“<em>List</em>”）_。</p>
+
+<p>我们已经有了三个笑话模型：</p>
+
+<ul>
+<li>域名“笑话”，</li>
+<li>网络“JokeDto”，</li>
+<li>和房间“JokeEntity”。</li>
+</ul>
+
+
+<p>添加第四个 <em>(an</em> <code>_@AppFunctionSerialized_</code> <em>class)</em> 看起来多余，但它与其他人遵循的边界模型模式相同。我们无法注释域“Joke”：“@AppFunctionSerialized”存在于“androidx.appfunctions”中，将 Android 依赖项拖到域层会破坏其纯粹性。</p>
+
+<p>因此，AppFunctions 边界有自己的 DTO，就像网络和持久性边界一样。而且，作为奖励，代理看到的模式可以独立于域进行塑造（请注意，此 DTO 删除了“isFavorite”，这在收藏夹列表中始终为真，并且对模型来说只是噪音）。转换是一个映射器，类似于现有的 <code>toJoke()</code>/<code>toEntity()</code> 扩展：</p>
+
+<pre><code class="kotlin">// AppFunctionJoke.kt
+// Developer rationale lives in a plain `//` comment on purpose (see the note below): this is the
+// agent-facing boundary DTO, the counterpart of the network JokeDto and the Room JokeEntity. We
+// can't annotate the domain Joke (androidx code would break domain purity), so the AppFunctions
+// boundary gets its own model — and we drop isFavorite, which is noise for a favorites list.
+/**
+ * A single joke from this app, modelled as a question-and-answer pair: the question is the set-up
+ * and the answer is the punchline. Returned by joke-reading functions such as the user's favorites
+ * list, and identified by a stable numeric id that other functions accept to act on this joke.
+ */
+@AppFunctionSerializable(isDescribedByKDoc = true)
+data class AppFunctionJoke(
+    /** Stable unique identifier of the joke. Pass this back to functions that act on a single joke. */
+    val id: Int,
+    /** The set-up line of the joke (its "question" part). */
+    val question: String,
+    /** The punchline of the joke (its "answer" part). */
+    val answer: String,
+)
+// AppFunctionJokeMapper.kt — the boundary mapper, like toJoke()/toEntity()
+fun Joke.toAppFunctionJoke(): AppFunctionJoke = AppFunctionJoke(
+    id = id, question = question, answer = answer,
+)
+</code></pre>
+
+<pre><code class="kotlin">/**
+ * Lists every joke the user has currently marked as a favorite, including its set-up and punchline.
+ *
+ * Returns structured data rather than a sentence, so a calling agent can read, count, or quote
+ * individual jokes. Use the id of a returned joke when calling "setFavorite" to unmark a specific
+ * one. An empty list means the user has no favorites.
+ *
+ * @return The user's favorite jokes; an empty list if there are none.
+ */
+@AppFunction(isDescribedByKDoc = true)
+suspend fun getFavorites(context: AppFunctionContext): List&lt;AppFunctionJoke&gt; = withContext(Dispatchers.IO) {
+    val result = AppModule.jokesRepository.getFavorites()
+    result.getOrDefault(emptyList()).map { joke -&gt; joke.toAppFunctionJoke() }
+}
+</code></pre>
+
+<p>关于可序列化上的 KDoc，有两个不明显的事情值得大声说出来，因为两者都“默默地”——它们编译得很好，只有在运行时、在代理内部表现不佳。</p>
+
+<p>首先，KSP 看起来在哪里：</p>
+
+<blockquote><p><strong><em>KSP 仅提取直接在每个属性上方内联编写的 KDoc，特别是用于</em></strong> <code>**_@AppFunctionSerialized_**</code> <strong><em>classes.</em></strong></p>
+
+<p><em>如果你使用类级别</em> <code>_@param_</code> <em>或</em> <code>_@property_</code> <em>标记来记录属性，KSP 不会提取这些属性的任何内容，并且该函数在运行时显示为“元数据丢失”/“AppFunction 不可用”。</em></p>
+
+<p><em>将文档放在属性上，而不是放在类标头中。</em></p></blockquote>
+
+<p>这是本文中两种文档风格真正不同的地方，值得确定，因为重用“@param”的本能是如此强烈。 <code>@param</code> 用法是在函数中使用的方式，但不是在数据类构造函数中使用的方式。</p>
+
+<p><strong>第二，也是容易错过的：</strong></p>
+
+<p><strong>类级 KDoc 摘要成为该类型面向代理的描述。</strong> 使用“isDescribedByKDoc = true”，你在类上方的 KDoc 块中编写的任何内容都会作为该类型的描述发送到生成的模式中，就像函数的 KDoc 摘要成为函数描述一样。</p>
+
+<p><strong>任何为 AppFunctions 注释的 KDoc 都是面向代理的副本。</strong> 在常规注释中保留仅限开发人员的基本原理（KSP 会忽略这一点），并使 KDoc 本身保持干净、具体的描述。</p>
+
+<p><strong>同样的陷阱解释了上面函数 KDoc 中的一个小而真实的细节：</strong> 它用普通引号表示“setFavorite”，而不是 KDoc 链接“[setFavorite]”。 KDoc 链接括号在进入架构的过程中未得到解析。它们会逐字保存，因此代理会读取原始的“[setFavorite]”（更糟糕的是，还会读取“[AppFunctionJoke.id]”等内部符号路径）。简单地引用名字；保存人们在 IDE 中阅读的 KDoc 的“[&hellip;]”链接。</p>
+
+<p><strong>关于支持的类型的注释，</strong>因为一旦你将“String”抛在后面，你就会立即使用它们。从这个 alpha 版本开始，<code>@AppFunction</code> 参数或返回值可以是： 原语 (<code>Int</code>、<code>Long</code>、<code>Float</code>、<code>Double</code>、<code>Boolean</code>)；原始数组（<code>IntArray</code>、<code>LongArray</code>、<code>FloatArray</code>、<code>DoubleArray</code>、<code>BooleanArray</code>）；本机类型（“String”、“PendingIntent”、“Uri”、“LocalTime”、“LocalDate”、“LocalDateTime”、“Instant”）、“@AppFunctionSerialized”对象；或任何受支持的非基本类型的“List”。该集合之外的任何内容都不会在架构往返过程中幸存下来。</p>
+
+<h3>类型参数和类型错误</h3>
+
+<p>第二个函数采用参数并按照平台期望的方式报告失败，通过抛出而不是返回错误字符串：</p>
+
+<pre><code class="kotlin">/**
+ * Marks or unmarks a single joke as a favorite, identified by its id.
+ *
+ * Required workflow: call [getFavorites] first when you need a valid joke id to act on.
+ * This sets the favorite flag to an absolute value rather than toggling it, so the call is safe to
+ * repeat — requesting `isFavorite = true` on a joke that is already a favorite leaves it a favorite.
+ *
+ * @param jokeId The unique identifier of the joke to update.
+ * @param isFavorite The desired favorite state: `true` to mark as a favorite, `false` to unmark it.
+ * @return A short human-readable status message describing the new state of the joke.
+ * @throws AppFunctionElementNotFoundException If no joke exists with the given [jokeId]; suggest the
+ * user call getFavorites or browse the jokes list to obtain a valid id.
+ */
+@AppFunction(isDescribedByKDoc = true)
+suspend fun setFavorite(
+    context: AppFunctionContext,
+    jokeId: Int,
+    isFavorite: Boolean,
+): String = withContext(Dispatchers.IO) {
+    val joke = AppModule.jokesRepository.getJokeById(jokeId).getOrNull()
+        ?: throw AppFunctionElementNotFoundException("No joke found with id $jokeId.")
+    val result = AppModule.jokesRepository.setFavorite(jokeId, isFavorite)
+    if (result.isSuccess) {
+        if (isFavorite) "Joke ${joke.id} is now a favorite." else "Joke ${joke.id} is no longer a favorite."
+    } else {
+        "Failed to update joke ${joke.id}: ${result.exceptionOrNull()?.message}"
+    }
+}
+</code></pre>
+
+<p>第二个函数演示了四件事：</p>
+
+<ul>
+<li><strong>类型化参数将其含义带入模式中。</strong> <code>jokeId: Int</code> 和 <code>isFavorite: Boolean</code> 可以清楚地读取模型来决定传递什么内容。这正是之前关于参数名称是合约一部分的观点。</li>
+<li><strong>抛出错误，而不是返回。</strong> 要向调用者报告真正的失败，请抛出<code>androidx.appfunctions.AppFunctionException</code>的子类。这里，当“id”不存在时，会出现“AppFunctionElementNotFoundException”。代理接收一个键入的错误，而不必解析句子，并且“@throws”行告诉它要建议什么恢复。 （该库提供了一系列这些：无效参数、元素未找到、需要许可等等。）</li>
+<li><strong>所需的工作流程：是一种记录在案的约定。</strong> 当一个功能依赖于另一个功能时，Google 的 KDoc 指南会用该确切的短语拼写出来。 “所需的工作流程：首先调用 getFavorites&hellip;”，以便代理学会在写入之前调用读取。</li>
+<li><strong>线程是显式的。</strong> AppFunction 实现默认在 UI 线程上运行，因此这两个函数本身切换到 <code>withContext(Dispatchers.IO)</code>。 （“clearFavorites”没有它就可以逃脱，因为它的单个 Room 调用已经在内部跳出主线程 - 但显式切换是更安全的默认值，也是要教授的规则。）</li>
+</ul>
+
+
+<p>有了这些，该类现在公开了三个函数。 “clearFavorites”、“getFavorites”和“setFavorite”，下一步的工厂会同时覆盖所有这些，因为它们位于同一个封闭类中。</p>
+
+<p>第 6 步 — 告诉操作系统如何构建你的 AppFunction 类</p>
+
+<p>到目前为止，我们已经创建了几个新类型：<code>JokesAppFunctions</code>、<code>AppFunctionJoke</code> 和一个映射器。对于任何使用分层代码库的人来说，自然而然会问：它们属于哪一层？示例中使用了常见的 <code>data</code> / <code>domain</code> / <code>presentation</code> 结构，每个功能都对应一个层，因此很容易将 AppFunctions 代码放到这三层中的某一层。</p>
+
+<p>请克制住这种想法；一旦你真正理解了 AppFunction 的本质，正确的答案就会直接来自清晰架构。</p>
+
+<p><strong>AppFunction 是一个入站入口点</strong>；一个驱动（主要）适配器。应用外部的某些东西（操作系统、代理）会介入并驱动你的业务逻辑。这与 Compose UI 扮演的角色完全相同；唯一的区别在于调用者。用户点击屏幕，代理调用函数。两者都位于外部的“接口适配器”环中，并向内部调用存储库。这与你的 <code>data</code> 层形成对比，<code>data</code> 层包含驱动型（辅助型）适配器——应用程序调用的出站网关（例如 Room、Ktor）。AppFunctions 指向相反的方向。</p>
+
+<p>这一分类就决定了选项：</p>
+
+<ul>
+<li><p><strong>不属于</strong> <code>data</code> 层。<code>data</code> 层用于出站网关，而 AppFunctionJoke 不是持久化或网络 DTO。它是入站接口的边界模型。将入口点放在 <code>data</code> 层会混淆“驱动我们的事物”和“我们驱动的事物”。</p></li>
+<li><p><strong>不属于根/应用程序包。</strong> 根包用于真正跨功能、应用程序范围的粘合层。<code>clearFavorites</code>、<code>getFavorites</code> 和 <code>setFavorite</code> 与笑话有关，因此它们属于笑话功能。</p></li>
+<li><p><strong>不属于</strong> <code>core</code> 包。一个共享的、与功能无关的模块不应该依赖于笑话领域；此处的特性逻辑会颠倒依赖关系规则。</p></li>
+</ul>
+
+
+<p><code>数据</code>/<code>领域</code>/<code>表示</code>三元组`是常见的架构结构，并非硬性规定。整洁架构的核心是领域，其外层环绕着接口适配器，这些适配器承载着所有交付机制。</p>
+
+<p>包括用户界面、控件、磁贴、深度链接和应用程序函数。在这个环中，表示层和应用程序函数是同级关系，而非父子关系。因此，最简洁的方案是在 presentation 之外添加第四个包，其作用域限定于功能：</p>
+
+<pre><code class="bash">features/jokes/
+├─ data/          ← driven adapters: Room, Ktor, DTOs, mappers
+├─ domain/        ← Joke, JokesRepository (no Android, no androidx.appfunctions)
+├─ presentation/  ← Compose screens + ViewModels   (delivery to a human)
+└─ appfunctions/  ← JokesAppFunctions, AppFunctionJoke, mapper  (delivery to an agent)
+</code></pre>
+
+<blockquote><p><em>值得保留的思维模型：</em> <strong><em>appfunctions/ 之于代理，正如 presentation/ 之于用户</em></strong></p>
+
+<p>_架构级别相同，受众不同。 <code>AppFunctionJoke</code> 之所以应该位于其适配器旁边，原因与 UI 模型位于展示层、<code>JokeDto</code> 位于数据层相同：边界模型与其边界位于同一层，并且它仅依赖于内部的领域 Joke。</p></blockquote>
+
+<p><strong>另一个区别使拆分更加清晰。</strong> AppFunctions 代码有两种类型，它们位于两个不同的位置：</p>
+
+<p>这是有意为之。之所以采用应用级配置，正是因为它将每个功能的 AppFunctions 聚合到一个模式中（回想一下步骤 1 中的 <code>aggregateAppFunctions</code> 标志）。</p>
+
+<p>每个功能都贡献自己的函数；应用模块将它们组装起来。这也为多模块拆分提供了前瞻性：<code>:jokes:appfunctions</code> 将依赖于 <code>:jokes:domain</code>，而聚合标志和 <code>Provider</code> 则保留在 <code>:app</code> 中。</p>
+
+<p>第 7 步 — 测试（adb、真实代理或两者）</p>
+
+<p>验证接线的最快方法是通过“adb shell cmd app_function”。值得精确说明此命令的作用，因为它不是假的或模拟的 - 它是同一操作系统级“AppFunctionService”的瘦壳前端，任何代理都可以通过 Kotlin 代码中的“AppFunctionManager”与其进行通信。</p>
+
+<p>你在这里不是在模拟代理人；而是在模拟代理人。你正在绕过它并直接与操作系统对话。这使得 adb 成为端到端验证的理想工具，因为它删除了每个人工智能产品变量，只留下你自己的线路进行测试。</p>
+
+<p>在运行 Android 16 或更高版本的设备或模拟器上构建并安装应用程序，然后列出已注册的 AppFunctions：</p>
+
+<p>在运行 <strong>Android 16 或更高版本</strong>的设备或模拟器上构建并安装应用程序，并在模拟器上使用 Google 系统映像 <strong>（Google API 或 Google Play）</strong>，因为纯 AOSP 映像上缺少 <code>cmd app_function</code> 工具 <em>（在下面的当路由 A (adb) 可能会碰壁时详细说明）</em>。</p>
+
+<p>然后列出已注册的AppFunctions：</p>
+
+<pre><code class="bash"># You Type this for the first 10 lines of app functions for our package
+adb shell cmd app_function list-app-functions | grep -A 10 "eu.anifantakis.networkapp.jokes"
+</code></pre>
+
+<p>如果所有内容均已编译且清单设置正确，你应该会看到如下内容：</p>
+
+<pre><code class="bash"># OUTPUT of first 10 lines:
+"eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites"
+        ],
+        "packageNameHash": [        -1179891122],
+        "scope": [ "global"        ],
+        "mobileApplicationQualifiedId": [ "android$apps-db\/apps#eu.anifantakis.networkapp"        ],
+--
+            "android$apps-db\/app_functions#eu.anifantakis.networkapp\/eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions\\#clearFavorites"
+          ],
+          "functionId": [ "eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites"          ],
+          "packageName": ["eu.anifantakis.networkapp"          ]
+        }
+      }
+    }
+  ],
+  "com.google.android.permissioncontroller": [
+  {
+ioannisanif@192 MitropolitikoNetworkApp %
+</code></pre>
+
+<p>此输出中有一些值得指出的事情：</p>
+
+<ul>
+<li><code>**functionId**</code> 是我们 AppFunction 的规范标识符：<code>eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites</code>。请注意完全限定类名和方法名之间的“#”分隔符。这正是你在下一个命令中传递给“&ndash;function”的字符串，因此请从此输出中复制它，而不是从内存中键入它。</li>
+<li><code>**packageName**</code> 是 <code>eu.anifantakis.networkapp</code> — 应用程序的 <code>applicationId</code>。这是你传递给“&ndash;package”的内容，它与包含函数类的包不同。 （函数类位于“eu.anifantakis.networkapp.jokes.features.jokes.appfunctions”，但应用程序标识符只是“eu.anifantakis.networkapp”。）</li>
+<li><code>**mobileApplicationQualifiedId**</code> 指向 <code>android$apps-db/apps#eu.anifantakis.networkapp</code>。 “apps-db”前缀是操作系统级数据库<em>（AppSearch，内部）</em>，系统使用它来索引已安装的应用程序。我们的函数在同一数据库中的“app_functions”下有自己的条目。</li>
+<li><code>**scope: global**</code> 确认该函数是可见的，无需进一步的门控。如果我们使用了“@AppFunction(isEnabled = false, &hellip;)”并且尚未在运行时启用它，则此条目根本不会显示在此处。</li>
+</ul>
+
+
+<p>值得一提的是，这个输出并不是一个对开发人员来说看起来很漂亮的诊断界面。它是操作系统 AppFunctions 注册表的字面视图；当代理询问“这个应用程序公开哪些功能？”时，它会读取相同的注册表。代理将看到的有关你的职能的所有内容都在这里。</p>
+
+<p><strong>端到端尝试：</strong></p>
+
+<p>要实际查看该功能的运行情况，请运行这个简短的演示：</p>
+
+<ol>
+<li><strong>运行应用程序</strong>，然后点击你想要保留的笑话旁边的心形图标，将一些笑话标记为收藏夹。</li>
+<li><strong>关闭并重新打开应用程序。</strong> 你应该注意到，当其余笑话从网络刷新时，你标记的收藏夹将被保留。</li>
+<li><strong>运行下面的脚本</strong>，然后观看喜爱的标记立即从屏幕上清除。请注意，你无需运行应用程序即可生效。</li>
+</ol>
+
+
+<pre><code class="bash">adb shell cmd app_function execute-app-function \
+  --package eu.anifantakis.networkapp \
+  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites \
+  --parameters '{}'
+</code></pre>
+
+<p>如果你的收藏夹表之前有标记为“isFavorite = 1”的行，那么它们现在全部重置为“0”，并且 adb 会打印函数返回的字符串。</p>
+
+<blockquote><p><strong>上面也提到了重要的观察：</strong></p>
+
+<p><strong><em>无论你的应用程序是在前台、后台还是完全关闭，这都有效。</em></strong></p>
+
+<p><em>操作系统通过</em> <code>_AppFunctionService_</code> <em>独立于你的活动生命周期来访问你的函数。这就是本文开头“由操作系统索引”的实际现金价值。</em></p>
+
+<p><strong><em>代理不需要你的 UI 处于活动状态即可访问你的代码。</em></strong></p></blockquote>
+
+<p>步骤 5b 中的两个函数可以通过相同的方式访问。 getFavorites 不带参数并返回结构化列表：</p>
+
+<pre><code class="bash">adb shell cmd app_function execute-app-function \
+  --package eu.anifantakis.networkapp \
+  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#getFavorites \
+  --parameters '{}'
+</code></pre>
+
+<p><code>setFavorite</code> 将类型化参数作为 JSON。请注意键如何与 Kotlin 参数名称完全匹配。</p>
+
+<pre><code class="bash">adb shell "cmd app_function execute-app-function \
+  --package eu.anifantakis.networkapp \
+  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#setFavorite \
+  --parameters '{\"jokeId\":179,\"isFavorite\":true}'"
+</code></pre>
+
+<p>返回“笑话 179 现在是最喜欢的。”，后续的 getFavorites 然后将笑话 179 包含在其结构化列表中。传递一个不存在的jokeId，你可以看到类型错误路径触发 - <code>Errorexecutingappfunction:android.app.appfunctions.AppFunctionException: Nojokefound with id 999999. (code 1500)</code> - 调用者得到一个结构化错误，而不是状态语句。</p>
+
+<p>还有一些值得使用的 adb 子命令放在后面的口袋里：</p>
+
+<pre><code class="bash"># Confirm the device even supports AppFunctions (prints a help page if so).
+# "cmd: Can't find service: app_function" → no AppFunctions support on this build.
+# "No shell command implementation."
+
+→ AOSP image: the service is present but its adb
+#
+
+front-end is not (see "When Route A might hit a wall"
+#
+
+below; use `dumpsys app_function` to inspect instead).
+adb shell cmd app_function help
+# Append --brief-yaml to any execute call for terser, more readable output.
+adb shell cmd app_function execute-app-function --brief-yaml \
+  --package eu.anifantakis.networkapp \
+  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#getFavorites \
+  --parameters '{}'
+# Toggle a single function on or off at runtime (ties into the @AppFunction(isEnabled = false) flag).
+adb shell cmd app_function set-enabled \
+  --package eu.anifantakis.networkapp \
+  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#setFavorite \
+  --state disable
+</code></pre>
+
+<h3>当路线 A (adb) 可能会碰壁时</h3>
+
+<p>上面的所有内容都是在 Google API 图像上捕获的。在纯 AOSP 映像（例如“sdk_phone64_arm64”）上，每个 cmd“app_function”子命令都会打印“No shell command implementation.”：</p>
+
+<pre><code class="bash">$ adb shell cmd app_function
+**No shell command implementation.**
+</code></pre>
+
+<p>看起来 AppFunctions 不受支持，但事实并非如此。</p>
+
+<p>该行是框架的默认“Binder.onShellCommand()”输出，而不是 AppFunctions 消息。整个过程依赖于同一个 AppFunctionManagerService 的两个方法：</p>
+
+<ul>
+<li><code>**onShellCommand()**</code> ：可选的 Binder 钩子。 Google 系统映像 <em>(</em><strong><em>Google API</em></strong> <em>and</em> <strong><em>Google Play</em></strong><em>)</em> 会覆盖它。 AOSP 版本没有，因此 cmd 会退回到该存根消息。 （<code>cmd app_search</code> 的行为方式相同。）</li>
+<li><code>**executeAppFunction()**</code>：<code>IAppFunctionManager</code> Binder 接口的必需方法，因此无论图像如何，服务都会实现它。</li>
+</ul>
+
+
+<p><strong>因此，在 AOSP 上，仅缺少 adb shell 包装器，而不缺少 API 本身。</strong></p>
+
+<p>这与“cmd: Can&rsquo;t find service: app_function”相反，这确实意味着不支持 AppFunctions；使用 <code>adb shell getprop ro.build.fingerprint</code> 区分两者（<code>sdk_gphone</code>&hellip; 有命令，<code>sdk_phone.../test-keys</code> 没有）。</p>
+
+<p><strong>实际影响：</strong></p>
+
+<p><code>adb shell dumpsys app_function</code> 可在 AOSP 和 Google API/Play 模拟器中工作，但 <code>cmd</code> 仅适用于 Google API/Play 模拟器。</p>
+
+<p>因此，“execute-app-function”子命令依赖于缺少的“onShellCommand()”，而“executeAppFunction()”绑定器方法只能通过“AppFunctionManager”以编程方式访问。</p>
+
+<p>也就是下面的B路。因此，在 AOSP 上，主机应用程序不再是可选的。 <em>（两种风格都可以支持它；Google API 也为你提供 cmd。）</em></p>
+
+<p>其他路径（我还没尝试过）</p>
+
+<p>本文中的“clearFavorites”功能碰巧可以安全地重复使用。无论调用一次还是十次，“UPDATE SET isFavorite = 0”都会产生相同的结果。这个事故值得暂停，因为当你编写一个破坏性的 AppFunction 时，重复调用会造成伤害，你已经重新打开了 REST 为确定性调用者解决的每个问题，并出现了一个新的问题：调用者现在是一个 LLM，可以产生幻觉、重试或出于错误的原因选择你的函数。</p>
+
+<p>调用两次的“deleteJoke(id)”充其量是一个错误。调用两次的“sendPayment(amount)”是一个真正的问题。在用“@AppFunction”注释写入之前，请处理 REST 迫使你回答的相同问题：重试时会发生什么，部分失败时会发生什么，以及首先允许谁调用它？</p>
+
+<p><strong>REST 时代的一些值得继承的模式：</strong></p>
+
+<h3>1) 通过设计确保写入安全，以便在可以的情况下重复写入</h3>
+
+<ul>
+<li>优先选择绝对集操作而不是增量操作，</li>
+<li>接受客户端提供的请求 ID，以便可以检测并忽略重复的调用，</li>
+<li>对于无操作和真正的改变同样返回成功</li>
+</ul>
+
+
+<p>让我们更详细地看看这些项目符号&hellip;&hellip;</p>
+
+<p><strong>> 优先选择绝对集操作而不是增量操作</strong></p>
+
+<p>写入最终值的 UPDATE，例如“SET status = &lsquo;active&#8217;”，每次运行时都会给出相同的结果。</p>
+
+<p>像“SET value = value + 1”这样的增量 - 每次重试都会累积，因此两次调用都会使计数器保持在 +2，即使调用者只是意味着 +1。</p>
+
+<p>对于 AppFunctions，“markAsFavorite(jokeId)”是绝对的并且可以安全地重复； <code>incrementFavoriteCount(jokeId)</code> 是一个增量，但不是。</p>
+
+<p><strong>> 接受客户端提供的请求 ID</strong></p>
+
+<p>让呼叫者在每次呼叫时发送一个唯一的密钥。</p>
+
+<p>你的函数会保留最近看到的键的一小部分记录；如果相同的键到达两次，你将返回第一次调用的缓存结果，而不是再次运行该操作。</p>
+
+<p>这正是像 Stripe 这样的支付 API 能够在网络重试中幸存下来而无需重复收费的方式。它们在每个请求上都需要一个“Idempotency-Key”标头，并且你可以为任何敏感写入借用相同的模式。</p>
+
+<p><strong>> 无论操作是否真正起作用还是无操作，都以相同的方式返回成功</strong></p>
+
+<p>我们的“clearFavorites”已经做到了这一点。</p>
+
+<p>两个分支都会返回“所有喜欢的笑话已成功清除”，无论十个笑话是不喜欢的还是零个。</p>
+
+<p>不同的消息（“Cleared 10”与“Nothing to Clear”）会向调用者泄露状态，并诱使法学硕士根据答案选择不同的下一步。</p>
+
+<h3>2) 自由地暴露读取，保守地暴露写入。</h3>
+
+<p>没有任何规则规定存储库中的每个方法都应该有一个@AppFunction。选择对特工真正有用的最小表面。</p>
+
+<h3>3) 假设没有人看守门</h3>
+
+<p>今天，“EXECUTE_APP_FUNCTIONS”已获得特权，但代理和函数之间的执行故事仍在定义中。后续的主机应用程序文章将详细探讨该层。 <em>在那之前，你的功能是最后一层防御，而不是第一层。</em></p>
+
+<p>**这一切背后有一个值得大声说出来的战略要点。我们花了十年时间优化深度链接、应用索引和搜索，以吸引用户进入应用。 AppFunctions 进行了相反的优化——应用程序永远不会打开，屏幕永远不会亮起，代理和业务逻辑之间没有 UI。这改变了“最低权限”在实践中的样子：用户界面不再询问“你确定吗？”代表你。</p>
+
+<p>结束语</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[车载系统中的可扩展UI：从UI嵌入到系统窗口编排]]></title>
@@ -1391,162 +1907,6 @@ class UserProfileLoader {
 <p>此分析器将这个模型清晰地呈现出来，并且机器可读。</p>
 
 <p>_有任何问题或反馈？请在 <a href="https://www.linkedin.com/in/sumeet-singh-arora-50605153/"><em>LinkedIn</em></a> 上联系我。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[务实的模块化：连接模块(wiring Modules)的妙用]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/01/03/pragmatic-modularization/"/>
-    <updated>2026-01-03T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/01/03/pragmatic-modularization</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Pragmatic Modularization: The Case for Wiring Modules」，原文链接<a href="https://proandroiddev.com/pragmatic-modularization-the-case-for-wiring-modules-c936d3af3611">https://proandroiddev.com/pragmatic-modularization-the-case-for-wiring-modules-c936d3af3611</a>，由Alex Krafts发布于2025年11月22日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/0*9waVavO74e0cqQg6" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>如果你正在经历漫长的模块化之旅，你应该已经阅读过官方的<a href="https://developer.android.com/topic/modularization">Google 开发者指南</a>。你可能已经见过关于提供依赖项的这种具体建议：</p>
-
-<blockquote><p>“……app 模块通常是添加依赖项的好地方。要提供实现，请将其指定为所选构建变体或测试源集的依赖项。”</p></blockquote>
-
-<p>下图展示了这种模式的一个常见示例，其中 <code>:app</code> 模块使用 <code>:database:impl:room</code> 作为其 <code>main</code> 源集，并使用 <code>:database:impl:mock</code> 作为 <code>androidTest</code> 源集。这是一种强大且正确的测试依赖项管理方法。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1304/0*Q3MP_6C6i4qhNhQr.png" alt="图 1. App 模块提供实际实现。" /></p>
-
-<p>但这种模式存在一个<strong>微妙之处</strong>。当这种逻辑应用于大型项目中所有功能实现时，可能会<strong>无意中造成构建速度瓶颈</strong>，尤其是在处理遗留应用模块时。</p>
-
-<pre><code class="kotlin">// :app/build.gradle.kts
-dependencies {
-    implementation(project(":database:api"))
-    implementation(project(":database:impl:room")) // &lt;--- This is the trap for incremental builds
-}
-</code></pre>
-
-<p>代码是模块化的，但你的 <code>:app</code> 模块现在与 <code>:database:impl:room</code> 模块<strong>构建耦合</strong>。这意味着任何<strong>资源更改</strong>（例如添加字符串）或对<strong>实现自身的公共接口</strong>的任何更改（例如在 <code>:impl</code> 内部添加一个不属于官方 <code>:api</code> 模块的新的 <code>public</code> 辅助类）都会破坏编译避免机制，并强制整个 <code>:app</code> 模块重新编译，从而抵消模块化带来的主要速度优势。</p>
-
-<blockquote><p>即使启用了非传递 R 类等优化，直接依赖关系通常也会强制构建系统验证使用者是否与生产者的新资源符号匹配。布线模块充当防火墙，防止频繁的资源检查影响到庞大的 App 模块。</p></blockquote>
-
-<h2>“精简应用”的理想状态与“臃肿应用”的现实</h2>
-
-<p>官方建议让 <code>:app</code> 模块提供实现，这非常有效，尤其是在 Google 指南中展示的场景下：为不同的构建版本（例如 <code>main</code> 和 <code>androidTest</code>）替换依赖项。</p>
-
-<p>但是，如果将此模式误用作所有功能实现的<em>通用规则</em>，尤其是在包含<strong>“臃肿应用”模块</strong>的项目中，就会出现一个微妙的陷阱。</p>
-
-<p>官方指南通常会隐含地假设一种架构理想：<strong>“精简应用”模块</strong>。“精简应用”只是一个轻量级的汇编器。它几乎不包含任何代码或资源。它<em>唯一</em>的任务是应用 <code>com.android.application</code> 插件并将所有功能模块打包成一个 APK 文件。如果你的 <code>:app</code> 模块很精简，重新编译它既快速又便宜，因此它依赖于 <code>:impl</code> 模块并无大碍。</p>
-
-<p>但对我们大多数人来说，现实情况是<strong>“厚应用”模块</strong>。它是最初的单体应用，仍然充斥着遗留代码、资源和半模块化的功能。</p>
-
-<p>当你的“厚应用”模块直接依赖于某个功能的 <code>:impl</code> 时，例如 <code>:app</code> -> &ldquo;:database:impl:room&rdquo;<code>，你就创建了一个会拖慢构建速度的瓶颈。你最大、最复杂的模块现在与该功能的内部细节**构建耦合**了。任何对</code>:impl<code>中资源或实现自身公共接口的更改都会破坏编译规避机制，并强制整个</code>:app` 模块重新编译。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1304/1*su8uLnwQsJMVWsUxrlVBSg.png" alt="图 2. “厚应用”瓶颈。由于庞大的 :app 模块直接依赖于实现，因此底层任何 ABI 更改都会触发顶层的完全重新编译。红色箭头展示了功能模块中的一个微小改动如何迫使资源密集型的 `:app` 模块重新构建，从而破坏了避免编译的策略。" /></p>
-
-<p>“现在，一个纯粹主义者可能会说：‘你应该更加自律，永远不要让你的 <code>:app</code> 模块从 <code>:impl</code> 导入任何东西，即使是公共的。’</p>
-
-<p>他们的说法没错。但是，在一个拥有数十位贡献者的‘厚应用’单体应用中，‘自律’是一种脆弱的防御手段。而连接模块模式<strong>在构建系统层面强制执行了这种自律。</strong>它使得开发者<em>不可能</em>意外地将 <code>:app</code> 模块与某个功能的实现细节耦合在一起，从而默认地保证了构建速度。”</p>
-
-<h2>“理想”方案 vs. “赋能”方案</h2>
-
-<p>这让团队面临两条道路：</p>
-
-<ol>
-<li>“理想”（但缓慢）方案：纯粹主义者的解决方案是将“臃肿的应用”模块重构为真正“精简”的模块……这才是正确的长期目标，但这需要数年时间，循序渐进。</li>
-<li>“赋能”（但快速）方案：这是“连接模块”模式。这种模式并非理想方案的替代方案，而是实现理想方案的催化剂。它提供了团队所需的构建速度和稳定性，使团队有时间和信心真正执行长期的增量重构。</li>
-</ol>
-
-
-<p>虽然这会增加“模块蔓延”，但它以架构的纯粹性换取了工程速度。在大型团队中，速度通常是更关键的指标。</p>
-
-<p>但这种观点将问题简单地二元化了。实际上，这种模式是一种<strong>务实的权衡</strong>。你是在<strong>有意识地做出权衡</strong>。你接受了新的、可控的成本（增加模块数量和配置），以解决一个令人头疼的日常问题（缓慢的增量构建）。这种新的、明确的“连接”债务通常远比“臃肿应用”的单体架构债务成本低得多，后者正在扼杀团队的开发速度。这种构建速度往往正是团队能够拥有时间和稳定性来进行更大规模、更长期的重构的关键所在。</p>
-
-<p>像 Slack、Spotify 和 Uber 这样的大型 Android 代码库都公开讨论过一些模式，这些模式大量依赖于将实现细节隐藏在稳定的 API 之后。这并非权宜之计；这是大型团队保持构建速度快和代码库可维护性的根本方法。</p>
-
-<h2>解决方案：“连接模块”模式</h2>
-
-<blockquote><p>这种模式有时被称为聚合模块，但我们更倾向于使用“连接”，因为它更能体现其在连接架构中的积极作用。</p></blockquote>
-
-<p>此解决方案引入了一个新的轻量级<strong>“连接模块”</strong>（例如，<code>:database:wiring</code>）。该模块充当“守门人”或该功能的稳定外观。</p>
-
-<p>其原理很简单：</p>
-
-<ol>
-<li><code>:app</code> 模块<em>仅</em>依赖于新的、稳定的 <code>:database:wiring</code> 模块。</li>
-<li>连接模块<em>是唯一</em>了解其自身内部 <code>:impl</code>（以及 <code>:ui</code>、<code>:domain</code> 等）模块的模块。</li>
-</ol>
-
-
-<pre><code class="kotlin">// :app/build.gradle.kts (Corrected)
-dependencies {
-    // ...
-    implementation(project(":database:wiring")) // NOW it's decoupled!
-    implementation(project(":feature:home"))
-}
-</code></pre>
-
-<pre><code class="kotlin">// :database:wiring/build.gradle.kts (The new "Wiring Module")
-plugins {
-    id("com.android.library")
-}
-android {
-    namespace = "com.example.database.wiring"
-}
-dependencies {
-    // Link the bindings internally without exposing the API transitively
-    implementation(project(":database:api"))
-
-    // Hide the implementation details from the :app module
-    implementation(project(":database:impl:room"))
-}
-</code></pre>
-
-<p>这种模式并非免费。这是一个务实的步骤，它能实现你承诺的快速增量构建，赋予你的团队速度和稳定性，从而支持那些规模更大、周期更长的重构。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1304/1*H2gD-qUVVI2r7CsTtMSt6Q.png" alt="图 3. 使用 :impl:room 模块 ABI 更改后的增量构建仅触发轻量级 :wiring 模块重建" /></p>
-
-<p>现在，<code>:app</code> 模块仅依赖于稳定的 wiring 模块。</p>
-
-<p><strong>关于依赖注入的说明：</strong></p>
-
-<p>这个“wiring 模块”不仅仅是一个提升构建速度的技巧；它是你功能<strong>依赖注入绑定</strong>（例如 Dagger 或 Hilt 的 <code>@Module</code>）的理想存放位置。它的唯一职责就是将抽象的 <code>:api</code> 连接到具体的 <code>:impl</code>，这正是清晰依赖注入 (DI) 的精髓所在。</p>
-
-<p>这种模式能够确保良好的架构，而构建速度的提升则是这种清晰分离带来的一个绝佳附加效果。</p>
-
-<h2>为什么速度如此之快：理解编译避免</h2>
-
-<p>这种结构并非权宜之计；它是启用 Gradle 最强大的构建速度提升功能——<strong>编译避免</strong>——的<em>正确</em>方法。</p>
-
-<p>Gradle 团队在其精彩博文“<a href="https://blog.gradle.org/our-approach-to-faster-compilation">我们实现更快编译的方法</a>”中对此进行了解释。以下是关键要点：</p>
-
-<ol>
-<li><strong>Gradle 检查的是 ABI，而不是实现：</strong> 正如博文所述，Gradle 检查的是依赖项的<strong>应用程序二进制接口 (ABI)</strong>。ABI 是模块的“公共契约”或“公共结构”——即其公共类和方法签名。它<strong>不</strong>包含方法体等私有实现细节。</li>
-<li><strong>旧方法会破坏这一点：</strong> 当你的 <code>:app</code> 模块直接依赖于 <code>:database:impl:room</code> 时，你实际上是在强制 Gradle 将整个实现都视为应用构建的一部分。正如我们之前提到的，<code>:database:impl:room</code> 中任何<strong>资源更改</strong>或对实现本身的<strong>公共接口</strong>（例如新增的 <code>public</code> 辅助函数）的更改，对于 <code>:app</code> 来说都是 ABI 不兼容的更改，从而导致需要完全重新编译。</li>
-<li><p><strong>新方法可以解决这个问题：</strong> 使用我们的 <code>:database:wiring</code> 模块后：</p></li>
-<li><p>开发人员更改了 <code>:database:impl:room</code> 中的一个文件。</p></li>
-<li><code>:database:wiring</code> 模块重新编译（由于它很小，所以速度很快）。</li>
-<li><strong>至关重要的是</strong>，正如 Gradle 博客文章中所解释的，这是一个 <strong>ABI 兼容的更改</strong>。连接模块的<em>公共结构</em>（即其 <code>api</code> 依赖项）并未改变。</li>
-<li>Gradle 会检查 <code>:app</code>，发现其依赖项的 ABI 完全相同，因此<strong>完全跳过重新编译</strong> <code>:app</code>。</li>
-</ol>
-
-
-<p>这篇博文将此称为<strong>编译避免(Compilation Avoidance)</strong>（完全跳过模块的编译），并将其与<em>增量编译</em>（重新编译模块中的<em>某些</em>文件）区分开来。这种模式是实现主应用程序模块真正避免编译的最有效方法之一。</p>
-
-<h2>实际应用：效果如何</h2>
-
-<p>这并非纸上谈兵。我们在生产应用中使用 Gradle Profiler 来测试这种模式旨在解决的具体场景：在某个功能的 <code>:impl</code> 模块中进行破坏 ABI 的更改（例如，添加一个新的公共方法），然后运行增量 <code>:app:assembleDebug</code> 构建。</p>
-
-<p>我们对八个不同的功能模块重复了此操作，并在引入连接模块前后分别对每个功能模块进行了平均 10 次运行。在旧配置中，<code>:app</code> 直接依赖于 <code>:feature:impl</code>，这些增量构建平均耗时约 <strong>99 秒</strong>。引入连接模块后，<code>:app</code> 仅依赖于 <code>:feature:wiring</code>，相同场景下的平均耗时降至约 <strong>63 秒</strong>。</p>
-
-<p>在这八个功能模块中，速度提升幅度约为 <strong>29%</strong> 到 <strong>45%</strong>，在这种特定的增量构建场景下，平均提升幅度约为 <strong>36%</strong>。</p>
-
-<p>在进行此次重构时，我恰好在研究是否值得将我的 MacBook 升级到更新的 Apple Silicon 机型。这个对比让我恍然大悟：对于这种工作负载，此次连接模块的更改所带来的构建速度提升，与升级到性能更强劲的高端 MacBook 机型**的效果不相上下。区别在于，这种重构能够有效地让参与项目的每个开发者都感受到“新机器”般的体验——而这仅仅是通过一个小的、有针对性的 Gradle 修改实现的，而非硬件升级。</p>
-
-<h2>要点</h2>
-
-<p>官方文档的建议在理论上是正确的，但理解实践中的权衡取舍至关重要。</p>
-
-<p>对于任何实际的<strong>“厚应用”模块</strong>而言，直接依赖 <code>:impl</code> 模块通常会导致构建速度瓶颈，因为它将最大的模块与某个功能的内部变更耦合在一起。</p>
-
-<p>保护构建速度至关重要。“模块连接”模式是一种非常实用且低成本的重构方式，它能显著提升日常工作流程的构建速度，而成本通常仅为完整 <code>:app</code> 模块重构的一小部分。</p>
 ]]></content>
   </entry>
   
