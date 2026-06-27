@@ -1,0 +1,592 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>使用Android Archive进行打包 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="深入了解 Android Archive (AAR)的打包原理，并展示如何在现代 Android 应用中的使用它。">
+  <meta name="keywords" content="Android, Archive, AAR">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/06/27/packaging-aar">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">使用Android Archive进行打包</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-06-27'><span class='date'><span class='date-month'>Jun</span> <span class='date-day'>27</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Packaging with Android Archive」，原文链接<a href="https://medium.com/gitconnected/packaging-with-android-archive-f5a33c48a25e">https://medium.com/gitconnected/packaging-with-android-archive-f5a33c48a25e</a>，由Chirani Rajapaksha发布于2026年6月20日。</p></blockquote>
+
+<p><a href="/blog/2026/06/27/packaging-aar/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*rz56vDEt8737r-0vmTnTzQ.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>当 Android 开发者构建库模块时，输出的并非标准的 JAR 文件，而是 AAR 文件。Android 引入 AAR 格式的初衷是，JAR 文件基于 JVM 构建，并不包含 Android 特有的组件。JAR 文件可以包含编译后的字节码，但无法包含清单文件、资源文件、布局文件或原生 <code>.so</code> 库。</p>
+
+<p>AAR 是一种 ZIP 压缩的归档文件，它将 Android 库所需的所有内容打包到一个可分发的文件中。根据<a href="https://developer.android.com/studio/projects/android-library">Android开发者文档</a>，AAR文件可以包含：</p>
+
+<ul>
+<li><p><code>AndroidManifest.xml</code> — 在构建时合并到使用该库的应用的清单文件中</p></li>
+<li><p><code>classes.jar</code> — 已编译的Kotlin/Java字节码</p></li>
+<li><p><code>res/</code> — Android资源，例如布局、可绘制对象和字符串</p></li>
+<li><p><code>assets/</code> — 原始资源文件</p></li>
+<li><p><code>jni/</code> — 已编译的本地<code>.so</code>库</p></li>
+<li><p><code>libs/</code> — 其他JAR文件</p></li>
+<li><p>Consumer ProGuard规则</p></li>
+<li><p>资源引用的R.txt符号</p></li>
+</ul>
+
+
+<p>这与JAR文件有着本质区别，JAR文件仅包含已编译的类文件和元数据。当你的库需要声明权限、注册组件或发布本地代码时，这种区别就显得尤为重要，而这些都是封装硬件API（例如ARCore）的SDK的常见需求。</p>
+
+<p>AAR 与 JAR：选择合适的格式</p>
+
+<p>考虑一个使用 Flutter 开发的应用，其中包含一个用 Kotlin 编写的原生 Android 层。该应用程序使用 <a href="https://developers.google.com/ar/">Google ARCore</a> 进行平面检测和表面识别，例如识别摄像头在现实世界中看到的水平或垂直平面。</p>
+
+<p>在典型的初始版本中，开发者会在整个 Android 代码库中直接导入 ARCore：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>flutter_app/
+</span><span class='line'>  └── android/
+</span><span class='line'>        └── app/
+</span><span class='line'>              ├── MainActivity.kt         ← ARCore imports here
+</span><span class='line'>              ├── ArSessionManager.kt     ← ARCore imports here
+</span><span class='line'>              └── PlaneDetectionHelper.kt ← ARCore imports here</span></code></pre></td></tr></table></div></figure>
+
+
+<p>每个涉及 AR 功能的文件都会与 ARCore 的内部类耦合，例如 <code>Session</code>、<code>Frame</code>、<code>Plane</code>、<code>Config</code>、<code>Trackable</code> 等等。这会带来一些实际问题：</p>
+
+<p><strong>升级 ARCore 存在风险。</strong> ARCore API 的任何重大变更都意味着所有导入它的文件都需要修改，而且没有统一的边界来控制影响范围。</p>
+
+<p><strong>客户端会获取过多信息。</strong> 如果你将此 Android 模块交付给客户，他们可以查看和修改所有 ARCore 集成代码。这可能会暴露你希望保护的实现细节。</p>
+
+<p><strong>测试难度加大。</strong> 由于调用应用程序模块了解 ARCore 类，因此无法像使用桩代码那样轻松地将 AR 后端替换为单元测试用的桩代码。</p>
+
+<p>解决方案是划定一个明确的边界。ARCore 成为一个实现细节，隐藏在一个接口之后，应用程序的其他部分无需了解底层 SDK 即可使用该接口。</p>
+
+<p>模块结构设计</p>
+
+<p>此模块仅包含契约。此处未声明任何 ARCore 依赖项。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>// ar-facade/src/main/kotlin/com/example/ar/ArSurfaceDetector.kt
+</span><span class='line'>
+</span><span class='line'>interface ArSurfaceDetector {
+</span><span class='line'>    fun startSession()
+</span><span class='line'>    fun stopSession()
+</span><span class='line'>    fun getDetectedPlanes(): List&lt;DetectedPlane&gt;
+</span><span class='line'>}
+</span><span class='line'>
+</span><span class='line'>data class DetectedPlane(
+</span><span class='line'>    val id: String,
+</span><span class='line'>    val type: PlaneType,
+</span><span class='line'>    val centerX: Float,
+</span><span class='line'>    val centerY: Float
+</span><span class='line'>)
+</span><span class='line'>
+</span><span class='line'>enum class PlaneType { HORIZONTAL_UP, HORIZONTAL_DOWN, VERTICAL }</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>app</code> 模块依赖于 <code>ar-facade</code>。它调用 <code>detector.startSession()</code> 并接收 <code>List&lt;DetectedPlane&gt;</code>。它不会访问 <code>com.google.ar.core.Plane</code> 或任何其他 ARCore 类。</p>
+
+<p>模块：<code>ar-core-impl</code></p>
+
+<h3>步骤 1 — 将模块声明为 Android 库</h3>
+
+<p>在 <code>ar-core-impl/build.gradle.kts</code> 文件中，应用库插件而不是应用程序插件：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>plugins {
+</span><span class='line'>    id("com.android.library")
+</span><span class='line'>    id("org.jetbrains.kotlin.android")
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>android {
+</span><span class='line'>    namespace = "com.example.ar.impl"
+</span><span class='line'>    compileSdk = 35    defaultConfig {
+</span><span class='line'>        minSdk = 24
+</span><span class='line'>        consumerProguardFiles("consumer-rules.pro")
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>com.android.library</code> 插件使 Gradle 生成 AAR 文件而不是 APK 文件。正如 <a href="https://developer.android.com/studio/projects/android-library">Android Studio 文档</a> 所述，应用此插件后，构建过程会创建 AAR 文件，而不是 APK 文件。</p>
+
+<h3>步骤 2 — 添加 ARCore 依赖项</h3>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>dependencies {
+</span><span class='line'>    implementation("com.google.ar:core:1.45.0")
+</span><span class='line'>    implementation(project(":ar-facade"))
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>步骤 3 — 添加 ARCore 所需的清单条目</h3>
+
+<p>AAR 的 <code>AndroidManifest.xml</code> 文件会自动包含其所需的条目。当使用 AAR 的应用包含该 AAR 时，这些清单条目会被合并到最终的应用清单中：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>&lt;!-- ar-core-impl/src/main/AndroidManifest.xml --&gt;
+</span><span class='line'>&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"&gt;</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>&lt;uses-permission android:name="android.permission.CAMERA" /&gt;    
+</span><span class='line'>&lt;uses-feature
+</span><span class='line'>    android:name="android.hardware.camera.ar"
+</span><span class='line'>    android:required="true" /&gt;    &lt;application&gt;
+</span><span class='line'>    &lt;meta-data
+</span><span class='line'>        android:name="com.google.ar.core"
+</span><span class='line'>        android:value="required" /&gt;
+</span><span class='line'>&lt;/application&gt;&lt;/manifest&gt;</span></code></pre></td></tr></table></div></figure>
+
+
+<p>根据 <a href="https://developers.google.com/ar/develop/c/enable-arcore">ARCore NDK 快速入门文档</a>，<code>uses-feature</code> 标签会将应用在 Google Play 商店中的可见性限制在支持 ARCore 的设备上，而 <code>meta-data</code> 标签会将应用标记为 AR 必需，这意味着必须安装 Google Play 服务 AR 版。</p>
+
+<p>由于这些条目存在于 AAR 的清单中，因此使用 AAR 的 <code>app</code> 模块无需声明任何 ARCore 特有的清单配置。它会继承库中的所有配置。</p>
+
+<h3>步骤 4 — 添加消费者 ProGuard 规则</h3>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'># consumer-rules.pro
+</span><span class='line'>-keep class com.example.ar.impl.** { *; }</span></code></pre></td></tr></table></div></figure>
+
+
+<p>库的 Gradle 配置中的 <code>consumerProguardFiles</code> 设置可确保在使用库的应用运行 R8 或 ProGuard 时自动应用这些规则。<a href="https://developer.android.com/build/publish-library/prep-lib-release">Android 文档</a> 指出，消费者 ProGuard 规则会随 AAR 文件一起打包，并应用于消费者的构建；SDK 作者控制哪些规则会被保留，而无需消费者手动管理这些规则。</p>
+
+<h3>步骤 5 — 构建 AAR 文件</h3>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>./gradlew :ar-core-impl:assembleRelease</span></code></pre></td></tr></table></div></figure>
+
+
+<p>输出文件位于：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>ar-core-impl/build/outputs/aar/ar-core-impl-release.aar</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在应用模块中使用 AAR 文件</p>
+
+<p>边界到位后，“app”模块永远不会引用 ARCore。 Flutter 平台通道处理程序可能如下所示：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>// app/src/main/kotlin/com/example/app/ArPlatformChannel.kt</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>import com.example.ar.ArSurfaceDetector   // facade only
+</span><span class='line'>import com.example.ar.DetectedPlane       // facade onlyclass
+</span><span class='line'>
+</span><span class='line'>ArPlatformChannel(private val detector: ArSurfaceDetector) :
+</span><span class='line'>    MethodChannel.MethodCallHandler {    
+</span><span class='line'>    
+</span><span class='line'>    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
+</span><span class='line'>        when (call.method) {
+</span><span class='line'>            "startSession"       -&gt; { detector.startSession(); result.success(null) }
+</span><span class='line'>            "stopSession"        -&gt; { detector.stopSession();  result.success(null) }
+</span><span class='line'>            "getDetectedPlanes"  -&gt; result.success(detector.getDetectedPlanes().map { it.toMap() })
+</span><span class='line'>            else                 -&gt; result.notImplemented()
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>“app/”中的任何位置都不存在“import com.google.ar.core.*”行。</p>
+
+<p>向客户端演示隔离</p>
+
+<p><strong>可以进行逆向工程。</strong> AAR 是编译代码，而不是加密代码。 JADX 等工具可以反编译部分实现。为了提供更强大的 IP 保护，R8 混淆与激进的缩小和重命名提供了有意义的抵抗，尽管它并不能阻止坚定的逆向工程师。 C/C++ 中的本机实现更难反编译，并且可能适合特别敏感的逻辑。</p>
+
+<p><strong>原始 AAR 没有依赖项元数据。</strong> 正如 <a href="https://developer.android.com/build/publish-library/upload-library">Android 文档说明</a>，原始 AAR 文件不会声明其身份、版本或传递依赖项。对于超出简单本地集成的任何内容，建议通过 Maven 发布。</p>
+
+<p><strong>清单合并需要注意。</strong> 当 AAR 的清单合并到使用应用程序时，可能会出现冲突 - 例如，如果应用程序已经声明了具有不同设置的“uses-feature”。 Android 的<a href="https://developer.android.com/build/manage-manifests">清单合并工具</a> 会自动处理大多数情况，但冲突需要使用合并规则手动解决。</p>
+
+<p>参考文献</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-06-27'><span class='date'><span class='date-month'>Jun</span> <span class='date-day'>27</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/06/13/appfunctions/" title="Previous Post: AppFunctions：让你的Android应用更容易被AI智能体发现">&laquo; AppFunctions：让你的Android应用更容易被AI智能体发现</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
