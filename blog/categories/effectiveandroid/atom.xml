@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-06-27T08:58:14+00:00</updated>
+  <updated>2026-07-01T14:26:11+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,79 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Android的Agent优先时代：构建时vs运行时]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/07/01/android-agent-first-era/"/>
+    <updated>2026-07-01T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/07/01/android-agent-first-era</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Android’s Agent-First Era: Build-Time vs Runtime」，原文链接<a href="https://medium.com/proandroiddev/androids-agent-first-era-build-time-vs-runtime-9f66db6d8eed">https://medium.com/proandroiddev/androids-agent-first-era-build-time-vs-runtime-9f66db6d8eed</a>，由Renaud Mathieu发布于2026年6月8日。</p></blockquote>
+
+<p>在 Android 中，“Agent”一词现在有两个不同的含义，而且很容易混淆。一个是帮助你编写代码的 AI，另一个是你应用内部为用户提供的 AI。谷歌在同一季度发布了针对这两个方面的工具，这正是有些人容易感到困惑的原因。因此，本文的核心内容集中在以下两点：</p>
+
+<blockquote><p><strong>_技能 + CLI = 构建时，提升你的效率。</strong></p>
+
+<p><strong>ADK = 运行时环境，你的产品。</strong></p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*XsYjGttz5ICej4rG22_w1Q.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>为什么现在才推出这些功能？开发模式正在从<strong>“人与 IDE 交互”</strong>转向<strong>“人监督智能体”</strong>，而谷歌正在公开地为此进行设计。与此同时，像<strong>Gemini Nano</strong>这样的设备端模型已经发展成熟，能够在手机上运行真正的智能体逻辑。因此，<strong>谷歌</strong>正在双管齐下：一方面提升智能体构建 Android 应用的能力，另一方面简化将智能体集成到应用本身的过程。本文的其余部分将围绕这两个方面展开。</p>
+
+<p>在正式开始之前，先介绍一个有用的细节：构建时部分基于开放标准（<a href="http://agentskills.io">agentskills.io</a>），因此它不局限于某个特定的助手；而运行时部分（<a href="https://adk.dev">ADK</a>) 是开源的。这意味着（至少目前如此？）谷歌的竞争优势在于工具和技术，而非厂商锁定。</p>
+
+<p>轴 1：构建时</p>
+
+<p>用于构建在你发布的应用程序中运行的助手的框架。最终的回报是为你的用户提供产品功能，通常在设备上私下运行。这是适用于 Kotlin 和 Android 的 <strong>ADK</strong>（或 JetBrains 的 <strong>Koog</strong>）。</p>
+
+<p>构建时：辅助构建的代理</p>
+
+<h3>ADK 是什么？</h3>
+
+<p><a href="https://github.com/google/adk-kotlin"><strong>代理开发套件</strong></a> 可让你在 Android 应用程序中构建和运行 AI 代理，而不仅仅是作为编码助手。它是一个支持 Kotlin 和 Java 的开源框架，相同的代理代码可以从单个工具调用代理扩展到复杂的多代理系统。你编写的代理代码与标准 ADK Kotlin 指南相同；只有 Gradle 依赖项以及运行时调用它的方式有所不同。</p>
+
+<p>最小代理是一个具有名称、指令、模型和一组工具的“LlmAgent”。工具是用“@Tool”注释的普通 Kotlin 函数，你可以从协程运行代理，收集其响应作为事件来驱动你的 UI。以下是从 Google 的 HelloTimeAgent 快速入门中删减的要点：</p>
+
+<pre><code class="kotlin">class TimeService {
+    @Tool
+    fun getCurrentTime(
+        @Param("City to get the time for") city: String
+    ): Map&lt;String, String&gt; = mapOf("city" to city, "time" to "10:30am")
+}
+val rootAgent = LlmAgent(
+    name = "hello_time_agent",
+    description = "Tells the current time in a city.",
+    model = Gemini(name = "gemini-flash-latest", apiKey = /* from your backend, never hard-coded */),
+    instruction = Instruction("Tell the time in a city using the getCurrentTime tool."),
+    tools = TimeService().generatedTools(),
+)
+</code></pre>
+
+<p>引人注目的是，在设备上运行所需的更改很少：将 <code>Gemini(...)</code> 模型替换为 ML Kit 支持的 <code>GenaiPrompt</code>（<code>GenaiPrompt.create(generativeModel, name = "gemini-nano")</code>），并且相同的代理现在可以离线运行。然后，你可以使用“InMemoryRunner”从协程驱动它，收集事件来更新你的 UI。</p>
+
+<h3>移动角度：在设备上使用 Gemini Nano</h3>
+
+<p>这就是 ADK 在手机上变得有趣的部分，而不仅仅是另一个代理 SDK。 Android 工件可以通过 ML Kit GenAI API 使用 Gemini Nano 在设备上运行推理，因此代理可以在没有网络访问的情况下运行并将数据保留在设备上。你甚至可以混合两者：云 Gemini 模型作为协调器，设备上模型处理隐私敏感的子任务。</p>
+
+<p>需要向读者提出的一个重要警告：切勿将 API 密钥嵌入到已发布的应用程序中。对于云模型，调用应通过你自己的后端或 Firebase AI Logic，以便密钥永远不会在客户端代码中公开。</p>
+
+<h3>ADK 并不孤单：Koog</h3>
+
+<p>将 Kotlin 中的运行时代理视为 Google 垄断是一种误导。 JetBrains 推出了直接竞争对手 <strong>Koog</strong>，这是一个使用 Kotlin 和 Java 编写的 AI 代理开源框架，涵盖相同的构建块：工具、工作流程、持久性、内存和可观察性。同样的问题，不同的哲学。 ADK 将你带入 Google 生态系统，如果你押注于设备上的 Gemini Nano，它会大放异彩，而 Koog 与模型无关，倾向于 Kotlin Multiplatform 和 OpenTelemetry 可观测性，并通过 LiteRT 在 Android 上运行本地模型。今天实际的决定因素是成熟度：Koog 已达到稳定的 1.0，并提供一年的 API 稳定性保证，而 ADK Android 神器仍处于早期阶段。对于生产 Kotlin 后端，这种保证是一个具体的论据。</p>
+
+<p>值得注意的是，JetBrains 也在 Axis 1 上发挥作用，拥有自己的 <a href="https://blog.jetbrains.com/ai/2026/04/skill-manager-and-skill-repository/">Skill Manager</a> 和技能存储库，因此两家供应商都在同时推进这两个方面。</p>
+
+<p>它为什么会发展，又将走向何方？</p>
+
+<p>要保留的一种心理模型：<strong>技能</strong>和<strong>CLI</strong>使你更快地构建应用程序； <strong>ADK</strong> 允许你将代理放入应用程序中。生命周期的不同末端，相同的代理优先浪潮。</p>
+
+<p>如果你的工作流程中代理较多或 CI 较多，请立即关注轴 1。如果你的路线图上有应用内或设备上的 AI 功能，请立即关注 Axis 2。否则，请同时关注两者。一个很好的第一个实验：在一个副项目上使用一项官方技能加上“chrisbanes/skills”运行“android init”，并单独连接 ADK Kotlin 快速入门以感受运行时方面。</p>
+
+<p>来源</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[使用Android Archive进行打包]]></title>
@@ -1081,339 +1154,6 @@ adb shell cmd app_function set-enabled \
 
 
 <p>结语</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android上的ZeroMQ：用发布/订阅模式连接Linux服务]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/05/23/android-using-zeromq/"/>
-    <updated>2026-05-23T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/05/23/android-using-zeromq</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「ZeroMQ on Android: Bridging a Linux Service with PUB SUB」，原文链接<a href="https://levelup.gitconnected.com/zeromq-on-android-bridging-a-linux-service-with-pub-sub-43ecf52209fa">https://levelup.gitconnected.com/zeromq-on-android-bridging-a-linux-service-with-pub-sub-43ecf52209fa</a>，由James Cullimore发布于2026年3月9日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*jKF0CYHnFn0_HY4YdXRiuQ.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在最近的一个项目中，我们遇到了一个看似简单却又充满挑战的需求。我们需要在一个基于 Linux 的小型服务和一个 Android 应用之间建立可靠、低延迟的通信。没有云组件，没有 HTTP API，也没有长期运行的后端基础设施。只有同一台机器上的两个进程需要高效且持续地进行通信。</p>
-
-<p>传统的 REST 或 gRPC 等方法对于我们面临的问题来说显得过于繁琐。我们不需要请求/响应语义，也不想承担序列化格式、连接管理或重试逻辑带来的额外开销。我们真正需要的是一个轻量级的消息传递层，能够在数据可用时推送消息，并允许 Android 应用在需要时发布消息。</p>
-
-<p>这时，ZeroMQ 就派上了用场。</p>
-
-<p>ZeroMQ 不是消息代理，也不是框架。它是一个底层消息库，提供 PUB/SUB、PUSH/PULL 和 REQ/REP 等构建模块，并允许你根据系统需求将它们组合起来。它完全在进程内运行，使用纯 TCP 协议，并且可以在包括 Linux 和 Android 在内的不同平台上良好运行。</p>
-
-<p>在本文中，我将详细介绍我们如何使用 ZeroMQ 通过简单的 PUB/SUB 设置将 Linux 服务连接到 Android 应用。我们将探讨我们实际交付的客户端实现、其结构设计的原因以及我们在此过程中遇到的权衡取舍。</p>
-
-<h2>架构概述和消息模型</h2>
-
-<p>在编写任何代码之前，我们花时间确定了 Linux 服务和 Android 应用应该如何通信。这两个进程将在同一设备上运行，并通过 localhost 进行通信。不需要加密、身份验证或消息持久化。最重要的是简单性、可预测性和低延迟。</p>
-
-<p>ZeroMQ 的消息传递模式使这一决策变得非常简单。</p>
-
-<p>我们为主要数据流选择了发布/订阅（PUB/SUB）模型。Linux 服务充当发布者，在新数据可用时广播消息。Android 应用充当订阅者，持续监听并响应更新。这种模式非常适合传输状态变化、传感器数据或状态更新，而无需轮询。</p>
-
-<p>同时，Android 应用需要一种向 Linux 服务发送消息的方式。我们没有引入第二个协议或不同的传输方式，而是使用了反向的第二个 ZeroMQ 套接字。在 Android 端，该套接字发布消息，Linux 服务订阅这些消息。虽然这不是严格的请求/响应机制，但它保持了通信模型的对称性，并且易于理解。</p>
-
-<p>从 Android 应用的角度来看，这会产生两个独立的连接：</p>
-
-<ul>
-<li><p>一个连接到 Linux 服务发布端口的订阅套接字，用于接收消息</p></li>
-<li><p>一个连接到 Linux 服务订阅端口的发布套接字，用于发送消息</p></li>
-</ul>
-
-
-<p>两个套接字都运行在本地主机上的 TCP 协议下，每个套接字都绑定到一个专用端口。这种分离方式保持了消息流的清晰性，避免了将不相关的功能耦合到同一个通道中。</p>
-
-<p>其余的实现工作都围绕着在 Android 上安全地管理这些套接字展开。这意味着要以一种不会泄漏资源或阻塞主线程的方式来处理线程、生命周期、连接状态和清理工作。然而，核心思想依然很简单：连接、订阅、接收消息，并在需要时发布响应。</p>
-
-<h2>Android 设置和 ZeroMQ 注意事项</h2>
-
-<p>在 Android 上使用 ZeroMQ 有一些值得提前注意的实际问题。虽然 ZeroMQ 本身是平台无关的，但 Android 的运行时、线程模型和生命周期限制会影响你将其集成到实际应用程序中的方式。</p>
-
-<p>在我们的案例中，我们依赖于 Java ZeroMQ 绑定，它公开了熟悉的 ZContext 和 ZMQ.Socket API。这些绑定在 Android 上运行良好，但它们不具备生命周期感知能力。一旦创建了上下文或套接字，你就需要显式地管理其生命周期。否则，很容易导致线程泄漏或本地资源的生命周期超过创建它们的组件。</p>
-
-<p>线程是第二个主要问题。ZeroMQ 套接字默认是阻塞的。在主线程上调用 recv 或 send 是不可行之选，即使是短暂的操作，如果处理不当，也可能导致卡顿或 ANR（应用程序无响应）。因此，所有套接字创建和消息处理都被推到后台线程进行。</p>
-
-<p>Kotlin 协程非常适合这里。它们允许我们将工作卸载到 Dispatchers.IO，保持代码的可读性，并在需要时将状态更改协调回主线程。稍后你将看到的客户端实现使用协程来管理连接建立、消息接收和清理，而无需将线程问题暴露给应用程序的其他部分。</p>
-
-<p>另一个重要的细节是，如果出现问题，ZeroMQ 不会自动重新连接套接字。如果连接断开或套接字发生故障，你需要决定如何应对。在我们的设置中，我们有意保持简单。客户端通过回调报告连接状态更改，并将重新连接策略留给调用者。这使得 ZeroMQ 客户端专注于通信，而不是策略。</p>
-
-<p>考虑到这些限制，我们将所有与 ZeroMQ 相关的逻辑封装在一个类中。该类拥有上下文、套接字和协程，并向应用程序的其他部分公开了一个简洁明了的 API。</p>
-
-<h2>将 ZeroMQ 添加到 Android 项目</h2>
-
-<p>要在 Android 上使用 ZeroMQ，我们依赖于<strong>JeroMQ</strong>，它是 ZeroMQ 的纯 Java 实现。这是一个重要的区别。JeroMQ 不需要原生二进制文件或 NDK 集成，这使得设置过程非常简单，并避免了 ABI 相关问题。</p>
-
-<p>在这个项目中，依赖项使用版本目录进行管理。ZeroMQ 依赖项只需定义一次，即可在所有模块中保持一致的引用。</p>
-
-<p>首先，我们声明版本：</p>
-
-<pre><code class="toml">jeromq = "0.6.0"
-</code></pre>
-
-<p>接下来，我们定义实际的库入口：</p>
-
-<pre><code class="toml">jeromq = { group = "org.zeromq", name = "jeromq", version.ref = "jeromq" }
-</code></pre>
-
-<p>完成这些步骤后，就可以像添加其他库一样，将依赖项添加到 Android 模块中：</p>
-
-<pre><code class="kotlin">implementation(libs.jeromq)
-</code></pre>
-
-<p>使用 JeroMQ 意味着 ZeroMQ 上下文和套接字完全运行在 JVM 中。这与 Android 的进程模型非常契合，并使资源管理更加可预测。这样做的缺点是无法使用 ZeroMQ 的原生实现，但对于本地低延迟通信而言，这种方法已经绰绰有余。</p>
-
-<p>添加依赖项后，无需其他配置。你可以创建 <code>ZContext</code>，打开套接字，并立即开始发送或接收消息。</p>
-
-<h2>ZeroMqClient 类及其职责</h2>
-
-<p>Android 端实现的核心是一个名为 <code>ZeroMqClient</code> 的类。它的作用是将所有 ZeroMQ 特有的细节隐藏在一个简洁、可预测的 API 之后，以便应用程序的其他部分可以安全地与之交互。</p>
-
-<p>该类负责：</p>
-
-<ul>
-<li><p>创建并拥有 ZeroMQ 上下文</p></li>
-<li><p>管理一个用于接收消息的 SUB 套接字</p></li>
-<li><p>管理一个用于发送消息的 PUB 套接字</p></li>
-<li><p>在主线程之外运行阻塞式套接字操作</p></li>
-<li><p>公开消息和连接状态的回调函数</p></li>
-<li><p>确定性地清理所有资源</p></li>
-</ul>
-
-
-<p>该类没有直接公开套接字，而是采用了一种配置驱动的方法。订阅和发布端口是可选的，这使得客户端可以根据使用场景以仅接收、仅发送或双向模式运行。</p>
-
-<p>以下是项目中完整的类定义：</p>
-
-<pre><code class="kotlin">import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import org.zeromq.SocketType
-import org.zeromq.ZContext
-import org.zeromq.ZMQ
-import org.zeromq.ZMQException
-import java.io.Closeable
-
-class ZeroMqClient(
-   private val subPort: Int? = null, // eg. 54054,
-   private val pubPort: Int? = null, // eg. 54055,
-   private val messageCallback: ((String) -&gt; Unit)? = null,
-   private val onConnectionChanged: ((Boolean) -&gt; Unit)? = null
-) : Closeable {
-   private var context: ZContext? = null
-   private var subSocket: ZMQ.Socket? = null
-   private var pubSocket: ZMQ.Socket? = null
-   private var isRunning = false
-   private var receiveJob: Job? = null
-</code></pre>
-
-<p>该类实现了 <code>Closeable</code> 接口，使其生命周期清晰可见。调用 <code>close</code> 函数时，预期所有后台工作都会停止，所有原生资源都会被释放。这一点在之后将客户端与 Android 组件生命周期绑定时尤为重要。</p>
-
-<p><code>subPort</code> 和 <code>pubPort</code> 参数可以为空。这使得客户端可以根据调用者的需求有条件地创建套接字，而无需引入多个实现或标志。</p>
-
-<p>回调函数也以传入的方式传递，而不是作为流或可观察对象公开。这是为了保持客户端轻量级且不依赖框架而特意做出的选择。应用程序中的更高层可以根据需要将这些回调函数适配到 StateFlow、LiveData 或任何其他抽象层。</p>
-
-<p>最后，ZeroMQ 上下文、套接字和协程作业等内部状态都是私有的。应用程序的其他部分无需了解消息是如何接收或发送的，只需知道消息正在接收或发送即可。</p>
-
-<h2>连接和初始化套接字</h2>
-
-<p><code>connect()</code> 函数用于将客户端从一个普通对象转换为一个活跃的 ZeroMQ 参与者。目标很简单：创建一个上下文，创建所需的套接字，将它们连接到本地主机，并在配置了 SUB 端口后开始接收消息。</p>
-
-<p>实现过程中受到以下几个限制：</p>
-
-<ul>
-<li><p>我们绝不阻塞主线程。</p></li>
-<li><p>我们希望 SUB 和 PUB 套接字是可选的。</p></li>
-<li><p>我们希望应用程序的其他部分能够知道连接是否成功。</p></li>
-</ul>
-
-
-<p>以下是 <code>connect()</code> 函数的实现：</p>
-
-<pre><code class="kotlin">fun connect() {
-  if (isRunning) return
-  CoroutineScope(Dispatchers.IO).launch {
-    try {
-      context = ZContext()
-      subPort?.let {
-        subSocket = context?.createSocket(SocketType.SUB)
-        subSocket?.subscribe("".toByteArray())
-        subSocket?.connect("tcp://127.0.0.1:$subPort")
-        Log.d(TAG, "Subbing to $subPort")
-        startReceiving()
-      }
-      pubPort?.let {
-        pubSocket = context?.createSocket(SocketType.PUB)
-        pubSocket?.connect("tcp://127.0.0.1:$pubPort")
-        Log.d(TAG, "Pubbing to $pubPort")
-      }
-      isRunning = subSocket != null || pubSocket != null
-      onConnectionChanged?.let {
-        CoroutineScope(Dispatchers.Main).launch { it.invoke(true) }
-      }
-    } catch (e: Exception) {
-      Log.e(TAG, "Error connecting to server: ${e.message}", e)
-      onConnectionChanged?.let {
-        CoroutineScope(Dispatchers.Main).launch { it.invoke(false) }
-      }
-      close()
-    } 
-  }  
-}
-</code></pre>
-
-<p>提前返回的 <code>if (isRunning) return</code> 可以防止重复连接。如果没有这个保护机制，很容易创建多个上下文和套接字，这很快就会导致混乱的行为和资源泄漏。</p>
-
-<p>所有设置都在 <code>Dispatchers.IO</code> 中启动。套接字创建和 <code>connect()</code> 调用都不是应该在主线程上运行的操作。这也让我们可以在以后添加重试或超时机制，而无需更改调用代码。</p>
-
-<p>当客户端配置了 <code>subPort</code> 时，它会创建一个 <code>SocketType.SUB</code> 套接字并立即进行订阅：</p>
-
-<pre><code class="kotlin">subSocket?.subscribe("".toByteArray())
-</code></pre>
-
-<p>使用空前缀订阅意味着：订阅所有内容。这保持了客户端的灵活性。如果你之后引入了基于主题的过滤，你可以将其替换为特定的前缀，并保持其余代码不变。</p>
-
-<p>两个套接字都连接到 <code>tcp://127.0.0.1:&lt;port&gt;</code>。这是最初需求的关键部分：Linux 服务和 Android 应用之间的本地通信。</p>
-
-<p>最后，连接回调函数在主调度器上被调用。即使回调函数只是切换状态，从后台线程更新 UI 状态也常常会导致一些难以察觉的问题，因此需要显式地处理。</p>
-
-<p>如果在设置过程中出现任何错误，代码会记录错误，报告连接失败，并调用 <code>close()</code> 以确保部分创建的资源不会残留。</p>
-
-<h2>使用协程接收消息</h2>
-
-<p>SUB 套接字连接成功后，下一个问题虽然简单却至关重要：如何在不阻塞应用程序的情况下持续监听，并将接收到的消息传递给代码的其他部分。</p>
-
-<p>这就是 <code>startReceiving()</code> 的作用。它会在后台调度器上运行一个循环，阻塞在 <code>recvStr()</code> 上，并将接收到的每条消息通过回调函数转发出去。</p>
-
-<p>以下是具体的实现：</p>
-
-<pre><code class="kotlin">private fun startReceiving() {
-  receiveJob = CoroutineScope(Dispatchers.IO).launch {
-    try {
-      while (isRunning &amp;&amp; subSocket != null) {
-        val message = subSocket?.recvStr()
-        if (message != null) {
-          Log.d(TAG, "Server received message: $message")
-          messageCallback?.invoke(message)
-        }
-      }
-    } catch (e: Exception) {
-      Log.e(TAG, "Error receiving message: ${e.message}", e)
-    }
-  }
-}
-</code></pre>
-
-<p><code>recvStr()</code> 是一个阻塞调用。在这里没问题，因为这个协程运行在 <code>Dispatchers.IO</code> 上。线程可以等待消息而不会影响 UI 的响应速度。</p>
-
-<p>循环条件会检查 <code>isRunning</code> 和 <code>subSocket != null</code>。这样，当客户端关闭或套接字意外被清理时，就可以快速、清晰地停止接收消息。结合 <code>close()</code> 中的 <code>receiveJob?.cancel()</code>，它提供了两层停止行为：基于状态的退出和协程取消。</p>
-
-<p>消息通过 <code>messageCallback</code> 向上传递。这使得该类专注于传输问题，而不是消息的解析方式。实际上，应用程序可以在回调中解析 JSON、更新 <code>StateFlow</code> 或将事件路由到应用程序的更深层。</p>
-
-<p>一个关于日志的小提示：日志标签显示“服务器已收到消息”，但这段代码位于客户端，接收来自服务器的消息。如果保持现状，它仍然可以工作，但在调试时可能会产生误导。是否要调整这一点取决于代码风格，但值得注意。</p>
-
-<p>错误会被捕获并记录，但协程不会自动重启。这符合客户端的轻量级设计。如有需要，可以在上一层实现连接策略（重试、重新连接、退避）。</p>
-
-<h2>使用 <code>sendMessage()</code> 发送消息</h2>
-
-<p>接收消息只是成功的一半。Android 应用还需要一种简单的方法将消息发布回 Linux 服务。</p>
-
-<p><code>sendMessage()</code> 函数特意设计得非常简洁。它会验证客户端是否正在运行以及 PUB 套接字是否存在，然后发送消息并记录结果。</p>
-
-<p>以下是实际使用的实现：</p>
-
-<pre><code class="kotlin">fun sendMessage(message: String) {
-  if (!isRunning || pubSocket == null) {
-    Log.e(TAG, "Cannot send message, client not connected")
-    return
-   }
-  try {
-    pubSocket?.send(message)
-    Log.d(TAG, "Sent message to server: $message")
-  } catch (e: ZMQException) {
-    Log.e(TAG, "Error sending message or receiving response: ${e.message}", e)
-  }
-}
-</code></pre>
-
-<p>首先，该方法预先处理了常见的误用情况。如果客户端创建时没有指定 <code>pubPort</code>，或者 <code>connect()</code> 尚未建立 PUB 套接字，我们会快速失败并记录清晰的日志消息。这避免了应用“以为”已发送消息但实际上并未发送任何消息的静默丢失。</p>
-
-<p>其次，该方法直接使用 <code>pubSocket?.send(message)</code>。在 PUB/SUB 架构中，不会立即收到确认或响应。send 调用要么在本地成功，要么抛出异常。实际的数据传输语义取决于对方是否已订阅并已连接。</p>
-
-<p>第三，错误被限定为 <code>ZMQException</code>。这样可以确保捕获的异常只针对套接字发送操作的实际预期结果，而不是吞掉所有异常。</p>
-
-<p>如果之后将其扩展为请求响应模式，API 的结构就会发生改变。在 Android 端，你可能需要将 PUB 替换为 REQ，并引入阻塞式接收或返回值的挂起函数。对于当前的设计而言，即发即弃的发送方式最为合适。</p>
-
-<h2>清理、生命周期以及安全地关闭客户端</h2>
-
-<p>在 Android 上，资源管理至关重要。ZeroMQ 上下文及其套接字可能在底层持有原生资源，除非你主动关闭，否则接收循环可能会在创建它的 UI 组件消失后继续运行很长时间。</p>
-
-<p>因此，此客户端实现了 <code>Closeable</code> 接口，并将所有清理逻辑放在 <code>close()</code> 函数中。</p>
-
-<p>以下是实际使用的实现：</p>
-
-<pre><code class="kotlin">override fun close() {
-       try {
-           isRunning = false
-           receiveJob?.cancel()
-           subSocket?.close()
-           pubSocket?.close()
-           context?.close()
-           Log.d(TAG, "Disconnected from server")
-           CoroutineScope(Dispatchers.Main).launch { onConnectionChanged?.invoke(false) }
-       } catch (e: Exception) {
-           Log.e(TAG, "Error disconnecting from server: ${e.message}", e)
-       } finally {
-           receiveJob = null
-           subSocket = null
-           pubSocket = null
-           context = null
-       }
-   }
-</code></pre>
-
-<h3>停止接收循环</h3>
-
-<p>第一行代码设置了 <code>isRunning = false</code>。这足以使 <code>startReceiving()</code> 中的 <code>while (isRunning &amp;&amp; subSocket != null)</code> 循环自然退出。</p>
-
-<p>然后，<code>receiveJob?.cancel()</code> 添加了第二个关闭机制。取消操作至关重要，因为 <code>recvStr()</code> 是阻塞的。实际上，取消操作和关闭套接字同时进行，有助于协程展开，而不是无限期地等待。</p>
-
-<h3>释放套接字和上下文</h3>
-
-<p>套接字会先关闭，然后是上下文：</p>
-
-<ul>
-<li><p><code>subSocket?.close()</code></p></li>
-<li><p><code>pubSocket?.close()</code></p></li>
-<li><p><code>context?.close()</code></p></li>
-</ul>
-
-
-<p>这样的顺序保证了清理过程的可预测性。在这样的系统中，需要避免在上下文已经消失后，套接字仍然处于活动状态。</p>
-
-<h3>在主线程上报告状态变更</h3>
-
-<p>断开连接后，客户端通过以下方式报告连接状态：</p>
-
-<pre><code class="kotlin">CoroutineScope(Dispatchers.Main).launch { onConnectionChanged?.invoke(false) }
-</code></pre>
-
-<p>这与 <code>connect()</code> 中使用的方法一致：状态更新会路由回主调度器，以便调用者可以安全地更新 UI 状态。</p>
-
-<p>最后，<code>finally</code> 代码块会将引用设置为 null。这与其说是为了确保正确性，不如说是为了明确地“关闭”对象，使其可以被垃圾回收，而不会留下残留引用。</p>
-
-<h2>结论</h2>
-
-<p>这种设置之所以有效，是因为它缩小了问题的范围，并将消息传递视为基础设施，而不是架构声明。我们有一个需要广播更新的 Linux 服务，以及一个需要快速响应并偶尔发布消息的 Android 应用。ZeroMQ 以极低的开销满足了我们的需求，无需引入代理、HTTP 层或更复杂的 RPC 栈。</p>
-
-<p><code>ZeroMqClient</code> 的设计非常精简。它拥有 ZeroMQ 上下文和套接字，所有阻塞操作都在 <code>Dispatchers.IO</code> 上完成，并且只暴露应用其他部分所需的功能：<code>connect()</code>、<code>sendMessage()</code>、消息回调和连接状态回调。生命周期通过 <code>Closeable</code> 显式控制，清理工作也集中进行，因此套接字不会在创建它们的组件之后仍然存在。</p>
-
-<p>如果你正在考虑类似的方案，需要记住的主要权衡是，发布/订阅模式并非请求/响应。你优化的是流式更新和松耦合，而不是确认和保证交付。这非常适合本地低延迟通信，但这仍然是一个需要你有意做出的设计选择。</p>
-
-<p>在我们的案例中，这个选择是值得的。我们在 Linux 服务和 Android 应用之间建立了一个简洁、轻量级的通道，并且我们保持了实现的简洁性，使其易于调试和维护。</p>
 ]]></content>
   </entry>
   
