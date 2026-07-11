@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-07-06T13:58:22+00:00</updated>
+  <updated>2026-07-11T13:32:25+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,241 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Kotlin DSL深度解析：从Gradle脚本到构建你自己的DSL]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/07/11/kotlin-dsl-deep-dive/"/>
+    <updated>2026-07-11T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/07/11/kotlin-dsl-deep-dive</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Kotlin DSL Deep Dive: From Gradle Scripts to Building Your Own」，原文链接<a href="https://proandroiddev.com/kotlin-dsl-deep-dive-from-gradle-scripts-to-building-your-own-8e08a1471467">https://proandroiddev.com/kotlin-dsl-deep-dive-from-gradle-scripts-to-building-your-own-8e08a1471467</a>，由Ioannis Anifantakis发布于2026年7月2日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Rkq3jXG4CFFJmVPtUcxpQw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>引言</p>
+
+<p><a href="https://github.com/ioannisa/HtmlBuilder-Kotlin-DSL-Demo"><strong>https://github.com/ioannisa/HtmlBuilder-Kotlin-DSL-Demo</strong></a></p>
+
+<blockquote><p><strong><em>重要提示：</em></strong></p>
+
+<p><strong><em>本文中的所有代码都位于上面链接的配套项目中。</em></strong></p>
+
+<p><em>这是一个 Android 应用，它会在实时 WebView 中渲染 DSL 的输出，并提供一个交互式标签页，你可以在其中添加产品并查看第 5 部分中的循环重新渲染。</em></p>
+
+<p><em>DSL 本身位于一个纯 Kotlin 文件中，没有任何 Android 导入，并且单元测试会逐字逐句地验证下面打印的每个输出。</em></p></blockquote>
+
+<p>第 1 部分：“DSL”的真正含义</p>
+
+<p>有些语言是内部 DSL 的良好宿主；有些很糟糕。 Kotlin 恰好是最好的之一，这并非偶然 - JetBrains 在设计这些功能时明确考虑了 DSL。他们一共有五个，第五个是承担重任的人。</p>
+
+<h3>功能 1：尾随 lambda 语法</h3>
+
+<p>在 Kotlin 中，如果函数的最后一个参数是 lambda，你可以将其移到括号之外：</p>
+
+<pre><code class="kotlin">// These are the same call:
+repeat(3, { 
+  println("Hi") 
+})
+repeat(3) { 
+  println("Hi") 
+}
+</code></pre>
+
+<p>如果 lambda 是 <em>only</em> 参数，则可以完全删除括号：</p>
+
+<pre><code>// These are the same call:
+run({ 
+  println("Hi") 
+})
+run { 
+  println("Hi") 
+}
+</code></pre>
+
+<p>暂停一下第二个例子。 <code>run { ... }</code> 看起来不像函数调用。它看起来像一个语言关键字。就像带有块的“if”或“while”。这种错觉是每个 Kotlin DSL 的基础。当你在 Gradle 文件中看到以下内容时：</p>
+
+<pre><code class="kotlin">dependencies {
+    // ...
+}
+</code></pre>
+
+<p>…你正在查看一个名为“dependency”的函数，该函数使用单个 lambda 参数进行调用。就是这样。 Gradle 语法之谜已经解开了一半。</p>
+
+<h3>特性2：扩展功能</h3>
+
+<p>Kotlin 允许你向你不拥有的类型添加函数：</p>
+
+<pre><code class="kotlin">fun String.shout() = this.uppercase() + "!!!"
+"hello".shout()  // "HELLO!!!"
+</code></pre>
+
+<p>“String”是标准库中的最终类，但我们只是给了它一个新方法。 （<em>在底层，它编译为一个以字符串作为参数的静态函数，因此实际上没有修改任何类。</em>）对于 DSL，这意味着你可以将域词汇附加到任何类型，包括来自你不控制的库的类型。</p>
+
+<p>如果你是一名 Android 开发人员，那么你已经拥有了一大堆这些库：<strong>KTX 库</strong>（<code>core-ktx</code>、<code>fragment-ktx</code> 等）本质上是此功能的产品化；将 Java Android API 封装在惯用的 Kotlin 中的扩展函数，因此你可以编写 <code>view.isVisible = true</code> 而不是 <code>view.visibility = View.VISIBLE</code>。</p>
+
+<p><strong>KTX 和 DSL 是同一个工具箱中的近亲，但有着不同的目标：</strong></p>
+
+<ul>
+<li>KTX 使<em>单次通话</em>变得更好；</li>
+<li>DSL 使用接收器（功能 5，即将推出）来构建<em>嵌套结构</em>。</li>
+</ul>
+
+
+<p>这条线在一些地方变得模糊——来自 core-ktx 的“sharedPreferences.edit { putString(&ldquo;key&rdquo;, value) }”是一个带有接收器的 lambda，一个单块迷你 DSL。</p>
+
+<p>为了消除混淆，本文旨在解决：<strong>KTX 与 </strong> <code>**.kts**</code> 无关 — 一个是库命名约定，另一个是 Kotlin 脚本的文件扩展名，我们将在第 3 部分中介绍。</p>
+
+<h3>特性 3：中缀函数</h3>
+
+<p>可以在没有点和括号的情况下调用标记为“infix”的函数：</p>
+
+<pre><code class="kotlin">infix fun Int.times(str: String) = str.repeat(this)
+3 times "Hey "  // "Hey Hey Hey "
+</code></pre>
+
+<p>你已经使用了它而没有注意到：<code>mapOf("a" to 1)</code> 中的<code>to</code> 不是语法。它是泛型类型的中缀扩展函数，返回“Pair”。</p>
+
+<p>测试框架非常依赖于此。 Kotest 的“结果应该是 42”是一个中缀函数调用。</p>
+
+<h3>特性 4：运算符重载</h3>
+
+<p>Kotlin 允许你通过带有“operator”关键字的函数定义“+”、“-”、“[]”、“()”和友元对你的类型的含义：</p>
+
+<pre><code class="kotlin">operator fun File.plus(other: File): File = File(this, other.name)
+</code></pre>
+
+<p>Gradle 的 Kotlin DSL 在 <code>sourceSets["main"]</code> 等地方使用了它。该括号访问是对类似集合的容器的“operator fun get(name: String)”调用。</p>
+
+<h3>特征 5：带有接收器的 Lambda 函数——大接收器</h3>
+
+<p><strong>这就是功能。如果你理解了本节，你就理解了 Kotlin DSL。如果需要，请阅读两遍；之后的一切都取决于它。</strong></p>
+
+<p>带有参数的普通 lambda 看起来像这样：</p>
+
+<pre><code class="kotlin">val greet: (StringBuilder) -&gt; Unit = { sb -&gt;
+    sb.append("Hello")
+    sb.append(", world")
+}
+</code></pre>
+
+<p>在 lambda 内部，我们必须通过参数 <code>sb</code> 来执行任何操作<em>（或者</em><code>_it_</code><em>如果你没有为参数指定名称）</em>。现在看看带有receiver<em>版本的</em>lambda：</p>
+
+<pre><code class="kotlin">val greet: StringBuilder.() -&gt; Unit = {
+    append("Hello")
+    append(", world")
+}
+</code></pre>
+
+<p>有两件事发生了变化：</p>
+
+<ul>
+<li>类型从 <code>(StringBuilder) -&gt; Unit</code> 变为 <code>StringBuilder.() -&gt; Unit</code>。将其理解为“StringBuilder 上的函数”而不是“采用 StringBuilder 的函数”。匿名扩展函数。</li>
+<li>在 lambda 内部，参数消失了。我们直接调用 <code>append(...)</code> 而不是 <code>sb.append(...)</code></li>
+</ul>
+
+
+<p>为什么这样有效？因为在带有接收器的 lambda 中，<code>**this**</code> <strong>是接收器对象</strong>。 lambda 的主体就像“StringBuilder”的方法一样执行。就像你不在类自己的方法中编写 this.append() 一样，你也不会在这里编写它。接收者是隐式的。</p>
+
+<blockquote><p><strong><em>现在将其与尾随 lambda 语法结合起来。</em></strong></p></blockquote>
+
+<p>这是一个微小但完整的 DSL 风格的函数。这是标准库的“buildString”使用的模式：</p>
+
+<pre><code class="kotlin">// DSL Definition
+fun buildString(builderAction: StringBuilder.() -&gt; Unit): String {
+    val sb = StringBuilder()
+    sb.builderAction()   // run the lambda with sb as the receiver
+    return sb.toString()
+}
+// Call site
+val message = buildString {
+    append("Hello")
+    append(", world")
+}
+</code></pre>
+
+<p><strong>查看调用站点。</strong> 一个块，你可以在其中“<em>just say</em>” <code>append(...)</code> 并且它可以工作。视线中没有物体，没有点，没有样板。感觉就像是一种用于字符串构建的特殊迷你语言。就是普通Kotlin的三行。</p>
+
+<blockquote><p><strong>这就是整个技巧。_</strong> <em>你见过的每一个 Kotlin DSL</em>（Gradle、Ktor 的路由、kotlinx.html）<em>是接受带有接收器的 lambda 表达式的函数的某种排列，因此每个</em> <code>_{ }_</code> <em>block 会改变</em> <code>_this_</code> <em>是什么，从而改变你可以“直接说”的函数。</em></p>
+
+<p><strong><em>Jetpack Compose 层位于顶部</em></strong><em>。一个编译器插件，重组，</em><code>_@Composable_</code><em>machinery。但它的作用域块，比如</em><code>_RowScope_</code><em>决定</em><code>_weight()_</code><em>合法，正是这个接收器技巧。</em></p></blockquote>
+
+<p><strong>并且你一直在没有 DSL 标签的情况下使用它：</strong></p>
+
+<p>标准库的作用域函数（“apply”、“run”、“with”）是建立在其他任何东西之上的微型 DSL。 <code>person.apply { name = "Ioannis" }</code> 只是一个以 <code>person</code> 作为接收者的 lambda。</p>
+
+<p>嵌套块只是嵌套接收器：</p>
+
+<pre><code class="kotlin">html {            // 'this' is an Html object  → you can call body()
+    body {        // 'this' is a Body object   → you can call p()
+        p {       // 'this' is a P object      → you can call text fns
+            +"Hello"
+        }
+    }
+}
+</code></pre>
+
+<blockquote><p><em>每一层嵌套都会交换一个新的隐式接收器，从而交换一个新的词汇表。</em> <strong><em>这就是 DSL 获得结构的方式：类型系统本身决定在哪里允许什么。</em></strong></p>
+
+<p><em>Write</em> <code>_body { body { } }_</code> <em>它不会编译。</em> <code>_Body_</code> <em>没有</em> <code>_body()_</code> <em>函数。你的“语言”有语法规则，由编译器强制执行，免费。</em></p></blockquote>
+
+<p>我们将在第 5 部分中准确构建这个 HTML DSL。但首先，让我们利用我们对带你来到这里的文件的新知识。</p>
+
+<p>第 3 部分：“.kts”文件实际上是什么</p>
+
+<p>构建 DSL 是一个设计练习，然后才是编码练习。食谱：</p>
+
+<ol>
+<li><strong>决定调用站点应该是什么样子。</strong> 首先编写梦想代码，就好像 DSL 已经存在一样。</li>
+<li><strong>识别接收者。</strong> 你梦想代码中的每个“{ }”块都需要一个类。该类的成员定义了块内的合法内容。</li>
+<li><strong>编写构建器函数</strong>来创建接收者对象，将用户的 lambda 应用于它，并向父级注册结果。</li>
+<li><strong>添加护栏</strong>（<code>@DslMarker</code> - 即将推出），以便编译器强制执行你的语法。</li>
+</ol>
+
+
+<p><strong>我们梦想的代码：我们承诺的 HTML 构建器：</strong></p>
+
+<pre><code class="kotlin">val page = html {
+    head {
+        title { +"My Page" }
+    }
+    body {
+        h1 { +"Welcome" }
+        p {
+            +"This entire page is "
+            b { +"plain Kotlin" }
+            +"."
+        }
+    }
+}
+println(page.render())
+</code></pre>
+
+<p>我们需要发明三件事：</p>
+
+<ul>
+<li>标签类别（接收者），</li>
+<li>构建器函数（<code>html</code>、<code>body</code>、<code>p</code>&hellip;）、</li>
+<li>以及那个奇怪的 <code>+"text"</code> 语法。</li>
+</ul>
+
+
+<p>我们开始吧。</p>
+
+<p>第 5 部分：逐步构建 HTML DSL</p>
+
+<p>现在你可以了，更难的问题是：你应该吗？</p>
+
+<p>**当你描述<em>结构化、嵌套、声明性</em>事物时，请使用 DSL：配置、UI 树、标记、路由表、测试场景、查询构建器。当代码的形状可以反映数据的形状时，当类型系统可以强制执行“什么去哪里”时，以及当许多人经常阅读或编写这些描述时，该模式就会发光。这正是 Gradle、Compose 和 Ktor 驻扎在这里的原因。</p>
+
+<p><strong>当</strong>逻辑是顺序的而不是结构化的（简单的函数更清晰）时，当只有一个调用站点时（抽象成本超过它节省的成本），或者当你纯粹受到美学的诱惑时，请跳过 DSL。 DSL 是一个带有意见的 API——每一个意见都是下一个开发人员必须学习的东西。问题“这个函数在哪里定义的？”以及“现在‘这个’是什么？”在深度嵌套的接收器范围内变得更难回答；好的 DSL 可以保持嵌套浅和词汇量小。与任何聪明的 API 一样，如果没有设计规范，DSL 的增长就会变成迷宫：调用站点的魔法意味着它下面的间接性。调试也继承了这种间接性——当 DSL 内部出现故障时，堆栈跟踪通常指向构建器内部而不是导致问题的调用站点，因此尽早投资于良好的错误消息。</p>
+
+<p>一个合理的经验法则是：DSL 必须由很多人多次编写，或者阅读的次数远多于其实现 — 否则会编写出无聊的代码。</p>
+
+<p>TL;DR——整篇文章六行</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[深入理解withContext和launch的真正区别]]></title>
@@ -1194,164 +1429,6 @@ synchronized(lock) {
 <li><a href="https://juejin.cn/post/7337517508151590947">专家之路上的Flow高级秘籍</a></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[用优雅的姿式应对Kotlin Flow的回压]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/07/03/handling-flow-backpress/"/>
-    <updated>2025-07-03T14:09:26+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/07/03/handling-flow-backpress</id>
-    <content type="html"><![CDATA[<p>本文译自「How to Manage Backpressure in Kotlin Flow: collect • buffer • conflate • collectLatest」，原文链接<a href="https://proandroiddev.com/how-to-manage-backpressure-in-kotlin-flow-collect-buffer-conflate-collectlatest-b8102284d968">https://proandroiddev.com/how-to-manage-backpressure-in-kotlin-flow-collect-buffer-conflate-collectlatest-b8102284d968</a>，由Shbazhenov发布于2025年6月13日。</p>
-
-<p><a href=""><img src="https://blog.mindorks.com/images/kotlin-flow-banner-image.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>你是否曾遇到过快速数据源发送的数据量超出应用处理能力的情况，导致应用速度变慢甚至崩溃？Kotlin Flow 内置了一些方法，可让你的生产者和消费者保持同步。本文将介绍：</p>
-
-<ol>
-<li>回压的含义</li>
-<li>Flow 默认的“互相等待”模式如何工作</li>
-<li>何时使用 buffer() 添加小型队列</li>
-<li>conflate() 如何跳过旧数据项</li>
-<li>为什么 collectLatest { } 会停止旧数据处理</li>
-<li>如何根据你的情况选择合适的选项</li>
-</ol>
-
-
-<h2>回压的含义</h2>
-
-<p>回压的作用是确保快速的数据发送方不会压垮较慢的接收方。如果没有回压，你可能会在内存中存储过多的数据，或者浪费时间处理过时的信息。</p>
-
-<p>回压可以帮助你：</p>
-
-<ul>
-<li>控制内存使用量</li>
-<li>避免不必要的工作</li>
-<li>使应用性能更可预测</li>
-</ul>
-
-
-<h2>1. 默认“互相等待”模式</h2>
-
-<p>默认情况下，当你执行以下操作时：</p>
-
-<pre><code class="Kotlin">flow {
-  repeat(3) {
-    emit(it)
-    println("Sent $it")
-    delay(100)            // 快速的发送者
-  }
-}
-.collect { value -&gt;
-  println("Handling $value")
-  delay(300)             // 慢速的处理者
-}
-</code></pre>
-
-<p>发送方 ( emit ) 将暂停，直到处理方 ( collect ) 处理完最后一个值。没有队列，每个值都是一次发送和处理一个。</p>
-
-<h2>2. 使用 buffer() 添加一个小队列</h2>
-
-<p>如果你希望发送方提前一点，请使用：</p>
-
-<pre><code class="Kotlin">flow { … }
-  .buffer(capacity = 2)
-  .collect { value -&gt;
-    // slow work here
-  }
-</code></pre>
-
-<ul>
-<li>现在，发送者最多可以将 2 个项目放入一个小队列中。</li>
-<li>一旦队列满了，它就会再次暂停。</li>
-</ul>
-
-
-<p>这给了你一个有限的队列：你仍然可以处理每个项目，但可以平滑速度峰值。</p>
-
-<h2>3. 使用 conflate() 跳过旧项目</h2>
-
-<p>当你只关心最新数据（例如更新进度条）时，你可以这样写：</p>
-
-<pre><code class="Kotlin">flow { … }
-  .conflate()
-  .collect { value -&gt;
-    println("Update to $value")
-    delay(300)
-  }
-</code></pre>
-
-<ul>
-<li>如果处理程序繁忙，则仅保留最新未处理的项目。</li>
-<li>较旧的项目将被丢弃，因此你无需处理过时的更新。</li>
-</ul>
-
-
-<p>注意：conflate() 不会停止当前工作；它只是在下次读取时跳过旧值。</p>
-
-<h2>4. 使用 collectLatest { } 停止旧工作</h2>
-
-<p>要进一步操作并在新数据进入时取消任何正在进行的工作，请使用：</p>
-
-<pre><code class="Kotlin">flow { … }
-  .collectLatest { value -&gt;
-    println("Start $value")
-    delay(300)    // 可能会被切断
-    println("Done $value")
-  }
-</code></pre>
-
-<ul>
-<li>每次发出（emit）新的数据时，处理前一个值的块都会立即被丢弃。</li>
-<li>只有当发送方的发送速度持续超出你的处理能力时，你才需要完成最后一个值的工作。</li>
-</ul>
-
-
-<p>这非常适合边输入边搜索的情况，在这种情况下，你希望在用户再次输入时立即丢弃旧请求。</p>
-
-<h2>5. 选择合适的工具</h2>
-
-<h3>普通 collect</h3>
-
-<ul>
-<li>功能：发送方和处理方互相等待，一个接一个</li>
-<li>何时选择它：你必须按顺序处理每个项目
-
-<h3>.buffer(n)</h3></li>
-<li>功能：大小为 n 的小队列；不丢弃任何项目</li>
-<li>何时选择它：你需要少量缓冲，但仍要处理所有项目
-
-<h3>.conflate()</h3></li>
-<li>功能：如果处理方繁忙，则仅保留最新项目</li>
-<li>何时选择它：你需要最新数据，但仍要完成当前工作
-
-<h3>collectLatest { }</h3></li>
-<li>功能：新数据到达后立即取消所有正在进行的工作</li>
-<li>何时选择它：只考虑最新的结果；立即放下其他一切
-
-<h2>6. 总结</h2></li>
-<li>回压机制可防止快速数据流过载慢速处理器。</li>
-<li>默认模式没有队列：安全但速度可能较慢。</li>
-<li>buffer() 函数添加了一个小队列：更灵活，不会丢包。</li>
-<li>conflate() 函数跳过旧值：始终保持最新，但让当前工作完成。</li>
-<li>collectLatest { } 函数停止旧工作：仅完成最新项。</li>
-</ul>
-
-
-<p>下次你的 Flow 感觉太快或太慢时，请问自己：</p>
-
-<ol>
-<li>我需要处理每个值吗？</li>
-<li>小型队列有帮助吗？</li>
-<li>只有最新数据才重要吗？</li>
-<li>当新数据到达时，我应该取消旧工作吗？</li>
-</ol>
-
-
-<p>选择最合适的简单选项，Kotlin Flow 会处理余下的事情。</p>
 ]]></content>
   </entry>
   
