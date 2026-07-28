@@ -1,0 +1,629 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>响应式的Android身份验证架构 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="本文教你将身份验证视为一个响应式的加密数据流，以实现自动刷新和响应式导航的 Android 身份验证架构。">
+  <meta name="keywords" content="Auth, Architecture, Android">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/07/27/android-auth-architecture">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">响应式的Android身份验证架构</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-07-27'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>27</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「An Android auth architecture with encrypted tokens, auto-refresh, and reactive navigation」，原文链接<a href="https://proandroiddev.com/an-android-auth-architecture-with-encrypted-tokens-auto-refresh-and-reactive-navigation-b5dcb7704f83">https://proandroiddev.com/an-android-auth-architecture-with-encrypted-tokens-auto-refresh-and-reactive-navigation-b5dcb7704f83</a>，由Shivam Agrawal发布于2026年6月27日。</p></blockquote>
+
+<h2><strong>简介</strong></h2>
+
+<!-- more -->
+
+
+<p>大多数“身份验证演示”会将令牌存储在 <code>SharedPreferences</code> 中，然后就万事大吉了。这种方法确实有效，但当你提出三个真实应用无法回避的问题时，问题就出现了：</p>
+
+<ul>
+<li><p>如果在请求进行过程中访问令牌过期会发生什么？</p></li>
+<li><p>冷启动时，存储的令牌已经失效会发生什么？</p></li>
+<li><p>如何让 UI 知道在即时登录成功后跳转到主屏幕——无论在应用内的任何位置，无需重启 <code>Activity</code>？</p></li>
+</ul>
+
+
+<p>在构建 <code>[android-secure-auth-architecture](https://github.com/shiwal25/android-secure-auth-architecture)</code> 的过程中，我不断遇到这些问题。这是一个参考实现，它将身份验证视为一个响应式的加密数据流，而不是一个需要检查的标志。它使用 <strong>Jetpack Compose、Ktor、Koin 和 Google Tink</strong> 构建，本文将详细介绍使其最终成型的四个关键部分。</p>
+
+<blockquote><p>_⚠️ 这只是一个架构展示，并非最终产品。后端是一个独立的服务，并未包含在内——<code>_BASE_URL_</code> 指向一个占位符。重点在于展示各个组件如何协同工作，而不是提供一个即插即用的库。</p></blockquote>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*xfLMxsmyltDV0bg2CBht5Q.png" alt="captionless image" /></p>
+
+<h3><strong>依赖项</strong></h3>
+
+<p>gradle/libs.versions.toml</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='toml'><span class='line'><span class="p">[</span><span class="n">versions</span><span class="p">]</span>
+</span><span class='line'><span class="n">koin</span> <span class="o">=</span> <span class="s">&quot;4.2.2&quot;</span>
+</span><span class='line'><span class="p">[</span><span class="n">libraries</span><span class="p">]</span>
+</span><span class='line'><span class="n">koin-android</span> <span class="o">=</span> <span class="p">{</span> <span class="n">module</span> <span class="o">=</span> <span class="s">&quot;io.insert-koin:koin-android&quot;</span><span class="p">,</span> <span class="n">version</span><span class="p">.</span><span class="n">ref</span> <span class="o">=</span> <span class="s">&quot;koin&quot;</span> <span class="p">}</span>
+</span><span class='line'><span class="n">koin-androidx-compose</span> <span class="o">=</span> <span class="p">{</span> <span class="n">module</span> <span class="o">=</span> <span class="s">&quot;io.insert-koin:koin-androidx-compose&quot;</span><span class="p">,</span> <span class="n">version</span><span class="p">.</span><span class="n">ref</span> <span class="o">=</span> <span class="s">&quot;koin&quot;</span> <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>gradle/build.gradle.kts</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">//koin</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">libs</span><span class="p">.</span><span class="n">koin</span><span class="p">.</span><span class="n">androidx</span><span class="p">.</span><span class="n">compose</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">libs</span><span class="p">.</span><span class="n">koin</span><span class="p">.</span><span class="n">android</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">platform</span><span class="p">(</span><span class="s">&quot;io.insert-koin:koin-bom:4.2.1&quot;</span><span class="p">))</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.insert-koin:koin-android&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.insert-koin:koin-androidx-compose&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.insert-koin:koin-androidx-compose-navigation&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">//Jetpack Navigation</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.navigation3:navigation3-ui:1.1.2&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.lifecycle:lifecycle-viewmodel-navigation3:2.10.0&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">//LifeCyle and ViewModel</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.lifecycle:lifecycle-runtime-compose:2.10.0&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">//Ktor</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">platform</span><span class="p">(</span><span class="s">&quot;io.ktor:ktor-bom:3.5.0&quot;</span><span class="p">))</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.ktor:ktor-client-android&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.ktor:ktor-client-content-negotiation&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.ktor:ktor-serialization-kotlinx-json&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.ktor:ktor-client-logging&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;io.ktor:ktor-client-auth&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">//Serialization</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">//DataStore</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.security:security-crypto:1.1.0&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.datastore:datastore:1.3.0-alpha09&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;androidx.datastore:datastore-tink:1.3.0-alpha07&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;com.google.crypto.tink:tink-android:1.21.0&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="c1">//Coroutines</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="s">&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0&quot;</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3><strong>Manifest</strong></h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;uses-permission</span> <span class="na">android:name=</span><span class="s">&quot;android.permission.INTERNET&quot;</span> <span class="nt">/&gt;</span>
+</span><span class='line'>    <span class="nt">&lt;application</span>
+</span><span class='line'>        <span class="na">android:name=</span><span class="s">&quot;.SecureAuthApplication&quot;</span>
+</span><span class='line'>    <span class="err">...</span><span class="nt">&gt;</span>
+</span><span class='line'>  <span class="nt">&lt;/application&gt;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3><strong>加密令牌存储</strong></h3>
+
+<p><code>TokenDataStore</code> 使用来自 <code>androidx.datastore.tink</code> 的 <code>AeadSerializer</code> 封装了 <code>DataStore&lt;AuthPreferences&gt;</code>。实际的加密密钥是由 <code>AndroidKeysetManager</code> 管理的 AES-256-GCM 密钥集，它被一个始终存储在 Android Keystore 中的密钥封装，而 Android Keystore 在大多数设备上都由硬件支持。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">keysetHandle</span> <span class="p">=</span> <span class="n">AndroidKeysetManager</span><span class="p">.</span><span class="n">Builder</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">withSharedPref</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">KEYSET_NAME</span><span class="p">,</span> <span class="n">KEYSET_PREFS_NAME</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">withKeyTemplate</span><span class="p">(</span><span class="n">KeyTemplate</span><span class="p">.</span><span class="n">createFrom</span><span class="p">(</span><span class="n">PredefinedAeadParameters</span><span class="p">.</span><span class="n">AES256_GCM</span><span class="p">))</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">withMasterKeyUri</span><span class="p">(</span><span class="n">MASTER_KEY_URI</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">build</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">.</span><span class="n">keysetHandle</span>
+</span><span class='line'><span class="k">val</span> <span class="py">aead</span><span class="p">:</span> <span class="n">Aead</span> <span class="p">=</span> <span class="n">keysetHandle</span><span class="p">.</span><span class="n">getPrimitive</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">RegistryConfiguration</span><span class="p">.</span><span class="k">get</span><span class="p">(),</span> <span class="n">Aead</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'><span class="k">val</span> <span class="py">encryptedSerializer</span> <span class="p">=</span> <span class="n">AeadSerializer</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">aead</span> <span class="p">=</span> <span class="n">aead</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">wrappedSerializer</span> <span class="p">=</span> <span class="n">AuthPreferencesSerializer</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">associatedData</span> <span class="p">=</span> <span class="n">DATASTORE_FILE_NAME</span><span class="p">.</span><span class="n">encodeToByteArray</span><span class="p">()</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>EncryptedSharedPreferences</code> 目前处于维护模式，并且基于已弃用的旧版 Security Crypto 库。<strong>DataStore + Tink</strong> 可以提供相同的由 Keystore 支持的 AEAD 加密，但它基于 DataStore 的 <code>Flow</code> 协程原生 API，这在应用程序的其他部分能够正确地将身份验证状态视为流而不是轮询值时至关重要。</p>
+
+<h3><strong>响应式身份验证状态</strong></h3>
+
+<p><code>AuthViewModel</code> 直接收集 <code>TokenDataStore.accessToken</code>：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">observeTokenForAuthState</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">tokenDataStore</span><span class="p">.</span><span class="n">accessToken</span><span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">token</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">isFirstEmission</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">isFirstEmission</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'>                <span class="n">handleStartup</span><span class="p">(</span><span class="n">token</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">_authState</span><span class="p">.</span><span class="n">value</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">token</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">AuthState</span><span class="p">.</span><span class="n">Authenticated</span>
+</span><span class='line'>                <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">AuthState</span><span class="p">.</span><span class="n">Unauthenticated</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>登录、注销和静默刷新会话都会产生完全相同的效果：同一个 <code>Flow</code> 会发出新的数据，并由同一个收集器捕获。登录后没有单独的“现在导航到主页”调用，将令牌保存到 <code>DataStore</code> 本身就是导航触发器。这是我最满意的设计部分：它将三个不同的“用户身份验证状态更改”代码路径合并为一个。</p>
+
+<p>第一次发出的数据通过 <code>handleStartup()</code> 进行特殊处理，因为冷启动有一个其他情况没有的问题：存储的令牌当前是否仍然有效？<code>JwtUtils</code> 在本地解码 JWT 有效负载（无需网络调用），并使用 30 秒的缓冲区检查 <code>exp</code> 声明，这样请求就不会与即将过期的令牌发生竞争。如果已过期，ViewModel 会触发刷新，然后再决定用户应该进入主屏幕还是登录屏幕。</p>
+
+<p>根导航只是监视 <code>authState</code> 并切换图——它对“已登录”的含义没有任何自己的看法：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">when</span> <span class="p">(</span><span class="n">state</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">AuthState</span><span class="p">.</span><span class="n">Loading</span>         <span class="p">-&gt;</span> <span class="n">SplashContent</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">AuthState</span><span class="p">.</span><span class="n">Unauthenticated</span> <span class="p">-&gt;</span> <span class="n">AuthNavGraph</span><span class="p">(</span><span class="n">authViewModel</span> <span class="p">=</span> <span class="n">authViewModel</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">AuthState</span><span class="p">.</span><span class="n">Authenticated</span>   <span class="p">-&gt;</span> <span class="n">MainNavGraph</span><span class="p">(</span><span class="n">authViewModel</span> <span class="p">=</span> <span class="n">authViewModel</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3><strong>自动刷新，通过 Ktor 的</strong> <code>**Auth**</code> <strong>插件</strong></h3>
+
+<p>任何 JWT 应用程序中有趣的失败模式：经过身份验证的请求发出，访问令牌刚刚过期，并且请求需要在刷新后透明地重试，而每个存储库方法都不知道刷新逻辑。 Ktor 的 <code>Auth { bearer { ... } }</code> 提供者正是处理这个问题的。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">install</span><span class="p">(</span><span class="n">Auth</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">bearer</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">loadTokens</span> <span class="p">{</span>
+</span><span class='line'>            <span class="c1">// read current access + refresh token from DataStore</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">refreshTokens</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">response</span> <span class="p">=</span> <span class="n">plainClient</span><span class="p">.</span><span class="n">post</span><span class="p">(</span><span class="n">refreshUrl</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">setBody</span><span class="p">(</span><span class="n">RefreshRequest</span><span class="p">(</span><span class="n">refreshToken</span> <span class="p">=</span> <span class="n">storedRefreshToken</span><span class="p">))</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="k">when</span> <span class="p">(</span><span class="n">response</span><span class="p">.</span><span class="n">status</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">HttpStatusCode</span><span class="p">.</span><span class="n">OK</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="c1">// save new tokens, return them as BearerTokens</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>                <span class="n">HttpStatusCode</span><span class="p">.</span><span class="n">Unauthorized</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">HttpStatusCode</span><span class="p">.</span><span class="n">Forbidden</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="n">tokenDataStore</span><span class="p">.</span><span class="n">clearSession</span><span class="p">()</span>
+</span><span class='line'>                    <span class="k">null</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>                <span class="k">else</span> <span class="p">-&gt;</span> <span class="k">null</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">sendWithoutRequest</span> <span class="p">{</span> <span class="n">request</span> <span class="p">-&gt;</span> <span class="n">request</span><span class="p">.</span><span class="n">url</span><span class="p">.</span><span class="n">host</span> <span class="p">==</span> <span class="n">BACKEND_HOST</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里有三个深思熟虑的决定：</p>
+
+<ul>
+<li><strong>刷新调用使用普通客户端，而不是经过身份验证的客户端。</strong>否则刷新请求本身可能会触发另一次刷新尝试并递归。</li>
+<li><strong>刷新期间的 5xx 不会清除会话。</strong> 只有“401”/“403”（服务器明确拒绝刷新令牌）才会使用户注销。暂时性服务器错误只会导致该请求失败；用户保持登录状态并可以重试。</li>
+<li><strong>前面提到的 30 秒过期缓冲区</strong> 是防止整个事情争分夺秒的原因。</li>
+</ul>
+
+
+<h3><strong>两个 HTTP 客户端</strong></h3>
+
+<p><code>HttpClientFactory</code> 构建一个 <code>plain</code> 客户端（无身份验证 — 用于 <code>/login</code>、<code>/register</code>、<code>/refresh</code>）和一个单独的 <code>auth</code> 客户端（安装了 <code>Auth</code> 插件 — 用于需要登录用户的所有内容）。 Koin 通过命名限定符将这些连接到正确的存储库中，因此从结构上来说，不知道如何刷新令牌的客户端意外调用经过身份验证的端点是不可能的。 DI 图本身强制执行边界，而不是依赖代码审查来捕获它。</p>
+
+<h3><strong>我做出的权衡，并将大规模重新考虑</strong></h3>
+
+<ul>
+<li><strong>Koin over Hilt</strong> ：在单独的早期开发过程中迭代速度更快；没有代码生成，并且运行时 DI 图很容易根据该项目的规模进行推理。随着模块数量的增加，Hilt 的编译时安全性变得更有价值。</li>
+<li><strong>Navigation 3 优于经典的 Navigation Compose</strong> ：较新，并且 API 表面仍在解决中，但基于“NavKey”的返回堆栈比字符串路由更自然地适合类型安全、状态驱动的图形切换。</li>
+<li><strong>Tink + DataStore over</strong> <code>**EncryptedSharedPreferences**</code>：主要是关于不构建维护模式 API。</li>
+<li><code>**Result&lt;Unit&gt;**</code> <strong>跨越存储库边界抛出异常</strong>：每个 <code>AuthRepository</code> 方法都会返回一个 <code>Result&lt;Unit&gt;</code> 以及人类可读的失败消息，因此 ViewModel 永远不需要捕获任何内容，它只是在成功或失败时进行模式匹配。</li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-07-27'><span class='date'><span class='date-month'>Jul</span> <span class='date-day'>27</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/architecture/'>architecture</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/07/21/that-is-mvi/" title="Previous Post: MVI模式的完整历史、误解和现代Android范式">&laquo; MVI模式的完整历史、误解和现代Android范式</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
