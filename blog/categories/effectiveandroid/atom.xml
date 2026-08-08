@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-07-27T14:05:35+00:00</updated>
+  <updated>2026-08-08T10:16:45+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,88 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[探究Android Views、Flutter和Compose如何渲染你的UI]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/08/08/android-views-flutter-and-compose/"/>
+    <updated>2026-08-08T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/08/08/android-views-flutter-and-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「One Tap, Three Machines: How Android Views, Flutter, and Compose Actually Render Your UI」，原文链接<a href="https://medium.com/proandroiddev/one-tap-three-machines-how-android-views-flutter-and-compose-actually-render-your-ui-ad31c30ec279">https://medium.com/proandroiddev/one-tap-three-machines-how-android-views-flutter-and-compose-actually-render-your-ui-ad31c30ec279</a>，由Angelina Andronova发布于2026年7月16日。</p></blockquote>
+
+<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*CKDWImmVOIeeIeHhmP3_mg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>_Android Native vs Flutter vs KMP — 本系列文章对比了三种移动技术栈如何以不同的方式解决相同的问题。第一部分：渲染，围绕每个 UI 框架都必须回答的一个问题展开。</p>
+
+<p>UI 框架经常被比作功能目录：这个框架支持热重载，那个框架提供原生外观和体验，第三个框架共享代码。记住这些功能并不等同于理解它们。更深层次的问题始终如一：<strong>当状态改变时，框架敢于重做多少屏幕内容？</strong></p>
+
+<p>每一种渲染架构都是对这个问题的答案，而每个答案都会在某些方面提升效率，并在其他方面付出代价。UI 渲染没有免费的午餐。</p>
+
+<p>本系列文章是我对三大移动技术栈的个人研究——追踪它们的渲染管线，并比较它们对相同问题的解答。追踪一次状态变更在机制中的运行过程，这三种架构可以归结为三种策略：</p>
+
+<p><strong>Android Views：</strong> <em>原地修改树状结构。</em></p>
+
+<p><strong>Flutter：</strong> <em>快速重建所有内容，进行差异比较和修补。</em></p>
+
+<p><strong>Compose：</strong> <em>订阅状态，仅重新运行读取器。</em></p>
+
+<p>本文将追踪一次状态变更——点击后计数器递增——在每种架构中的运行过程：哪些工作被执行，哪些工作被跳过，以及每种设计旨在避免哪些故障。</p>
+
+<p>第一部分 — Android Views：可变树状结构</p>
+
+<p>Flutter 考虑了同步问题，并做出了一个激进的赌注：如果保持可变树真实是困难的部分，那就停止变异。每次从状态描述整个 UI，并让框架找到差异。</p>
+
+<p>这个赌注之所以有效，是因为 Flutter 将 UI 分成了<strong>三棵树</strong>：</p>
+
+<p><strong>小部件</strong> — 不可变的描述，自由重建。从设计上来说，创建它们的成本很低；它们是配置，而不是机械。
+<strong>元素</strong> - 幸存下来的持久中间层会重建并保持状态。
+<strong>渲染对象</strong> — 用于测量、布局和绘制的昂贵机器。</p>
+
+<p>相同的计数器，Flutter 风格：</p>
+
+<pre><code class="dart">class _CounterScreenState extends State&lt;CounterScreen&gt; {
+  int count = 0;
+  @override
+  Widget build(BuildContext context) {
+    return Column(children: [      Text('$count'),
+      ElevatedButton(
+        onPressed: () =&gt; setState(() =&gt; count++),
+        child: const Text('+'),
+      ),
+    ]);
+  }
+}
+</code></pre>
+
+<p>没有任何视图可以进入。 “build”方法是同步：状态和 UI 不能不一致，因为 UI 每次都会根据状态重新计算。</p>
+
+<p>我们的水龙头调用“setState”。该框架为该小部件的子树重新运行“build()”，生成一个新的小部件树 - 包括新的“Text(&lsquo;1&rsquo;)”描述。然后元素树将新的与旧的进行比较：相同的运行时类型和键 → 保留现有的 Element 和 RenderObject，只需更新它们即可；不同→拆除并重新创建。这个一位数的变化结束了它的旅程，作为对现有渲染对象的一个​​小更新，就像视图世界一样——但没有人必须记住去做它。</p>
+
+<p><strong>这可以防止失败：</strong> 状态 UI 漂移。每次更改时屏幕都会从模型中重新派生，因此它<em>不能</em>默默地不同意它。而且，由于 Flutter 通过自己的引擎（现在是 Impeller，历史上是 Skia）自行绘制每个像素，因此同一棵树在 Android、iOS 及其他平台上的渲染效果相同——通过完全拥有画布解决了碎片问题。</p>
+
+<p><strong>它的回报是：</strong>乐观的工作。无论是否发生任何变化，重建都会发生，并且差异的存在是为了在事后扔掉废物。在预算紧张的情况下——长清单、低端设备——无纪律的重建会变得很糟糕，而社区的工具箱（“const”构造函数、细粒度的“BlocBuilder”放置、键）在很大程度上是一个手动缩小爆炸半径的工具箱。拥有每一个像素还意味着重新实现操作系统免费提供的功能：文本编辑、滚动物理、可访问性桥梁——永远追逐平台的发展。</p>
+
+<p>第三部分 — 撰写：订阅和补丁</p>
+
+<p>跟踪所有三台机器的一位数变化，并将策略压缩到一个表中：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OfpE1jYDAzQYv5f_xEDhEg.png" alt="无字幕图像" /></p>
+
+<p>当突变很少且层次结构稳定时，<strong>Views</strong> 是正确的机器 - 并且它仍然是每个 Android 开发人员必须了解的世界，因为这两种新机器都可以解决其弱点。</p>
+
+<p>当产品要求像素相同的多平台 UI，并且你的团队对重建范围有严格要求时，<strong>Flutter</strong> 是合适的机器。</p>
+
+<p>当你希望框架承担真实性负担和效率负担，并且愿意学习它悄悄要求你遵守的稳定性合同时，<strong>Compose</strong> 是合适的机器。</p>
+
+<p>生产中的大多数渲染性能问题不是由于选择了错误的机器而引起的，而是由于使用一台机器而精神上却生活在另一台机器中——像 Flutter 中的 Views 开发人员一样变异，或者像 Compose 中的 Flutter 开发人员一样提升状态读取。这些框架的不同之处并不在于它们可以做什么，而在于它们默默地期望你做什么。</p>
+
+<p>本系列的下一篇：<a href="https://medium.com/@angelinaballerina/one-badge-third-deliveries-how-android-flutter-and-compose-keep-your-ui-in-sync-2ef1e84a6038">状态管理</a> —“LiveData”、“Bloc”、“StateFlow”，以及为什么每个生态系统从不同方向汇聚到流上。</p>
+
+<p><em>本系列是作者对 Android Native、KMP 和 Flutter 的个人研究——它们在幕后如何工作、它们的不同之处以及它们各自对你的期望。</em></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[MVI模式的完整历史、误解和现代Android范式]]></title>
@@ -992,170 +1074,6 @@ adb shell cmd app_function set-enabled \
 <p>**这一切背后有一个值得大声说出来的战略要点。我们花了十年时间优化深度链接、应用索引和搜索，以吸引用户进入应用。 AppFunctions 进行了相反的优化——应用程序永远不会打开，屏幕永远不会亮起，代理和业务逻辑之间没有 UI。这改变了“最低权限”在实践中的样子：用户界面不再询问“你确定吗？”代表你。</p>
 
 <p>结束语</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[车载系统中的可扩展UI：从UI嵌入到系统窗口编排]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android/"/>
-    <updated>2026-06-06T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Scalable UI in Android Automotive OS: From UI Embedding to System Window Orchestration」，原文链接<a href="https://medium.com/proandroiddev/scalable-ui-in-aaos-from-ui-embedding-to-system-window-orchestration-dae03b335eee">https://medium.com/proandroiddev/scalable-ui-in-aaos-from-ui-embedding-to-system-window-orchestration-dae03b335eee</a>，由Daniel Georg发布于20264月23日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*9Xu2aaQTu6ecj9iVhBWkfA.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在 Android Automotive 的原生主屏幕上，所有内容都位于同一个 Activity 中。CarLauncher 会同时绘制地图、媒体卡片和状态小部件。切换应用意味着需要替换整个 UI。 <a href="https://source.android.com/docs/automotive/scalableui">Scalable UI</a> 框架采用了不同的方法：每个面板都拥有自己独立的 Activity，所有 Activity 并排运行，完全由 RRO 覆盖层中的声明式 XML 驱动。</p>
-
-<p>这源于另一个问题。在我之前的<a href="https://medium.com/@passenger6/remote-compose-in-android-automotive-os-embed-rich-ui-without-the-usual-pain-90b857d59d8c">文章</a>中，我探讨了远程组合 (Remote Compose) 作为在 AAOS 中跨应用边界共享 UI 的新方法。它提供了一种解决方案，避免了通常的跨进程开销和耦合。然而，来自 <a href="https://www.linkedin.com/in/ralph-thomas"><strong>Ralph Thomas</strong></a> <strong>(Google)</strong> 的一条<a href="https://www.linkedin.com/feed/update/urn:li:activity:7444753922419761152?commentUrn=urn%3Ali%3Acomment%3A%28activity%3A7444753922419761152%2C7444763415753060352%29&amp;dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287444763415753060352%2Curn%3Ali%3Aactivity%3A7444753922419761152%29">评论</a> 改变了我的想法更广阔的视野引领我深入探索，彻底改变了我的视角。</p>
-
-<p>我一直密切关注着可扩展用户界面（Scalable UI），但那条评论让我停下来思考另一个问题。远程配置（Remote Compose）解决了嵌入外部用户界面而不耦合的问题，但如果<strong>嵌入本身</strong>是一种错误的抽象方式呢？</p>
-
-<blockquote><p>我们不再需要在启动器内部构建组件，因为在可扩展用户界面时代，应用程序<strong>本身就是组件</strong>。</p></blockquote>
-
-<p>OEM厂商现在不再使用启动器来协调嵌入的内容，而是通过RRO覆盖层在系统UI配置中声明布局。传统意义上的“主页”Activity已不复存在，因为系统本身就成为了启动器。每个应用程序都拥有自己的域，独立运行，无需共享界面、进程间通信（IPC）或嵌入。</p>
-
-<p>在这种模式下，包括面板大小、Activity位置和过渡效果在内的所有配置都用XML声明。从 OEM 的角度来看，这意味着无需编写任何 Java/Kotlin 代码，只需 XML 覆盖层，即可实现复杂的窗口行为。</p>
-
-<p>可扩展 UI 背后的完整愿景有一个名称，至少我个人认为它应该叫：<strong>状态驱动的驾驶舱编排</strong>。整个驾驶舱，包括应用程序、系统栏、HUN 和覆盖层，都变成了一个协调一致的界面，在同步状态之间切换，而不是一系列独立管理的窗口。系统 UI 在 XML 中声明状态；窗口管理器驱动每个应用程序、每个系统栏和每个覆盖层同步完成状态转换。</p>
-
-<p>本文的其余部分将介绍这在实践中是如何实现的：构建模块、完全使用 XML 构建的概念验证仪表板，以及这种架构带来的权衡取舍。我还会介绍我开发的用于创建可扩展 UI 的可视化编辑器，无需手动编写 XML。</p>
-
-<p>沉重的遗留问题：启动器为何沦为噩梦</p>
-
-<p>当标准的嵌入技术无法满足复杂的多窗口布局需求时，下一步就是深入系统内部，例如，创建一个 CustomDisplayAreaProvider 并直接编排 TaskDisplayArea (TDA)。</p>
-
-<p>我花了几个月的时间来实现这种自定义的底层窗口逻辑。要实际放置和动画化这些显示区域，你必须在系统 UI 中注册一个自定义的 TaskDisplayAreaOrganizer。设置布局需要一个 WindowContainerTransaction 来告知 WindowManager 新的 TDA 边界，而动画则必须逐帧驱动，直接使用 SurfaceControl.Transaction 控制显示区域的边界。</p>
-
-<p>每个过渡效果都是一个手动编写的 ValueAnimator，它插值边界并将其应用到 SurfaceFlinger，可以直接应用，也可以通过扩展 WMShell 过渡框架并添加自定义的 TransitionHandler 来实现。到了这一步，你不再是在编写应用程序代码，而是在编写窗口管理管道的一部分。</p>
-
-<p>WinScope 成了你在这个过程中唯一的帮手。它是唯一能让你直观地理解窗口管理器中层、焦点转移和可见性标志等复杂机制的工具。没有它，你基本上就是在盲目摸索。</p>
-
-<p>经过数月的工程开发，你终于运行了兼容性测试套件 (CTS)。几个小时后，结果显示你的信息娱乐系统不再符合 CTS 标准。这标志着一场痛苦的 bug 修复马拉松的开始，每次修复 Google 强制测试中的 bug 都会破坏你自定义的 UX。自定义窗口管理逻辑是一把双刃剑，很容易导致认证进度被打乱。</p>
-
-<p>在分析了旧方法失效的原因之后，下一个问题显而易见：是否存在更好的抽象方案？</p>
-
-<p>编排 vs. 嵌入</p>
-
-<p>具体来说，可扩展 UI 由四个基本元素构成，全部以 XML 声明。“驾驶舱状态”是唯一的数据源——你不再需要编写动画代码，而是定义：</p>
-
-<ul>
-<li><strong>任务面板：</strong> 矩形容器，映射到专用的根任务栈，用于承载完整的应用程序（导航或媒体），作为功能性组件。</li>
-</ul>
-
-
-<pre><code class="xml">&lt;TaskPanel id="navigation" defaultVariant="@id/base" displayId="0"&gt;
-&lt;/TaskPanel&gt;
-</code></pre>
-
-<ul>
-<li><strong>装饰面板：</strong> 用于注入自定义 UI/覆盖层的通用容器，可与应用程序任务完美同步。</li>
-</ul>
-
-
-<pre><code class="xml">&lt;DecorPanel id="navigation_decor" defaultVariant="@id/base" displayId="0"&gt;
-&lt;/DecorPanel&gt;
-</code></pre>
-
-<ul>
-<li><strong>变体：</strong> 管理精确边界、Z 轴顺序和可见性的视觉状态。</li>
-</ul>
-
-
-<pre><code class="xml">&lt;Variant id="@+id/base"&gt; &lt;/Variant&gt;
-</code></pre>
-
-<p><strong>过渡：</strong> 由窗口管理器协调的同步动画，用于根据系统事件在变体之间切换面板。 OEM 厂商还可以定义自己的自定义事件，并通过面板控制器触发这些事件，或将其绑定到意图，从而将系统扩展到内置的 <em>System</em>* 事件之外。</p>
-
-<pre><code class="xml">&lt;Transitions&gt;
-        &lt;Transition onEvent="_System_TaskOpenEvent" fromVariant="@id/base" toVariant="@id/open" duration="300" interpolator="@android:anim/accelerate_decelerate_interpolator"/&gt;
- &lt;/Transitions&gt;
-</code></pre>
-
-<p>以下是一个导航面板的实际示例，该面板定义了两种视觉状态（变体）和一个动画过渡：</p>
-
-<pre><code class="xml">&lt;TaskPanel id="navigation" defaultVariant="@id/base" displayId="0"&gt;
-    &lt;Variant id="@+id/base"&gt;
-        &lt;Layer layer="2"/&gt;
-        &lt;Visibility isVisible="true"/&gt;
-        &lt;Alpha alpha="1.0"/&gt;
-        &lt;Bounds left="0dp" top="0dp" right="850dp" bottom="1600dp"/&gt;
-    &lt;/Variant&gt;
-    &lt;Variant id="@+id/open"&gt;
-        &lt;Layer layer="2"/&gt;
-        &lt;Visibility isVisible="true"/&gt;
-        &lt;Alpha alpha="1.0"/&gt;
-        &lt;Bounds left="0dp" top="0dp" right="2480dp" bottom="1600dp"/&gt;
-    &lt;/Variant&gt;
-    &lt;Transitions&gt;
-        &lt;Transition onEvent="_System_TaskOpenEvent" fromVariant="@id/base" toVariant="@id/open" duration="300" interpolator="@android:anim/accelerate_decelerate_interpolator"/&gt;
-    &lt;/Transitions&gt;
-&lt;/TaskPanel&gt;
-</code></pre>
-
-<p><strong>重要性：</strong> 请注意，计算 850dp 和 2480dp 之间的插值无需任何代码。<strong>可扩展 UI</strong> 框架基于此 XML 协调过渡，确保窗口管理器能够与容器完美同步地缩放底层任务。</p>
-
-<p>这就是 <strong>状态驱动的驾驶舱编排</strong> 的实际应用——系统栏和 HUN 也是可扩展 UI 面板，由与应用程序相同的驾驶舱状态驱动。</p>
-
-<p>这直接解决了之前提到的 CTS 问题。由于该框架已预先通过认证并符合 CTS 标准，因此消除了后期测试失败的主要风险。过去需要数月时间进行自定义窗口逻辑设置以及可能出现的认证回归才能实现的功能，现在<strong>开箱即用</strong>。</p>
-
-<p>以上是核心组件。我不会在这里重写手册——如果你需要完整的技术规格、库源代码，或者想了解它是如何集成到 SystemUI 中的，请查看以下资源：</p>
-
-<ul>
-<li><p><strong>官方文档：</strong> <a href="https://source.android.com/docs/automotive/scalableui">带有可扩展 UI 的高级窗口</a></p></li>
-<li><p><strong>库：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/systemlibs/car-scalable-ui-lib/">car-scalable-ui-lib</a>（声明式核心）</p></li>
-<li><p><strong>窗口 Shell：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/services/Car/libs/car-wm-shell-lib/">car-wm-shell-lib</a>（核心任务布局和内边距管理）</p></li>
-<li><p><strong>SystemUI 集成：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/SystemUI/src/com/android/systemui/car/wm/scalableui/">可缩放 UI 窗口管理器逻辑</a></p></li>
-<li><p><strong>代码实验室和示例：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/References/scalable-ui/">参考实现</a></p></li>
-</ul>
-
-
-<p>验证：无需 Kotlin/Java 代码即可实现的 3 列仪表盘</p>
-
-<p>一旦所有三个部分都就位，框架就会启动，发现你的面板清单，并开始进行编排。你现在可以构建自己的自定义多窗口信息娱乐系统了。</p>
-
-<p>完整的 PoC，包括配置叠加层和所有面板 XML，也可以在我的 <a href="https://github.com/passenger6/MultiPanelLandscapeRRO">GitHub</a> 上找到。</p>
-
-<p>超越 XML：面板控制器</p>
-
-<p>任何设计都存在权衡取舍，而我想在此深入探讨的，是你在决定使用 Scalable UI 构建生产级控制面板之前，务必了解的一点。我通过自身实验观察到的行为，可能是出于有意设计，也可能是集中式编排带来的副作用。我并不总是能确定究竟是哪一种，而且在实践中，区分二者远不如理解它如何影响实际部署重要。</p>
-
-<p><strong>系统 UI 成为单点故障</strong></p>
-
-<p>这种架构转变从根本上改变了控制面板的故障模型。由于系统本身充当了编排器的角色，系统 UI 实际上成为了整个 UI 的单点故障。</p>
-
-<p>在 Scalable UI 出现之前，启动器崩溃可能会导致主屏幕消失，但状态栏、HVAC 控制、通知和自定义 OEM SystemUIOverlayWindows 仍会继续独立运行。相反，系统 UI 崩溃会导致这些系统界面瘫痪，而启动器和托管应用程序则“幸存”下来。</p>
-
-<p>使用 Scalable UI 时，当系统 UI 崩溃时，框架会移除系统 UI 作为 TaskOrganizer 创建的所有面板根任务。这些面板内的所有应用，无论是导航、电话、设置还是其他正在运行的活动，都会连同其任务一起被终止。系统 UI 会快速重启，但由于 Scalable UI 不会保存上次的活动状态，它会从初始配置而非用户离开时的状态重建面板布局。只有配置为自动启动的应用才会自动重启，并且只会重启到其默认的面板位置。所有应用状态、导航历史记录和滚动位置都会丢失。例如，在我的概念验证中，无论用户重新排列了哪些面板或哪个面板处于活动状态，系统始终以三列布局重启。</p>
-
-<p>对于 OEM 厂商而言，这改变了系统 UI 故障时的风险。添加到系统 UI 的每个新功能、每个面板控制器、过渡动画器和事件分发器都会扩大单次崩溃的影响范围。面板控制器中一个未被捕获的异常，不仅会导致驾驶员失去状态栏，还会导致整个信息娱乐体验的丧失。</p>
-
-<p><strong>我希望添加的功能</strong></p>
-
-<p>除了上述权衡之外，我还希望 Scalable UI 能添加以下几个功能：</p>
-
-<ul>
-<li><p><strong>Scalable UI 配置的热重载。</strong> 目前，应用更新后的面板布局需要终止 System UI，这会销毁所有面板根任务并终止其中托管的所有应用程序。如果有一种热重载机制，能够在不重启 System UI 的情况下获取新的面板定义、变体更改和过渡更新，那么 OEM 厂商就可以在运行时更新其仪表板布局，而无需终止正在运行的会话。</p></li>
-<li><p><strong>面板动画的缩放和矩阵变换。</strong> <em>SurfaceControl.Transaction</em> 已经在框架级别支持 <em>setScale()</em> 和 <em>setMatrix()</em>，但 Scalable UI 框架并未公开这些方法。如果在 Variant 模型和 Panel 接口中添加缩放和旋转属性，就可以在过渡期间实现缩放、缩小和倾斜效果，而无需自定义窗口管理技巧。</p></li>
-<li><p><strong>每个属性的动画时序。</strong> 目前，所有动画属性共享同一个持续时间和插值器。框架的自定义动画路径虽然存在，但由于缺少属性设置器、缺少起始值/目标值注入以及任务预定位，因此对边界动画不起作用。修复这三个问题将允许每个属性的交错过渡，例如边界滑动时带有过冲，而透明度则线性淡入淡出。</p></li>
-<li><p><strong>同步应用过渡。</strong> Scalable UI 在内部处理所有任务过渡，没有为外部动画参与者提供钩子。集成 <em>RemoteAnimationAdapter</em> 支持将允许 OEM 启动器在应用进入面板时为其表面添加动画，例如将应用从控件图标变形到目标面板，而不是简单地出现在目标边界处。</p></li>
-<li><p><strong>重启后的状态持久性。</strong> Scalable UI 不会持久化上次活动的变体状态。每次重启后，每个面板都会恢复到其默认配置。为每个面板保留当前变体可以让信息娱乐系统从用户离开的地方继续运行。</p></li>
-</ul>
-
-
-<p><strong>隆重推出 Scalable UI 编辑器</strong></p>
-
-<p>在过去几个月使用 Scalable UI 的过程中，我发现一个问题反复出现：手动编写 Scalable UI 意味着需要在多个 XML 文件中处理变体、Z 图层和过渡效果，而且只有在刷入 RRO 并重启 SystemUI 后才能看到效果。工作流程并没有跟上框架的强大功能。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*TBlXAvuYmRG4dFD2E-02iA.png" alt="captionless image" /></p>
-
-<p>因此，我开始开发自己的工具——一个 Scalable UI 可视化编辑器，可以直接从布局设计导出 RRO 项目。你可以将 TaskPanel 放置在画布上，切换变体来定义状态，并调整过渡效果，所有操作均可实时预览。只需单击一下，即可将 RRO 直接写入正在运行的模拟器或设备。输出为标准的 RRO 文件，与手动工作流程完全兼容。</p>
-
-<p>如果你的团队正在基于 Scalable UI 进行开发，欢迎与我们联系。</p>
-
-<p><strong>结语</strong></p>
 ]]></content>
   </entry>
   

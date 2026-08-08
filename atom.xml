@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-07-27T14:05:35+00:00</updated>
+  <updated>2026-08-08T10:16:45+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,101 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[探究Android Views、Flutter和Compose如何渲染你的UI]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/08/08/android-views-flutter-and-compose/"/>
+    <updated>2026-08-08T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/08/08/android-views-flutter-and-compose</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「One Tap, Three Machines: How Android Views, Flutter, and Compose Actually Render Your UI」，原文链接<a href="https://medium.com/proandroiddev/one-tap-three-machines-how-android-views-flutter-and-compose-actually-render-your-ui-ad31c30ec279">https://medium.com/proandroiddev/one-tap-three-machines-how-android-views-flutter-and-compose-actually-render-your-ui-ad31c30ec279</a>，由Angelina Andronova发布于2026年7月16日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/08/08/android-views-flutter-and-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*CKDWImmVOIeeIeHhmP3_mg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>_Android Native vs Flutter vs KMP — 本系列文章对比了三种移动技术栈如何以不同的方式解决相同的问题。第一部分：渲染，围绕每个 UI 框架都必须回答的一个问题展开。</p>
+
+<p>UI 框架经常被比作功能目录：这个框架支持热重载，那个框架提供原生外观和体验，第三个框架共享代码。记住这些功能并不等同于理解它们。更深层次的问题始终如一：<strong>当状态改变时，框架敢于重做多少屏幕内容？</strong></p>
+
+<p>每一种渲染架构都是对这个问题的答案，而每个答案都会在某些方面提升效率，并在其他方面付出代价。UI 渲染没有免费的午餐。</p>
+
+<p>本系列文章是我对三大移动技术栈的个人研究——追踪它们的渲染管线，并比较它们对相同问题的解答。追踪一次状态变更在机制中的运行过程，这三种架构可以归结为三种策略：</p>
+
+<p><strong>Android Views：</strong> <em>原地修改树状结构。</em></p>
+
+<p><strong>Flutter：</strong> <em>快速重建所有内容，进行差异比较和修补。</em></p>
+
+<p><strong>Compose：</strong> <em>订阅状态，仅重新运行读取器。</em></p>
+
+<p>本文将追踪一次状态变更——点击后计数器递增——在每种架构中的运行过程：哪些工作被执行，哪些工作被跳过，以及每种设计旨在避免哪些故障。</p>
+
+<p>第一部分 — Android Views：可变树状结构</p>
+
+<p>Flutter 考虑了同步问题，并做出了一个激进的赌注：如果保持可变树真实是困难的部分，那就停止变异。每次从状态描述整个 UI，并让框架找到差异。</p>
+
+<p>这个赌注之所以有效，是因为 Flutter 将 UI 分成了<strong>三棵树</strong>：</p>
+
+<p><strong>小部件</strong> — 不可变的描述，自由重建。从设计上来说，创建它们的成本很低；它们是配置，而不是机械。
+<strong>元素</strong> - 幸存下来的持久中间层会重建并保持状态。
+<strong>渲染对象</strong> — 用于测量、布局和绘制的昂贵机器。</p>
+
+<p>相同的计数器，Flutter 风格：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='dart'><span class='line'><span class="kd">class</span> <span class="nc">_CounterScreenState</span> <span class="kd">extends</span> <span class="n">State</span><span class="o">&lt;</span><span class="n">CounterScreen</span><span class="o">&gt;</span> <span class="p">{</span>
+</span><span class='line'>  <span class="kt">int</span> <span class="n">count</span> <span class="o">=</span> <span class="m">0</span><span class="p">;</span>
+</span><span class='line'>  <span class="err">@</span><span class="n">override</span>
+</span><span class='line'>  <span class="n">Widget</span> <span class="n">build</span><span class="p">(</span><span class="n">BuildContext</span> <span class="n">context</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">Column</span><span class="p">(</span><span class="nl">children:</span> <span class="p">[</span>      <span class="n">Text</span><span class="p">(</span><span class="s1">&#39;</span><span class="si">$</span><span class="n">count</span><span class="s1">&#39;</span><span class="p">),</span>
+</span><span class='line'>      <span class="n">ElevatedButton</span><span class="p">(</span>
+</span><span class='line'>        <span class="nl">onPressed:</span> <span class="p">()</span> <span class="o">=&gt;</span> <span class="n">setState</span><span class="p">(()</span> <span class="o">=&gt;</span> <span class="n">count</span><span class="o">++</span><span class="p">),</span>
+</span><span class='line'>        <span class="nl">child:</span> <span class="kd">const</span> <span class="n">Text</span><span class="p">(</span><span class="s1">&#39;+&#39;</span><span class="p">),</span>
+</span><span class='line'>      <span class="p">),</span>
+</span><span class='line'>    <span class="p">]);</span>
+</span><span class='line'>  <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>没有任何视图可以进入。 “build”方法是同步：状态和 UI 不能不一致，因为 UI 每次都会根据状态重新计算。</p>
+
+<p>我们的水龙头调用“setState”。该框架为该小部件的子树重新运行“build()”，生成一个新的小部件树 - 包括新的“Text(&lsquo;1&rsquo;)”描述。然后元素树将新的与旧的进行比较：相同的运行时类型和键 → 保留现有的 Element 和 RenderObject，只需更新它们即可；不同→拆除并重新创建。这个一位数的变化结束了它的旅程，作为对现有渲染对象的一个​​小更新，就像视图世界一样——但没有人必须记住去做它。</p>
+
+<p><strong>这可以防止失败：</strong> 状态 UI 漂移。每次更改时屏幕都会从模型中重新派生，因此它<em>不能</em>默默地不同意它。而且，由于 Flutter 通过自己的引擎（现在是 Impeller，历史上是 Skia）自行绘制每个像素，因此同一棵树在 Android、iOS 及其他平台上的渲染效果相同——通过完全拥有画布解决了碎片问题。</p>
+
+<p><strong>它的回报是：</strong>乐观的工作。无论是否发生任何变化，重建都会发生，并且差异的存在是为了在事后扔掉废物。在预算紧张的情况下——长清单、低端设备——无纪律的重建会变得很糟糕，而社区的工具箱（“const”构造函数、细粒度的“BlocBuilder”放置、键）在很大程度上是一个手动缩小爆炸半径的工具箱。拥有每一个像素还意味着重新实现操作系统免费提供的功能：文本编辑、滚动物理、可访问性桥梁——永远追逐平台的发展。</p>
+
+<p>第三部分 — 撰写：订阅和补丁</p>
+
+<p>跟踪所有三台机器的一位数变化，并将策略压缩到一个表中：</p>
+
+<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OfpE1jYDAzQYv5f_xEDhEg.png" alt="无字幕图像" /></p>
+
+<p>当突变很少且层次结构稳定时，<strong>Views</strong> 是正确的机器 - 并且它仍然是每个 Android 开发人员必须了解的世界，因为这两种新机器都可以解决其弱点。</p>
+
+<p>当产品要求像素相同的多平台 UI，并且你的团队对重建范围有严格要求时，<strong>Flutter</strong> 是合适的机器。</p>
+
+<p>当你希望框架承担真实性负担和效率负担，并且愿意学习它悄悄要求你遵守的稳定性合同时，<strong>Compose</strong> 是合适的机器。</p>
+
+<p>生产中的大多数渲染性能问题不是由于选择了错误的机器而引起的，而是由于使用一台机器而精神上却生活在另一台机器中——像 Flutter 中的 Views 开发人员一样变异，或者像 Compose 中的 Flutter 开发人员一样提升状态读取。这些框架的不同之处并不在于它们可以做什么，而在于它们默默地期望你做什么。</p>
+
+<p>本系列的下一篇：<a href="https://medium.com/@angelinaballerina/one-badge-third-deliveries-how-android-flutter-and-compose-keep-your-ui-in-sync-2ef1e84a6038">状态管理</a> —“LiveData”、“Bloc”、“StateFlow”，以及为什么每个生态系统从不同方向汇聚到流上。</p>
+
+<p><em>本系列是作者对 Android Native、KMP 和 Flutter 的个人研究——它们在幕后如何工作、它们的不同之处以及它们各自对你的期望。</em></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[响应式的Android身份验证架构]]></title>
@@ -7532,836 +7627,6 @@
 <p>现在去发布一些正确缩放的图像吧。</p>
 
 <p>如果这篇文章让你免于陷入 StackOverflow 的无底洞，那真是太感谢了。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[深度解析Compose中的BoxWithConstraints]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose/"/>
-    <updated>2026-03-26T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「BoxWithConstraints in Jetpack Compose: The Complete Deep Dive」，原文链接<a href="https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7">https://proandroiddev.com/boxwithconstraints-in-jetpack-compose-the-complete-deep-dive-28b8f6516ef7</a>，由Sehaj kahlon发布于2026年2月15日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/03/26/boxwithconstraints-in-jetpack-compose/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*MLsQmsCtobQD5EhMRB1jFg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>关键点：这个组件存在的意义是什么？</h2>
-
-<p>让我来描述一下你可能经历过的场景。</p>
-
-<p>你正在构建一个卡片组件。在手机上，它应该垂直堆叠：图片在上，文字在下。在平板电脑上，它应该水平拉伸：图片在左，文字在右。需求很简单，对吧？</p>
-
-<p>你的第一反应可能是：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">AdaptiveCard</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">configuration</span> <span class="p">=</span> <span class="n">LocalConfiguration</span><span class="p">.</span><span class="n">current</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">configuration</span><span class="p">.</span><span class="n">screenWidthDp</span> <span class="p">&lt;</span> <span class="m">600</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">VerticalCard</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">HorizontalCard</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>这种方法存在缺陷。</strong> 原因如下。</p>
-
-<p><code>LocalConfiguration.current.screenWidthDp</code> 返回的是屏幕宽度。但如果你的卡片位于 <code>NavigationRail</code> 中呢？或者在分屏应用中？或者在 ChromeOS 的可调整大小的窗口中呢？你的卡片并不关心屏幕大小——它只关心<strong>实际分配给它的空间</strong>。</p>
-
-<p>这就是 <code>BoxWithConstraints</code> 解决的根本问题：<strong>它告诉你父元素分配给你的空间大小，而不是屏幕大小。</strong></p>
-
-<p>可以这样理解：</p>
-
-<ul>
-<li><p><code>LocalConfiguration</code> = &ldquo;房间有多大？&rdquo;</p></li>
-<li><p><code>BoxWithConstraints</code> = &ldquo;你把我放在的盒子有多大？&rdquo;</p></li>
-</ul>
-
-
-<p>相框并不关心你的房子有多大。它只关心分配给它的墙面空间。</p>
-
-<h2>内部机制：底层工作原理</h2>
-
-<h3>Compose 执行模型（以及 BoxWithConstraints 为何会破坏它）</h3>
-
-<p>要理解 <code>BoxWithConstraints</code>，你必须首先了解 Compose 的执行流程：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>Composition → Measurement → Layout → Drawing
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>在标准的 Compose 代码中：</p>
-
-<ol>
-<li><p><strong>组合</strong>：你声明 UI 树（<code>Column { Text("Hello") }</code>）</p></li>
-<li><p><strong>测量</strong>：系统测量每个节点</p></li>
-<li><p><strong>布局</strong>：节点定位</p></li>
-<li><p><strong>绘制</strong>：像素绘制到屏幕上</p></li>
-</ol>
-
-
-<p>这个顺序<strong>不可更改</strong>。组合先于测量。你无法测量尚未组合的内容。</p>
-
-<p>但是 <code>BoxWithConstraints</code> 提出了一个不寻常的问题：<em>“我能否在决定组合内容之前就知道我的约束条件？”</em></p>
-
-<p>这就像要求厨师在烹饪之前先摆盘一样。</p>
-
-<h2>引入子组合：Compose 的延迟组合机制</h2>
-
-<p><code>BoxWithConstraints</code> 通过<strong>子组合</strong>实现此功能，该机制将组合操作延迟到测量时执行。</p>
-
-<p>以下是实际实现（为清晰起见已简化）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">BoxWithConstraints</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">contentAlignment</span><span class="p">:</span> <span class="n">Alignment</span> <span class="p">=</span> <span class="n">Alignment</span><span class="p">.</span><span class="n">TopStart</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">propagateMinConstraints</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">false</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">content</span><span class="p">:</span> <span class="n">@Composable</span> <span class="n">BoxWithConstraintsScope</span><span class="p">.()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">SubcomposeLayout</span><span class="p">(</span><span class="n">modifier</span><span class="p">)</span> <span class="p">{</span> <span class="n">constraints</span> <span class="p">-&gt;</span>
-</span><span class='line'>        <span class="c1">// We&#39;re NOW in the measurement phase, but we can compose!</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">scope</span> <span class="p">=</span> <span class="n">BoxWithConstraintsScopeImpl</span><span class="p">(</span><span class="k">this</span><span class="p">,</span> <span class="n">constraints</span><span class="p">)</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">measurables</span> <span class="p">=</span> <span class="n">subcompose</span><span class="p">(</span><span class="n">Unit</span><span class="p">)</span> <span class="p">{</span> <span class="n">scope</span><span class="p">.</span><span class="n">content</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="c1">// Standard Box measurement logic follows...</span>
-</span><span class='line'>        <span class="n">with</span><span class="p">(</span><span class="n">measurePolicy</span><span class="p">)</span> <span class="p">{</span> <span class="n">measure</span><span class="p">(</span><span class="n">measurables</span><span class="p">,</span> <span class="n">constraints</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>关键在于 <code>SubcomposeLayout</code>。它反转了正常的流程：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>Normal:
-</span><span class='line'>
-</span><span class='line'>Composition → Measurement
-</span><span class='line'>Subcompose: Measurement → Composition <span class="o">(</span>of children<span class="o">)</span> → Measurement <span class="o">(</span>of children<span class="o">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>当父元素请求 <code>BoxWithConstraints</code> 测量自身时，它会：</p>
-
-<ol>
-<li><p>接收约束条件</p></li>
-<li><p><strong>创建一个包含这些约束条件的作用域</strong></p></li>
-<li><p><strong>此时组合子元素</strong></p></li>
-<li><p>测量已组合的子元素</p></li>
-<li><p>返回测量结果</p></li>
-</ol>
-
-
-<p>这就是为什么 <code>BoxWithConstraints</code> 被认为是“重量级”的原因。它在测量阶段执行组合操作。</p>
-
-<h2>三层节点架构</h2>
-
-<p>在内部，<code>SubcomposeLayout</code> 将子节点分为三个不同的区域进行管理：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="o">[</span>Active nodes<span class="o">]</span> <span class="o">[</span>Reusable nodes<span class="o">]</span> <span class="o">[</span>Precomposed nodes<span class="o">]</span>
-</span><span class='line'>     ↑
-</span><span class='line'>
-</span><span class='line'>     ↑
-</span><span class='line'>
-</span><span class='line'>     ↑
-</span><span class='line'>  Currently
-</span><span class='line'>
-</span><span class='line'>  <span class="s2">&quot;Recycled&quot;</span>
-</span><span class='line'>
-</span><span class='line'>  Pre-composed
-</span><span class='line'>    used
-</span><span class='line'>
-</span><span class='line'>    <span class="k">for</span> reuse
-</span><span class='line'>
-</span><span class='line'>    ahead of <span class="nb">time</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>活动节点</strong>：当前测量阶段正在使用的插槽。</p>
-
-<p><strong>可重用节点</strong>：之前已激活但仍保留的插槽（类似于 RecyclerView 的可回收视图）。当需要类似内容时，这些插槽会被“重新激活”，而不是创建新的组合。</p>
-
-<p><strong>预组合节点</strong>：通过 <code>precompose()</code> 预先组合的插槽（惰性列表内部使用此功能在即将显示的项目可见之前进行组合）。</p>
-
-<p>正是这种架构使得 <code>LazyColumn</code> 能够流畅滚动。它不会创建和销毁组合，而是在这三个节点池之间进行节点的轮换。</p>
-
-<h2>约束：深入解析</h2>
-
-<p>在 <code>BoxWithConstraintsScope</code> 中，你可以访问四个属性：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">interface</span> <span class="n">BoxWithConstraintsScope</span> <span class="p">:</span> <span class="n">BoxScope</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">minWidth</span><span class="p">:</span> <span class="n">Dp</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">maxWidth</span><span class="p">:</span> <span class="n">Dp</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">minHeight</span><span class="p">:</span> <span class="n">Dp</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">maxHeight</span><span class="p">:</span> <span class="n">Dp</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">constraints</span><span class="p">:</span> <span class="n">Constraints</span>  <span class="c1">// The raw pixel-based constraints</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>这些属性的实际含义是什么？</h3>
-
-<p><code>**maxWidth**</code> <strong>/</strong> <code>**maxHeight**</code>：父元素提供的最大空间。如果为 <code>Dp.Infinity</code>，则表示父元素允许你“随意使用”（通常来自可滚动容器）。</p>
-
-<p><code>**minWidth**</code> <strong>/</strong> <code>**minHeight**</code>：父元素期望的最小高度。通常为 <code>0.dp</code>，但如果父元素使用了 <code>propagateMinConstraints = true</code> 或你使用的是基于 <code>weight</code> 的布局，则该值可能不为零。</p>
-
-<h2>屏幕尺寸陷阱</h2>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// These are NOT the screen dimensions!</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">width</span> <span class="p">=</span> <span class="n">maxWidth</span>   <span class="c1">// Space YOUR PARENT gave YOU</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">height</span> <span class="p">=</span> <span class="n">maxHeight</span> <span class="c1">// Space YOUR PARENT gave YOU</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>考虑以下层级结构：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Row</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">NavigationRail</span> <span class="p">{</span> <span class="cm">/* 80.dp wide */</span> <span class="p">}</span>
-</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">1f</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// maxWidth here is (screenWidth - 80.dp)</span>
-</span><span class='line'>        <span class="c1">// NOT screenWidth!</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这正是 <code>BoxWithConstraints</code> 存在的意义。<code>LocalConfiguration</code> 会给出错误的答案。</p>
-
-<h2>有界约束与无界约束</h2>
-
-<p>这里有一个容易引起混淆的细微差别：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">item</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">// maxHeight == Dp.Infinity !!!</span>
-</span><span class='line'>            <span class="c1">// Because LazyColumn offers infinite vertical space</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>maxHeight</code> 的值为 <code>Infinity</code>，因为 <code>LazyColumn</code> 不会限制其子元素的高度，它会滚动。这是预期行为，但这意味着你不能在可滚动容器内使用 <code>maxHeight</code> 来进行响应式布局。</p>
-
-<h2>实际用例</h2>
-
-<h3>用例 1：响应式卡片布局</h3>
-
-<p>此卡片会根据<strong>可用空间</strong>（而非屏幕方向）在垂直和水平布局之间切换：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-<span class='line-number'>31</span>
-<span class='line-number'>32</span>
-<span class='line-number'>33</span>
-<span class='line-number'>34</span>
-<span class='line-number'>35</span>
-<span class='line-number'>36</span>
-<span class='line-number'>37</span>
-<span class='line-number'>38</span>
-<span class='line-number'>39</span>
-<span class='line-number'>40</span>
-<span class='line-number'>41</span>
-<span class='line-number'>42</span>
-<span class='line-number'>43</span>
-<span class='line-number'>44</span>
-<span class='line-number'>45</span>
-<span class='line-number'>46</span>
-<span class='line-number'>47</span>
-<span class='line-number'>48</span>
-<span class='line-number'>49</span>
-<span class='line-number'>50</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">ResponsiveProductCard</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">imageUrl</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">title</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">description</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">isWide</span> <span class="p">=</span> <span class="n">maxWidth</span> <span class="p">&gt;</span> <span class="m">400.</span><span class="n">dp</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">isWide</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">// Horizontal layout: image left, text right</span>
-</span><span class='line'>            <span class="n">Row</span><span class="p">(</span>
-</span><span class='line'>                <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(),</span>
-</span><span class='line'>                <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">AsyncImage</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">model</span> <span class="p">=</span> <span class="n">imageUrl</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">contentDescription</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">0.4f</span><span class="p">)</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">aspectRatio</span><span class="p">(</span><span class="m">1f</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>                <span class="n">Column</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">0.6f</span><span class="p">),</span>
-</span><span class='line'>                    <span class="n">verticalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">Center</span>
-</span><span class='line'>                <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">headlineSmall</span><span class="p">)</span>
-</span><span class='line'>                    <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                    <span class="n">Text</span><span class="p">(</span><span class="n">description</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">bodyMedium</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">}</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>            <span class="c1">// Vertical layout: image top, text bottom</span>
-</span><span class='line'>            <span class="n">Column</span> <span class="p">{</span>
-</span><span class='line'>                <span class="n">AsyncImage</span><span class="p">(</span>
-</span><span class='line'>                    <span class="n">model</span> <span class="p">=</span> <span class="n">imageUrl</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">contentDescription</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>                    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
-</span><span class='line'>                        <span class="p">.</span><span class="n">aspectRatio</span><span class="p">(</span><span class="m">16f</span> <span class="p">/</span> <span class="m">9f</span><span class="p">)</span>
-</span><span class='line'>                <span class="p">)</span>
-</span><span class='line'>                <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">12.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="n">title</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">headlineSmall</span><span class="p">)</span>
-</span><span class='line'>                <span class="n">Spacer</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">4.</span><span class="n">dp</span><span class="p">))</span>
-</span><span class='line'>                <span class="n">Text</span><span class="p">(</span><span class="n">description</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">bodyMedium</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>为什么这比检查屏幕尺寸更好</strong>：将此卡片放入双列网格中，即使在平板电脑上，它也会自动显示垂直布局。它真正实现了对<em>其</em>容器的响应式布局。</p>
-
-<h3>用例 2：动态文本大小</h3>
-
-<p>自动调整文本大小以适应可用宽度：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">AutoSizeTitle</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">text</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">fontSize</span> <span class="p">=</span> <span class="k">when</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">maxWidth</span> <span class="p">&lt;</span> <span class="m">200.</span><span class="n">dp</span> <span class="p">-&gt;</span> <span class="m">14.</span><span class="n">sp</span>
-</span><span class='line'>            <span class="n">maxWidth</span> <span class="p">&lt;</span> <span class="m">300.</span><span class="n">dp</span> <span class="p">-&gt;</span> <span class="m">18.</span><span class="n">sp</span>
-</span><span class='line'>            <span class="n">maxWidth</span> <span class="p">&lt;</span> <span class="m">400.</span><span class="n">dp</span> <span class="p">-&gt;</span> <span class="m">24.</span><span class="n">sp</span>
-</span><span class='line'>            <span class="k">else</span> <span class="p">-&gt;</span> <span class="m">32.</span><span class="n">sp</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="n">text</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">fontSize</span> <span class="p">=</span> <span class="n">fontSize</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">maxLines</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">overflow</span> <span class="p">=</span> <span class="n">TextOverflow</span><span class="p">.</span><span class="n">Ellipsis</span><span class="p">,</span>
-</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>用例 3：基于宽度的网格项数</h3>
-
-<p>动态计算网格列数：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">AdaptiveGrid</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">items</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Item</span><span class="p">&gt;,</span>
-</span><span class='line'>    <span class="n">modifier</span><span class="p">:</span> <span class="n">Modifier</span> <span class="p">=</span> <span class="n">Modifier</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">())</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">columns</span> <span class="p">=</span> <span class="n">maxOf</span><span class="p">(</span><span class="m">1</span><span class="p">,</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">/</span> <span class="m">160.</span><span class="n">dp</span><span class="p">).</span><span class="n">toInt</span><span class="p">())</span>
-</span><span class='line'>
-</span><span class='line'>        <span class="n">LazyVerticalGrid</span><span class="p">(</span>
-</span><span class='line'>            <span class="n">columns</span> <span class="p">=</span> <span class="n">GridCells</span><span class="p">.</span><span class="n">Fixed</span><span class="p">(</span><span class="n">columns</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">horizontalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">),</span>
-</span><span class='line'>            <span class="n">verticalArrangement</span> <span class="p">=</span> <span class="n">Arrangement</span><span class="p">.</span><span class="n">spacedBy</span><span class="p">(</span><span class="m">8.</span><span class="n">dp</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">items</span><span class="p">(</span><span class="n">items</span><span class="p">)</span> <span class="p">{</span> <span class="n">item</span> <span class="p">-&gt;</span>
-</span><span class='line'>                <span class="n">GridItem</span><span class="p">(</span><span class="n">item</span><span class="p">)</span>
-</span><span class='line'>            <span class="p">}</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>性能陷阱和最佳实践</h2>
-
-<h3>何时不应使用 BoxWithConstraints</h3>
-
-<p><strong>1. 当一个简单的修饰符就足够时</strong></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Overkill</span>
-</span><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">size</span><span class="p">(</span><span class="n">maxWidth</span> <span class="p">*</span> <span class="m">0.5f</span><span class="p">,</span> <span class="n">maxHeight</span> <span class="p">*</span> <span class="m">0.5f</span><span class="p">))</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Just use fillMaxSize with a fraction</span>
-</span><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">(</span><span class="m">0.5f</span><span class="p">))</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>2. 当你只是检查屏幕方向时</strong></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Using BoxWithConstraints for screen-level decisions</span>
-</span><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">&gt;</span> <span class="n">maxHeight</span><span class="p">)</span> <span class="n">LandscapeLayout</span><span class="p">()</span> <span class="k">else</span> <span class="n">PortraitLayout</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Use LocalConfiguration for screen-level decisions</span>
-</span><span class='line'><span class="k">val</span> <span class="py">configuration</span> <span class="p">=</span> <span class="n">LocalConfiguration</span><span class="p">.</span><span class="n">current</span>
-</span><span class='line'><span class="k">if</span> <span class="p">(</span><span class="n">configuration</span><span class="p">.</span><span class="n">orientation</span> <span class="p">==</span> <span class="n">Configuration</span><span class="p">.</span><span class="n">ORIENTATION_LANDSCAPE</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">LandscapeLayout</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">PortraitLayout</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>3.在 LazyColumn/LazyRow 元素内部</strong></p>
-
-<p>这是一个常见的错误：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ❌ Performance issue</span>
-</span><span class='line'><span class="n">LazyColumn</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">items</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span> <span class="n">index</span> <span class="p">-&gt;</span>
-</span><span class='line'>        <span class="n">BoxWithConstraints</span> <span class="p">{</span>  <span class="c1">// Subcomposition per item!</span>
-</span><span class='line'>            <span class="n">ItemContent</span><span class="p">(</span><span class="n">index</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>每个元素都会触发子组合。如果元素数量为 1000，则在滚动过程中会重复执行子组合。相反，将 <code>BoxWithConstraints</code> 提升到父级：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// ✅ Single subcomposition</span>
-</span><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">itemHeight</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">&gt;</span> <span class="m">400.</span><span class="n">dp</span><span class="p">)</span> <span class="m">120.</span><span class="n">dp</span> <span class="k">else</span> <span class="m">80.</span><span class="n">dp</span>
-</span><span class='line'>    <span class="n">LazyColumn</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">items</span><span class="p">(</span><span class="m">1000</span><span class="p">)</span> <span class="p">{</span> <span class="n">index</span> <span class="p">-&gt;</span>
-</span><span class='line'>            <span class="n">ItemContent</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">height</span> <span class="p">=</span> <span class="n">itemHeight</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>更轻量级的替代方案</h2>
-
-<p><strong>基于百分比的尺寸：</strong></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Use Modifier.fillMaxWidth(fraction)</span>
-</span><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">(</span><span class="m">0.8f</span><span class="p">))</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Use Modifier.weight in Row/Column</span>
-</span><span class='line'><span class="n">Row</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">1f</span><span class="p">))</span>  <span class="c1">// 25%</span>
-</span><span class='line'>    <span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">weight</span><span class="p">(</span><span class="m">3f</span><span class="p">))</span>  <span class="c1">// 75%</span>
-</span><span class='line'><span class="p">}</span><span class="n">For</span> <span class="n">aspect</span> <span class="n">ratio</span><span class="p">:</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">aspectRatio</span><span class="p">(</span><span class="m">16f</span> <span class="p">/</span> <span class="m">9f</span><span class="p">))</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>不使用子组件的自定义尺寸逻辑：</strong></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Custom Layout is lighter than SubcomposeLayout</span>
-</span><span class='line'><span class="n">Layout</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">content</span> <span class="p">=</span> <span class="p">{</span> <span class="cm">/* your content */</span> <span class="p">}</span>
-</span><span class='line'><span class="p">)</span> <span class="p">{</span> <span class="n">measurables</span><span class="p">,</span> <span class="n">constraints</span> <span class="p">-&gt;</span>
-</span><span class='line'>    <span class="c1">// Full control over measurement without subcomposition cost</span>
-</span><span class='line'>    <span class="c1">// But you can&#39;t make composition decisions here</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>窗口尺寸类（屏幕级响应式）：</strong></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// Material3&#39;s adaptive APIs</span>
-</span><span class='line'><span class="k">val</span> <span class="py">windowSizeClass</span> <span class="p">=</span> <span class="n">calculateWindowSizeClass</span><span class="p">(</span><span class="n">activity</span><span class="p">)</span>
-</span><span class='line'><span class="k">when</span> <span class="p">(</span><span class="n">windowSizeClass</span><span class="p">.</span><span class="n">widthSizeClass</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">WindowWidthSizeClass</span><span class="p">.</span><span class="n">Compact</span> <span class="p">-&gt;</span> <span class="n">CompactLayout</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">WindowWidthSizeClass</span><span class="p">.</span><span class="n">Medium</span> <span class="p">-&gt;</span> <span class="n">MediumLayout</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">WindowWidthSizeClass</span><span class="p">.</span><span class="n">Expanded</span> <span class="p">-&gt;</span> <span class="n">ExpandedLayout</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h2>重要陷阱和边界情况</h2>
-
-<h3>1. 固有尺寸不起作用</h3>
-
-<p>这将导致崩溃：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Row</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Text</span><span class="p">(</span>
-</span><span class='line'>        <span class="s">&quot;Hello&quot;</span><span class="p">,</span>
-</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="n">IntrinsicSize</span><span class="p">.</span><span class="n">Min</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">)</span>
-</span><span class='line'>    <span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>        <span class="c1">// CRASH: &quot;Asking for intrinsic measurements of </span>
-</span><span class='line'>        <span class="c1">// SubcomposeLayout layouts is not supported&quot;</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>SubcomposeLayout</code> 无法回答“你的固有尺寸是多少？”因为它在接收到实际约束之前无法确定要组合的内容。</p>
-
-<p><strong>解决方法</strong>：为 <code>BoxWithConstraints</code> 添加显式的大小修饰符：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">100.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// Now intrinsic measurement isn&#39;t needed</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>2. 首次组合时序</h3>
-
-<p>在首次组合时，<code>BoxWithConstraints</code> 还没有约束。子元素会先使用占位符值进行组合，然后再使用实际约束重新组合。这意味着：</p>
-
-<ul>
-<li><p>内部的 <code>LaunchedEffect</code> 等效果可能会触发两次</p></li>
-<li><p>基于约束的初始状态计算可能需要保护</p></li>
-</ul>
-
-
-<p><strong>最佳实践</strong>：保护基于约束的逻辑：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">constraints</span><span class="p">.</span><span class="n">hasBoundedWidth</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">columns</span> <span class="p">=</span> <span class="p">(</span><span class="n">maxWidth</span> <span class="p">/</span> <span class="m">160.</span><span class="n">dp</span><span class="p">).</span><span class="n">toInt</span><span class="p">()</span>
-</span><span class='line'>        <span class="c1">// Safe to use</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>3. 通常不需要嵌套 <code>BoxWithConstraints</code></h3>
-
-<p>如果你发现自己需要嵌套它们：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">BoxWithConstraints</span> <span class="p">{</span>  <span class="c1">// Usually unnecessary</span>
-</span><span class='line'>        <span class="c1">// ...</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>内部的 <code>BoxWithConstraints</code> 具有相同的约束（除非被修改）。只需使用外部作用域即可。</p>
-
-<h3>4. 状态提升的重要性（详见此处）</h3>
-
-<p>由于测量期间内容会被子组合，因此在 <code>BoxWithConstraints</code> 内部创建的状态具有特殊的生命周期特征：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// This state is created during MEASUREMENT, not composition</span>
-</span><span class='line'>    <span class="k">var</span> <span class="py">count</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'>    <span class="c1">// If parent re-measures without recomposing, this state persists</span>
-</span><span class='line'>    <span class="c1">// But if the slot is &quot;recycled&quot;, it might reset</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>最佳实践</strong>：将重要状态提升到 <code>BoxWithConstraints</code> 之上：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">var</span> <span class="py">count</span> <span class="k">by</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">mutableStateOf</span><span class="p">(</span><span class="m">0</span><span class="p">)</span> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// count is stable regardless of subcomposition lifecycle</span>
-</span><span class='line'>    <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Count: $count&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>5. propagateMinConstraints 参数</h3>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">BoxWithConstraints</span><span class="p">(</span><span class="n">propagateMinConstraints</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// Children now MUST be at least minWidth x minHeight</span>
-</span><span class='line'>    <span class="c1">// This can cause unexpected overflow if children </span>
-</span><span class='line'>    <span class="c1">// have their own size requirements</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>仅当你明确希望强制子元素具有最小尺寸时才使用此参数。</p>
-
-<h2>总结：何时使用 BoxWithConstraints</h2>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*ReLZsAjntRlcLXMJlYEUbw.png" alt="" /></p>
-
-<h2>结语</h2>
-
-<p><code>BoxWithConstraints</code> 是一个表面看似简单，但当你理解其底层机制后，会发现它蕴含着丰富的内涵。它不仅仅是一个<strong>“告诉你自身大小的盒子”</strong>，而是一种允许元素组合决策依赖于布局信息的机制。</p>
-
-<p>当你真正需要<strong>容器感知响应式布局</strong>时，请使用它。如果更简单的修饰符就能满足需求，则应避免使用它。永远记住：<strong>它会带来额外的开销，因为它本质上与常规代码合成不同。</strong></p>
-
-<p><strong>最好的代码并非使用最复杂的 API，而是使用最适合当前任务的 API。</strong></p>
-
-<p><strong>如果这篇深度解析对你有所帮助，请考虑与你的团队分享。知识共享才能促进 Android 社​​区的发展。</strong></p>
 ]]></content>
   </entry>
   
