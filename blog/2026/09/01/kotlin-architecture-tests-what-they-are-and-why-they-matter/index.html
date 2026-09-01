@@ -1,0 +1,761 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>让架构边界变成可执行的测试 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="本文讲解 Kotlin 架构测试：当代码能编译、单测能通过、linter 无报错时，项目仍可能悄悄变得难以维护。它教你用可执行的测试把依赖方向、模块边界、公开 API 等结构性决策固化成规则，让人工与 AI 都难以越界。">
+  <meta name="keywords" content="Kotlin, Architecture, Test">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/09/01/kotlin-architecture-tests-what-they-are-and-why-they-matter">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">让架构边界变成可执行的测试</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-09-01'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>1</span><span class='date-suffix'>st</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Kotlin Architecture Tests: What They Are and Why They Matter - Part 1/3」，原文链接<a href="https://medium.com/proandroiddev/kotlin-architecture-tests-what-they-are-and-why-they-matter-389ce9a1204c">https://medium.com/proandroiddev/kotlin-architecture-tests-what-they-are-and-why-they-matter-389ce9a1204c</a>，由Bao Le发布于2026年7月16日。</p></blockquote>
+
+<p>一个 Kotlin 项目可以编译通过，通过单元测试，满足代码检查工具的要求，但其结构仍然可能变得难以修改。架构测试正是为了弥补这一缺陷而存在的。</p>
+
+<p><a href="/blog/2026/09/01/kotlin-architecture-tests-what-they-are-and-why-they-matter/"><img src="https://cdn-images-1.medium.com/max/1024/1*dlCG9s9ody90TpUC5B6e9Q.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>大多数验证工具回答的是局部问题。</p>
+
+<p>编译器会检查代码是否符合 Kotlin 规范。代码检查工具会检查文件是否遵循本地的风格和质量规则。单元测试会检查函数或组件的行为是否符合预期。</p>
+
+<p>这些检查是必要的。但它们与检查系统是否仍然保持团队所依赖的结构并不相同。</p>
+
+<p>考虑一个依赖于数据层实现的领域用例：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>package com.acme.domain
+</span><span class='line'>import com.acme.data.SqlUserRepository
+</span><span class='line'>class GetUserUseCase(
+</span><span class='line'>    private val repository: SqlUserRepository,
+</span><span class='line'>)</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这段代码可以编译。单元测试也可以通过。<code>ktlint</code> 可能没有任何有用的信息。</p>
+
+<p>问题在于结构：领域层现在了解了一个持久化细节。原本旨在保持可变更性的边界变成了一个需要人们记住的约定。</p>
+
+<p>架构测试将这个约定转化为一个可执行的规则：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Konture.classes {
+</span><span class='line'>    that().resideInAPackage("..domain..")
+</span><span class='line'>    should().onlyDependOnClassesInAnyPackage(
+</span><span class='line'>        "..domain..",
+</span><span class='line'>        "kotlin..",
+</span><span class='line'>        "java..",
+</span><span class='line'>    )
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这就是核心思想。架构测试并不能证明软件的正确性，它们只能证明特定的结构决策仍然有效。</p>
+
+<h2>绿色构建的错觉</h2>
+
+<p>绿色构建表明代码仓库满足了你要求的检查。</p>
+
+<p>但它并不能说明预期的架构在变更后仍然有效。</p>
+
+<p>如果符号位于类路径中，编译器会接受禁止的依赖项。如果有人声明了依赖项，Gradle 会构建一个违反你设计的模块图。除非被测行为发生变化，否则单元测试不会因为一个特性模块导入了另一个特性模块的实现细节而失败。</p>
+
+<p>这就是为什么架构违规在代码审查中常常看起来很普通：</p>
+
+<ul>
+<li><p>控制器直接调用代码仓库，因为这比添加应用程序服务更快。</p></li>
+<li><p>领域模型接受网络 DTO，因为该 DTO 已经包含正确的字段。</p></li>
+<li><p>特性实现模块导入了另一个特性实现模块，因为 API 模块尚未公开所需的接口。</p></li>
+<li><p>Kotlin 类在 <code>impl</code> 包中默认保持公共属性，方便其他模块复用。</p></li>
+<li><p>AI 代码助手会添加 Gradle 依赖项，因为它能使当前文件编译通过。</p></li>
+</ul>
+
+
+<p>这些更改并非出于恶意或疏忽。大多数结构性偏差源于一些看似合理但累积起来代价高昂的局部优化。</p>
+
+<p>架构测试能够尽早揭示这些累积成本。</p>
+
+<h2>结构性漂移有其形状</h2>
+
+<p>大多数架构的漂移并不显着。它通常从拉取请求中看起来合理的一个边缘开始。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*lrB0ao28oDiqd6YKK3kvUQ.png" alt="无字幕图片" /></p>
+
+<p>第二个图仍然可以编译。产品行为可能仍然是正确的。损坏稍后出现：</p>
+
+<ul>
+<li>配置文件重构现在需要结帐上下文，</li>
+<li>不相关的功能更改会使更多构建工作失效，</li>
+<li>审核者必须考虑更广泛的爆炸半径，</li>
+<li>下一个快捷方式感觉不那么不寻常，因为第一个快捷方式已经存在。</li>
+</ul>
+
+
+<p>正确的指标是特定于项目的，但有用的指标是具体的：禁止的模块边缘数量、每月违反规则的数量、模块扇入和扇出、功能更改后的重建范围以及对同一边界的重复审查评论。当架构测试将这些观察结果转化为失败的示例而不是风格论证时，它们就会变得有说服力。</p>
+
+<h2>架构测试检查什么</h2>
+
+<p>良好的架构测试可以保护影响变更速度、模块独立性、公共 API 形状和审查负载的决策。它们通常分为几类。</p>
+
+<h2>1. 依赖方向和层隔离</h2>
+
+<p>分层系统取决于方向。在清洁架构、端口和适配器以及许多以领域为中心的设计中，外层可能依赖于内部，但核心不应依赖于 UI、数据库、传输框架或平台 API。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*wa80wLtTPtKcXsuiz7n8Ag.png" alt="无字幕图片" /></p>
+
+<p>典型规则：</p>
+
+<ul>
+<li>域包不得导入持久性、传输、Android、Compose、Spring 或 Ktor 服务器 API。</li>
+<li>应用程序服务可能依赖于域合约，而不是直接依赖于 Web 控制器。</li>
+<li>UI 模块应该使用表示状态，而不是数据库或网络实体。</li>
+</ul>
+
+
+<p>编译器会看到有效的类型。架构测试对给定层中哪些有效类型不可接受进行编码。</p>
+
+<h2>2. Gradle 模块边界</h2>
+
+<p>在模块化 Kotlin 项目中，Gradle 项目依赖项是架构的一部分。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*q2SoHyULKONbrk0Uc_rXPQ.png" alt="无字幕图像" /></p>
+
+<p>典型规则：</p>
+
+<ul>
+<li><code>:core:domain</code> 不得依赖于 <code>:core:data</code> 或 <code>:app</code>。</li>
+<li>功能实现模块不得依赖于同级功能实现模块。</li>
+<li>API模块可能被广泛依赖；实施模块应保留在其 API 后面。</li>
+<li>Gradle 项目图不应包含循环。</li>
+</ul>
+
+
+<p>此类别对于设计和构建性能很重要。不必要的模块边缘会扩大重新编译范围，降低缓存的有用性，并使本地更改影响不相关的功能。</p>
+
+<h2>3. 公共 API 和类型泄漏</h2>
+
+<p>一些架构失败与私有实现中的导入无关。它们与模块公开的内容有关。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*0wdONSCbsAUHzZZlPouT9Q.png" alt="无字幕图像" /></p>
+
+<p>典型规则：</p>
+
+<ul>
+<li>公共域 API 不应公开数据库实体或网络 DTO。</li>
+<li>公共功能 API 包应该公开合约和稳定模型，而不是实现类。</li>
+<li>持久性或框架注释不应泄漏到干净的业务接口中。</li>
+<li>库模块应该将实现包保留在“内部”，除非它们是故意公开的。</li>
+</ul>
+
+
+<p>Kotlin 默认的公共可见性使得这很容易出错。一旦另一个模块根据意外的公共类型启动，删除它就会成为重大更改。</p>
+
+<h2>4. 跨层调用</h2>
+
+<p>有些系统依赖中间层进行验证、授权、事务、日志记录或编排。直接调用可以绕过这些政策所在的位置。</p>
+
+<p>典型规则：</p>
+
+<ul>
+<li>控制器调用应用程序服务，而不是直接调用存储库。</li>
+<li>可组合项调用 ViewModel 或演示者，而不是 Retrofit 服务。</li>
+<li>路由处理程序调用用例，而不是 SQL 适配器。</li>
+<li>UI 模块不调用基础设施模块。</li>
+</ul>
+
+
+<p>应谨慎使用这些规则。当中间层承担真正的责任时，它们就很有价值。当层级仅因为图表所示而存在时，他们就是官僚机构。</p>
+
+<h2>5. 依赖注入和接线约定</h2>
+
+<p>DI 配置是可执行形式的架构。它决定哪个实现支持哪个合约。</p>
+
+<p>一些接线策略属于集成测试。其他的可以从结构上检查：</p>
+
+<ul>
+<li>DI 模块采用经批准的封装。</li>
+<li>功能模块不会覆盖核心绑定。</li>
+<li>适配器实现绑定到域接口而不是直接使用。</li>
+<li>仅测试绑定不会泄漏到生产源集中。</li>
+</ul>
+
+
+<p>有用的规则是捕获真实类别的生产或维护故障的规则，而不是仅仅反映偏好的规则。</p>
+
+<h2>6. 文件和来源卫生</h2>
+
+<p>并非每个结构测试都需要深刻。一些规则可以保持导航的可预测性并减少审核噪音：</p>
+
+<ul>
+<li>每个文件一个主要类。</li>
+<li>文件名与主类名匹配。</li>
+<li>没有通配符导入。</li>
+<li>生成或迁移包被明确排除。</li>
+</ul>
+
+
+<p>这些规则不应重复格式化程序或 linter 已经可以很好处理的内容。当架构测试需要整个项目上下文时，它们是最有价值的。</p>
+
+<h2>架构测试不应该检查哪些内容</h2>
+
+<p>当架构测试试图控制一切时，它们就会变得脆弱。</p>
+
+<p>它们不应取代：</p>
+
+<ul>
+<li>类型安全编译器。</li>
+<li>空白和样式的格式化程序。</li>
+<li>用于普通单文件气味的短绒检查。</li>
+<li>行为单元测试。</li>
+<li>真实接线和运行时行为的集成测试。</li>
+<li>代码审查，以判断、命名和设计意图不够稳定，无法进行编码。</li>
+</ul>
+
+
+<p>糟糕的架构测试会冻结实现细节并将其称为设计。好的边界可以保护多个工程师已经依赖的边界。</p>
+
+<h2>架构测试如何变得有害</h2>
+
+<p>架构测试就是治理。糟糕的治理比没有治理更糟糕，因为它教会人们绕过系统。</p>
+
+<p>常见故障模式：</p>
+
+<ul>
+<li><strong>脆弱的规则</strong>：测试对当今的文件夹布局进行编码，而不是持久的边界。</li>
+<li><strong>虚假安全性</strong>：通过的套件被视为架构良好的证据。</li>
+<li><strong>团队摩擦</strong>：规则阻止合法的功能工作，但没有人知道谁拥有异常流程。</li>
+<li><strong>过度测试生成的代码</strong>：Room、KSP、Compose、序列化或 DI 生成的源会产生编写代码规则无意判断的噪音。</li>
+<li><strong>广泛的软件包禁令</strong>：一条规则阻止了太多内容，因此工程师添加了排除项，直到该规则不再具有任何意义。</li>
+<li><strong>没有负面证据</strong>：该套件从未因故意违规而失败。</li>
+</ul>
+
+
+<p>解药不是更大的套房。它是一个更小、更明确的套件。每条规则都应该列出它所保护的决策、破坏它的成本以及预期的修复路径。</p>
+
+<h2>何时不使用它们</h2>
+
+<p>架构测试并不是自动值得的。</p>
+
+<p>对于一个很小的代码库来说，他们通常还为时过早，因为每个人仍然可以在头脑中掌握结构。在每周都会发现模块和包边界的早期产品中，它们可能会很吵。它们可能不太适合高度动态或反射的代码，其中有意义的依赖关系是运行时连接而不是可见的源结构。如果第一个套件尝试强制执行目标架构而不是团队实际迁移的架构，那么它们还可能会减慢具有严重流失的整体架构。</p>
+
+<p>在这些情况下，更轻的工具可能就足够了：</p>
+
+<ul>
+<li>简短的架构决策记录，</li>
+<li>模块所有权说明，</li>
+<li>接下来的一些更改的审核清单，</li>
+<li>一份非阻塞报告，在执行之前对违规行为进行计数。</li>
+</ul>
+
+
+<p>当边界足够稳定且可以强制实施且成本足够高而无法打破时，请使用架构测试。</p>
+
+<h2>失败的生活文档</h2>
+
+<p>架构图、自述文件、入门文档和审查清单都有帮助。他们都没有失败 CI。</p>
+
+<p>架构测试为规则提供了持久的形式：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>@Test
+</span><span class='line'>fun `domain must not depend on data or app modules`() {
+</span><span class='line'>    Konture.modules {
+</span><span class='line'>        that().haveNamePath(":domain")
+</span><span class='line'>        should().notDependOnModule(":data")
+</span><span class='line'>        should().notDependOnModule(":app")
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>测试名称记录了规则。断言定义了规则。失败输出告诉开发人员哪里违反了规则。</p>
+
+<p>这改变了评论对话。存储库无需要求审阅者在时间压力下记住每个边界，而是可以报告：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Architecture violation(s) detected:
+</span><span class='line'>Module :domain should not depend on :data, but a dependency was found.</span></code></pre></td></tr></table></div></figure>
+
+
+<p>团队仍在决定规则是否正确。该测试无需手动重新发现相同的违规行为。</p>
+
+<h2>组织影响</h2>
+
+<p>技术效果是边界强制。组织效应是共享记忆。</p>
+
+<p>对于新工程师来说，架构测试会压缩入职时间。它们显示了允许哪些依赖项、哪些 API 是有意公开的以及存在异常的位置。对于经验丰富的工程师来说，他们会减少重复的审核评论，因此代码审核可以专注于设计判断，而不是监管相同的导入。</p>
+
+<p>对于团队来说，权衡是自主性与一致性。平台或架构团队不应使用测试来集中每个本地决策。更好的模式是对一小组跨团队合约进行编码，并让功能团队拥有其余部分。当规则发生变化时，将这种变化视为架构决策：更新测试、更新 ADR 或文档（如果存在），并使迁移路径明确。</p>
+
+<p>从规模上看，架构测试作为治理的一部分效果最好，而不是作为治理的替代品：</p>
+
+<ul>
+<li>ADR 解释了边界存在的原因。</li>
+<li>架构测试检查边界是否仍然成立。</li>
+<li>CI 报告跨越边界的位置。</li>
+<li>审核者决定是否应更改边界或代码。</li>
+</ul>
+
+
+<h2>展示中的具体示例</h2>
+
+<p>Konture 存储库包括一个小型 Gradle 展示，它使用与上面示例相同的形状：<code>:app</code>、<code>:domain</code>、<code>:data</code> 和专用的 <code>:konture-test</code> 模块。</p>
+
+<p>它的架构套件不仅检查一条快乐路径规则。它结合了多种结构检查：</p>
+
+<ul>
+<li>模块图没有循环。</li>
+<li><code>:domain</code> 不依赖于 <code>:data</code> 或 <code>:app</code>。</li>
+<li><code>:data</code> 仅依赖于 <code>:domain</code>。</li>
+<li>..domain.. 中的类仅依赖于domain、Kotlin 或Java 包。</li>
+<li>域中的存储库声明是接口。</li>
+<li>用例签名不会泄漏“.data.”或“.app.”类型。</li>
+</ul>
+
+
+<p>一项测试故意证明错误的模块规则会引发“AssertionError”。故意错误的断言说“:data”应该只依赖于“:app”；示例项目具有依赖于“:domain”的“:data”，因此该规则失败，其形状与真实的架构回归相同：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Architecture violation(s) detected:
+</span><span class='line'>Module :data depends on :domain, which is not allowed by pattern(s): :app</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这很重要。从未失败的结构性规则可能不会检查团队认为正在检查的事情。</p>
+
+<p>示例套件是可执行的：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>./gradlew -p showcases/sample-gradle :konture-test:test</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在此存储库中，该命令成功运行架构测试模块并生成 Konture 用于评估模块感知规则的布局和依赖项元数据。</p>
+
+<h2>为什么这对于人工智能辅助开发很重要</h2>
+
+<p>AI编码助手擅长本地完成。他们可以导入可见的类，添加缺少的依赖项，并进行狭窄的测试通过。</p>
+
+<p>建筑通常是全球背景。</p>
+
+<p>此类说明有助于：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Keep domain independent from data.
+</span><span class='line'>Do not add sideways feature dependencies.
+</span><span class='line'>Map network DTOs before they reach UI state.</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但及时的指示并不是强制执行。他们是指导。</p>
+
+<p>架构测试为人类和代理提供相同的反馈循环：</p>
+
+<ol>
+<li>变革跨越边界。</li>
+<li>对于具体模块、文件、导入或类型，测试失败。</li>
+<li>开发人员或代理使用预期的抽象来修复设计。</li>
+</ol>
+
+
+<p>这不是魔法，也不能代替复习。这是一种使结构规则对已经更改代码的工具可见的方法。</p>
+
+<h2>Kotlin 架构的未来压力</h2>
+
+<p>对结构性反馈的需求可能会增加，而不是减少。</p>
+
+<p>Compose Multiplatform 使 UI 代码可移植，但它也带来了新的问题：哪些 UI 抽象属于共享代码，哪些保持特定于平台。 Kotlin 2.x 和编译器插件密集型堆栈继续模糊编写的源代码与生成或转换的代码之间的界限。人工智能代理可以比审阅者手动检查每个模块边缘更快地生成大型的、局部合理的补丁。</p>
+
+<p>这并不意味着每个团队都需要更多规则。这意味着重要的规则需要是可执行的、狭窄的且易于修复的。面向未来的架构套件并不是最大的套件。它抓住了人类和特工最有可能意外跨越的界限。</p>
+
+<h2>当规则值得 CI 执行时</h2>
+
+<p>并不是每个好主意都应该阻碍构建。当其中大部分为真时，规则是 CI 的良好候选者：</p>
+
+<ul>
+<li>团队可以解释破坏它的成本。</li>
+<li>该规则在正常功能工作中是稳定的。</li>
+<li>违规行为通常是错误，而不是合法的设计选择。</li>
+<li>失败消息指出了可行的修复方法。</li>
+<li>异常很少见，可以明确命名。</li>
+<li>该规则捕获编译器、linter 或单元测试未捕获的内容。</li>
+</ul>
+
+
+<p>如果一条规则在正常开发过程中不断失败，则它可能过于宽泛。如果一条规则需要许多安静的排除，它可能会假装架构比实际情况更干净。如果没有人能解释它为什么存在，它就不应该阻止交付。</p>
+
+<p>从保护已知难题的规则开始：模块循环、域到数据依赖关系、功能实现耦合、公共 API 泄​​漏以及平台 API 泄​​漏到共享 KMP 代码中。</p>
+
+<h2>实际回报</h2>
+
+<p>架构测试可帮助团队保留使未来更改成本更低的结构：</p>
+
+<ul>
+<li>它们使领域逻辑独立于框架和持久性。</li>
+<li>它们可以防止意外的 Gradle 边缘扩大重新编译范围。</li>
+<li>它们保护 API 模块免遭泄露实现细节。</li>
+<li>他们有意提高公众知名度。</li>
+<li>他们将重复的审核意见转化为对特定模块、文件、导入或类型失败的检查。</li>
+</ul>
+
+
+<p>目标不是僵化的架构。目标是显式架构。</p>
+
+<p>一旦团队选择了结构，构建就应该有助于保护它。</p>
+
+<p>下一篇文章重点介绍本入门仅暗示的部分：为什么仅源规则会错过 Gradle 依赖漂移、为什么仅 Gradle 规则会错过源级别类型泄漏，以及为什么 Kotlin 架构测试同时需要两个视图。</p>
+
+<ul>
+<li><a href="https://github.com/baole/konture">GitHub - baole/konture：定义、执行和自动化架构规则作为快速、轻量级的 Kotlin 单元测试运行。完全支持 Kotlin 多平台 (KMP)、Android 和服务器端（Ktor、Spring）。</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-why-konture-exists-4ac92a4dd3ba">Kotlin 架构测试：Konture 为何存在 - 第 2/3 部分</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-with-konture-a-practical-guide-part-3-3-1f36ebe685db">使用 Konture 进行 Kotlin 架构测试：实用指南 - 第 3/3 部分</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-09-01'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>1</span><span class='date-suffix'>st</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/kotlin/'>kotlin</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/08/29/design-architecture-kmp/" title="Previous Post: 规范驱动开发：让AI生成符合预期的KMP代码">&laquo; 规范驱动开发：让AI生成符合预期的KMP代码</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

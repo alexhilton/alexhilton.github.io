@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-08-29T11:07:38+00:00</updated>
+  <updated>2026-09-01T13:00:10+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,435 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[让架构边界变成可执行的测试]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/09/01/kotlin-architecture-tests-what-they-are-and-why-they-matter/"/>
+    <updated>2026-09-01T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/09/01/kotlin-architecture-tests-what-they-are-and-why-they-matter</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Kotlin Architecture Tests: What They Are and Why They Matter - Part 1/3」，原文链接<a href="https://medium.com/proandroiddev/kotlin-architecture-tests-what-they-are-and-why-they-matter-389ce9a1204c">https://medium.com/proandroiddev/kotlin-architecture-tests-what-they-are-and-why-they-matter-389ce9a1204c</a>，由Bao Le发布于2026年7月16日。</p></blockquote>
+
+<p>一个 Kotlin 项目可以编译通过，通过单元测试，满足代码检查工具的要求，但其结构仍然可能变得难以修改。架构测试正是为了弥补这一缺陷而存在的。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2026/09/01/kotlin-architecture-tests-what-they-are-and-why-they-matter/"><img src="https://cdn-images-1.medium.com/max/1024/1*dlCG9s9ody90TpUC5B6e9Q.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>大多数验证工具回答的是局部问题。</p>
+
+<p>编译器会检查代码是否符合 Kotlin 规范。代码检查工具会检查文件是否遵循本地的风格和质量规则。单元测试会检查函数或组件的行为是否符合预期。</p>
+
+<p>这些检查是必要的。但它们与检查系统是否仍然保持团队所依赖的结构并不相同。</p>
+
+<p>考虑一个依赖于数据层实现的领域用例：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>package com.acme.domain
+</span><span class='line'>import com.acme.data.SqlUserRepository
+</span><span class='line'>class GetUserUseCase(
+</span><span class='line'>    private val repository: SqlUserRepository,
+</span><span class='line'>)</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这段代码可以编译。单元测试也可以通过。<code>ktlint</code> 可能没有任何有用的信息。</p>
+
+<p>问题在于结构：领域层现在了解了一个持久化细节。原本旨在保持可变更性的边界变成了一个需要人们记住的约定。</p>
+
+<p>架构测试将这个约定转化为一个可执行的规则：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Konture.classes {
+</span><span class='line'>    that().resideInAPackage("..domain..")
+</span><span class='line'>    should().onlyDependOnClassesInAnyPackage(
+</span><span class='line'>        "..domain..",
+</span><span class='line'>        "kotlin..",
+</span><span class='line'>        "java..",
+</span><span class='line'>    )
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这就是核心思想。架构测试并不能证明软件的正确性，它们只能证明特定的结构决策仍然有效。</p>
+
+<h2>绿色构建的错觉</h2>
+
+<p>绿色构建表明代码仓库满足了你要求的检查。</p>
+
+<p>但它并不能说明预期的架构在变更后仍然有效。</p>
+
+<p>如果符号位于类路径中，编译器会接受禁止的依赖项。如果有人声明了依赖项，Gradle 会构建一个违反你设计的模块图。除非被测行为发生变化，否则单元测试不会因为一个特性模块导入了另一个特性模块的实现细节而失败。</p>
+
+<p>这就是为什么架构违规在代码审查中常常看起来很普通：</p>
+
+<ul>
+<li><p>控制器直接调用代码仓库，因为这比添加应用程序服务更快。</p></li>
+<li><p>领域模型接受网络 DTO，因为该 DTO 已经包含正确的字段。</p></li>
+<li><p>特性实现模块导入了另一个特性实现模块，因为 API 模块尚未公开所需的接口。</p></li>
+<li><p>Kotlin 类在 <code>impl</code> 包中默认保持公共属性，方便其他模块复用。</p></li>
+<li><p>AI 代码助手会添加 Gradle 依赖项，因为它能使当前文件编译通过。</p></li>
+</ul>
+
+
+<p>这些更改并非出于恶意或疏忽。大多数结构性偏差源于一些看似合理但累积起来代价高昂的局部优化。</p>
+
+<p>架构测试能够尽早揭示这些累积成本。</p>
+
+<h2>结构性漂移有其形状</h2>
+
+<p>大多数架构的漂移并不显着。它通常从拉取请求中看起来合理的一个边缘开始。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*lrB0ao28oDiqd6YKK3kvUQ.png" alt="无字幕图片" /></p>
+
+<p>第二个图仍然可以编译。产品行为可能仍然是正确的。损坏稍后出现：</p>
+
+<ul>
+<li>配置文件重构现在需要结帐上下文，</li>
+<li>不相关的功能更改会使更多构建工作失效，</li>
+<li>审核者必须考虑更广泛的爆炸半径，</li>
+<li>下一个快捷方式感觉不那么不寻常，因为第一个快捷方式已经存在。</li>
+</ul>
+
+
+<p>正确的指标是特定于项目的，但有用的指标是具体的：禁止的模块边缘数量、每月违反规则的数量、模块扇入和扇出、功能更改后的重建范围以及对同一边界的重复审查评论。当架构测试将这些观察结果转化为失败的示例而不是风格论证时，它们就会变得有说服力。</p>
+
+<h2>架构测试检查什么</h2>
+
+<p>良好的架构测试可以保护影响变更速度、模块独立性、公共 API 形状和审查负载的决策。它们通常分为几类。</p>
+
+<h2>1. 依赖方向和层隔离</h2>
+
+<p>分层系统取决于方向。在清洁架构、端口和适配器以及许多以领域为中心的设计中，外层可能依赖于内部，但核心不应依赖于 UI、数据库、传输框架或平台 API。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*wa80wLtTPtKcXsuiz7n8Ag.png" alt="无字幕图片" /></p>
+
+<p>典型规则：</p>
+
+<ul>
+<li>域包不得导入持久性、传输、Android、Compose、Spring 或 Ktor 服务器 API。</li>
+<li>应用程序服务可能依赖于域合约，而不是直接依赖于 Web 控制器。</li>
+<li>UI 模块应该使用表示状态，而不是数据库或网络实体。</li>
+</ul>
+
+
+<p>编译器会看到有效的类型。架构测试对给定层中哪些有效类型不可接受进行编码。</p>
+
+<h2>2. Gradle 模块边界</h2>
+
+<p>在模块化 Kotlin 项目中，Gradle 项目依赖项是架构的一部分。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*q2SoHyULKONbrk0Uc_rXPQ.png" alt="无字幕图像" /></p>
+
+<p>典型规则：</p>
+
+<ul>
+<li><code>:core:domain</code> 不得依赖于 <code>:core:data</code> 或 <code>:app</code>。</li>
+<li>功能实现模块不得依赖于同级功能实现模块。</li>
+<li>API模块可能被广泛依赖；实施模块应保留在其 API 后面。</li>
+<li>Gradle 项目图不应包含循环。</li>
+</ul>
+
+
+<p>此类别对于设计和构建性能很重要。不必要的模块边缘会扩大重新编译范围，降低缓存的有用性，并使本地更改影响不相关的功能。</p>
+
+<h2>3. 公共 API 和类型泄漏</h2>
+
+<p>一些架构失败与私有实现中的导入无关。它们与模块公开的内容有关。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*0wdONSCbsAUHzZZlPouT9Q.png" alt="无字幕图像" /></p>
+
+<p>典型规则：</p>
+
+<ul>
+<li>公共域 API 不应公开数据库实体或网络 DTO。</li>
+<li>公共功能 API 包应该公开合约和稳定模型，而不是实现类。</li>
+<li>持久性或框架注释不应泄漏到干净的业务接口中。</li>
+<li>库模块应该将实现包保留在“内部”，除非它们是故意公开的。</li>
+</ul>
+
+
+<p>Kotlin 默认的公共可见性使得这很容易出错。一旦另一个模块根据意外的公共类型启动，删除它就会成为重大更改。</p>
+
+<h2>4. 跨层调用</h2>
+
+<p>有些系统依赖中间层进行验证、授权、事务、日志记录或编排。直接调用可以绕过这些政策所在的位置。</p>
+
+<p>典型规则：</p>
+
+<ul>
+<li>控制器调用应用程序服务，而不是直接调用存储库。</li>
+<li>可组合项调用 ViewModel 或演示者，而不是 Retrofit 服务。</li>
+<li>路由处理程序调用用例，而不是 SQL 适配器。</li>
+<li>UI 模块不调用基础设施模块。</li>
+</ul>
+
+
+<p>应谨慎使用这些规则。当中间层承担真正的责任时，它们就很有价值。当层级仅因为图表所示而存在时，他们就是官僚机构。</p>
+
+<h2>5. 依赖注入和接线约定</h2>
+
+<p>DI 配置是可执行形式的架构。它决定哪个实现支持哪个合约。</p>
+
+<p>一些接线策略属于集成测试。其他的可以从结构上检查：</p>
+
+<ul>
+<li>DI 模块采用经批准的封装。</li>
+<li>功能模块不会覆盖核心绑定。</li>
+<li>适配器实现绑定到域接口而不是直接使用。</li>
+<li>仅测试绑定不会泄漏到生产源集中。</li>
+</ul>
+
+
+<p>有用的规则是捕获真实类别的生产或维护故障的规则，而不是仅仅反映偏好的规则。</p>
+
+<h2>6. 文件和来源卫生</h2>
+
+<p>并非每个结构测试都需要深刻。一些规则可以保持导航的可预测性并减少审核噪音：</p>
+
+<ul>
+<li>每个文件一个主要类。</li>
+<li>文件名与主类名匹配。</li>
+<li>没有通配符导入。</li>
+<li>生成或迁移包被明确排除。</li>
+</ul>
+
+
+<p>这些规则不应重复格式化程序或 linter 已经可以很好处理的内容。当架构测试需要整个项目上下文时，它们是最有价值的。</p>
+
+<h2>架构测试不应该检查哪些内容</h2>
+
+<p>当架构测试试图控制一切时，它们就会变得脆弱。</p>
+
+<p>它们不应取代：</p>
+
+<ul>
+<li>类型安全编译器。</li>
+<li>空白和样式的格式化程序。</li>
+<li>用于普通单文件气味的短绒检查。</li>
+<li>行为单元测试。</li>
+<li>真实接线和运行时行为的集成测试。</li>
+<li>代码审查，以判断、命名和设计意图不够稳定，无法进行编码。</li>
+</ul>
+
+
+<p>糟糕的架构测试会冻结实现细节并将其称为设计。好的边界可以保护多个工程师已经依赖的边界。</p>
+
+<h2>架构测试如何变得有害</h2>
+
+<p>架构测试就是治理。糟糕的治理比没有治理更糟糕，因为它教会人们绕过系统。</p>
+
+<p>常见故障模式：</p>
+
+<ul>
+<li><strong>脆弱的规则</strong>：测试对当今的文件夹布局进行编码，而不是持久的边界。</li>
+<li><strong>虚假安全性</strong>：通过的套件被视为架构良好的证据。</li>
+<li><strong>团队摩擦</strong>：规则阻止合法的功能工作，但没有人知道谁拥有异常流程。</li>
+<li><strong>过度测试生成的代码</strong>：Room、KSP、Compose、序列化或 DI 生成的源会产生编写代码规则无意判断的噪音。</li>
+<li><strong>广泛的软件包禁令</strong>：一条规则阻止了太多内容，因此工程师添加了排除项，直到该规则不再具有任何意义。</li>
+<li><strong>没有负面证据</strong>：该套件从未因故意违规而失败。</li>
+</ul>
+
+
+<p>解药不是更大的套房。它是一个更小、更明确的套件。每条规则都应该列出它所保护的决策、破坏它的成本以及预期的修复路径。</p>
+
+<h2>何时不使用它们</h2>
+
+<p>架构测试并不是自动值得的。</p>
+
+<p>对于一个很小的代码库来说，他们通常还为时过早，因为每个人仍然可以在头脑中掌握结构。在每周都会发现模块和包边界的早期产品中，它们可能会很吵。它们可能不太适合高度动态或反射的代码，其中有意义的依赖关系是运行时连接而不是可见的源结构。如果第一个套件尝试强制执行目标架构而不是团队实际迁移的架构，那么它们还可能会减慢具有严重流失的整体架构。</p>
+
+<p>在这些情况下，更轻的工具可能就足够了：</p>
+
+<ul>
+<li>简短的架构决策记录，</li>
+<li>模块所有权说明，</li>
+<li>接下来的一些更改的审核清单，</li>
+<li>一份非阻塞报告，在执行之前对违规行为进行计数。</li>
+</ul>
+
+
+<p>当边界足够稳定且可以强制实施且成本足够高而无法打破时，请使用架构测试。</p>
+
+<h2>失败的生活文档</h2>
+
+<p>架构图、自述文件、入门文档和审查清单都有帮助。他们都没有失败 CI。</p>
+
+<p>架构测试为规则提供了持久的形式：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>@Test
+</span><span class='line'>fun `domain must not depend on data or app modules`() {
+</span><span class='line'>    Konture.modules {
+</span><span class='line'>        that().haveNamePath(":domain")
+</span><span class='line'>        should().notDependOnModule(":data")
+</span><span class='line'>        should().notDependOnModule(":app")
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>测试名称记录了规则。断言定义了规则。失败输出告诉开发人员哪里违反了规则。</p>
+
+<p>这改变了评论对话。存储库无需要求审阅者在时间压力下记住每个边界，而是可以报告：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Architecture violation(s) detected:
+</span><span class='line'>Module :domain should not depend on :data, but a dependency was found.</span></code></pre></td></tr></table></div></figure>
+
+
+<p>团队仍在决定规则是否正确。该测试无需手动重新发现相同的违规行为。</p>
+
+<h2>组织影响</h2>
+
+<p>技术效果是边界强制。组织效应是共享记忆。</p>
+
+<p>对于新工程师来说，架构测试会压缩入职时间。它们显示了允许哪些依赖项、哪些 API 是有意公开的以及存在异常的位置。对于经验丰富的工程师来说，他们会减少重复的审核评论，因此代码审核可以专注于设计判断，而不是监管相同的导入。</p>
+
+<p>对于团队来说，权衡是自主性与一致性。平台或架构团队不应使用测试来集中每个本地决策。更好的模式是对一小组跨团队合约进行编码，并让功能团队拥有其余部分。当规则发生变化时，将这种变化视为架构决策：更新测试、更新 ADR 或文档（如果存在），并使迁移路径明确。</p>
+
+<p>从规模上看，架构测试作为治理的一部分效果最好，而不是作为治理的替代品：</p>
+
+<ul>
+<li>ADR 解释了边界存在的原因。</li>
+<li>架构测试检查边界是否仍然成立。</li>
+<li>CI 报告跨越边界的位置。</li>
+<li>审核者决定是否应更改边界或代码。</li>
+</ul>
+
+
+<h2>展示中的具体示例</h2>
+
+<p>Konture 存储库包括一个小型 Gradle 展示，它使用与上面示例相同的形状：<code>:app</code>、<code>:domain</code>、<code>:data</code> 和专用的 <code>:konture-test</code> 模块。</p>
+
+<p>它的架构套件不仅检查一条快乐路径规则。它结合了多种结构检查：</p>
+
+<ul>
+<li>模块图没有循环。</li>
+<li><code>:domain</code> 不依赖于 <code>:data</code> 或 <code>:app</code>。</li>
+<li><code>:data</code> 仅依赖于 <code>:domain</code>。</li>
+<li>..domain.. 中的类仅依赖于domain、Kotlin 或Java 包。</li>
+<li>域中的存储库声明是接口。</li>
+<li>用例签名不会泄漏“.data.”或“.app.”类型。</li>
+</ul>
+
+
+<p>一项测试故意证明错误的模块规则会引发“AssertionError”。故意错误的断言说“:data”应该只依赖于“:app”；示例项目具有依赖于“:domain”的“:data”，因此该规则失败，其形状与真实的架构回归相同：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Architecture violation(s) detected:
+</span><span class='line'>Module :data depends on :domain, which is not allowed by pattern(s): :app</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这很重要。从未失败的结构性规则可能不会检查团队认为正在检查的事情。</p>
+
+<p>示例套件是可执行的：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>./gradlew -p showcases/sample-gradle :konture-test:test</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在此存储库中，该命令成功运行架构测试模块并生成 Konture 用于评估模块感知规则的布局和依赖项元数据。</p>
+
+<h2>为什么这对于人工智能辅助开发很重要</h2>
+
+<p>AI编码助手擅长本地完成。他们可以导入可见的类，添加缺少的依赖项，并进行狭窄的测试通过。</p>
+
+<p>建筑通常是全球背景。</p>
+
+<p>此类说明有助于：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Keep domain independent from data.
+</span><span class='line'>Do not add sideways feature dependencies.
+</span><span class='line'>Map network DTOs before they reach UI state.</span></code></pre></td></tr></table></div></figure>
+
+
+<p>但及时的指示并不是强制执行。他们是指导。</p>
+
+<p>架构测试为人类和代理提供相同的反馈循环：</p>
+
+<ol>
+<li>变革跨越边界。</li>
+<li>对于具体模块、文件、导入或类型，测试失败。</li>
+<li>开发人员或代理使用预期的抽象来修复设计。</li>
+</ol>
+
+
+<p>这不是魔法，也不能代替复习。这是一种使结构规则对已经更改代码的工具可见的方法。</p>
+
+<h2>Kotlin 架构的未来压力</h2>
+
+<p>对结构性反馈的需求可能会增加，而不是减少。</p>
+
+<p>Compose Multiplatform 使 UI 代码可移植，但它也带来了新的问题：哪些 UI 抽象属于共享代码，哪些保持特定于平台。 Kotlin 2.x 和编译器插件密集型堆栈继续模糊编写的源代码与生成或转换的代码之间的界限。人工智能代理可以比审阅者手动检查每个模块边缘更快地生成大型的、局部合理的补丁。</p>
+
+<p>这并不意味着每个团队都需要更多规则。这意味着重要的规则需要是可执行的、狭窄的且易于修复的。面向未来的架构套件并不是最大的套件。它抓住了人类和特工最有可能意外跨越的界限。</p>
+
+<h2>当规则值得 CI 执行时</h2>
+
+<p>并不是每个好主意都应该阻碍构建。当其中大部分为真时，规则是 CI 的良好候选者：</p>
+
+<ul>
+<li>团队可以解释破坏它的成本。</li>
+<li>该规则在正常功能工作中是稳定的。</li>
+<li>违规行为通常是错误，而不是合法的设计选择。</li>
+<li>失败消息指出了可行的修复方法。</li>
+<li>异常很少见，可以明确命名。</li>
+<li>该规则捕获编译器、linter 或单元测试未捕获的内容。</li>
+</ul>
+
+
+<p>如果一条规则在正常开发过程中不断失败，则它可能过于宽泛。如果一条规则需要许多安静的排除，它可能会假装架构比实际情况更干净。如果没有人能解释它为什么存在，它就不应该阻止交付。</p>
+
+<p>从保护已知难题的规则开始：模块循环、域到数据依赖关系、功能实现耦合、公共 API 泄​​漏以及平台 API 泄​​漏到共享 KMP 代码中。</p>
+
+<h2>实际回报</h2>
+
+<p>架构测试可帮助团队保留使未来更改成本更低的结构：</p>
+
+<ul>
+<li>它们使领域逻辑独立于框架和持久性。</li>
+<li>它们可以防止意外的 Gradle 边缘扩大重新编译范围。</li>
+<li>它们保护 API 模块免遭泄露实现细节。</li>
+<li>他们有意提高公众知名度。</li>
+<li>他们将重复的审核意见转化为对特定模块、文件、导入或类型失败的检查。</li>
+</ul>
+
+
+<p>目标不是僵化的架构。目标是显式架构。</p>
+
+<p>一旦团队选择了结构，构建就应该有助于保护它。</p>
+
+<p>下一篇文章重点介绍本入门仅暗示的部分：为什么仅源规则会错过 Gradle 依赖漂移、为什么仅 Gradle 规则会错过源级别类型泄漏，以及为什么 Kotlin 架构测试同时需要两个视图。</p>
+
+<ul>
+<li><a href="https://github.com/baole/konture">GitHub - baole/konture：定义、执行和自动化架构规则作为快速、轻量级的 Kotlin 单元测试运行。完全支持 Kotlin 多平台 (KMP)、Android 和服务器端（Ktor、Spring）。</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-why-konture-exists-4ac92a4dd3ba">Kotlin 架构测试：Konture 为何存在 - 第 2/3 部分</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-with-konture-a-practical-guide-part-3-3-1f36ebe685db">使用 Konture 进行 Kotlin 架构测试：实用指南 - 第 3/3 部分</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[规范驱动开发：让AI生成符合预期的KMP代码]]></title>
@@ -7299,192 +7728,6 @@
 <li><p><a href="https://github.com/arkivanov/MVIKotlin">MVIKotlin</a> (Arkadii Ivanov) — 成熟且久经考验的 MVI 框架，具备时间旅行调试功能，并着重于 KMP（Kotlin 跨平台管理）。广泛应用于 Kotlin 多平台项目。<a href="https://arkivanov.github.io/MVIKotlin/">文档</a></p></li>
 </ul>
 
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Jetpack Compose元球边缘效果]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect/"/>
-    <updated>2026-04-18T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Jetpack Compose Metaball Edge Effect — Final Part」，原文链接<a href="https://proandroiddev.com/jetpack-compose-metaball-edge-effect-final-part-ac8a4cc7a425">https://proandroiddev.com/jetpack-compose-metaball-edge-effect-final-part-ac8a4cc7a425</a>，由Yuriy Skul发布于2026年3月21日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/04/18/metaball-edge-effect/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*oKSE6UFKtEYhxgmqDBv7mw.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<h2>背景</h2>
-
-<p>我探索了几种 Metaball 交互方法——都不算太复杂，只是模糊和 alpha 阈值。</p>
-
-<p>但由于 <code>blur()</code>（API 31+）和 <code>RenderEffect</code>（API 31+）有最低 API 级别要求，而用于 alpha 过滤的运行时着色器（AGSL）仅在 API 33 及更高版本中可用，因此我也探索了适用于旧版 Android 的替代方案。</p>
-
-<p>我还尝试在两个带轮廓的圆形按钮之间实现 Metaball 效果——方法相同，但使用的是描边而不是填充形状。与颜色矩阵不同，AGSL 允许在特定的 alpha 范围内进行过滤，这使得渲染成为可能（参见 Supra 部分的底部）：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:600/1*BcYrSQMs8ZhimgPIN791DA.gif" alt="跨 API 的 Metaball 效果" /></p>
-
-<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/gooey">跨 API 的 Metaball 效果的 GitHub 链接</a></p>
-
-<p><a href="https://medium.com/@yuriyskul/compose-agsl-shader-gooey-outline-metaball-effect-with-transparent-background-cb8b0e72286c">Medium “Supra” 概述文章链接</a></p>
-
-<p>但后来我突然想到一个简单而优雅的想法——实现滚动内容与屏幕边缘之间的元球交互方式相同。在我看来，它看起来非常简洁美观，就像物体之间的元球交互一样。</p>
-
-<p>这个概念验证非常简单——只需在顶部和底部边缘附近添加垂直渐变带，模糊圆形对象，并应用常规的 alpha 阈值过滤：<a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAndText/tabs/edge">github 链接“Gooey Edge”选项卡</a>:</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:500/1*_UK9XXKiySTuVavXyjetIA.gif" alt="POC（元球边缘效果）" /></p>
-
-<p>对文本进行简单探索后发现，根据模糊半径、alpha 阈值和文本大小的不同，结果会有所不同——从一大块实心斑点到一小块，甚至在 alpha 过滤后完全没有效果。</p>
-
-<p>文本替换动画的一个好方法是，将模糊效果从 0 动画到某个值，交换文本，然后再动画回来。</p>
-
-<p>有趣的是，根据你调整元球参数的方式，你可以得到几种不同的行为：</p>
-
-<ul>
-<li><p>文本先变成元球，然后再变成另一段文本</p></li>
-<li><p>文本变成元球，缩小并消失，然后这个过程反向进行，变成一段新的文本</p></li>
-<li><p>文本立即融化，然后出现一段新的文本（我不喜欢这种效果）</p></li>
-</ul>
-
-
-<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAndText/tabs/text">GitHub 链接 “文本融化”选项卡</a></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:700/1*nPWAVvYCNYqdLTg_zRYsnA.gif" alt="文本变形概念" /></p>
-
-<blockquote><p>也许很多人（包括我自己）都做过类似的事情，但第一个公开分享的人是…… <strong>Sinasamaki</strong> 以简洁明了的方式分享了这一概念，因此将这一理念引入 Android 平台是理所应当的。他的所有作品都是杰作——纯粹的艺术作品。</p>
-
-<p><a href="https://www.sinasamaki.com/5-metaball-animations-in-jetpack-compose/"><strong>Sinasamaki — metaball 教程</strong></a></p></blockquote>
-
-<p>滚动文本的 metaball 效果的主要问题在于，模糊效果是以 <code>RenderEffect</code> 的形式应用于整个可组合对象（包含文本的滚动列）。结果，所有文本都会变得模糊，metaball 的交互不再局限于预期的区域（顶部和底部边缘附近）。</p>
-
-<p>相反，整个内容变成了一大块黑色的色块。你越是想让 metaball 效果更强烈、更吸引眼球，情况就越糟糕——因为文本首先会与自身交互，然后才会（以微弱的方式）与屏幕边缘交互。</p>
-
-<p>首先，我尝试构建一个变通方案——在原始文本上方同步渲染相同的文本，然后叠加顶部和底部区域，对其进行模糊处理，最后应用相同的效果。最终，我得到了一个可行的解决方案，但仍然不够完善，而且充满了各种变通方法。</p>
-
-<p>因此，我得出结论，我需要一个 <strong>自定义模糊效果，可以局部应用于所需区域（顶部和底部边缘），并且模糊强度随着靠近边缘而增加。</strong></p>
-
-<p>我围绕仅使用 alpha 通道的模糊效果进行了一系列测试和实验（因为元球效果不需要 RGB 模糊）。我比较了线性模糊和高斯模糊两种方法，并尝试了不同的内核质量——16dp（约17次点击）左右效果不错，但超过这个值就需要多次渲染（约61次点击）。使用更高的值（100次以上点击）很快就会变得过于耗费资源。</p>
-
-<p><a href="https://medium.com/@yuriyskul/agsl-alpha-blur-with-local-regions-and-dynamic-radius-linear-and-gaussian-17-61-101-taps-3a36198c9567">我的文章介绍了使用动态半径的自定义AGSL局部模糊。</a></p>
-
-<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/customAlphaBlur">自定义Alpha模糊实验的GitHub链接</a>.</p>
-
-<p>对于元球效果，我选择了以下结果：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:700/1*hSsNmOQP9-tQUwYS9u76JA.gif" alt="自定义高斯 AGSL alpha 模糊" /></p>
-
-<p>我已经准备好了……</p>
-
-<h2>垂直滚动解决方案</h2>
-
-<p>实现起来相对简单。</p>
-
-<p>滚动文本放置在一个 <code>Column</code> 元素内，并仅对顶部和底部区域应用自定义模糊效果。随着内容接近滚动容器边缘，模糊强度逐渐增强。</p>
-
-<p>当处理像文本这样非常小的元素（笔画宽度只有几个 dp）时，所有 metaball 配置参数——例如自定义局部模糊区域的高度或渐变带——也都会变得非常小。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:864/1*mJhhmhq7DbEkkOtG3ReFgw.png" alt="添加局部模糊以实现“融化”效果" /></p>
-
-<p>为了实现“黏糊糊”效果，添加了高度为 16dp 的小型渐变带，垂直渐变范围为 0.4 到 0。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:856/1*toHSAwCjRt_hahUyMdEL4w.png" alt="添加局部模糊和垂直渐变带以实现“黏糊糊”效果" /></p>
-
-<p>根据之前对文本及其变换的实验，观察到两种现象：文本要么消失，要么变成一团模糊的色块。</p>
-
-<p>边缘附近的消失可以称为“融化”效果，而与边缘融合也可以称为“黏糊糊”效果。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*doBo1WfYpy9_f1sikUHrAw.gif" alt="结果：文字融化效果" /></p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:900/1*CKR3sa0_hxJIPNYTyMf8lg.gif" alt="结果：文字粘稠效果" /></p>
-
-<p>问题解决了——但我并不满意。这和我预想的完全不一样。它看起来没有我想象中那么干净利落，也没有那么惊艳。</p>
-
-<p>为了获得至少像样的效果，需要对所有这些参数进行大量调整：模糊程度、AGSL 应用区域、透明度阈值以及渐变带中的最大透明度。所有这些都与文本大小有关，而如果文本大小以 <code>sp</code> 为单位定义，则不稳定，甚至行间距也可能导致画面模糊。</p>
-
-<p>此外，由于 <code>RenderEffect</code> 的存在，我们仍然依赖于 API 级别。无论我如何尝试，自定义 alpha 模糊的效果都不如系统自带的模糊效果高效可靠，而且可能会引入瑕疵，尤其是在边缘处。</p>
-
-<p>另外，字母与边缘的融合（这是我们想要的效果）也存在一个缺点——字母之间会相互融合，导致形状变成模糊的色块。遗憾的是，目前还没有彻底消除这些副作用的方法。</p>
-
-<p>虽然无法阻止字母自身融合，但在水平滚动的情况下，相邻字母之间不会发生融合。</p>
-
-<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgesAdvanced"><strong>GitHub 链接：垂直滚动解决方案</strong></a></p>
-
-<h2>水平滚动解决方案</h2>
-
-<p>对于相对于模糊半径而言较大的对象，例如带有图标的大型圆形元素，或者更粗更大的图标，可以获得更稳定的效果。此外，即使是巨大的单行文本水平滚动时，效果也会更好。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">//left/right custom blur local zones width and gradient edge boxes width</span>
-</span><span class='line'><span class="k">val</span> <span class="py">effectMagnitude</span> <span class="p">=</span> <span class="m">56.</span><span class="n">dp</span>
-</span><span class='line'><span class="k">val</span> <span class="py">blurRadius</span> <span class="p">=</span> <span class="m">30.</span><span class="n">dp</span>
-</span><span class='line'><span class="k">val</span> <span class="py">alphaThresholdEffect</span> <span class="p">=</span> <span class="n">alphaThreshold50PercentEffect</span>
-</span><span class='line'><span class="c1">// Max horizontal gradient</span>
-</span><span class='line'><span class="k">val</span> <span class="py">edgeAlpha</span> <span class="p">=</span> <span class="m">0.5f</span>
-</span><span class='line'><span class="k">val</span> <span class="py">circleSize</span> <span class="p">=</span> <span class="m">72.</span><span class="n">dp</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*2-gmg2aux2EE91HyxKHj1w.gif" alt="带有圆形元素的水平滚动元球" /></p>
-
-<p>对于大型图标，效果仍然对小型和细元素非常敏感——请注意搜索、勾选和加号图标的情况。对于这些图标，需要降低透明度阈值并减小模糊半径。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">effectMagnitude</span> <span class="p">=</span> <span class="m">56.</span><span class="n">dp</span>
-</span><span class='line'><span class="k">val</span> <span class="py">blurRadius</span> <span class="p">=</span> <span class="m">30.</span><span class="n">dp</span>
-</span><span class='line'><span class="k">val</span> <span class="py">alphaThresholdEffect</span> <span class="p">=</span> <span class="n">alphaThreshold50PercentEffect</span>
-</span><span class='line'><span class="k">val</span> <span class="py">edgeAlpha</span> <span class="p">=</span> <span class="m">0.5f</span>
-</span><span class='line'><span class="k">val</span> <span class="py">iconSize</span> <span class="p">=</span> <span class="m">56.</span><span class="n">dp</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*x650hs9weqrghnkSUbLEnA.gif" alt="Plain Icons meaball edge effect — very sensitive for small and thin elements" /></p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">effectMagnitude</span> <span class="p">=</span> <span class="m">30.</span><span class="n">dp</span>
-</span><span class='line'><span class="k">val</span> <span class="py">blurRadius</span> <span class="p">=</span> <span class="m">20.</span><span class="n">dp</span>
-</span><span class='line'><span class="k">val</span> <span class="py">alphaThresholdEffect</span> <span class="p">=</span> <span class="n">alphaThreshold30PercentEffect</span>
-</span><span class='line'><span class="k">val</span> <span class="py">edgeAlpha</span> <span class="p">=</span> <span class="m">0.3f</span>
-</span><span class='line'><span class="c1">//use dp instead of sp for stable effect</span>
-</span><span class='line'><span class="k">val</span> <span class="py">HorizontalTextSize</span> <span class="p">=</span> <span class="m">56.</span><span class="n">sp</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1200/1*WL1n3it2q2fV0EpzJhpq0g.gif" alt="Metaball Edge Horizo​​ntal Text" /></p>
-
-<p><strong>自定义模糊效果可以替换为常规模糊效果吗？</strong> 可以，但这会引入一个关键问题：整个内容都会变得模糊，并且到处都会出现不必要的 Metaball 交互。在之前的文章中，我们已经探讨并解决了这个问题。</p>
-
-<p><strong>我们可以避免使用 RenderEffect 模糊或自定义模糊吗？</strong></p>
-
-<p>可以。在我之前的文章中，我探讨了绘制发光光晕边框的六种不同方法，同样的思路也适用于这里——在圆形元素周围绘制模糊蒙版滤镜或光晕渐变。这样，圆形元素的内部就不会变形。</p>
-
-<p>然而，你仍然需要解决相邻元素通过其“透明度”相互交叉的问题，从而导致重叠区域可见。一个简单的办法是检测最左侧和最右侧的元素，并仅对它们应用效果。</p>
-
-<p><a href="https://github.com/yuriyskulskiy/android-compose-playground/tree/main/app/src/main/java/com/skul/yuriy/composeplayground/feature/metaballEdgeHorizo%E2%80%8B%E2%80%8BntalScroll"><strong>GitHub 链接：水平滚动解决方案</strong></a></p>
-
-<h2><strong>结论</strong></h2>
-
-<p><strong>是的，局部自定义模糊可以显著简化问题。</strong> 然而，它并不能解决视觉上的“污渍”问题。内容往往先变成一团模糊的色块，然后才开始与边缘互动。</p>
-
-<p>元球效果与液态玻璃（玻璃变形）等效果的主要区别在于，<strong>元球效果发生在元素之间</strong>。这种效果发生在用户界面元素之外，在它们之间的空间中，那里可能存在许多其他元素。</p>
-
-<p>相比之下，玻璃变形在视觉上<strong>被包含在单个组件内</strong>。</p>
-
-<p>因此，液态玻璃通常看起来干净利落，而元球效果在涉及多个元素时很容易变得杂乱无章。</p>
 ]]></content>
   </entry>
   
