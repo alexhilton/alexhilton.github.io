@@ -1,0 +1,941 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>架构测试为何需要双视图 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="架构测试只靠字节码或源码扫描都不够：本文剖析 Gradle 构建图与 Kotlin 源代码两种视角，说明 Konture 如何把它们结合成可执行规则，并给出规则取舍与失败模式的实践建议。">
+  <meta name="keywords" content="Kotlin, Konture, Archtecture, Test">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/09/07/kotlin-architecture-tests-why-konture-exists">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">架构测试为何需要双视图</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-09-07'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>7</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Kotlin Architecture Tests: Why Konture Exists」，原文链接<a href="https://proandroiddev.com/kotlin-architecture-tests-why-konture-exists-4ac92a4dd3ba">Kotlin Architecture Tests: Why Konture Exists</a>，由Bao Le发布于2026年7月16日。</p></blockquote>
+
+<p><em>Kotlin 架构对同一架构有两种不同的理解：Gradle 图决定了哪些组件可以链接，而 Kotlin 源代码模型决定了代码的实际内容。Konture 的存在就是为了测试这两种理解。</em></p>
+
+<p>考虑以下来自 Android 项目的规则：</p>
+
+<blockquote><p>展示代码不得在屏幕状态或面向 UI 的 API 中暴露传输 DTO。</p></blockquote>
+
+<p>这条规则在两个不同的地方都可能失效。</p>
+
+<p>当表示模块直接连接到传输模块时，构建图可能会失败：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>// feature/profile/presentation/build.gradle.kts
+</span><span class='line'>dependencies {
+</span><span class='line'>    implementation(project(":core:network"))
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>它在源端也可能失败：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>package com.acme.profile.presentation
+</span><span class='line'>import com.acme.network.dto.UserDto
+</span><span class='line'>data class ProfileUiState(
+</span><span class='line'>    val user: UserDto,
+</span><span class='line'>)</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这些故障彼此关联，但并不完全相同。第一种是 Gradle 模块的物理依赖问题，第二种是源代码级别的导入问题。一款优秀的 Kotlin 架构测试工具必须能够识别这两种故障，因为多平台系统同时受这两种因素的影响。</p>
+
+<p>这就是 Konture 存在的理由。</p>
+
+<h2>不完整的观点</h2>
+
+<p>现有工具很有用。Konture 的目的并非取代编译器、代码检查器、测试运行器或所有架构测试库。问题在于，Kotlin 项目的每种视图都会有所遗漏。</p>
+
+<table>
+<thead>
+<tr>
+<th> 视图 </th>
+<th> 优势 </th>
+<th> 不足 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> JVM 字节码 </td>
+<td> 已编译类及其依赖关系 </td>
+<td> Kotlin 源代码意图、源代码集、Gradle 项目边界、部分编译器插件的影响 </td>
+</tr>
+<tr>
+<td> Kotlin 源代码扫描 </td>
+<td> 包、导入、声明、修饰符、注解 </td>
+<td> 真实的 Gradle 模块图和项目依赖策略 </td>
+</tr>
+<tr>
+<td> Gradle 图检查 </td>
+<td> 模块、源代码集、已声明的项目依赖关系 </td>
+<td> 源代码级导入、公共签名、可见性和类型泄漏 </td>
+</tr>
+<tr>
+<td> 代码检查工具 </td>
+<td> 局部风格和单文件质量 </td>
+<td> 整体项目结构和架构所有权 </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>Kotlin架构贯穿于这些观点之中。</p>
+
+<p>你可以在已提交的示例中看到这一点。“Now in Android”示例包含 36 个 Gradle 项目（位于 <code>settings.gradle.kts</code> 文件中），其中包括 API/实现功能拆分和一个专门的 <code>:konture-test</code> 项目。<a href="https://github.com/baole/kotlinconf-app/tree/main/konture-test">KotlinConf KMP 示例</a> 包含 9 个 Gradle 项目，涵盖共享核心、后端、Android、桌面、Web、管理和架构测试。单视图工具在这些项目中仍然有用，但它无法自然地看到项目使用的所有边界。</p>
+
+<h2>工具对比</h2>
+
+<p>实际问题不是“哪个工具最好？”，而是“哪个工具遵循哪种规则？”</p>
+
+<table>
+<thead>
+<tr>
+<th> 工具选项 </th>
+<th> 优势 </th>
+<th> 劣势 </th>
+<th> 适用场景 </th>
+<th> 与 Konture 结合使用 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> ArchUnit </td>
+<td> 成熟的 JVM 字节码规则和类依赖性检查 </td>
+<td> Gradle 项目图、KMP 源集、源代码级 Kotlin 意图 </td>
+<td> 系统主要基于 JVM，规则在已编译类中可见 </td>
+<td> 你还需要模块依赖策略、Kotlin 可见性或 KMP/平台边界 </td>
+</tr>
+<tr>
+<td> detekt 自定义规则 </td>
+<td> Kotlin PSI、样式、命名、本地声明规则 </td>
+<td> Gradle 模块图和跨模块依赖策略 </td>
+<td> 该规则类似于 lint：命名、注解、本地源代码约定 </td>
+<td> lint 发现的问题需要与模块所有权或公共 API 边界一致 </td>
+</tr>
+<tr>
+<td> Gradle Doctor 或模块图插件 </td>
+<td> 构建健康状况、项目图可见性、依赖性报告 </td>
+<td> 源导入、签名、类可见性、API 泄漏 </td>
+<td> 你需要图洞察、构建性能报告或依赖性卫生 </td>
+<td>图边缘只是故事的一半，源代码级别的泄漏也至关重要 </td>
+</tr>
+<tr>
+<td> 自定义 PSI 工具 </td>
+<td> 高度特定的 Kotlin 源代码规则 </td>
+<td> 维护成本、构建集成、图感知 </td>
+<td> 你拥有一个针对特定组织的规则，团队可以拥有该工具 </td>
+<td> 自定义规则应与构建图契约并行运行 </td>
+</tr>
+<tr>
+<td> 运行时或 UI 测试工具，例如 Kakao </td>
+<td> 用户流程和 Android UI 行为 </td>
+<td> 静态架构 </td>
+<td> 你正在验证行为、页面和交互流程 </td>
+<td> 结构边界应在成为运行时行为缺陷之前失效 </td>
+</tr>
+<tr>
+<td> 简单的审查清单 </td>
+<td> 判断、细微差别、例外情况 </td>
+<td> 在时间压力下的一致性 </td>
+<td> 规则仍在不断演变或取决于人为设计的权衡 </td>
+<td> 清单项变得足够稳定，可以在 CI 中执行 </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>Konture 的赌注很窄：Kotlin 架构需要一个单一的测试表面，能够同时讨论 Gradle 模块和 Kotlin 源代码声明。</p>
+
+<h2>促使它发生的失败模式</h2>
+
+<p>最昂贵的架构故障很少始于“糟糕的架构”，它们往往始于合理的局部修复：</p>
+
+<ul>
+<li>一个功能实现导入了另一个功能实现，因为 API 模块尚未公开某个缺失的契约。</li>
+<li>一个共享的 KMP 模块在截止日期前接受了一个 Android 导入，之后发现桌面或 iOS 无法再干净地重用该代码。</li>
+<li>一个公共存储库接口返回一个数据库实体，因为该实体已经包含所需的字段。</li>
+<li>后端路由直接调用存储库，因为服务层对于一个端点来说过于繁琐。</li>
+</ul>
+
+
+<p>每一次失败都会产生利息债务。下一次重构必须先偿还隐藏的耦合，才能实现预期的变更。下一个平台目标必须分离原本应该可移植的 API。下一个代码审查员必须从分散的导入和构建文件中重构架构决策。</p>
+
+<p>Konture 的设计初衷就是为了解决这类问题：它既不是纯粹的源代码级规则，也不是纯粹的构建级规则，而是架构级规则，因为它介于两者之间。</p>
+
+<h3>字节码固然重要，但它并非 Kotlin 程序的全部。</h3>
+
+<p><a href="https://www.archunit.org">ArchUnit</a> 已成熟并被证明适用于 JVM 系统。如果你的架构规则可以从编译后的类中得到解答，那么字节码分析通常是一个不错的选择。</p>
+
+<p>现代 Kotlin 项目通常需要比这更多的上下文信息。</p>
+
+<p>Kotlin 源代码结构并非总能与团队想要维护的源代码级设计完美契合。顶层函数和扩展函数会被编译成生成的持有者类。内联函数会将函数体移至调用点。<code>object</code>、委托属性和编译器插件可能会引入一些对运行时很重要但对源代码级设计规则而言却显得冗余的生成结构。</p>
+
+<p>但这并不意味着字节码分析是错误的。而是说，对于诸如以下规则而言，字节码并非最佳的主要分析视角：</p>
+
+<ul>
+<li><code>:feature:checkout:impl</code> 是否依赖于同级实现模块？</li>
+<li><code>commonMain</code> 是否导入了 Android API？</li>
+<li>公共领域签名是否暴露了持久化类型？</li>
+<li><code>impl</code> 包在源代码中是否保持内部状态？</li>
+</ul>
+
+
+<p>这些是 Kotlin 和 Gradle 架构方面的问题，而不仅仅是 JVM 类方面的问题。</p>
+
+<h3>源代码扫描很有用，但文件夹并非构建方式</h3>
+
+<p>Kotlin优先的源代码扫描器擅长处理声明、导入、命名、注解和可见性。它们可以表达许多字节码工具难以处理的规则。</p>
+
+<p>但源代码目录并非 Gradle 项目。包名并非模块依赖项。名为 <code>api</code> 的文件夹与通过 <code>api</code> 或 <code>implementation</code> 依赖的其他项目所依赖的模块并不相同。</p>
+
+<p>这种区别在 Android 和 Kotlin 多平台项目中至关重要：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>:app 
+</span><span class='line'>:core:domain 
+</span><span class='line'>:core:data 
+</span><span class='line'>:feature:checkout:api 
+</span><span class='line'>:feature:checkout:impl 
+</span><span class='line'>:feature:profile:api 
+</span><span class='line'>:feature:profile:impl 
+</span><span class='line'>:shared 
+</span><span class='line'>:androidApp 
+</span><span class='line'>:iosApp</span></code></pre></td></tr></table></div></figure>
+
+
+<p>构建过程已经知道哪些模块存在、哪些源集是生产源集，以及声明了哪些项目依赖项。架构测试应该使用这些信息，而不是仅仅依靠命名约定来重建架构。</p>
+
+<h3>代码检查器不是架构测试器</h3>
+
+<p><code>detekt</code> 和 <code>ktlint</code> 非常擅长局部检查。它们并非设计用于回答系统整体问题：</p>
+
+<ul>
+<li>此模块是否依赖于被禁止的同级模块？</li>
+<li>某个功能实现是否对其他实现可见？</li>
+<li>项目图是否存在循环？</li>
+<li>公共 API 是否暴露了其他层拥有的类型？</li>
+</ul>
+
+
+<p>这些不是格式问题，而是所有权和依赖关系问题。</p>
+
+<h2>Konture的双视图模型</h2>
+
+<p>Konture 将构建视图和源代码视图结合在一起。</p>
+
+<p>构建视图包括：</p>
+
+<ul>
+<li>Gradle 模块。</li>
+<li>源代码集。</li>
+<li>生产环境 Kotlin 源代码目录。</li>
+<li>已声明的项目依赖项。</li>
+<li>已应用的插件上下文。</li>
+</ul>
+
+
+<p>源视图包括：</p>
+
+<ul>
+<li>文件、包和导入。</li>
+<li>类、接口、函数和属性。</li>
+<li>可见性和注解。</li>
+<li>项目类之间的引用。</li>
+</ul>
+
+
+<p><a href="/blog/2026/09/07/kotlin-architecture-tests-why-konture-exists/"><img src="https://cdn-images-1.medium.com/max/1024/1*kR64C8EwBIQFX19VjXKcNA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>Konture 同时支持独立的断言（例如 <code>Konture.modules { ... }</code>）和分组断言块。当相关的模块和源规则需要作为一个架构契约运行时，请使用 <code>Konture.architecture { ... }</code>：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Konture.architecture {
+</span><span class='line'>    modules {
+</span><span class='line'>        that().haveNamePath(":shared")
+</span><span class='line'>        should().notDependOnModule(":androidApp")
+</span><span class='line'>    }
+</span><span class='line'>    classes {
+</span><span class='line'>        that().resideInAPackage("..shared..")
+</span><span class='line'>        should().onlyDependOnClassesInAnyPackage(
+</span><span class='line'>            "..shared..",
+</span><span class='line'>            "kotlin..",
+</span><span class='line'>            "java..",
+</span><span class='line'>        )
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>模块规则捕获物理构建依赖关系，源代码规则捕获源代码级别的引用模式。两者结合使用，可以覆盖构建检查或源代码检查单独都无法完全覆盖的边界。</p>
+
+<h2>什么是 Konture</h2>
+
+<p>Konture 是一个 Kotlin 架构测试库，由两个协调的部分组成：</p>
+
+<ul>
+<li>一个 Gradle 插件，用于捕获项目布局、源代码集和模块依赖关系。</li>
+<li>一个断言库，允许团队像编写普通 Kotlin 测试一样编写架构规则。</li>
+</ul>
+
+
+<p>它不需要自定义测试运行器。架构测试可以在 JUnit、Kotest、TestBalloon 或项目已使用的其他 Kotlin/JVM 运行器下运行。</p>
+
+<p>Konture 也与架构无关。它不规定必须采用 Clean Architecture、MVVM、六边形架构、特性切片或 DDD。这些都是设计选择。Konture 的任务是使所选设计可执行。</p>
+
+<p>这种区别至关重要。Android 团队可能会保护功能 API 和实现模块。后端团队可能会保护端口和适配器。KMP 团队可能会确保共享代码不依赖于平台。库团队可能会防止实现类型泄露到公共包中。</p>
+
+<p>Konture应该将团队的政策写入代码，而不是凭空捏造。</p>
+
+<h2>API设计理念</h2>
+
+<p>DSL有意与普通测试非常接近：</p>
+
+<ul>
+<li><code>Konture.modules { ... }</code> 用于 Gradle 项目和源集策略。</li>
+<li><code>Konture.classes { ... }</code>、<code>Konture.files { ... }</code>、<code>Konture.functions { ... }</code> 和 <code>Konture.properties { ... }</code> 用于源声明。</li>
+<li><code>Konture.layered { ... }</code> 用于可读的定向包规则。</li>
+<li><code>Konture.architecture { ... }</code> 将相关的模块和源规则组合成一个契约。</li>
+<li>诸如 <code>scopeFromPackage</code> 和 <code>scopeFromModule</code> 之类的函数式作用域为自定义谓词提供了逃生通道。</li>
+</ul>
+
+
+<p>这种结构是经过精心设计的。架构规则由可能不参与架构工具开发的工程师审核。规则的编写方式应像测试用例一样，失败方式也应像测试用例一样，并且应与验证套件的其他部分并存。</p>
+
+<p>扩展点即谓词。当流畅的 DSL 过于抽象时，团队可以直接检查导入、注解、可见性、超类型、文件路径、源集或模块依赖关系，并编写更具体的断言。这样可以将非常规策略保留在项目代码中，而无需 Konture 为每个组织的架构都编写一个关键字。</p>
+
+<h2>三个结构性工作</h2>
+
+<p>架构测试最有价值的地方在于，它们能够保护那些日后修复成本高昂的决策。在 Kotlin 系统中，这些决策通常可以归纳为以下三个方面。</p>
+
+<table>
+<thead>
+<tr>
+<th> 任务 </th>
+<th> 威胁 </th>
+<th> 构建级规则 </th>
+<th> 源代码级规则 </th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td> 逻辑隔离 </td>
+<td> 层或模块之间的依赖关系被禁止 </td>
+<td> <code>:domain</code> 不依赖于 <code>:data</code>；功能实现不依赖于同级实现 </td>
+<td> 域包不导入数据、UI、框架或平台包 </td>
+</tr>
+<tr>
+<td> API 封闭性 </td>
+<td> 实现细节成为公共契约 </td>
+<td> API 模块与实现模块保持分离 </td>
+<td> 公共签名不暴露持久化、传输或框架类型 </td>
+</tr>
+<tr>
+<td> 机制规范 </td>
+<td> 结构更难导航和构建 </td>
+<td> 模块图不存在循环 </td>
+<td> 文件避免通配符导入、类/文件不匹配或不受控制的生成代码区域 </td>
+</tr>
+</tbody>
+</table>
+
+
+<p>关键不在于制定庞大的规则集，而在于保护少数几个能够保证代码库可变更的结构性选择。</p>
+
+<h2>Gradle意识即平台工程</h2>
+
+<p>Kotlin 团队通常使用模块来管理所有权、编译范围和功能独立性。这使得 Gradle 图成为一个平台层面的问题，而不仅仅是构建文件的细节。</p>
+
+<p>请考虑以下常见政策：</p>
+
+<p>功能实现模块之间不得依赖其他功能实现模块。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*AnJu0Y3bcaK6Zj4zyToMXA.png" alt="无标题图像" /></p>
+
+<p>如果 <code>:feature:checkout:impl</code> 添加了此依赖项：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>implementation ( project ( ":feature:profile:impl" ))</span></code></pre></td></tr></table></div></figure>
+
+
+<p>构建可能仍然会通过。这项功能甚至可能更快发布。但模块图现在显示，检出操作与配置文件内部结构耦合在一起。</p>
+
+<p>这会产生实际后果：</p>
+
+<ul>
+<li>配置文件实现方式的变更可能会导致下游工作量增加。</li>
+<li>由于内部变更跨越了功能边界，构建缓存的重用效率降低。</li>
+<li>由于其他功能现在可能依赖于配置文件内部结构，重构配置文件变得更加困难。</li>
+<li>代码审查人员必须手动检查构建文件的偏差。</li>
+</ul>
+
+
+<p>一条支持 Gradle 的规则使边界可执行：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Konture.modules {
+</span><span class='line'>    that().haveNameMatching(":feature:**:impl")
+</span><span class='line'>    should().onlyDependOnModules(
+</span><span class='line'>        ":feature:**:api",
+</span><span class='line'>        ":core:**",
+</span><span class='line'>        ":shared",
+</span><span class='line'>    )
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这不仅仅是“整洁架构”，它还将构建健康和所有权编码为一个测试。</p>
+
+<h2>来源意识保护语义边界</h2>
+
+<p>干净的 Gradle 图并不能证明源代码语义的正确性。</p>
+
+<p>例如，<code>:data</code> 可能正确地依赖于 <code>:domain</code>，以便实现领域接口。但是，开发人员仍然可能将持久化模型泄露到面向领域的 API 中：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>package com.acme.domain
+</span><span class='line'>import com.acme.data.UserEntity
+</span><span class='line'>interface UserRepository {
+</span><span class='line'>    fun getUser(id: UserId): UserEntity
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>单凭构建图可能无法看出问题所在，但源模型可以。</p>
+
+<p>架构测试可以检查导入、包、声明、可见性和签名：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Konture.classes {
+</span><span class='line'>    that().resideInAPackage("..domain..")
+</span><span class='line'>    should().onlyDependOnClassesInAnyPackage(
+</span><span class='line'>        "..domain..",
+</span><span class='line'>        "kotlin..",
+</span><span class='line'>        "java..",
+</span><span class='line'>    )
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于外部框架，自定义导入谓词可以明确地表达该策略：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Konture.scopeFromPackage("com.acme.domain")
+</span><span class='line'>    .assertTrue("Domain must not import framework or persistence APIs") { cls -&gt;
+</span><span class='line'>        cls.imports.none { fqName -&gt;
+</span><span class='line'>            fqName.startsWith("android.") ||
+</span><span class='line'>                fqName.startsWith("androidx.compose.") ||
+</span><span class='line'>                fqName.startsWith("org.springframework.") ||
+</span><span class='line'>                fqName.startsWith("jakarta.persistence.")
+</span><span class='line'>        }
+</span><span class='line'>    }</span></code></pre></td></tr></table></div></figure>
+
+
+<p><code>scopeFromPackage("com.acme.domain")</code> 为自定义断言选择一个具体的包前缀。相比之下，<code>resideInAPackage("..domain..")</code> 在流畅类规则中使用 Konture 的通配符包匹配。</p>
+
+<p>这是架构治理的源代码层面：不仅包括哪些模块可以链接，还包括哪些概念允许出现在代码的哪些部分。</p>
+
+<h2>权衡取舍与失效模式</h2>
+
+<p>架构测试应该像其他任何生产安全保障措施一样受到质疑。糟糕的规则只会拖累项目进展。</p>
+
+<p>常见失效模式：</p>
+
+<ul>
+<li><strong>规则过于宽泛</strong>：禁止在域中使用 <code>kotlinx..</code> 可能会意外地阻止协程或序列化的合法使用。</li>
+<li><strong>隐藏的例外</strong>：排除大型遗留包可能会使规则看起来比实际更强。</li>
+<li><strong>生成的代码噪音</strong>：生成的源代码可能需要显式处理，以确保规则能够保护编写的代码。</li>
+<li><strong>KMP 复杂性</strong>：<code>commonMain</code>、<code>androidMain</code> 和 <code>iosMain</code> 通常需要不同的策略。</li>
+<li><strong>混合 Java/Kotlin 项目</strong>：除非项目有意考虑到 Java 代码，否则 Kotlin 源代码规则可能无法覆盖 Java 代码。</li>
+<li><strong>规则维护</strong>：架构会不断演进。测试必须随着架构的演进而演进，而不是因为意外而阻碍架构的运行。</li>
+</ul>
+
+
+<p>这些权衡取舍并不会削弱架构测试的必要性，反而为负责任地使用架构测试设定了标准。</p>
+
+<p>例如，一个很有吸引力的 KMP 规则是：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Shared code must not import kotlinx..</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这种做法通常过于宽泛。<code>kotlinx.coroutines</code> 可能是一个合法的共享代码依赖项，而 Android 框架导入则不然。更好的规则是更精准的：禁止那些真正违反可移植性的平台或框架包，并允许架构有意使用的跨平台库。</p>
+
+<p>从稳定、高信号强度的规则入手。明确例外情况。证明每条规则都可能失效。将规则变更视为架构变更，而不是为了让持续集成（CI）通过而采取的手段。</p>
+
+<h2>来自展示套件的证据</h2>
+
+<p>该存储库包含展示套件，可在不同复杂程度上测试 Konture。</p>
+
+<p>这个最小的 Gradle 示例模型模拟了一个经典的 <code>:app</code>、<code>:domain</code> 和 <code>:data</code> 项目。其标准架构测试套件包含 14 个测试，涵盖模块图、源包边界、仓库契约、用例放置、类型泄漏规则和访问规则。它还包含一个负面测试，该测试断言故意错误的模块规则会抛出 <code>AssertionError</code> 异常，这是一种证明规则确实可能失败的有效模式。</p>
+
+<p>规模较大的展示更能代表平台关注的问题：</p>
+
+<ul>
+<li>检查过的 Now in Android 架构文件包含 13 个测试，这些测试确保功能模块不依赖于 <code>:app</code> 模块，不会绕过存储库访问数据库或网络模块，保持功能 API 模块与功能实现模块的独立性，防止功能实现之间的耦合，以及确保 ViewModel 远离 Android 框架导入。</li>
+<li>经检查的 KotlinConf KMP 边界/后端文件中的 8 个测试，这些测试确保共享的 <code>:core</code> 模块保持为叶子依赖项，客户端应用模块不依赖于后端实现，后端代码不依赖于前端客户端模块，以及后端路由不直接导入存储库或数据库模式。</li>
+</ul>
+
+
+<p>这些并非玩具式的规则，而是所有权和平台约束的可执行版本：功能解耦、共享模型纯粹性、后端/前端分离、路由服务边界以及 API 接口控制。</p>
+
+<p>轻量级的 Gradle 示例可以直接运行：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>./gradlew -p showcases/sample-gradle :konture-test:test</span></code></pre></td></tr></table></div></figure>
+
+
+<p>在本仓库中，该命令成功完成，并在生成 Konture 的布局和依赖项元数据后运行专用架构测试模块。</p>
+
+<h2>性能和规模</h2>
+
+<p>架构测试的成本应该足够低，以便团队能够持续地进行反馈。</p>
+
+<p>Konture 的 Gradle 插件会根据构建结果生成布局元数据，并且断言库会在常规测试任务中运行。这对于大型项目来说会带来一些实际影响：</p>
+
+<ul>
+<li>将架构测试放在独立的模块中，避免生产模块继承仅用于测试的依赖项。</li>
+<li>将规则的作用域限定在它们实际控制的模块和包中，而不是为每个断言扫描整个项目。</li>
+<li>优先使用少量高信号契约，而不是数十条重叠的样式规则。</li>
+<li>让 Gradle 处理任务输入和生成的布局元数据的缓存，而不是在每个测试中重新发现项目图。</li>
+<li>在 CI 中像跟踪其他验证任务一样跟踪架构测试任务的持续时间。</li>
+</ul>
+
+
+<p>对于包含 100 个以上模块的项目，重要的设计问题不仅仅是“工具能否扫描代码库？”，而是“团队能否理解错误并快速修复？”。一条描述模糊违规的快速规则仍然会浪费审核时间。一条速度稍慢但能识别出被禁止的模块边界、导入或公共签名的规则，通常是更明智的平台投资。</p>
+
+<h2>用于人工智能辅助更改的双视图反馈</h2>
+
+<p>AI 编码助手往往倾向于优化局部进度：导入可见类、添加缺失依赖项、满足当前测试。Konture 的双视图模型为它们提供了更精确的修复信号。构建图失败表示“你添加或依赖了错误的模块边”；源模型失败表示“此文件导入或暴露了错误的概念”。这些是不同的修复方法，测试输出应该清晰地体现出这种区别。</p>
+
+<h2>何时 Konture 适合</h2>
+
+<p>如果你关注的规则涵盖 Kotlin 源代码和 Gradle 结构，那么 Konture 是一个不错的选择：</p>
+
+<ul>
+<li>Gradle 模块边界和非循环项目图。</li>
+<li>功能 <code>:api</code> 与 <code>:impl</code> 的分离。</li>
+<li>表示层、领域层和公共 API 接口与传输层、持久层和框架类型保持独立。</li>
+<li>公共 API 签名避免使用持久层、传输层或 UI 类型。</li>
+<li>Kotlin 可见性约定，例如保持实现包为 <code>internal</code>。</li>
+<li>需要项目级上下文的文件和包约定。</li>
+</ul>
+
+
+<p>它对格式化、普通样式以及标准代码检查工具已经能够很好地处理的检查项来说用处不大。使用能够准确执行规则的最便宜的工具即可。</p>
+
+<h2>当前限制和路线图压力</h2>
+
+<p>Konture应该明确说明它不是什么。</p>
+
+<p>它不能替代 Kotlin 编译器、字节码分析、运行时集成测试或依赖项漏洞扫描。它也不是验证反射或运行时依赖注入容器背后隐藏行为的合适场所。混合 Java/Kotlin 项目需要专门的覆盖范围，因为 Kotlin 源代码分析不会自动使 Java 架构可见。生成的源代码和编译器插件输出可能需要排除或单独的规则，以便测试套件能够专注于编写的架构。</p>
+
+<p>构建工具的演进也至关重要。Android Gradle 插件、Kotlin 多平台源代码集建模、Kotlin 编译器变更以及新的代码生成模式都会改变“项目结构”的含义。Konture 的长期价值取决于对这些输入信息的准确把握：Gradle 元数据、Kotlin 源代码解析、源代码集/平台感知以及能够帮助团队修复设计缺陷而非与工具对抗的失败信息。</p>
+
+<p>因此，路线图压力是切实存在的：</p>
+
+<ul>
+<li>更深入的 KMP 源代码集和平台感知示例，</li>
+<li>更清晰地处理生成的代码，</li>
+<li>更强大的公共 API 泄漏检查，</li>
+<li>更好的大型规则套件诊断，</li>
+<li>与构建缓存和 CI 报告更顺畅的集成。</li>
+</ul>
+
+
+<h2>核心思想</h2>
+
+<p>架构不应该依赖内存。</p>
+
+<p>如果某个边界重要到需要在每次代码审查中都加以保护，那么它就适合作为可执行测试的候选对象。如果打破这个边界会导致构建速度变慢、API 泄露、团队协作受限，或者增加 AI 辅助变更的风险，那么代码库应该能够明确地指出这些问题。</p>
+
+<p>Konture 的存在是因为 Kotlin 架构不仅仅存在于字节码中，不仅仅存在于源文件中，也不仅仅存在于 Gradle 构建文件中。它存在于它们之间的关系之中。</p>
+
+<ul>
+<li><a href="https://github.com/baole/konture">GitHub - baole/konture：定义、强制执行和自动化架构规则，并以快速、轻量级的 Kotlin 单元测试形式运行。完全支持 Kotlin 多平台 (KMP)、Android 和服务器端 (Ktor、Spring)。</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-what-they-are-and-why-they-matter-389ce9a1204c">Kotlin 架构测试：它们是什么以及为什么重要 - 第 1/3 部分</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-with-konture-a-practical-guide-part-3-3-1f36ebe685db">使用 Konture 进行 Kotlin 架构测试：实用指南 - 第 3/3 部分</a></li>
+</ul>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-09-07'><span class='date'><span class='date-month'>Sep</span> <span class='date-day'>7</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/kotlin/'>kotlin</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/09/01/kotlin-architecture-tests-what-they-are-and-why-they-matter/" title="Previous Post: 让架构边界变成可执行的测试">&laquo; 让架构边界变成可执行的测试</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
