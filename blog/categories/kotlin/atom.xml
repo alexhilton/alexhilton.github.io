@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Kotlin | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/kotlin/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-09-07T13:37:18+00:00</updated>
+  <updated>2026-09-27T14:06:20+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,797 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[从零开始的架构测试套件]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/09/27/kotlin-architecture-tests-with-konture-a-practical-guide/"/>
+    <updated>2026-09-27T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/09/27/kotlin-architecture-tests-with-konture-a-practical-guide</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Kotlin Architecture Tests with Konture: A Practical Guide - Part 3/3」，原文链接<a href="https://proandroiddev.com/kotlin-architecture-tests-with-konture-a-practical-guide-part-3-3-1f36ebe685db">Kotlin Architecture Tests with Konture: A Practical Guide - Part 3/3</a>，由Bao Le发布于2026年7月17日。</p></blockquote>
+
+<p>搭建一个专门的架构测试模块，添加 Konture，并构建一套小型结构规则，以保护 Kotlin 项目实际依赖的边界。</p>
+
+<p>最好的首次架构测试通常并不巧妙。</p>
+
+<p>这是团队一直以来都奉行的规则：</p>
+
+<pre><code>Feature implementation modules must not depend on sibling feature 
+implementation modules.
+</code></pre>
+
+<p>这条规则很具体，也很容易解释，但一旦违反就会付出代价。它还能培养正确的习惯：将真实的架构决策编码到代码中，而不是理想化的示意图。</p>
+
+<p>本指南使用 Gradle Kotlin DSL 和 JUnit 5。Konture 本身与测试运行器无关，因此相同的规则可以从 JUnit、Kotest、TestBalloon 或其他 Kotlin/JVM 运行器运行。</p>
+
+<h2>目标设置</h2>
+
+<p>使用专用的架构测试模块。</p>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*CQj1vCu2VN1AaCJMau_IWw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>一个独立的模块为架构测试套件提供了项目级视图，而无需向生产模块添加架构测试依赖项。它还简化了持续集成配置：只需在需要结构检查时运行一个任务即可。</p>
+
+<p>在一个较大的项目中，被检查的模块可能如下所示：</p>
+
+<pre><code>:app
+:core:domain
+:core:data
+:feature:checkout:api
+:feature:checkout:impl
+:feature:profile:api
+:feature:profile:impl
+:shared
+:androidApp
+:iosApp
+</code></pre>
+
+<p>名称并不重要，策略才重要。请在每条规则中使用你实际使用的模块和包。</p>
+
+<h2>步骤 1：添加 Konture</h2>
+
+<p>在版本目录中声明版本：</p>
+
+<pre><code>[versions]
+konture = "0.6.8"
+[plugins]
+konture = { id = "io.github.baole.konture", version.ref = "konture" }
+[libraries]
+konture = { group = "io.github.baole", name = "konture", version.ref = "konture" }
+</code></pre>
+
+<p>在根构建中应用插件：</p>
+
+<pre><code>plugins {
+    alias(libs.plugins.konture) apply true
+}
+</code></pre>
+
+<p>该插件生成 Konture 模块感知规则所需的布局元数据。</p>
+
+<h2>步骤 2：创建架构测试模块</h2>
+
+<p>在<code>settings.gradle.kts</code>中注册该模块：</p>
+
+<pre><code>include(":konture-test")
+</code></pre>
+
+<p>创建 <code>konture-test/build.gradle.kts</code>：</p>
+
+<pre><code>plugins {
+    kotlin("jvm")
+    alias(libs.plugins.konture)
+}
+dependencies {
+    testImplementation(libs.konture)
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.0")
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.11.0")
+    testImplementation(project(":app"))
+    testImplementation(project(":core:domain"))
+    testImplementation(project(":feature:checkout:api"))
+    testImplementation(project(":feature:checkout:impl"))
+    testImplementation(project(":feature:profile:api"))
+    testImplementation(project(":feature:profile:impl"))
+}
+tasks.test {
+    useJUnitPlatform()
+}
+</code></pre>
+
+<p>将示例依赖项列表替换为规则检查的模块。架构测试模块应该能够看到它检查的代码和构建元数据。</p>
+
+<h2>步骤 3：从一个构建图规则开始</h2>
+
+<p>创建 konture-test/src/test/kotlin/com/acme/ArchitectureGuardrailsTest.kt。</p>
+
+<pre><code>package com.acme
+import io.github.baole.konture.Konture
+import org.junit.jupiter.api.Test
+class ArchitectureGuardrailsTest {
+    @Test
+    fun `feature implementations must not depend on sibling feature implementations`() {
+        Konture.modules {
+            that().haveNameMatching(":feature:**:impl")
+            should().onlyDependOnModules(
+                ":feature:**:api",
+                ":core:**",
+                ":shared",
+            )
+        }
+    }
+}
+</code></pre>
+
+<p>此规则检查 Gradle 项目图。如果 <code>:feature:checkout:impl</code> 添加了 <code>implementation(project(":feature:profile:impl"))</code>，则架构测试失败。</p>
+
+<p>对于更简单的分层项目，请使用实际路径：</p>
+
+<pre><code>Konture.modules {
+    that().haveNamePath(":core:domain")
+    should().notDependOnModule(":core:data")
+    should().notDependOnModule(":app")
+}
+</code></pre>
+
+<p>不要发布占位符名称。架构测试是契约；契约需要具体的目标。</p>
+
+<h2>步骤 4：添加循环检查</h2>
+
+<p>循环模块依赖会减慢构建速度并削弱所有权边界。</p>
+
+<pre><code>@Test
+fun `module graph must not contain cycles`() {
+    Konture.assertNoCycles()
+}
+</code></pre>
+
+<p>对于多模块项目来说，这是一个很有用的默认值，因为周期往往会使未来的每一个边界决策都变得更加困难。</p>
+
+<h2>第五步：保护域名源代码</h2>
+
+<p>清晰的模块图并不能保证清晰的源引用。请添加源级别的包规则：</p>
+
+<pre><code>@Test
+fun `domain classes must only depend on domain and standard library types`() {
+    Konture.classes {
+        that().resideInAPackage("..domain..")
+        should().onlyDependOnClassesInAnyPackage(
+            "..domain..",
+            "kotlin..",
+            "java..",
+        )
+    }
+}
+</code></pre>
+
+<p>如果你的领域层有意依赖于共享的项目代码，请明确说明：</p>
+
+<pre><code>Konture.classes {
+    that().resideInAPackage("..domain..")
+    should().onlyDependOnClassesInAnyPackage(
+        "..domain..",
+        "..shared..",
+        "kotlin..",
+        "java..",
+    )
+}
+</code></pre>
+
+<p>规则应该与团队选择的架构相匹配，而不是从示例中借鉴的架构。</p>
+
+<h2>第 6 步：禁止在不应该导入的地方导入框架</h2>
+
+<p>通过导入比通过项目类依赖项更容易检测到外部框架。</p>
+
+<pre><code>@Test
+fun `domain must not import framework or persistence APIs`() {
+    Konture.scopeFromPackage("com.acme.domain")
+        .assertTrue("Domain must not import framework or persistence APIs") { cls -&gt;
+            cls.imports.none { fqName -&gt;
+                fqName.startsWith("org.springframework.") ||
+                    fqName.startsWith("io.ktor.") ||
+                    fqName.startsWith("android.") ||
+                    fqName.startsWith("androidx.compose.") ||
+                    fqName.startsWith("jakarta.persistence.") ||
+                    fqName.startsWith("javax.persistence.")
+            }
+        }
+}
+</code></pre>
+
+<p><code>scopeFromPackage("com.acme.domain")</code> 为自定义断言选择一个具体的包前缀。相比之下，<code>resideInAPackage("..domain."")</code> 在流畅的类规则中使用 Konture 的通配符包匹配。</p>
+
+<p>针对项目调整前缀。后端可能会禁止域中使用持久化注解。Android 应用可能会禁止在共享包或域包中使用 Android 和 Compose API。KMP 项目可能会对 commonMain、androidMain 和 iosMain 应用不同的策略。</p>
+
+<p>避免使用过于宽泛的禁令，以免误伤合法的依赖项。例如，禁用所有 kotlinx 组件可能会阻碍协程的正常使用。</p>
+
+<h2>第 7 步：强制执行存储库契约</h2>
+
+<p>如果你的架构将领域层中的存储库视为契约，请将该规则编码到代码中：</p>
+
+<pre><code>@Test
+fun `repositories inside domain must be interfaces`() {
+    Konture.classes {
+        that().resideInAPackage("..domain..")
+        that().haveNameEndingWith("Repository")
+        should().beInterfaces()
+    }
+}
+</code></pre>
+
+<p>这可以发现一个常见的捷径：</p>
+
+<pre><code>class UserRepository { 
+    // concrete persistence behavior in domain 
+}
+</code></pre>
+
+<p>如果你的项目使用了抽象类、端口或其他命名约定，请对这些约定进行编码。规则应该强制执行你的契约模型，而不是“Repository”这个词本身。</p>
+
+<h2>第 8 步：将实现包保留在内部</h2>
+
+<p>Kotlin 类和成员默认是公开的。在多模块项目中，这种意外的公开可见性会导致意外的 API 暴露。</p>
+
+<pre><code>@Test
+fun `implementation classes must remain internal`() {
+    Konture.classes {
+        that().resideInAPackage("..impl..")
+        should().beInternal()
+    }
+}
+</code></pre>
+
+<p>这对于将 API 和实现分开的功能模块或库模块尤其有用：</p>
+
+<pre><code>:feature:checkout:api
+:feature:checkout:impl
+</code></pre>
+
+<p>API 模块负责公开合约。实现模块不应成为其他功能的百搭容器。</p>
+
+<h2>步骤 9：保护功能模块隔离</h2>
+
+<p>如果一开始没有启用功能隔离，请在基本模块规则稳定后再添加。同级功能实现通常不应该直接相互依赖。</p>
+
+<pre><code>@Test
+fun `feature implementations must not depend on sibling feature implementations`() {
+    Konture.modules {
+        that().haveNameMatching(":feature:**:impl")
+        should().onlyDependOnModules(
+            ":feature:**:api",
+            ":core:**",
+            ":shared",
+        )
+    }
+}
+</code></pre>
+
+<p>这样一来，功能实现就可以依赖于功能 API 模块、核心模块和共享模块，从而避免实现之间的耦合。</p>
+
+<p>如果应用采用了不同的模块化策略，请修改允许列表。这里的值并非指模式，而是指使预期的依赖关系图可执行。</p>
+
+<h2>步骤 10：使用分层 DSL 实现方向性规则</h2>
+
+<p>对于基于包的层规则，分层 DSL 比一长串包谓词更容易阅读。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*kSGD70FZzkAeAzyORgEeBQ.png" alt="无标题图像" /></p>
+
+<pre><code>@Test
+fun `layers must follow inward dependency direction`() {
+    Konture.layered {
+        val presentation = layer("presentation") definedBy "..presentation.."
+        val domain = layer("domain") definedBy "..domain.."
+        val data = layer("data") definedBy "..data.."
+        where(presentation) {
+            mayOnlyAccessLayers(domain)
+        }
+        where(data) {
+            mayOnlyAccessLayers(domain)
+        }
+        where(domain) {
+            mayOnlyAccessLayers()
+        }
+    }
+}
+</code></pre>
+
+<p>对于端口和适配器，同样的思路可能如下所示：</p>
+
+<pre><code>Konture.layered {
+    val domain = layer("domain") definedBy "..domain.."
+    val application = layer("application") definedBy "..application.."
+    val adapter = layer("adapter") definedBy "..adapter.."
+    where(domain) {
+        mayOnlyAccessLayers()
+    }
+    where(application) {
+        mayOnlyAccessLayers(domain)
+    }
+    where(adapter) {
+        mayOnlyAccessLayers(application, domain)
+    }
+}
+</code></pre>
+
+<p>使用团队实际使用的模型。与实际代码库不符的分层规则很快就会造成阻碍。</p>
+
+<h2>第 11 步：谨慎地添加文件级清理</h2>
+
+<p>一些信息源惯例可以降低导航成本和评论噪音：</p>
+
+<pre><code>@Test
+fun `source files should stay simple and explicit`() {
+    Konture.files {
+        should().notHaveWildcardImports()
+        should().haveOnlyOneClassPerFile()
+        should().haveNameMatchingClassName()
+    }
+}
+</code></pre>
+
+<p>不要将架构测试变成第二个代码检查工具。如果 detekt、ktlint 或其他格式化工具已经能够很好地执行规则，请使用该工具。</p>
+
+<h2>第 12 步：运行套件</h2>
+
+<p>运行指定任务：</p>
+
+<pre><code>./gradlew :konture-test:test
+</code></pre>
+
+<p>或者将其纳入正常的验证流程：</p>
+
+<pre><code>./gradlew check
+</code></pre>
+
+<p>该仓库中的 Gradle 示例展示了相同的模式：</p>
+
+<pre><code>./gradlew -p showcases/sample-gradle :konture-test:test
+</code></pre>
+
+<p>该命令针对一个小型 :app、:domain 和 :data 项目运行一个专用的架构测试模块。该测试套件涵盖模块依赖关系、类包边界、存储库契约、用例签名中的类型泄漏，以及一个证明故意错误的模块规则会失败的否定断言。</p>
+
+<p>反例展示了真实违规情况下应有的失败形态：</p>
+
+<pre><code>Architecture violation(s) detected:
+Module :data depends on :domain, which is not allowed by pattern(s): :app
+</code></pre>
+
+<p>解决方法并非削弱规则，而是恢复预期的架构图，或者仅在架构决策确实发生变化时才修改规则。对于上述功能示例，通常意味着将共享合约移至 <code>:feature:profile:api</code> 模块，并依赖该 API 模块而非 <code>:feature:profile:impl</code> 模块。</p>
+
+<p>当规则执行失败时，像处理其他任何测试失败一样处理它：</p>
+
+<ol>
+<li>读取违规信息。</li>
+<li>判断编码后的规则是否仍然正确。</li>
+<li>如果代码越界，则修复代码。</li>
+<li>如果架构决策发生变化，则修复规则。</li>
+<li>仅当需要引入异常时才添加显式异常。</li>
+</ol>
+
+
+<p>不要在持续集成（CI）通过之前悄悄削弱规则。那样会将架构测试从治理工具变成装饰品。</p>
+
+<h2>组合相关规则</h2>
+
+<p>以上示例使用了诸如 <code>Konture.modules { ... }</code> 和 <code>Konture.classes { ... }</code> 之类的独立断言。当多个规则描述同一边界时，请将它们与 <code>Konture.architecture { ... }</code> 组合在一起，以便模块级和源代码级检查能够被视为一个统一的契约：</p>
+
+<pre><code>@Test
+fun `presentation boundary must hide transport models`() {
+    Konture.architecture {
+        modules {
+            that().haveNamePath(":feature:profile:presentation")
+            should().notDependOnModule(":core:network")
+        }
+        classes {
+            that().resideInAPackage("..profile.presentation..")
+            should().notDependOnClassesInAnyPackage(
+                "..network.dto..",
+                "..database..",
+            )
+        }
+    }
+}
+</code></pre>
+
+<h2>高级模式</h2>
+
+<p>一旦入门套件稳定下来，就添加规则，以应对 Kotlin 项目通常会泄露架构的地方。</p>
+
+<h2>DTO 和实体表面边界</h2>
+
+<p>最昂贵的漏洞通常出现在公开或面向用户界面的签名中。页面状态、演示器契约或功能 API 暴露了传输 DTO，从而将一个实现细节变成了长期存在的依赖项。</p>
+
+<pre><code>@Test
+fun `presentation state must not expose transport or persistence types`() {
+    val presentationClasses = Konture.scopeFromPackage("com.acme.profile.presentation").classes
+    presentationClasses.assertTrue("Presentation API must not expose DTOs or entities") { cls -&gt;
+        val publicFunctionTypes =
+            cls.functions
+                .filter { it.visibility == io.github.baole.konture.Visibility.PUBLIC }
+                .flatMap { fn -&gt; listOf(fn.returnType) + fn.parameters.map { it.type } }
+        val publicPropertyTypes =
+            cls.properties
+                .filter { it.visibility == io.github.baole.konture.Visibility.PUBLIC }
+                .map { it.type }
+        (publicFunctionTypes + publicPropertyTypes).none { type -&gt;
+            type.endsWith("Dto") ||
+                type.endsWith("Entity") ||
+                type.contains(".network.") ||
+                type.contains(".database.")
+        }
+    }
+}
+</code></pre>
+
+<p>你可以将其与模块规则结合使用：</p>
+
+<pre><code>Konture.modules {
+    that().haveNamePath(":shared")
+    should().notDependOnModule(":androidApp")
+}
+</code></pre>
+
+<p>使用构建实际使用的源集名称：commonMain、androidMain、iosMain、desktopMain、jvmMain 或项目特定的中间源集。</p>
+
+<h2>DI 图约定</h2>
+
+<p>Konture 不应取代运行时依赖注入集成测试。它仍然可以保护结构化依赖注入策略：</p>
+
+<pre><code>@Test
+fun `hilt modules must stay in di packages`() {
+    Konture.classes {
+        that().haveAnnotationOf("dagger.Module")
+        should().resideInAPackage("..di..")
+    }
+}
+</code></pre>
+
+<p>对于 Koin，类似的策略可能存在于文件或函数级别：</p>
+
+<pre><code>@Test
+fun `production koin modules must not live in test packages`() {
+    Konture.files {
+        that().satisfy { file -&gt;
+            file.imports.any { it == "org.koin.dsl.module" }
+        }
+        should().resideInAPackage { packageName -&gt;
+            !packageName.contains(".test.") &amp;&amp;
+                !packageName.contains(".fixtures.")
+        }
+    }
+}
+</code></pre>
+
+<p>这些规则并不能证明DI图的起始位置。它们的作用是防止线路代码扩散到所有权不明确的地方。</p>
+
+<h2>生成的代码</h2>
+
+<p>生成的代码常常出于正当理由而违反编写代码的规范。务必明确地处理它。</p>
+
+<pre><code>konture {
+    excludePackages(
+        "..generated..",
+        "..buildconfig..",
+        "..databinding..",
+    )
+}
+</code></pre>
+
+<p>来自 Room、KSP、Compose 资源、protobuf、序列化或依赖注入工具生成的源代码不应在有关公共 API 设计或包所有权的规则中产生误报。如果生成的代码是公共契约的一部分，则应测试公开编写的包装器，而不是生成的实现细节。</p>
+
+<h2>遗产隔离</h2>
+
+<p>对于遗留代码，不要假装目标架构已经存在。将其隔离。</p>
+
+<pre><code>@Test
+fun `new domain code must not depend on legacy persistence`() {
+    val newDomain =
+        Konture.scopeFromPackage("com.acme.domain").classes.filterNot { cls -&gt;
+            cls.packageName.startsWith("com.acme.domain.legacy")
+        }
+    newDomain.assertTrue("New domain code must not import legacy persistence") { cls -&gt;
+        cls.imports.none { it.startsWith("com.acme.legacy.persistence.") }
+    }
+}
+</code></pre>
+
+<p>例外情况是可见的、有名称的、可移除的。这比一条总是失效的宽泛规则或一条无人记得的默默排除条款要好得多。</p>
+
+<h2>公共 API 接口</h2>
+
+<p>当意外的公共 API 造成长期耦合时，架构测试尤其有用。</p>
+
+<pre><code>@Test
+fun `public feature api must not expose implementation or persistence types`() {
+    val apiClasses = Konture.scopeFromModule(":feature:checkout:api").classes
+    apiClasses.assertTrue("Public API must not leak implementation detail") { cls -&gt;
+        val publicFunctionTypes =
+            cls.functions
+                .filter { it.visibility == io.github.baole.konture.Visibility.PUBLIC }
+                .flatMap { fn -&gt; listOf(fn.returnType) + fn.parameters.map { it.type } }
+        val publicPropertyTypes =
+            cls.properties
+                .filter { it.visibility == io.github.baole.konture.Visibility.PUBLIC }
+                .map { it.type }
+        (publicFunctionTypes + publicPropertyTypes).none { type -&gt;
+            type.contains(".impl.") ||
+                type.contains(".data.") ||
+                type.endsWith("Entity") ||
+                type.endsWith("Dto")
+        }
+    }
+}
+</code></pre>
+
+<p>对于库来说，这也是一条语义化版本控制规则。如果一个公共签名今天暴露了一个持久化实体，那么明天移除该实体就会导致 API 发生重大变更。</p>
+
+<h2>规则设计原则</h2>
+
+<p>在扩展套件之前，请先遵循以下原则：</p>
+
+<ul>
+<li><strong>每个测试对应一条策略</strong>：失败的测试名称应明确告知开发人员是哪个决策被违反。</li>
+<li><strong>证明规则可能失败</strong>：临时引入违规行为，运行测试，确认测试失败，然后移除违规行为。</li>
+<li><strong>使用真实名称</strong>：避免在已提交的规则中使用占位符模块和包。</li>
+<li><strong>明确例外情况</strong>：生成的代码、迁移包和遗留区域可能需要排除，但这些排除应是经过深思熟虑的。</li>
+<li><strong>避免使用宽泛的通配符</strong>：只有当团队了解其排除的合法情况时，宽泛的禁令才有用。</li>
+<li><strong>结构与样式分离</strong>：架构测试应保护边界和所有权，而非格式。</li>
+</ul>
+
+
+<p>这些示例项目是很好的校准素材。Now in Android 套件演示了功能解耦、ViewModel 框架导入检查以及 :api/:impl 分离。KotlinConf KMP 套件演示了共享核心的纯粹性、后端/前端分离以及路由到服务的边界。使用类似这样的示例来设计规则时，应考虑实际的架构压力，而不是抽象的整洁性。</p>
+
+<h2>故障排除</h2>
+
+<p>大多数 Konture 失败案例都可归为以下几类。</p>
+
+<p>将第一个违规解读为一个设计问题：该规则是否仍然成立？如果成立，则修复代码。如果不再成立，则更改规则，并在测试名称、ADR 或文档中留下清晰的记录。</p>
+
+<h2>这值得吗？</h2>
+
+<p>与后期结构修复相比，建筑结构检测费用低廉，但并非免费：</p>
+
+<ul>
+<li>对现有代码库进行首次检查通常会发现遗留的违规行为和误报，需要在强制执行前进行分类处理。</li>
+<li>团队必须充分了解领域特定语言 (DSL)，以便精确表达策略，而不是编写宽泛且令人困惑的规则。</li>
+<li>当架构发生变化时，每条持久规则都会成为维护的难点；规则修改应作为设计变更进行审查。</li>
+</ul>
+
+
+<p>对于某个特定的规则集，例如功能实现隔离或领域纯净性，许多团队通常可以在一到两个迭代周期内从信息性持续集成 (CI) 过渡到强制性 CI。但这只是一个粗略的估计，并非绝对保证：较旧的代码库和大型迁移区域需要更多时间。</p>
+
+<h2>指标和可观测性</h2>
+
+<p>将架构套件视为产品健康状况信号，而不仅仅是合格/不合格的门槛。</p>
+
+<p>有用的指标：</p>
+
+<ul>
+<li>架构规则数量，</li>
+<li>CI 中的架构测试持续时间，</li>
+<li>强制执行前各规则的违规次数，</li>
+<li>各模块或包的重复违规次数，</li>
+<li>显式异常和隔离包的数量，</li>
+<li>重大变更区域的模块扇入和扇出，</li>
+<li>规则生效后消失的审查评论。</li>
+</ul>
+
+
+<p>不要过度依赖数字。一个拥有五条切实有效规则的项目可能比一个充斥着五十条形式主义规则的项目更健康。最佳衡量标准是该方案能否及早发现代价高昂的结构性错误，并清晰地解释修复方案。</p>
+
+<h2>迁移指南</h2>
+
+<p>推广既是一个技术问题，也是一个社会问题。</p>
+
+<ol>
+<li>盘点目前在评审中已执行的架构决策。</li>
+<li>选择一条共识度高且修复路径清晰的规则。</li>
+<li>通过引入并移除局部违规来验证该规则的失效。</li>
+<li>如果存在现有违规，则在持续集成 (CI) 中以信息性方式运行该规则。</li>
+<li>显式隔离遗留区域，而不是阻塞所有工作。</li>
+<li>当新的违规很少发生且团队理解了该规则的失效原因后，再将其设为必需规则。</li>
+<li>只有在前一条规则变得乏味之后，才添加下一条规则。</li>
+</ol>
+
+
+<p>当测试阻止了原本不可见的快捷方式时，要做好应对阻力的准备。如果规则明确具体，那么这种讨论是有益的；但如果规则含糊不清，则会浪费时间。最初的规则应与团队已经意识到的痛点紧密相关：例如循环、功能实现耦合、平台泄漏或公共 DTO/实体暴露。</p>
+
+<h2>维护与演进</h2>
+
+<p>当架构发生变化时，架构测试也应该随之改变。</p>
+
+<p>像对待其他公共合同一样，对重要规则进行版本控制：策略变更时重命名测试用例，迁移工作完成后移除排除项，如果团队需要时间迁移，则在发布窗口期内保留旧规则以供参考。如果某条规则积累了大量例外情况，则应安排规则审查，而不是添加新的过滤器。</p>
+
+<p>良好的规则弃用示例如下：</p>
+
+<ul>
+<li>将旧规则标记为参考规则，</li>
+<li>在其旁边添加新规则，</li>
+<li>逐步迁移模块，</li>
+<li>一旦图与新策略匹配，则删除旧规则及其隔离列表。</li>
+</ul>
+
+
+<p>这套方案应该描述你现在选择的架构，而不是你两年前希望拥有的架构。</p>
+
+<h2>入门套件</h2>
+
+<p>以下是一个模块化功能项目的简洁起点：</p>
+
+<pre><code>package com.acme
+import io.github.baole.konture.Konture
+import org.junit.jupiter.api.Test
+class ArchitectureGuardrailsTest {
+    @Test
+    fun `module graph must not contain cycles`() {
+        Konture.assertNoCycles()
+    }
+    @Test
+    fun `feature API modules must not depend on feature implementation modules`() {
+        Konture.modules {
+            that().haveNameMatching(":feature:**:api")
+            should().notDependOnModule(":feature:**:impl")
+        }
+    }
+    @Test
+    fun `feature implementations must not depend on sibling feature implementations`() {
+        Konture.modules {
+            that().haveNameMatching(":feature:**:impl")
+            should().onlyDependOnModules(
+                ":feature:**:api",
+                ":core:**",
+                ":shared",
+            )
+        }
+    }
+    @Test
+    fun `domain classes must only depend on domain and standard library types`() {
+        Konture.classes {
+            that().resideInAPackage("..domain..")
+            should().onlyDependOnClassesInAnyPackage(
+                "..domain..",
+                "kotlin..",
+                "java..",
+            )
+        }
+    }
+    @Test
+    fun `implementation classes must remain internal`() {
+        Konture.classes {
+            that().resideInAPackage("..impl..")
+            should().beInternal()
+        }
+    }
+}
+</code></pre>
+
+<p>保持入门套件的精简。让它从真正的痛点中成长：</p>
+
+<ul>
+<li>代码审查中发现的边界违规。</li>
+<li>扩大构建影响范围的模块依赖。</li>
+<li>导致重构成本增加的 DTO 泄漏。</li>
+<li>跨层的 AI 辅助补丁。</li>
+<li>难以移除的公共实现类。</li>
+</ul>
+
+
+<p>架构测试在保护人们已经关心的决策时效果最佳。</p>
+
+<h2>成熟套件形状</h2>
+
+<p>成熟的套件未必很大。它是由一系列精心设计的方案层层递进而成：</p>
+
+<pre><code>class ArchitectureSuiteTest {
+    @Test
+    fun `project graph must stay acyclic`() {
+        Konture.assertNoCycles()
+    }
+    @Test
+    fun `feature modules expose contracts through api modules`() {
+        Konture.architecture {
+            modules {
+                that().haveNameMatching(":feature:**:api")
+                should().notDependOnModule(":feature:**:impl")
+            }
+            modules {
+                that().haveNameMatching(":feature:**:impl")
+                should().onlyDependOnModules(
+                    ":feature:**:api",
+                    ":core:**",
+                    ":shared",
+                )
+            }
+        }
+    }
+    @Test
+    fun `domain stays independent from frameworks and persistence`() {
+        Konture.architecture {
+            modules {
+                that().haveNamePath(":core:domain")
+                should().notDependOnModule(":core:data")
+            }
+            classes {
+                that().resideInAPackage("..domain..")
+                should().notDependOnClassesInAnyPackage(
+                    "..data..",
+                    "..database..",
+                    "..network..",
+                    "android..",
+                    "androidx.compose..",
+                    "org.springframework..",
+                )
+            }
+        }
+    }
+    @Test
+    fun `shared kmp code stays platform independent`() {
+        val commonClasses =
+            Konture.scopeFromModule(":shared").classes.filter { cls -&gt;
+                cls.filePath.contains("/commonMain/")
+            }
+        commonClasses.assertTrue("commonMain must not import platform APIs") { cls -&gt;
+            cls.imports.none { it.startsWith("android.") || it.startsWith("java.awt.") }
+        }
+    }
+}
+</code></pre>
+
+<p>该套件包含不同的任务：图健康性、功能所有权、域纯度和平台可移植性。每次失败都会告诉开发人员违反了哪个架构决策。</p>
+
+<h2>推广指南</h2>
+
+<p>对于现有项目，分阶段引入架构测试：</p>
+
+<ol>
+<li>首先处理一些非争议性规则，例如模块循环和域到数据的依赖关系。</li>
+<li>如果第一次测试发现大量违规，则在本地和持续集成 (CI) 环境中运行测试套件，以提供信息。</li>
+<li>修复或明确隔离遗留的违规规则。</li>
+<li>将高置信度的规则转化为 CI 必需的检查项。</li>
+<li>像审查架构变更一样审查规则变更，而不是像审查格式调整一样审查规则变更。</li>
+</ol>
+
+
+<p>对于生成的代码、测试用例和遗留系统迁移区域，建议明确排除某些内容：</p>
+
+<pre><code>konture {
+    excludePackages("..generated..")
+}
+</code></pre>
+
+<p>这个小写的 konture {} 代码块位于 Gradle 构建配置中，用于配置 Konture 插件。它与测试文件中使用的大写 Konture.* 断言 API 不同。</p>
+
+<p>例外情况应该足够明显，以便未来的维护者能够理解真正的边界。</p>
+
+<p>第一套规则稳定后，针对项目实际存在问题的领域添加规则：</p>
+
+<ul>
+<li>特性模块隔离。</li>
+<li>KMP 源集可移植性。</li>
+<li>公共 API 泄漏。</li>
+<li>DTO 和实体边界。</li>
+<li>路由或控制器依赖方向。</li>
+<li>依赖注入约定。</li>
+<li>旧版包隔离。</li>
+</ul>
+
+
+<p>Konture并非针对某种特定架构风格的规范，而是一种使架构可执行的方法。</p>
+
+<p>在本地运行。在持续集成环境中运行。让人工干预和人工智能辅助的修改获得相同的结构性反馈。</p>
+
+<p>当结构至关重要时，将其融入建筑设计之中。</p>
+
+<ul>
+<li><a href="https://github.com/baole/konture">GitHub - baole/konture：定义、强制执行和自动化架构规则，并以快速、轻量级的 Kotlin 单元测试形式运行。完全支持 Kotlin 多平台 (KMP)、Android 和服务器端 (Ktor、Spring)。</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-what-they-are-and-why-they-matter-389ce9a1204c">Kotlin 架构测试：它们是什么以及为什么重要 - 第 1/3 部分</a></li>
+<li><a href="https://medium.com/@leducbao/kotlin-architecture-tests-why-konture-exists-4ac92a4dd3ba">Kotlin 架构测试：Konture 存在的意义 - 第 2/3 部分</a></li>
+</ul>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[架构测试为何需要双视图]]></title>
@@ -1231,243 +2022,6 @@ println(page.render())
 <p>一个合理的经验法则是：DSL 必须由很多人多次编写，或者阅读的次数远多于其实现 — 否则会编写出无聊的代码。</p>
 
 <p>TL;DR——整篇文章六行</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[深入理解withContext和launch的真正区别]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch/"/>
-    <updated>2025-12-05T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/12/05/real-diff-between-withcontext-and-launch</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「The Real Difference Between withContext(Dispatchers.IO) and launch(Dispatchers.IO)」，原文链接<a href="https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2">https://proandroiddev.com/the-real-difference-between-withcontext-dispatchers-io-and-launch-dispatchers-io-b70ec00a33f2</a>，由
-Anatolii Frolov发布于2025年11月20日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*nHuLhSAjZIEbeLHiFdMeSA.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在使用 Kotlin 协程时，很容易遇到两种看起来几乎相同的模式。它们都使用了 <code>Dispatchers.IO</code>。它们都将工作移出主线程。它们都出现在不同团队编写的仓库、服务层和 ViewModel 代码中。</p>
-
-<p>但相似之处仅限于表面。它们的行为截然不同——这种差异会影响实际 Android 项目中的顺序、正确性，甚至线程安全。当后台操作影响 UI 状态或共享数据时，这一点尤为重要。</p>
-
-<p>这种困惑不难理解。它们的语法几乎相同，并且都在同一个调度器上运行。但一个会暂停直到工作完成，而另一个会启动并行工作并立即返回。这创建了不同的执行路径，很容易被忽略。</p>
-
-<p>本文解释了 <code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 之间的真正区别，通过实际代码展示了它们的行为差异，并重点介绍了这种差异在生产环境 Android 应用中的重要性。</p>
-
-<h2>看似相同的代码行为却截然不同</h2>
-
-<p>以下两段代码看起来几乎一样：</p>
-
-<pre><code class="kotlin">withContext(Dispatchers.IO) {
-    // work
-}launch(Dispatchers.IO) {
-    // work
-}
-</code></pre>
-
-<p>它们运行在同一个调度器上。它们都将工作转移到后台线程。但它们的行为<strong>并不</strong>相同。</p>
-
-<p>以下是并排运行它们的结果：</p>
-
-<pre><code class="kotlin">fun main() = runBlocking {
-    println("Start")
-
-    launch(Dispatchers.IO) {
-        delay(100)
-        println("Inside launch")
-    }
-
-    withContext(Dispatchers.IO) {
-        delay(50)
-        println("Inside withContext")
-    }
-
-    println("End")
-}
-</code></pre>
-
-<p>输出：</p>
-
-<pre><code class="bash">Start
-Inside withContext
-End
-Inside launch
-</code></pre>
-
-<p>这展示了关键区别。</p>
-
-<p><code>withContext</code> 会等待其工作完成才会继续执行。</p>
-
-<p><code>launch</code> 则完全不等待——它并行运行，并在稍后完成。</p>
-
-<h2>为什么会发生这种情况</h2>
-
-<p><code>withContext</code> 是一个挂起函数。这意味着当前协程会在该行暂停，切换到 <code>Dispatchers.IO</code>，执行代码块，然后从中断的地方继续执行。这里的关键词是<strong>等待</strong>。在该行之后的任何代码都会等待代码块执行完毕。</p>
-
-<p><code>launch</code> 会创建一个新的协程并立即返回。当前协程会立即继续执行，而新创建的代码块会独立执行。这是一种“触发并继续”模式。除非你显式地对新创建的协程调用 <code>join()</code>，否则不会有等待。</p>
-
-<p>这不是一个 bug，而是协程构建器的设计决策。</p>
-
-<p><code>withContext</code> 确保单个协程内部的执行顺序。</p>
-
-<p><code>launch</code> 的设计本身就引入了并发性。</p>
-
-<p>这种视觉上的相似性掩盖了行为上的差异。前者保持代码的可预测顺序，而后者引入了并行工作，这些工作可能会根据调度和负载情况随时完成。</p>
-
-<h2>这种差异在实际项目中的重要性</h2>
-
-<p>在许多 Android 场景中，任务完成的确切时间至关重要。哪怕是顺序上的细微差别，都可能导致一些难以察觉的 bug，直到生产环境才会被发现。</p>
-
-<h3>1. 后台任务完成后更新 UI</h3>
-
-<p>在 ViewModel 中：</p>
-
-<pre><code class="kotlin">viewModelScope.launch {
-    val user = withContext(Dispatchers.IO) {
-        userRepository.loadUser()
-    }
-    _state.value = user
-}
-</code></pre>
-
-<p>输出（概念图）：</p>
-
-<pre><code class="bash">User loaded first
-UI updated second
-</code></pre>
-
-<p>由于 <code>withContext</code> 会等待，因此 UI 只有在加载完成后才会更新。</p>
-
-<p>但如果将其替换为 <code>launch(Dispatchers.IO)</code>：</p>
-
-<pre><code class="kotlin">viewModelScope.launch {
-    var result: User? = null
-
-    launch(Dispatchers.IO) {
-        result = userRepository.loadUser()
-    }
-
-    _state.value = result
-}
-</code></pre>
-
-<p>输出（概念图）：</p>
-
-<pre><code class="bash">UI updated first
-User loaded later
-</code></pre>
-
-<p>这里，UI 在后台任务完成之前就更新了。语法上的视觉相似性掩盖了执行顺序的不同。</p>
-
-<h3>2.协调多步骤后台操作</h3>
-
-<p>在自定义仓库代码中，你可能需要操作严格按照顺序执行。例如，先保存数据，然后写入日志：</p>
-
-<pre><code class="kotlin">withContext(Dispatchers.IO) {
-    fileWriter.save(data)
-}
-
-withContext(Dispatchers.IO) {
-    logWriter.write("Saved")
-}
-</code></pre>
-
-<p><code>suspend</code> 保证了操作顺序。日志写入必须在保存完成后才能进行。</p>
-
-<p>但使用 <code>launch</code> 则：</p>
-
-<pre><code class="kotlin">launch(Dispatchers.IO) { fileWriter.save(data) }
-launch(Dispatchers.IO) { logWriter.write("Saved") }
-</code></pre>
-
-<p>这两个操作可以以任意顺序执行。在负载较高的情况下，日志写入可能早于保存操作。这听起来似乎无关紧要，但一旦调试或审计变得困难，就会造成问题。</p>
-
-<h3>3. 访问共享状态</h3>
-
-<p>使用 <code>withContext</code> 进行顺序执行在更新共享对象时更安全：</p>
-
-<pre><code class="kotlin">withContext(Dispatchers.IO) {
-    cache.update(item)
-}
-</code></pre>
-
-<p>使用 <code>launch</code>，两个更新操作可以同时运行：</p>
-
-<pre><code class="kotlin">launch(Dispatchers.IO) { cache.update(item1) }
-launch(Dispatchers.IO) { cache.update(item2) }
-</code></pre>
-
-<p>除非缓存本身是线程安全的，否则并行写入可能会导致竞态条件。</p>
-
-<h2>为什么这种差异容易被忽略</h2>
-
-<p>主要原因是语法。两者都使用相同的括号。两者都显示 <code>Dispatchers.IO</code>。两者都将代码包裹在代码块中。人们的注意力会集中在调度器上，而不是协程构建器上。</p>
-
-<p>另一个原因是许多现代库已经在内部处理线程。Room DAO 方法和 Retrofit 的挂起函数不需要 <code>withContext(Dispatchers.IO)</code>。由于这些库减少了手动切换调度器，开发者看到的协程构建器之间的明显差异较少。</p>
-
-<p>这可能会造成一种错觉，即所有调度器的用法都可以互换，但对于自定义操作来说并非如此。</p>
-
-<h2>与 async/await 的深入比较</h2>
-
-<p>为了进一步突出差异，请比较以下三个示例：</p>
-
-<pre><code class="kotlin">val deferred = async(Dispatchers.IO) {
-    loadData()
-}val result = deferred.await()
-println(result)
-</code></pre>
-
-<p>输出（概念图）：</p>
-
-<pre><code class="bash">loadData completes
-result printed
-</code></pre>
-
-<p><code>async</code> 的行为类似于 <code>launch</code>，但返回 <code>Deferred</code>。</p>
-
-<p><code>await()</code> 会将其转换为顺序行为——就像 <code>withContext</code> 一样。</p>
-
-<p>关键点：<strong>顺序行为仅在显式等待时发生。</strong></p>
-
-<h2>异常处理行为</h2>
-
-<p><code>withContext</code> 直接在调用协程中抛出异常。它们不会被延迟或存储。</p>
-
-<p><code>launch</code> 将异常报告给其父作用域。如果该作用域有 supervisor 或自定义异常处理程序，则效果不同。异常不会立即中断调用者的执行路径。</p>
-
-<p>这意味着：</p>
-
-<pre><code class="kotlin">withContext(Dispatchers.IO) { error("Boom") }
-println("Next")
-</code></pre>
-
-<p>崩溃会在“Next”执行之前停止协程。</p>
-
-<p>但使用 <code>launch</code>：</p>
-
-<pre><code class="kotlin">launch(Dispatchers.IO) { error("Boom") }
-println("Next")
-</code></pre>
-
-<p>“Next”仍然会打印。启动的协程会自行崩溃。</p>
-
-<h2>需要记住的内容</h2>
-
-<ul>
-<li><p><code>withContext</code> <strong>等待</strong>代码块执行完毕后才会继续执行。</p></li>
-<li><p><code>launch</code> 会启动<strong>并行</strong>工作并立即返回。</p></li>
-<li><p>当<strong>结果或顺序</strong>至关重要时，请使用 <code>withContext</code>。</p></li>
-<li><p>当你需要<strong>并发工作</strong>且无需阻塞调用者时，请使用 <code>launch</code>。</p></li>
-<li><p>视觉上的相似性掩盖了行为上的差异——协程构建器定义了语义，而不是调度器。</p></li>
-</ul>
-
-
-<h2>总结</h2>
-
-<p><code>withContext(Dispatchers.IO)</code> 和 <code>launch(Dispatchers.IO)</code> 看起来相似，但行为却不同。前者会暂停并确保顺序执行，而后者会创建并发并立即继续执行。当工作顺序、共享状态、UI 更新或异常处理依赖于工作完成时间时，这种差异至关重要。</p>
-
-<p>理解这种区别可以使协程代码更易于预测，并避免那些只有在实际应用中才会显现的细微错误。</p>
 ]]></content>
   </entry>
   
