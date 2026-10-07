@@ -1,0 +1,1011 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>生命周期感知的多模块启动模式 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="用依赖注入驱动架构，把初始化任务按冷启动、热启动和会话三个生命周期分配：讲清多绑定、优先级阶段与统一任务运行器，并说明如何按用户隐私同意动态启停第三方 SDK。">
+  <meta name="keywords" content="Hilt, Startup, Performance">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/10/07/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">生命周期感知的多模块启动模式</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-10-07'><span class='date'><span class='date-month'>Oct</span> <span class='date-day'>7</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「The Android Startup Pattern: A Lifecycle-Aware, Multi-Module Approach」，原文链接<a href="https://medium.com/proandroiddev/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach-d0f73e367a62">https://medium.com/proandroiddev/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach-d0f73e367a62</a>，由Ehab Elwan发布于2026年8月25日。</p></blockquote>
+
+<p><a href="/blog/2026/10/07/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach/"><img src="https://cdn-images-1.medium.com/max/1024/1*CPz9u6psa6AMDaopuXXuwg.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<blockquote><p>声明：本文由我撰写，并借助人工智能工具进行了完善。</p></blockquote>
+
+<p>每个不断发展的 Android 项目最终都会催生出一个双头“上帝级”。</p>
+
+<p>一方面，你的 Application 类会变成全局基础架构（第三方 SDK、崩溃报告器和跟踪工具）的垃圾场。另一方面，你的主入口点（通常是 <code>MainViewModel</code>）会被阻塞 UI 的启动逻辑堵塞。</p>
+
+<p>它通常看起来像这样：</p>
+
+<p>反模式：双头神类</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>class MyApplication : Application() {
+</span><span class='line'>    override fun onCreate() {
+</span><span class='line'>        super.onCreate()
+</span><span class='line'>        // The framework dumping ground
+</span><span class='line'>        CrashReportingSDK.getInstance().setCollectionEnabled(true)
+</span><span class='line'>        HeavyUiSDK.initialize(context = this, ...) 
+</span><span class='line'>        AnalyticsSDK.initialize(this, "API_KEY")
+</span><span class='line'>        // ... 50 more lines of spaghetti
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>class MainViewModel : ViewModel() {
+</span><span class='line'>    init {
+</span><span class='line'>        // The UI-blocking dumping ground
+</span><span class='line'>        updateRemoteConfigs()
+</span><span class='line'>        checkUserSessionToken()
+</span><span class='line'>        processPendingDeepLinks()
+</span><span class='line'>        prefetchHomeFeedData()
+</span><span class='line'>        // ... UI cannot render until this finishes
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>将初始化过程拆分到这两个文件中会造成严重问题：</p>
+
+<ol>
+<li><strong>它违反了单一职责原则</strong>：应用程序的入口点被迫协调每个功能的内部运作，导致模块之间紧密耦合。</li>
+<li><strong>它忽略了进程生命周期</strong>：应用程序任务会在每次静默后台唤醒时无差别地运行，而当应用程序返回前台时，<code>MainViewModel</code> 任务无法重新触发。</li>
+<li><strong>它破坏了可测试性</strong>：将 SDK 初始化直接硬编码到入口点中，使得编写独立的单元测试变得极其困难，除非使用复杂的模拟设置。</li>
+<li><strong>它使隐私合规性复杂化</strong>：集中式的 SDK 存储使得在用户根据全球隐私法规（例如 GDPR、CCPA 和 CPRA）明确授予同意之前，动态暂停跟踪 SDK 变得极其困难。</li>
+</ol>
+
+
+<p>为了解决这个问题，我们需要更智能的初始化策略。</p>
+
+<h2>Jetpack 应用启动：何时使用（以及何时避免使用）</h2>
+
+<p>在构建自定义解决方案之前，我们必须了解<a href="https://developer.android.com/topic/libraries/app-startup">Jetpack App Startup</a>。谷歌开发此库是为了解决一个特定问题：第三方 SDK 使用其自身的不可见内容提供程序 (ContentProvider) 进行自动初始化，这会严重增加冷启动时间。</p>
+
+<h3><strong>何时使用：</strong></h3>
+
+<p>它是初始化不依赖于应用程序内部业务逻辑的原始框架库（如 WorkManager 或 Crashlytics）的完美工具。</p>
+
+<h3><strong>当它变得危险时：</strong></h3>
+
+<p>Jetpack 应用启动会在 Application.onCreate() 之前运行。这意味着它会在你的依赖注入图构建完成之前执行。此外，<strong>在底层自动初始化跟踪或广告 SDK 可能违反 GDPR、CCPA 和 CPRA 等全球隐私法规</strong>。如果 SDK 在你的用户同意管理平台 (CMP) 评估用户选择之前收集数据，则你不符合相关法规。</p>
+
+<p>对于一个强大的企业应用程序，你需要一个自定义的依赖注入驱动模式，用于应用程序级别的业务逻辑，该模式要尊重依赖注入、生命周期和用户同意。</p>
+
+<h2>核心概念：多重绑定和阶段</h2>
+
+<p>主应用程序模块不会显式调用功能设置，而是使用一种称为<strong>多重绑定</strong>的依赖注入概念来反转依赖关系。</p>
+
+<p>无论你使用 Hilt、Dagger、Koin 还是 Metro，现代依赖注入框架都允许各个功能模块以静默的方式向全局集合贡献实现。主应用程序模块只需注入该集合并运行任务，完全无需了解这些任务的来源。</p>
+
+<p>阶段合同</p>
+
+<p>我们定义了<strong>优先级阶段</strong>（在你的<code>:core</code>模块中），并利用密封接口来保证开发人员只能接入我们明确支持的生命周期。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>enum class StartupPhase(val order: Int) {
+</span><span class='line'>    // The app cannot function if this fails (e.g., Security Configs).
+</span><span class='line'>    CRITICAL(0),
+</span><span class='line'>    // Crucial for the first screen (e.g., Feature Flags).
+</span><span class='line'>    HIGH(1),
+</span><span class='line'>    // Standard startup tasks (e.g., Pre-warming caches).
+</span><span class='line'>    NORMAL(2),
+</span><span class='line'>    // Fire-and-forget, or things that can wait (e.g., Background Observers).
+</span><span class='line'>    LOW(3)
+</span><span class='line'>}
+</span><span class='line'>// Sealed to prevent rogue custom lifecycles
+</span><span class='line'>sealed interface StartupTask {
+</span><span class='line'>    val phase: StartupPhase get() = StartupPhase.NORMAL
+</span><span class='line'>// Tip: Always profile this timeout on low-end hardware under heavy CPU load!
+</span><span class='line'>    val timeoutMs: Long get() = 800L
+</span><span class='line'>    suspend operator fun invoke()
+</span><span class='line'>}
+</span><span class='line'>interface AppStartupTask : StartupTask
+</span><span class='line'>interface ForegroundTask : StartupTask
+</span><span class='line'>interface SessionStartupTask : StartupTask
+</span><span class='line'>// Thread-safe base class for tasks that SHOULD block and retry safely
+</span><span class='line'>abstract class IdempotentStartupTask : StartupTask {
+</span><span class='line'>    private val mutex = Mutex()
+</span><span class='line'>    @Volatile private var isCompleted = false
+</span><span class='line'>    final override suspend operator fun invoke() {
+</span><span class='line'>        if (isCompleted) return
+</span><span class='line'>        mutex.withLock {
+</span><span class='line'>            if (isCompleted) return@withLock
+</span><span class='line'>            execute()
+</span><span class='line'>            isCompleted = true
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>    protected abstract suspend fun execute()
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<blockquote><p><strong>注意：</strong> 由于这些任务在启动序列中执行，因此它们必须是主程序安全的。任何 CPU 密集型工作都应该切换到 Dispatchers.Default，而繁重的 I/O 操作（例如数据库读取或网络调用）应该使用 withContext 切换到 Dispatchers.IO（或者依赖于像 Room 和 Retrofit 这样的主程序安全库）。</p></blockquote>
+
+<h2>冷启动：基础设施、观察员和共识</h2>
+
+<p>冷启动任务在应用程序进程驻留在内存中时运行<strong>一次</strong>。</p>
+
+<p>这个生命周期完美地展现了挂起合约的强大功能。我们可以在不阻塞启动序列的情况下执行标准的阻塞代码或启动持续观察者（通过注入应用程序作用域的协程作用域）。这对于动态处理隐私许可非常有用。</p>
+
+<h3><strong>功能实现</strong></h3>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>// A blocking task (delays the next phase until finished)
+</span><span class='line'>class SecurityConfigTask @Inject constructor(
+</span><span class='line'>    private val securityManager: SecurityManager
+</span><span class='line'>) : IdempotentStartupTask(), AppStartupTask {
+</span><span class='line'>    override val phase = StartupPhase.CRITICAL
+</span><span class='line'>    
+</span><span class='line'>    override suspend fun execute() {
+</span><span class='line'>        securityManager.initializeEncryptionKeys() 
+</span><span class='line'>    }
+</span><span class='line'>}
+</span><span class='line'>// A continuous task (fire-and-forget observer)
+</span><span class='line'>class PendingSyncObserverTask @Inject constructor(
+</span><span class='line'>    private val offlineSyncDao: OfflineSyncDao,
+</span><span class='line'>    private val syncManager: SyncManager,
+</span><span class='line'>    @ApplicationScope private val appScope: CoroutineScope
+</span><span class='line'>) : AppStartupTask {
+</span><span class='line'>    override val phase = StartupPhase.LOW
+</span><span class='line'>    override suspend fun invoke() {
+</span><span class='line'>        appScope.launch {
+</span><span class='line'>            offlineSyncDao.observePendingActions().collect { pendingItems -&gt;
+</span><span class='line'>                if (pendingItems.isNotEmpty()) {
+</span><span class='line'>                    syncManager.startUploadProcess(pendingItems)
+</span><span class='line'>                }
+</span><span class='line'>            }
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>}
+</span><span class='line'>// A decentralized, dynamic consent-gated task (GDPR, CCPA, CPRA)
+</span><span class='line'>class AnalyticsConsentTask @Inject constructor(
+</span><span class='line'>    private val consentManager: ConsentManager,
+</span><span class='line'>    @ApplicationScope private val appScope: CoroutineScope
+</span><span class='line'>) : AppStartupTask {
+</span><span class='line'>    override val phase = StartupPhase.LOW
+</span><span class='line'>    override suspend fun invoke() {
+</span><span class='line'>        appScope.launch {
+</span><span class='line'>            // Continuously observes this specific vendor's consent state.
+</span><span class='line'>            // Handles cold start, delayed CMP acceptance, AND later revocation in settings!
+</span><span class='line'>            // Multiple tasks doing this takes virtually zero resources as suspended flows are cheap.
+</span><span class='line'>            consentManager.observeConsent(Vendor.FIREBASE_ANALYTICS).collect { isGranted -&gt;
+</span><span class='line'>                Analytics.setCollectionEnabled(isGranted)
+</span><span class='line'>            }
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>// Example: How feature modules contribute tasks to the global Set in Hilt/Dagger
+</span><span class='line'>@Module
+</span><span class='line'>@InstallIn(SingletonComponent::class)
+</span><span class='line'>abstract class SecurityModule {
+</span><span class='line'>    @Binds
+</span><span class='line'>    @IntoSet
+</span><span class='line'>    abstract fun bindSecurityConfigTask(task: SecurityConfigTask): AppStartupTask
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>统一的任务运行器和错误恢复</h3>
+
+<p>为了在所有生命周期中安全地执行这些任务，避免因非关键性故障导致应用程序崩溃，我们在共享的 <code>:core</code> 模块中放置了一个 Kotlin 扩展函数。我们使用协程作用域 (coroutineScope) 结合每个任务的 try-catch 块，以便捕获并记录非关键性故障，而关键性故障则会立即取消同级任务并向上冒泡。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>class CriticalStartupException(
+</span><span class='line'>    val failedTaskName: String, 
+</span><span class='line'>    cause: Throwable
+</span><span class='line'>) : Exception("Critical task failed: $failedTaskName", cause)
+</span><span class='line'>/**
+</span><span class='line'> * Groups tasks by phase and runs them concurrently. 
+</span><span class='line'> */
+</span><span class='line'>suspend fun Iterable&lt;StartupTask&gt;.executeAll() {
+</span><span class='line'>    val phases = this.groupBy { it.phase.order }.toSortedMap()
+</span><span class='line'>    
+</span><span class='line'>    for ((_, tasksInPhase) in phases) {
+</span><span class='line'>        coroutineScope {
+</span><span class='line'>            tasksInPhase.forEach { task -&gt; 
+</span><span class='line'>                launch {
+</span><span class='line'>                   try {
+</span><span class='line'>                        withTimeout(task.timeoutMs) { task() }
+</span><span class='line'>                    } catch (e: TimeoutCancellationException) {
+</span><span class='line'>                        if (task.phase == StartupPhase.CRITICAL) {
+</span><span class='line'>                            throw CriticalStartupException("${task.javaClass.simpleName} timed out", e)
+</span><span class='line'>                        } else {
+</span><span class='line'>                            // Log non-fatal error
+</span><span class='line'>                        }
+</span><span class='line'>                    } catch (e: CancellationException) {
+</span><span class='line'>                        throw e 
+</span><span class='line'>                    } catch (e: Exception) {
+</span><span class='line'>                        if (task.phase == StartupPhase.CRITICAL) {
+</span><span class='line'>                            throw CriticalStartupException(task.javaClass.simpleName, e)
+</span><span class='line'>                        } else {
+</span><span class='line'>                            // Log non-fatal error
+</span><span class='line'>                        }
+</span><span class='line'>                    }
+</span><span class='line'>                } 
+</span><span class='line'>            }
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h3><strong>编排器（<code>:app</code> 模块）</strong></h3>
+
+<p>得益于我们的扩展功能，编曲器变得非常精简。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>sealed interface StartupState {
+</span><span class='line'>    data object Loading : StartupState()
+</span><span class='line'>    data object Success : StartupState()
+</span><span class='line'>    data class FatalError(val exception: CriticalStartupException) : StartupState()
+</span><span class='line'>}
+</span><span class='line'>@Singleton
+</span><span class='line'>class AppInitializer @Inject constructor(
+</span><span class='line'>    private val appTasks: Set&lt;@JvmSuppressWildcards AppStartupTask&gt;,
+</span><span class='line'>    @ApplicationScope private val scope: CoroutineScope 
+</span><span class='line'>) {
+</span><span class='line'>    private val _startupState = MutableStateFlow&lt;StartupState&gt;(StartupState.Loading)
+</span><span class='line'>    val startupState: StateFlow&lt;StartupState&gt; = _startupState.asStateFlow()
+</span><span class='line'>    fun initialize() {
+</span><span class='line'>        // Reset state so the UI shows a loading spinner on retry
+</span><span class='line'>        _startupState.value = StartupState.Loading 
+</span><span class='line'>        
+</span><span class='line'>        scope.launch { 
+</span><span class='line'>            try {
+</span><span class='line'>                appTasks.executeAll()
+</span><span class='line'>                _startupState.value = StartupState.Success
+</span><span class='line'>            } catch (e: CriticalStartupException) {
+</span><span class='line'>                _startupState.value = StartupState.FatalError(e)
+</span><span class='line'>            }
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h3><strong>将其连接到用户界面</strong></h3>
+
+<p>要完成循环，你的 UI 层只需观察 <code>AppInitializer</code>（通常是通过将其注入到你的全局 <code>MainViewModel</code> 中），并对状态变化做出反应。</p>
+
+<p>使用 AndroidX Core Splash Screen API，你可以将原生启动画面保持在屏幕上，直到编排完成：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>// Inside your MainActivity
+</span><span class='line'>val splashScreen = installSplashScreen()
+</span><span class='line'>splashScreen.setKeepOnScreenCondition {
+</span><span class='line'>    viewModel.startupState.value == StartupState.Loading
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<p>一旦状态变为 Success，你的 Activity 就可以安全地渲染主导航图。如果抛出 FatalError 异常，则渲染一个带有“重试”按钮的备用屏幕，该按钮会调用 viewModel.retryInitialization() 方法。保持启动画面显示直到 <code>StartupState</code> 状态离开 Loading 状态，可以消除 UI 闪烁、竞态条件和突然启动崩溃。</p>
+
+<blockquote><p><strong>重试的黄金法则：强制幂等性</strong></p>
+
+<p>如果用户在致命错误屏幕上点击“重试”，onRetry 函数会再次调用 appInitializer.initialize()。由于这会重新运行整个初始化过程，因此任务必须是<strong>幂等的</strong>。</p>
+
+<p>扩展 <code>IdempotentStartupTask</code> 会自动强制执行此操作：如果 CrashReportingTask 在第一次尝试中成功，但 SecurityConfigTask 失败，则重试将通过其 @Volatile 和 Mutex 状态检查安全地跳过 CrashReportingTask，并立即继续执行失败的任务。</p></blockquote>
+
+<h2>热身启动：前台任务</h2>
+
+<p>现代 Android 开发中存在一个隐藏的风险：<strong>后台唤醒</strong>。营销和归因工具经常会发送静默推送通知，其目的仅仅是为了 ping 一下设备，并跟踪应用是否仍然安装在设备上。</p>
+
+<p>当这些静默的卸载跟踪 ping 唤醒你的应用时，操作系统会创建进程并调用 Application.onCreate()。如果你的冷启动序列立即触发大量 API 同步、初始化占用大量资源的 UI 相关 SDK 并启动分析工具，那么一个简单的后台 ping 就会造成巨大的电量消耗。讽刺的是，这种静默的电量消耗往往正是用户卸载应用的根本原因！</p>
+
+<p>通过将依赖于 UI 的 SDK 或繁重的数据同步任务移至 <code>ForegroundTask</code>，我们可以将它们与 Android 的 <code>ProcessLifecycleOwner</code> 关联起来。由于在静默后台唤醒期间不会调用 <code>onStart()</code>，因此这些繁重的任务自然会被延迟到用户实际将应用切换到屏幕时才执行。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>class RemoteConfigTask @Inject constructor(
+</span><span class='line'>    private val configManager: ConfigManager
+</span><span class='line'>) : IdempotentStartupTask(), ForegroundTask {
+</span><span class='line'>    override val phase = StartupPhase.HIGH
+</span><span class='line'>    override val timeoutMs = 5000L // Giving the network a bit more time if needed
+</span><span class='line'>    
+</span><span class='line'>    override suspend fun execute() { 
+</span><span class='line'>        configManager.updateRemoteConfigs()
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>@Singleton
+</span><span class='line'>class AppLifecycleObserver @Inject constructor(
+</span><span class='line'>    private val foregroundTasks: Set&lt;@JvmSuppressWildcards ForegroundTask&gt;,
+</span><span class='line'>    @ApplicationScope private val scope: CoroutineScope
+</span><span class='line'>) : DefaultLifecycleObserver {
+</span><span class='line'>    override fun onStart(owner: LifecycleOwner) {
+</span><span class='line'>        scope.launch { 
+</span><span class='line'>            try {
+</span><span class='line'>                foregroundTasks.executeAll() 
+</span><span class='line'>            } catch (e: CriticalStartupException) {
+</span><span class='line'>                // Log non-fatal foreground failure and do not crash the app
+</span><span class='line'>            }
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>用户会话：会话启动任务</h2>
+
+<p>如果你的应用启动但用户已登出，则尝试同步用户配置文件将会失败。会话任务必须完全与你的身份验证状态关联，完全绕过操作系统生命周期。</p>
+
+<blockquote><p><em>注意：<code>SessionOrchestrator</code> 只处理会话相关任务。注销时，清除本地数据库和撤销令牌的操作应严格委托给你的 <code>AuthManager</code>。</em></p></blockquote>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>@Singleton
+</span><span class='line'>class SessionOrchestrator @Inject constructor(
+</span><span class='line'>    private val authManager: AuthManager,
+</span><span class='line'>    private val sessionTasks: Set&lt;@JvmSuppressWildcards SessionStartupTask&gt;,
+</span><span class='line'>    @ApplicationScope private val scope: CoroutineScope
+</span><span class='line'>) {
+</span><span class='line'>    fun startObserving() {
+</span><span class='line'>        scope.launch {
+</span><span class='line'>            authManager.authState
+</span><span class='line'>                .map { it is AuthState.LoggedIn }
+</span><span class='line'>                .distinctUntilChanged()
+</span><span class='line'>                .filter { isLoggedIn -&gt; isLoggedIn }
+</span><span class='line'>                .collect {
+</span><span class='line'>                    try {
+</span><span class='line'>                        sessionTasks.executeAll()
+</span><span class='line'>                    } catch (e: CriticalStartupException) {
+</span><span class='line'>                        // Log failure or route to UI, but keep collector alive
+</span><span class='line'>                    }
+</span><span class='line'>                }
+</span><span class='line'>        }
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>协调启动序列</h2>
+
+<p>我们在 Application 类中委托执行。请注意，这个入口点非常简洁，并且完全不涉及功能逻辑：</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>@HiltAndroidApp
+</span><span class='line'>class MyApplication : Application() {
+</span><span class='line'>    @Inject lateinit var appInitializer: AppInitializer
+</span><span class='line'>    @Inject lateinit var lifecycleObserver: AppLifecycleObserver
+</span><span class='line'>    @Inject lateinit var sessionOrchestrator: SessionOrchestrator
+</span><span class='line'>    override fun onCreate() {
+</span><span class='line'>        super.onCreate()
+</span><span class='line'>        appInitializer.initialize()
+</span><span class='line'>        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+</span><span class='line'>        sessionOrchestrator.startObserving()
+</span><span class='line'>    }
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>UI 层：完善 <code>MainViewModel</code></h2>
+
+<p>我们已成功清理了入口点，将全局基础架构迁移到 <code>AppStartupTask</code>，将全局 UI SDK 迁移到 <code>ForegroundTask</code>。</p>
+
+<p>但是，那些阻塞了 <code>MainViewModel</code> 的屏幕特定数据获取操作（例如 <code>prefetchHomeFeedData()</code>）该如何处理呢？这些逻辑根本不应该包含在全局启动序列中。获取首页信息流的数据应该延迟执行，即在主屏幕实际渲染时才执行。</p>
+
+<p>一种常见的反模式是使用 LaunchedEffect(key) 或更新、高度优化的 SideEffect(key) API 以命令式的方式指示 ViewModel 获取数据。另一种反模式是在 ViewModel 的初始化代码块中启动协程。这两种反模式都会使测试变得困难，并破坏响应式 UI 模式。</p>
+
+<p>相反，应采用声明式流程方法。数据会在用户界面开始感知数据时才延迟加载。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>@HiltViewModel
+</span><span class='line'>class HomeViewModel @Inject constructor(
+</span><span class='line'>    private val fetchFeedUseCase: FetchFeedUseCase 
+</span><span class='line'>) : ViewModel() {
+</span><span class='line'>    // No init blocks. No LaunchedEffect. No SideEffect.
+</span><span class='line'>    // Data fetching starts automatically when the UI subscribes.
+</span><span class='line'>    val uiState: StateFlow&lt;HomeState&gt; = flow {
+</span><span class='line'>            // Wrap a one-shot suspend call into a cold flow
+</span><span class='line'>            emit(fetchFeedUseCase())
+</span><span class='line'>        }.map {
+</span><span class='line'>          // Map result to UI state (e.g. Success, Error) here 
+</span><span class='line'>        }.stateIn(
+</span><span class='line'>            scope = viewModelScope,
+</span><span class='line'>            started = SharingStarted.WhileSubscribed(5000),
+</span><span class='line'>            initialValue = HomeState.Loading
+</span><span class='line'>        )
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>@Composable
+</span><span class='line'>fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
+</span><span class='line'>    // Lifecycle-aware collection stops wasting resources when the app is backgrounded
+</span><span class='line'>    val state by viewModel.uiState.collectAsStateWithLifecycle()
+</span><span class='line'>    
+</span><span class='line'>    // Render UI...
+</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>为什么这种架构在生产环境中胜出</h2>
+
+<p>除了优化入口点之外，这种架构还解决了几个大型企业面临的挑战：</p>
+
+<ol>
+<li><strong>去中心化隐私合规性：</strong> 由于任务可以注入持续观察者，因此对隐私敏感的 SDK 可以动态响应 <code>ConsentManager</code>。它们会在获得特定供应商的许可后初始化，并在稍后在设置中撤销许可后优雅地关闭，从而使你的 <code>:core:consent</code> 模块与第三方 SDK 依赖项完全解耦。</li>
+<li><strong>防止静默唤醒导致的电池消耗：</strong> 通过将 UI 相关的 SDK 和繁重的同步操作转移到 <code>ForegroundTask</code>，你可以消除设备在用户口袋中时因后台推送 ping（例如卸载跟踪）而导致的静默资源消耗。</li>
+<li><strong>测试人员的理想之选：</strong> 你可以通过传递模拟任务集来对编排器进行单元测试，并在完全隔离的环境下测试各个初始化任务。此外，由于 ViewModel 不再使用 init 块或 Compose 副作用来获取启动数据，因此你可以在单元测试中实例化它们，而不会触发意外的网络调用。</li>
+</ol>
+
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-10-07'><span class='date'><span class='date-month'>Oct</span> <span class='date-day'>7</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/09/28/you-cant-hide-secrets-in-your-android-app-heres-what-to-do-instead/" title="Previous Post: 藏在设备上的秘密，终究藏不住">&laquo; 藏在设备上的秘密，终究藏不住</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

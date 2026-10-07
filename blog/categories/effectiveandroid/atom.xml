@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-09-28T13:23:15+00:00</updated>
+  <updated>2026-10-07T12:46:21+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,421 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[生命周期感知的多模块启动模式]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/10/07/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach/"/>
+    <updated>2026-10-07T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/10/07/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「The Android Startup Pattern: A Lifecycle-Aware, Multi-Module Approach」，原文链接<a href="https://medium.com/proandroiddev/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach-d0f73e367a62">https://medium.com/proandroiddev/the-android-startup-pattern-a-lifecycle-aware-multi-module-approach-d0f73e367a62</a>，由Ehab Elwan发布于2026年8月25日。</p></blockquote>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*CPz9u6psa6AMDaopuXXuwg.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<blockquote><p>声明：本文由我撰写，并借助人工智能工具进行了完善。</p></blockquote>
+
+<p>每个不断发展的 Android 项目最终都会催生出一个双头“上帝级”。</p>
+
+<p>一方面，你的 Application 类会变成全局基础架构（第三方 SDK、崩溃报告器和跟踪工具）的垃圾场。另一方面，你的主入口点（通常是 <code>MainViewModel</code>）会被阻塞 UI 的启动逻辑堵塞。</p>
+
+<p>它通常看起来像这样：</p>
+
+<p>反模式：双头神类</p>
+
+<pre><code>class MyApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        // The framework dumping ground
+        CrashReportingSDK.getInstance().setCollectionEnabled(true)
+        HeavyUiSDK.initialize(context = this, ...) 
+        AnalyticsSDK.initialize(this, "API_KEY")
+        // ... 50 more lines of spaghetti
+    }
+}
+</code></pre>
+
+<pre><code>class MainViewModel : ViewModel() {
+    init {
+        // The UI-blocking dumping ground
+        updateRemoteConfigs()
+        checkUserSessionToken()
+        processPendingDeepLinks()
+        prefetchHomeFeedData()
+        // ... UI cannot render until this finishes
+    }
+}
+</code></pre>
+
+<p>将初始化过程拆分到这两个文件中会造成严重问题：</p>
+
+<ol>
+<li><strong>它违反了单一职责原则</strong>：应用程序的入口点被迫协调每个功能的内部运作，导致模块之间紧密耦合。</li>
+<li><strong>它忽略了进程生命周期</strong>：应用程序任务会在每次静默后台唤醒时无差别地运行，而当应用程序返回前台时，<code>MainViewModel</code> 任务无法重新触发。</li>
+<li><strong>它破坏了可测试性</strong>：将 SDK 初始化直接硬编码到入口点中，使得编写独立的单元测试变得极其困难，除非使用复杂的模拟设置。</li>
+<li><strong>它使隐私合规性复杂化</strong>：集中式的 SDK 存储使得在用户根据全球隐私法规（例如 GDPR、CCPA 和 CPRA）明确授予同意之前，动态暂停跟踪 SDK 变得极其困难。</li>
+</ol>
+
+
+<p>为了解决这个问题，我们需要更智能的初始化策略。</p>
+
+<h2>Jetpack 应用启动：何时使用（以及何时避免使用）</h2>
+
+<p>在构建自定义解决方案之前，我们必须了解<a href="https://developer.android.com/topic/libraries/app-startup">Jetpack App Startup</a>。谷歌开发此库是为了解决一个特定问题：第三方 SDK 使用其自身的不可见内容提供程序 (ContentProvider) 进行自动初始化，这会严重增加冷启动时间。</p>
+
+<h3><strong>何时使用：</strong></h3>
+
+<p>它是初始化不依赖于应用程序内部业务逻辑的原始框架库（如 WorkManager 或 Crashlytics）的完美工具。</p>
+
+<h3><strong>当它变得危险时：</strong></h3>
+
+<p>Jetpack 应用启动会在 Application.onCreate() 之前运行。这意味着它会在你的依赖注入图构建完成之前执行。此外，<strong>在底层自动初始化跟踪或广告 SDK 可能违反 GDPR、CCPA 和 CPRA 等全球隐私法规</strong>。如果 SDK 在你的用户同意管理平台 (CMP) 评估用户选择之前收集数据，则你不符合相关法规。</p>
+
+<p>对于一个强大的企业应用程序，你需要一个自定义的依赖注入驱动模式，用于应用程序级别的业务逻辑，该模式要尊重依赖注入、生命周期和用户同意。</p>
+
+<h2>核心概念：多重绑定和阶段</h2>
+
+<p>主应用程序模块不会显式调用功能设置，而是使用一种称为<strong>多重绑定</strong>的依赖注入概念来反转依赖关系。</p>
+
+<p>无论你使用 Hilt、Dagger、Koin 还是 Metro，现代依赖注入框架都允许各个功能模块以静默的方式向全局集合贡献实现。主应用程序模块只需注入该集合并运行任务，完全无需了解这些任务的来源。</p>
+
+<p>阶段合同</p>
+
+<p>我们定义了<strong>优先级阶段</strong>（在你的<code>:core</code>模块中），并利用密封接口来保证开发人员只能接入我们明确支持的生命周期。</p>
+
+<pre><code>enum class StartupPhase(val order: Int) {
+    // The app cannot function if this fails (e.g., Security Configs).
+    CRITICAL(0),
+    // Crucial for the first screen (e.g., Feature Flags).
+    HIGH(1),
+    // Standard startup tasks (e.g., Pre-warming caches).
+    NORMAL(2),
+    // Fire-and-forget, or things that can wait (e.g., Background Observers).
+    LOW(3)
+}
+// Sealed to prevent rogue custom lifecycles
+sealed interface StartupTask {
+    val phase: StartupPhase get() = StartupPhase.NORMAL
+// Tip: Always profile this timeout on low-end hardware under heavy CPU load!
+    val timeoutMs: Long get() = 800L
+    suspend operator fun invoke()
+}
+interface AppStartupTask : StartupTask
+interface ForegroundTask : StartupTask
+interface SessionStartupTask : StartupTask
+// Thread-safe base class for tasks that SHOULD block and retry safely
+abstract class IdempotentStartupTask : StartupTask {
+    private val mutex = Mutex()
+    @Volatile private var isCompleted = false
+    final override suspend operator fun invoke() {
+        if (isCompleted) return
+        mutex.withLock {
+            if (isCompleted) return@withLock
+            execute()
+            isCompleted = true
+        }
+    }
+    protected abstract suspend fun execute()
+}
+</code></pre>
+
+<blockquote><p><strong>注意：</strong> 由于这些任务在启动序列中执行，因此它们必须是主程序安全的。任何 CPU 密集型工作都应该切换到 Dispatchers.Default，而繁重的 I/O 操作（例如数据库读取或网络调用）应该使用 withContext 切换到 Dispatchers.IO（或者依赖于像 Room 和 Retrofit 这样的主程序安全库）。</p></blockquote>
+
+<h2>冷启动：基础设施、观察员和共识</h2>
+
+<p>冷启动任务在应用程序进程驻留在内存中时运行<strong>一次</strong>。</p>
+
+<p>这个生命周期完美地展现了挂起合约的强大功能。我们可以在不阻塞启动序列的情况下执行标准的阻塞代码或启动持续观察者（通过注入应用程序作用域的协程作用域）。这对于动态处理隐私许可非常有用。</p>
+
+<h3><strong>功能实现</strong></h3>
+
+<pre><code>// A blocking task (delays the next phase until finished)
+class SecurityConfigTask @Inject constructor(
+    private val securityManager: SecurityManager
+) : IdempotentStartupTask(), AppStartupTask {
+    override val phase = StartupPhase.CRITICAL
+
+    override suspend fun execute() {
+        securityManager.initializeEncryptionKeys() 
+    }
+}
+// A continuous task (fire-and-forget observer)
+class PendingSyncObserverTask @Inject constructor(
+    private val offlineSyncDao: OfflineSyncDao,
+    private val syncManager: SyncManager,
+    @ApplicationScope private val appScope: CoroutineScope
+) : AppStartupTask {
+    override val phase = StartupPhase.LOW
+    override suspend fun invoke() {
+        appScope.launch {
+            offlineSyncDao.observePendingActions().collect { pendingItems -&gt;
+                if (pendingItems.isNotEmpty()) {
+                    syncManager.startUploadProcess(pendingItems)
+                }
+            }
+        }
+    }
+}
+// A decentralized, dynamic consent-gated task (GDPR, CCPA, CPRA)
+class AnalyticsConsentTask @Inject constructor(
+    private val consentManager: ConsentManager,
+    @ApplicationScope private val appScope: CoroutineScope
+) : AppStartupTask {
+    override val phase = StartupPhase.LOW
+    override suspend fun invoke() {
+        appScope.launch {
+            // Continuously observes this specific vendor's consent state.
+            // Handles cold start, delayed CMP acceptance, AND later revocation in settings!
+            // Multiple tasks doing this takes virtually zero resources as suspended flows are cheap.
+            consentManager.observeConsent(Vendor.FIREBASE_ANALYTICS).collect { isGranted -&gt;
+                Analytics.setCollectionEnabled(isGranted)
+            }
+        }
+    }
+}
+</code></pre>
+
+<pre><code>// Example: How feature modules contribute tasks to the global Set in Hilt/Dagger
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class SecurityModule {
+    @Binds
+    @IntoSet
+    abstract fun bindSecurityConfigTask(task: SecurityConfigTask): AppStartupTask
+}
+</code></pre>
+
+<h3>统一的任务运行器和错误恢复</h3>
+
+<p>为了在所有生命周期中安全地执行这些任务，避免因非关键性故障导致应用程序崩溃，我们在共享的 <code>:core</code> 模块中放置了一个 Kotlin 扩展函数。我们使用协程作用域 (coroutineScope) 结合每个任务的 try-catch 块，以便捕获并记录非关键性故障，而关键性故障则会立即取消同级任务并向上冒泡。</p>
+
+<pre><code>class CriticalStartupException(
+    val failedTaskName: String, 
+    cause: Throwable
+) : Exception("Critical task failed: $failedTaskName", cause)
+/**
+ * Groups tasks by phase and runs them concurrently. 
+ */
+suspend fun Iterable&lt;StartupTask&gt;.executeAll() {
+    val phases = this.groupBy { it.phase.order }.toSortedMap()
+
+    for ((_, tasksInPhase) in phases) {
+        coroutineScope {
+            tasksInPhase.forEach { task -&gt; 
+                launch {
+                   try {
+                        withTimeout(task.timeoutMs) { task() }
+                    } catch (e: TimeoutCancellationException) {
+                        if (task.phase == StartupPhase.CRITICAL) {
+                            throw CriticalStartupException("${task.javaClass.simpleName} timed out", e)
+                        } else {
+                            // Log non-fatal error
+                        }
+                    } catch (e: CancellationException) {
+                        throw e 
+                    } catch (e: Exception) {
+                        if (task.phase == StartupPhase.CRITICAL) {
+                            throw CriticalStartupException(task.javaClass.simpleName, e)
+                        } else {
+                            // Log non-fatal error
+                        }
+                    }
+                } 
+            }
+        }
+    }
+}
+</code></pre>
+
+<h3><strong>编排器（<code>:app</code> 模块）</strong></h3>
+
+<p>得益于我们的扩展功能，编曲器变得非常精简。</p>
+
+<pre><code>sealed interface StartupState {
+    data object Loading : StartupState()
+    data object Success : StartupState()
+    data class FatalError(val exception: CriticalStartupException) : StartupState()
+}
+@Singleton
+class AppInitializer @Inject constructor(
+    private val appTasks: Set&lt;@JvmSuppressWildcards AppStartupTask&gt;,
+    @ApplicationScope private val scope: CoroutineScope 
+) {
+    private val _startupState = MutableStateFlow&lt;StartupState&gt;(StartupState.Loading)
+    val startupState: StateFlow&lt;StartupState&gt; = _startupState.asStateFlow()
+    fun initialize() {
+        // Reset state so the UI shows a loading spinner on retry
+        _startupState.value = StartupState.Loading 
+
+        scope.launch { 
+            try {
+                appTasks.executeAll()
+                _startupState.value = StartupState.Success
+            } catch (e: CriticalStartupException) {
+                _startupState.value = StartupState.FatalError(e)
+            }
+        }
+    }
+}
+</code></pre>
+
+<h3><strong>将其连接到用户界面</strong></h3>
+
+<p>要完成循环，你的 UI 层只需观察 <code>AppInitializer</code>（通常是通过将其注入到你的全局 <code>MainViewModel</code> 中），并对状态变化做出反应。</p>
+
+<p>使用 AndroidX Core Splash Screen API，你可以将原生启动画面保持在屏幕上，直到编排完成：</p>
+
+<pre><code>// Inside your MainActivity
+val splashScreen = installSplashScreen()
+splashScreen.setKeepOnScreenCondition {
+    viewModel.startupState.value == StartupState.Loading
+}
+</code></pre>
+
+<p>一旦状态变为 Success，你的 Activity 就可以安全地渲染主导航图。如果抛出 FatalError 异常，则渲染一个带有“重试”按钮的备用屏幕，该按钮会调用 viewModel.retryInitialization() 方法。保持启动画面显示直到 <code>StartupState</code> 状态离开 Loading 状态，可以消除 UI 闪烁、竞态条件和突然启动崩溃。</p>
+
+<blockquote><p><strong>重试的黄金法则：强制幂等性</strong></p>
+
+<p>如果用户在致命错误屏幕上点击“重试”，onRetry 函数会再次调用 appInitializer.initialize()。由于这会重新运行整个初始化过程，因此任务必须是<strong>幂等的</strong>。</p>
+
+<p>扩展 <code>IdempotentStartupTask</code> 会自动强制执行此操作：如果 CrashReportingTask 在第一次尝试中成功，但 SecurityConfigTask 失败，则重试将通过其 @Volatile 和 Mutex 状态检查安全地跳过 CrashReportingTask，并立即继续执行失败的任务。</p></blockquote>
+
+<h2>热身启动：前台任务</h2>
+
+<p>现代 Android 开发中存在一个隐藏的风险：<strong>后台唤醒</strong>。营销和归因工具经常会发送静默推送通知，其目的仅仅是为了 ping 一下设备，并跟踪应用是否仍然安装在设备上。</p>
+
+<p>当这些静默的卸载跟踪 ping 唤醒你的应用时，操作系统会创建进程并调用 Application.onCreate()。如果你的冷启动序列立即触发大量 API 同步、初始化占用大量资源的 UI 相关 SDK 并启动分析工具，那么一个简单的后台 ping 就会造成巨大的电量消耗。讽刺的是，这种静默的电量消耗往往正是用户卸载应用的根本原因！</p>
+
+<p>通过将依赖于 UI 的 SDK 或繁重的数据同步任务移至 <code>ForegroundTask</code>，我们可以将它们与 Android 的 <code>ProcessLifecycleOwner</code> 关联起来。由于在静默后台唤醒期间不会调用 <code>onStart()</code>，因此这些繁重的任务自然会被延迟到用户实际将应用切换到屏幕时才执行。</p>
+
+<pre><code>class RemoteConfigTask @Inject constructor(
+    private val configManager: ConfigManager
+) : IdempotentStartupTask(), ForegroundTask {
+    override val phase = StartupPhase.HIGH
+    override val timeoutMs = 5000L // Giving the network a bit more time if needed
+
+    override suspend fun execute() { 
+        configManager.updateRemoteConfigs()
+    }
+}
+</code></pre>
+
+<pre><code>@Singleton
+class AppLifecycleObserver @Inject constructor(
+    private val foregroundTasks: Set&lt;@JvmSuppressWildcards ForegroundTask&gt;,
+    @ApplicationScope private val scope: CoroutineScope
+) : DefaultLifecycleObserver {
+    override fun onStart(owner: LifecycleOwner) {
+        scope.launch { 
+            try {
+                foregroundTasks.executeAll() 
+            } catch (e: CriticalStartupException) {
+                // Log non-fatal foreground failure and do not crash the app
+            }
+        }
+    }
+}
+</code></pre>
+
+<h2>用户会话：会话启动任务</h2>
+
+<p>如果你的应用启动但用户已登出，则尝试同步用户配置文件将会失败。会话任务必须完全与你的身份验证状态关联，完全绕过操作系统生命周期。</p>
+
+<blockquote><p><em>注意：<code>SessionOrchestrator</code> 只处理会话相关任务。注销时，清除本地数据库和撤销令牌的操作应严格委托给你的 <code>AuthManager</code>。</em></p></blockquote>
+
+<pre><code>@Singleton
+class SessionOrchestrator @Inject constructor(
+    private val authManager: AuthManager,
+    private val sessionTasks: Set&lt;@JvmSuppressWildcards SessionStartupTask&gt;,
+    @ApplicationScope private val scope: CoroutineScope
+) {
+    fun startObserving() {
+        scope.launch {
+            authManager.authState
+                .map { it is AuthState.LoggedIn }
+                .distinctUntilChanged()
+                .filter { isLoggedIn -&gt; isLoggedIn }
+                .collect {
+                    try {
+                        sessionTasks.executeAll()
+                    } catch (e: CriticalStartupException) {
+                        // Log failure or route to UI, but keep collector alive
+                    }
+                }
+        }
+    }
+}
+</code></pre>
+
+<h2>协调启动序列</h2>
+
+<p>我们在 Application 类中委托执行。请注意，这个入口点非常简洁，并且完全不涉及功能逻辑：</p>
+
+<pre><code>@HiltAndroidApp
+class MyApplication : Application() {
+    @Inject lateinit var appInitializer: AppInitializer
+    @Inject lateinit var lifecycleObserver: AppLifecycleObserver
+    @Inject lateinit var sessionOrchestrator: SessionOrchestrator
+    override fun onCreate() {
+        super.onCreate()
+        appInitializer.initialize()
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
+        sessionOrchestrator.startObserving()
+    }
+}
+</code></pre>
+
+<h2>UI 层：完善 <code>MainViewModel</code></h2>
+
+<p>我们已成功清理了入口点，将全局基础架构迁移到 <code>AppStartupTask</code>，将全局 UI SDK 迁移到 <code>ForegroundTask</code>。</p>
+
+<p>但是，那些阻塞了 <code>MainViewModel</code> 的屏幕特定数据获取操作（例如 <code>prefetchHomeFeedData()</code>）该如何处理呢？这些逻辑根本不应该包含在全局启动序列中。获取首页信息流的数据应该延迟执行，即在主屏幕实际渲染时才执行。</p>
+
+<p>一种常见的反模式是使用 LaunchedEffect(key) 或更新、高度优化的 SideEffect(key) API 以命令式的方式指示 ViewModel 获取数据。另一种反模式是在 ViewModel 的初始化代码块中启动协程。这两种反模式都会使测试变得困难，并破坏响应式 UI 模式。</p>
+
+<p>相反，应采用声明式流程方法。数据会在用户界面开始感知数据时才延迟加载。</p>
+
+<pre><code>@HiltViewModel
+class HomeViewModel @Inject constructor(
+    private val fetchFeedUseCase: FetchFeedUseCase 
+) : ViewModel() {
+    // No init blocks. No LaunchedEffect. No SideEffect.
+    // Data fetching starts automatically when the UI subscribes.
+    val uiState: StateFlow&lt;HomeState&gt; = flow {
+            // Wrap a one-shot suspend call into a cold flow
+            emit(fetchFeedUseCase())
+        }.map {
+          // Map result to UI state (e.g. Success, Error) here 
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = HomeState.Loading
+        )
+}
+</code></pre>
+
+<pre><code>@Composable
+fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
+    // Lifecycle-aware collection stops wasting resources when the app is backgrounded
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Render UI...
+}
+</code></pre>
+
+<h2>为什么这种架构在生产环境中胜出</h2>
+
+<p>除了优化入口点之外，这种架构还解决了几个大型企业面临的挑战：</p>
+
+<ol>
+<li><strong>去中心化隐私合规性：</strong> 由于任务可以注入持续观察者，因此对隐私敏感的 SDK 可以动态响应 <code>ConsentManager</code>。它们会在获得特定供应商的许可后初始化，并在稍后在设置中撤销许可后优雅地关闭，从而使你的 <code>:core:consent</code> 模块与第三方 SDK 依赖项完全解耦。</li>
+<li><strong>防止静默唤醒导致的电池消耗：</strong> 通过将 UI 相关的 SDK 和繁重的同步操作转移到 <code>ForegroundTask</code>，你可以消除设备在用户口袋中时因后台推送 ping（例如卸载跟踪）而导致的静默资源消耗。</li>
+<li><strong>测试人员的理想之选：</strong> 你可以通过传递模拟任务集来对编排器进行单元测试，并在完全隔离的环境下测试各个初始化任务。此外，由于 ViewModel 不再使用 init 块或 Compose 副作用来获取启动数据，因此你可以在单元测试中实例化它们，而不会触发意外的网络调用。</li>
+</ol>
+
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[藏在设备上的秘密，终究藏不住]]></title>
@@ -1638,208 +2053,6 @@ android skills list --installed
 <p>本系列的下一篇：<a href="https://medium.com/@angelinaballerina/one-badge-third-deliveries-how-android-flutter-and-compose-keep-your-ui-in-sync-2ef1e84a6038">状态管理</a> —“LiveData”、“Bloc”、“StateFlow”，以及为什么每个生态系统从不同方向汇聚到流上。</p>
 
 <p><em>本系列是作者对 Android Native、KMP 和 Flutter 的个人研究——它们在幕后如何工作、它们的不同之处以及它们各自对你的期望。</em></p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[MVI模式的完整历史、误解和现代Android范式]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/07/21/that-is-mvi/"/>
-    <updated>2026-07-21T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/07/21/that-is-mvi</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Yes, That’s MVI: The Pattern’s Full History, Misconceptions, and Modern Android Form」，原文链接<a href="https://proandroiddev.com/yes-that-is-mvi-674f810ca4fe">https://proandroiddev.com/yes-that-is-mvi-674f810ca4fe</a>，由Eury Pérez Beltré发布于2025年5月29日。</p>
-
-<p>每项传统背后都有其原因——而原因背后，又蕴藏着一个故事。
-– 佚名</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*ZC5YKog0LMH-dqSw6Os21Q.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>欢迎阅读本文！我的目标是帮助你真正理解 MVI 模式的本质，解释我为何对我的观点充满信心，以及该模式的起源。但在你深入阅读之前，请注意：</p>
-
-<p><em>📝 本文包含对 MVI 架构模式的历史和演变的广泛而深入的研究，以及作者的观点。请做好区分事实和观点的准备 😉</em></p>
-
-<h3>目录</h3>
-
-<ol>
-<li><p>引言：<em>超越流行语</em></p></li>
-<li><p>架构先驱：<em>MVI 的雏形</em></p></li>
-<li><p>MVI 的起源：<em>模式的形成</em></p></li>
-<li><p>问题：<em>MVI 的误解</em></p></li>
-<li><p>Android 中的 MVI：<em>它的真实面貌</em></p></li>
-<li><p>结语：<em>我的个人见解</em></p></li>
-<li><p>引言：超越流行语</p></li>
-</ol>
-
-
-<p>MVI 并没有像其他设计模式一样在我们可以参考的论文或书籍中进行介绍。这是其创建者深思熟虑的结果，他对当时的现有解决方案提出了异议（<a href="https://staltz.com/some-problems-with-react-redux">1</a>、<a href="https://staltz.com/nothing-new-in-react-and-flux-%20except-one-thing">2</a>、 <a href="https://staltz.com/uni%20Direction-user-interface-architectures/#:~:text=Model-Vie">3</a>)。</p>
-
-<p>虽然许多人认为 MVI 是 Redux (2015) 或 Elm 的 MVU (2011) 的直接后代，但它真正的概念根源在于两种早期模式：<strong>模型-视图-控制器 (MVC)</strong> 和 <strong>Flux</strong>，根据 André Staltz（cycle.js 和MVI 模式）。</p>
-
-<h3>模型-视图-控制器 (MVC) — 大约 1979 年</h3>
-
-<p>作为最早且最有影响力的架构模式之一，<strong>MVC</strong> 将应用程序分为三个主要组件：</p>
-
-<ul>
-<li><strong>模型：</strong> 管理数据和业务逻辑</li>
-<li><strong>View：</strong> 负责渲染UI元素</li>
-<li><strong>控制器：</strong> 处理用户输入并相应更新模型</li>
-</ul>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*7NxFAJ6kCDn-ZcKE.png" alt="来源：cycle.js.org" /></p>
-
-<p>André Staltz 通过 <strong>反应式编程</strong> 重新审视了 MVC。在他 2014 年的博客文章 <a href="https://www.futurice.com/blog/reactive-mvc-and-the-virtual-dom">“Reactive MVC and the Virtual DOM”</a> 中，他提出了针对基于流的 UI 定制的 MVC 的现代重新思考。在这个重新想象中：</p>
-
-<ul>
-<li><strong>意图</strong>取代了控制器：它将用户交互捕获为<strong>事件流</strong>。</li>
-<li><strong>模型</strong> 对这些流作出反应以更新应用程序状态。</li>
-<li><strong>View</strong> 反应性地呈现状态。</li>
-</ul>
-
-
-<p>他将这种重组后的架构称为<strong>模型-视图-意图 (MVI)</strong>，这使其成为该模式的首次正式提及。这个版本的 MVC 尊重单向数据流，同时与 RxJS 等基于可观察的系统自然地保持一致。</p>
-
-<h3>Flux (MVC) — 2014 年 5 月</h3>
-
-<p>在 Staltz 发表博文之前不久，Facebook 推出了 <strong>Flux</strong> 和 <strong>React</strong>。 React 专注于 UI 渲染，而 Flux 引入了一种新的架构来管理数据流：</p>
-
-<ul>
-<li><strong>动作</strong>描述发生了什么。</li>
-<li><strong>调度程序</strong> 将操作路由到商店。</li>
-<li><strong>商店</strong> 保存应用程序状态并更新以响应操作。</li>
-<li><strong>视图</strong> 侦听存储更改并重新渲染。</li>
-</ul>
-
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*8LBjmdnj4TQ4oW3N.png" alt="来源：reactjs.org" /></p>
-
-<p>Flux 最重要的创新是<strong>单向和循环数据流</strong>，它为 UI 应用程序中共享可变状态的混乱带来了秩序。 Staltz 认可了这一创新，但批评 Flux 经常混合<strong>命令式</strong>和<strong>反应式</strong>范例。尽管如此，保持状态变化可预测和线性的原则仍然成为 MVI 的关键部分。</p>
-
-<p>在MVI中，Staltz采用了<strong>Flux的单向数据流</strong>，但对其进行了简化。他删除了 Dispatcher，避免了命令式存储，而是使用 <strong>observables</strong> 将用户意图、状态和 UI 渲染直接建模为纯粹的反应式转换。用他自己的话说：</p>
-
-<blockquote><p>“React/Flux 组合显然受到了响应式编程原则的启发，但 API 和架构是交互式和响应式模式的不合理组合……我们可以做得更好。”</p></blockquote>
-
-<ol>
-<li>MVI 的起源：模式是如何形成的</li>
-</ol>
-
-
-<p>随着 <strong>MVI 模式在 Android 生态系统中越来越流行</strong>，特别是随着 Jetpack Compose、协程和单向状态管理的兴起，出现了一股怀疑浪潮。一些开发者（被戏称为“MVI 警察”）开始质疑许多 Kotlin/Android 实现是否可以真正被称为“MVI”。</p>
-
-<h3>MVI 和 Redux 的误解</h3>
-
-<p>最常见的误解之一是 <strong>MVI 只是 Redux，但名称不同</strong>，或者 MVI 直接受到 Redux 的启发。但正如你在前面的部分中所看到的，<strong>这在历史上并不准确</strong>：MVI 是由 André Staltz 于 2014 年在他的 <a href="https://www.futurice.com/blog/reactive-mvc-and-the-virtual-dom">Reactive MVC</a> 博客文章中引入的，<strong>Redux 发布前几个月</strong> <a href="https://redux.js.org/understand/history-and-design/history-of-redux#2015-the-birth-of-redux"><strong>较晚发布2015</strong></a> 作者：丹·阿布拉莫夫。</p>
-
-<p>也就是说，很容易理解混乱的根源。 MVI 和 Redux 确实有几个共同的核心思想——但这并不是因为 MVI 源自 Redux。相反，<strong>两者都独立地受到相同底层架构的影响：Flux</strong>。</p>
-
-<p>这些相似之处包括：</p>
-
-<ul>
-<li>MVI 对待 <strong>用户意图</strong> 的方式类似于 <strong>Redux 操作</strong>。</li>
-<li>MVI 模型<strong>状态</strong> 是不可变的并且随着时间的推移而演变，就像 Redux 的 <strong>store</strong> 一样。</li>
-<li>MVI 使用 <strong>reducers</strong> 从先前的状态和用户输入导出新的状态。</li>
-</ul>
-
-
-<p>然而，在这些相似之处中存在着关键的<strong>架构差异</strong>：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1376/format:webp/1*y10wKRKe6qG3TMlSKDf3kA.jpeg" alt="无字幕图像" /></p>
-
-<p>现在你应该同意 Kotlin/Android <strong>MVI</strong> 实现不需要 <strong>严格遵循</strong> Redux 设计模式。</p>
-
-<h3>MVI 和 MVVM 的误解</h3>
-
-<p>另一个常见的误解是，许多流行的 MVI 实现只是 <strong>MVVM，具有单个状态数据类和用于意图的密封接口</strong>。为了澄清这一点，让我们首先回顾一下设计模式真正是什么的基础知识。</p>
-
-<p>根据 <strong>Gang of Four</strong> 于 1994 年出版的开创性著作《设计模式：可重用面向对象软件的元素》：</p>
-
-<blockquote><p>“设计模式<strong>系统地</strong>命名、激发并解释了解决面向对象系统中<strong>重复出现的设计问题</strong>的通用设计。”</p>
-
-<p>“设计模式是针对软件设计中常见问题的<strong>通用可重复解决方案</strong>。它不是可以直接转换为代码的最终设计，而是<strong>如何解决问题</strong>的描述或模板，可以在许多不同的情况下使用。”</p></blockquote>
-
-<p>就像自然界中发现的模式一样——无论是数字、视觉还是其他——突变或修改现有模式通常会产生新的、独特的模式：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*evG5bpUROHiiNMMR.jpg" alt="无字幕图像" /></p>
-
-<p>那么，追随MVI趋势的开发者实际上是在无意识地做MVVM吗？为了解决这个问题，让我们比较两种模式之间的异同，就像我们在上一节中所做的那样。</p>
-
-<p>为了保持观点的基础，我们将引用一篇备受推崇的 <a href="https://learn.microsoft.com/en-us/archive/msdn-magazine/2009/february/patterns-wpf-apps-with-the-model-view-viewmodel-design-pattern#:~:text=to%20properties%20on%20a%20ViewModel">Microsoft 文章</a> — <a href="https://learn.microsoft.com/en-us/archive/blogs/johngossman/introduction-to-modelviewviewmodel-pattern-for-building-wpf-apps"> MVVM</a>早在2005年。</p>
-
-<p>两种模式都有几个共同特征：</p>
-
-<ul>
-<li>明确 <strong>关注点分离</strong></li>
-<li>使用<strong>可观察流</strong>来更新 UI</li>
-<li><strong>ViewModels</strong> 的使用（尤其是在 Android 上）</li>
-</ul>
-
-
-<p>然而，当我们并排检查细节时，我们会发现，尽管有这些表面上的相似之处，MVI 和 MVVM 在关键方面却存在根本性的不同——展示了模式的演变如何导致全新的架构方法。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*SAgQ0BTpXKbJwRi6wpTsLg.png" alt="无字幕图像" /></p>
-
-<p>正如软件开发经常告诉我们的那样，乍一看相似的东西一旦仔细观察就会发现明显的差异。</p>
-
-<p>Android 中干净简单的 MVVM 实现如下所示：</p>
-
-<p>Android 团队不久前创建的这个图表支持了这个想法，该图表旨在为应用程序建议一种架构模式：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/0*oHv6gdjyOlg4ySnc.png" alt="无字幕图像" /></p>
-
-<p>请注意 viewModel 中的多个 <em>LiveData</em> 实例。现在要查看 MVI 示例，让我们跳到下一部分。</p>
-
-<ol>
-<li>Android 中的 MVI：它到底是什么样子？</li>
-</ol>
-
-
-<p>尽管我从未认同“<em>MVI警察</em>”的思维方式，但我意识到我缺乏可靠的信息来支持我的观点。这次广泛的调查教会了我一些宝贵的经验教训——有些甚至不是关于设计模式或软件工程的。我想与大家分享一些：</p>
-
-<ul>
-<li>在软件开发和生活中，<strong>对你来说听起来合乎逻辑</strong>并不总是正确的。</li>
-<li>概念有<strong>历史并随着时间的推移而演变</strong>；认识到这一过程至关重要。</li>
-<li>在仅仅因为<em>你</em>相信你的方式是唯一正确的方式而告诉别人他们错了之前，<strong>三思而后行——有时甚至三思而行</strong>。多种有效方法可以共存。</li>
-</ul>
-
-
-<p>在技术方面，<strong>最大的收获</strong>实际上是关于软技能：</p>
-
-<ul>
-<li>设计模式是<strong>常见问题的重复解决方案</strong>。如果该解决方案发生重大变化，它就会成为一种<em>新</em>模式。</li>
-<li>是的，诸如使用单个不可变数据类用于状态、用于意图的密封接口以及 ViewModel 内的化简器函数之类的更改<strong>可以证明定义不同的模式</strong>是合理的。</li>
-<li>是的，你可以调整/个性化模式，但仍然避免告诉其他人你的实现是“真实的”或“最佳”的。</li>
-<li><strong>历史很重要</strong>。许多声称 MVI 受到 Redux 启发的人可能甚至没有意识到 <strong>MVI 首先存在</strong>。</li>
-<li>最后，MVI 实现<strong>不得</strong> 包含像 Redux 这样的全局存储。这样做意味着它不是 MVI。 （是的，我正在看着你，MVI 警察 - 加油！🚓）</li>
-<li>MVI 创建者一开始甚至不喜欢 Redux</li>
-<li>MVI 简单明了。 Redux 没那么多……</li>
-</ul>
-
-
-<p>归根结底，真正重要的是理解这些模式背后的原因，<strong>尊重它们的演变</strong>，并深思熟虑地应用它们<strong>解决实际问题</strong>。让我们拥抱想法的多样性，而不是遵循“正确的方式”。这种方法将促进<strong>更健康的讨论</strong>并最终带来更好的软件。</p>
-
-<p>在 Medium 和 <a href="http://linkedin.com/in/euryperez/">LinkedIn</a> 上关注我，了解我何时撰写这篇文章，向你展示我个人如何在项目中利用 MVI。</p>
-
-<p>如果这篇文章对你有帮助，请点赞、评论、分享😉</p>
-
-<p><strong>来源：</strong></p>
-
-<ul>
-<li><a href="https://staltz.com/cycleconf17/#/step-1">https://staltz.com/cycleconf17/#/step-1</a></li>
-<li><a href="https://www.futurice.com/blog/reactive-mvc-and-the-virtual-dom">https://www.futurice.com/blog/reactive-mvc-and-the-virtual-dom</a></li>
-<li><a href="https://staltz.com/blog">https://staltz.com/blog</a></li>
-<li><a href="https://staltz.com/unidirection-user-interface-architectures">https://staltz.com/unidirection-user-interface-architectures</a></li>
-<li><a href="https://staltz.com/nothing-new-in-react-and-flux-%20except-one-thing">https://staltz.com/nothing-new-in-react-and-flux-except-one-thing</a></li>
-<li><a href="https://staltz.com/some-problems-with-react-redux">https://staltz.com/some-problems-with-react-redux</a></li>
-<li><a href="https://hannesdorfmann.com/android/model-view-intent/">https://hannesdorfmann.com/android/model-view-intent/</a></li>
-<li><a href="https://redux.js.org/understanding/history-and-design/history-of-redux#2015-the-birth-of-redux">https://redux.js.org/understanding/history-and-design/history-of-redux</a></li>
-<li><a href="https://legacy.reactjs.org/blog/2014/07/30/flux-actions-and-the-dispatcher.html">https://legacy.reactjs.org/blog/2014/07/30/flux-actions-and-the-dispatcher.html</a></li>
-<li><a href="https://learn.microsoft.com/en-us/archive/blogs/johngossman/introduction-to-modelviewviewmodel-pattern-for-building-wpf-apps">https://learn.microsoft.com/en-us/archive/blogs/johngossman/introduction-to-modelviewviewmodel-pattern-for-building-wpf-apps</a></li>
-<li><a href="https://learn.microsoft.com/en-us/archive/msdn-magazine/2009/february/patterns-wpf-apps-with-the-model-view-viewmodel-design-pattern">https://learn.microsoft.com/en-us/archive/msdn-magazine/2009/february/patterns-wpf-apps-with-the-model-view-viewmodel-design-pattern</a></li>
-<li><a href="https://en.wikipedia.org/wiki/Model%E2%80%93view%E2%80%93viewmodel">https://en.wikipedia.org/wiki/Model%E2%80%93view%E2%80%93viewmodel</a></li>
-</ul>
-
 ]]></content>
   </entry>
   
