@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-10-07T12:46:21+00:00</updated>
+  <updated>2026-10-11T04:36:44+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,342 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[模块化Jetpack Compose架构]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/10/11/modular-jetpack-compose-dont-leave-your-architecture-to-code-review/"/>
+    <updated>2026-10-11T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/10/11/modular-jetpack-compose-dont-leave-your-architecture-to-code-review</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Modular Jetpack Compose: Don’t Leave Your Architecture to Code Review」，原文链接<a href="https://medium.com/proandroiddev/modular-jetpack-compose-dont-leave-your-architecture-to-code-review-67b1b916097c">https://medium.com/proandroiddev/modular-jetpack-compose-dont-leave-your-architecture-to-code-review-67b1b916097c</a>，由Kanan Yusubov发布于2026年10月2日。</p></blockquote>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*yCvH3k0FBNABILyKskYtlg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>每个 Android 架构图在最初看起来都很简洁。功能用方框表示，箭头向下，README 文件中还会附上“功能之间不得相互依赖”的说明。</p>
+
+<p>然后，截止日期到了。有人需要在结账页面上显示用户头像，个人资料功能已经有了用户存储库，只需导入一次即可。构建已通过，审核工作正在进行，但方向却发生了转变。六个月后，任何人都无法在不破坏结账流程的情况下更改个人资料功能。</p>
+
+<p>文件夹和命名规则描述了一种架构，但它们并不强制执行。仅存在于 README 文件中的规则只是建议。</p>
+
+<p>本文选取模块化 Compose 应用通常遵循的六条规则，并将每条规则从 README 文件移至构建过程中：</p>
+
+<ol>
+<li><strong>只有应用程序可以依赖于某个实现。</strong> 由 Gradle 检查强制执行。</li>
+<li><strong>规则 2：模块的内部实现保持私有。</strong> 由 Kotlin 内部机制强制执行。</li>
+<li><strong>规则 3：只有功能可以构建自己的路由。</strong> 由内部路由和启动器强制执行。</li>
+<li><strong>规则 4：每个依赖项都有定义。</strong> 由 <code>Koin</code> 编译器插件强制执行。</li>
+<li><strong>规则 5：所有失败都会被处理。</strong> 由密封类型强制执行。</li>
+<li><strong>规则 6：每个功能和路由都会被注册。</strong> 由持续集成 (CI) 中运行的源代码检查强制执行。</li>
+</ol>
+
+
+<p>如果某项规则无法强制执行，那么最后一部分规定，正确的方法就是最简单的方法。</p>
+
+<h2>结构：每项功能都由两个模块组成</h2>
+
+<p>每个功能都会变成一对 Gradle 模块：</p>
+
+<ul>
+<li><strong>-api</strong> 定义了功能可以做什么。仅限接口。</li>
+<li><strong>-impl</strong> 定义了实现方式。包括屏幕、视图模型、存储库、DTO 和布线。</li>
+</ul>
+
+
+<pre><code>app/                          the only module that sees implementations
+features/
+  posts/posts-api             PostsApi, PostsLauncher
+  posts/posts-impl            screens, view models, data, Koin module
+  counter/counter-api
+  counter/counter-impl        depends on posts-api, never posts-impl
+core/
+  designsystem/               tokens, theme, components
+  statemanager/               AppStateViewModel
+  router/router-api | impl    Navigation 3
+  network/network-api | impl  Ktor
+  logger/logger-api | impl    Kermit
+</code></pre>
+
+<p>依赖关系仅向下指向：应用 → 功能 → 核心。功能之间仅通过 API 进行通信。当 checkout 需要用户头像时，它依赖于 profile-api 并通过接口进行请求。它永远不会访问 UserRepository，因此 profile 可以自由地重写它。</p>
+
+<p>规则 1：只有应用程序可以依赖于实现。</p>
+
+<p>这条规则是其他一切的基础。它使应用程序成为组合的根源：它是唯一知道每个接口背后对应哪个实现的地方。其他所有模块都是根据契约编写的。</p>
+
+<p>约定插件中的几行代码会在项目声明每个依赖项时进行检查：</p>
+
+<pre><code class="kotlin">internal fun Project.applyArchitectureGuard() {
+    val self = path
+    configurations.configureEach {
+        val configurationName = name
+        dependencies.withType(ProjectDependency::class.java).configureEach {
+            val target = path
+            val violation = when {
+                target == self -&gt; null // a module's own test classpaths
+                target == ":app" -&gt; "nothing may depend on :app"
+                target.endsWith("-impl") &amp;&amp; self != ":app" -&gt;
+                    "only :app may depend on an -impl module; depend on its -api instead"
+                else -&gt; null
+            }
+            if (violation != null) {
+                throw GradleException(
+                    "Architecture rule broken in $self ($configurationName -&gt; $target): $violation.",
+                )
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>将 implementation(project(&ldquo;<code>:features:posts:posts-impl</code>&rdquo;)) 添加到计数器特性中，构建会在配置期间停止，甚至在编译单个文件之前就停止了：</p>
+
+<pre><code>Architecture rule broken in :features:counter:counter-impl
+(implementation -&gt; :features:posts:posts-impl):
+only :app may depend on an -impl module; depend on its -api instead.
+</code></pre>
+
+<p>信息会说明哪里出了问题以及应该如何解决。这样就无需进行回顾对话了。</p>
+
+<p>由于该检查在 configureEach 函数中运行，因此它涵盖了所有配置：implementation、api、testImplementation 以及插件后续添加的任何配置。而且由于该规则针对的是模块路径，因此无需维护任何列表。</p>
+
+<p>每个模块都会自动获得守卫，无需请求</p>
+
+<p>只有当每个模块都启用架构保护时，它才能发挥作用；而二十个模块如果都使用相同的构建配置，就会出现差异。因此，共享的构建配置以约定插件的形式存在于 build-logic/ 目录下，Android 库插件和应用程序插件都会调用 applyArchitectureGuard() 方法。</p>
+
+<p>一个功能的构建文件只包含该功能特有的内容：</p>
+
+<pre><code class="kotlin">plugins {
+    id("modular.feature.impl")
+}
+dependencies {
+    implementation(project(":features:posts:posts-api"))
+    implementation(project(":core:network:network-api"))
+}
+</code></pre>
+
+<p>modular.feature.impl 引入了 Android 库设置（以及相应的 guard）、Compose、<code>Koin</code>、序列化、detekt、设计系统、状态管理器、路由契约、日志契约和测试库。甚至 Android 命名空间也源自模块路径：<code>:features:posts:posts-impl</code> 变为 com.example.modularapp.features.posts.impl。</p>
+
+<p>规则二：模块内部信息应保密</p>
+
+<p>Kotlin 的 internal 指的是“仅在此 Gradle 模块内部可见”。在 -impl 模块中，几乎所有东西都是内部的：路由、视图模型、仓库、DTO。</p>
+
+<pre><code class="kotlin">internal class PostsRepositoryImpl(private val client: NetworkClient) : PostsRepository
+</code></pre>
+
+<h2>规则 1：只有应用程序可以依赖实现</h2>
+
+<p>该守卫机制可防止声明错误的依赖项。内部机制确保即使是允许依赖于 posts-impl（仅包含 app 模块）的模块，也只能找到实现该功能所需的几个类。</p>
+
+<h2>规则 2：模块的内部实现保持私有</h2>
+
+<h2>规则 3：只有功能才能构建自己的路由</h2>
+
+<p>Navigation 3 采用了一种简洁明了的模型：返回栈是一个简单的键列表，NavDisplay 会显示最后一个键对应的可组合元素。前进操作会添加一个键，后退操作会移除一个键。</p>
+
+<p>模块化的问题是：谁有权创建键？如果任何功能都可以构建 PostDetailsRoute(42)，那么每个功能都依赖于文章如何排列其屏幕。因此，路由是私有的：</p>
+
+<pre><code class="kotlin">// posts-impl: no other module can see these
+@Serializable
+internal data object PostsRoute : AppRoute
+@Serializable
+internal data class PostDetailsRoute(val postId: Int) : AppRoute
+</code></pre>
+
+<p>其他功能则从其启动器获取路由，该启动器发布在其 API 中：</p>
+
+<pre><code class="kotlin">// posts-api
+interface PostsApi {
+    val launcher: PostsLauncher
+}
+interface PostsLauncher {
+    fun posts(): AppRoute
+    fun postDetails(postId: Int): AppRoute
+}
+</code></pre>
+
+<p>启动器返回的是一条路径，而不是实际导航。启动器知道路径的<em>位置</em>，而调用者决定<em>如何操作</em>：推送路径、用路径替换当前屏幕，或者将其设为新的根目录。</p>
+
+<pre><code class="kotlin">// counter-impl, handling an effect from its view model
+CollectEffects(viewModel.effects) { effect -&gt;
+    when (effect) {
+        // Our own screen: use the route directly.
+        is CounterEffect.OpenDetails -&gt; navigator.push(CounterDetailsRoute(effect.count))
+        // Another feature: only through its launcher.
+        CounterEffect.OpenPosts -&gt; navigator.push(postsLauncher.posts())
+    }
+}
+</code></pre>
+
+<p>尝试在计数器功能中写入 navigator.push(PostDetailsRoute(42))，但编译失败。该路由不可见。</p>
+
+<p>每个 -impl 都贡献一个 ModuleRouter，用于将其路由映射到屏幕。它也是构建该功能视图模型的唯一位置：</p>
+
+<pre><code class="kotlin">class PostsModuleRouter internal constructor(
+    private val repository: PostsRepository,
+) : ModuleRouter {
+    override fun PolymorphicModuleBuilder&lt;NavKey&gt;.registerRoutes() {
+        subclass(PostsRoute::class)
+        subclass(PostDetailsRoute::class)
+    }
+    override fun EntryProviderScope&lt;NavKey&gt;.entries() {
+        entry&lt;PostsRoute&gt; {
+            PostsScreen(viewModel = viewModel { PostsViewModel(repository) })
+        }
+        entry&lt;PostDetailsRoute&gt; { route -&gt;
+            PostDetailsScreen(viewModel = viewModel { PostDetailsViewModel(route.postId, repository) })
+        }
+    }
+}
+</code></pre>
+
+<p>两个细节很重要。</p>
+
+<ul>
+<li><strong>registerRoutes() 方法使得返回栈能够在进程终止后继续存在。</strong>路由使用 @Serializable 注解，并且由于它们是私有的，因此每个功能都会注册自己的子类。应用程序会将它们合并到一个序列化器中。</li>
+<li><strong>每个返回栈条目都拥有自己的</strong> <strong><code>ViewModelStore</code></strong>，这是通过 Navigation 3 的视图模型装饰器实现的。条目内的 viewModel { … } 会创建一个视图模型，该模型的生命周期与该屏幕在返回栈中停留的时间完全相同。</li>
+</ul>
+
+
+<h2>导航是效果，而不是调用</h2>
+
+<p>导航是一种效果，而非一种调用。</p>
+
+<p>屏幕遵循一个状态/事件/效果循环，这是在纯 AndroidX <code>ViewModel</code> 中实现的：</p>
+
+<pre><code>user taps ──▶ Event ──▶ ViewModel ──▶ new State ──▶ screen redraws
+                            └────────▶ Effect ────▶ screen navigates
+</code></pre>
+
+<p>视图模型不包含导航器或上下文。它以效果的形式描述应该发生什么，屏幕会执行该效果。效果通过缓冲通道传输，因此屏幕在后台运行时发送的效果会在屏幕恢复运行时送达，而不会丢失。</p>
+
+<p>规则 4：每个依赖项都有一个定义</p>
+
+<p>传统的 Koin 编译器会在运行时解析所有定义：如果缺少定义，则代码路径首次运行时会崩溃。而 Koin 的 K2 编译器插件则将这种检查移到了构建过程中。</p>
+
+<p>每个 -impl 都包含一个 <code>Koin</code> 模块。这些定义都是函数，因此类本身完全没有依赖注入注解：</p>
+
+<pre><code class="kotlin">@Module
+class PostsKoinModule {
+    @Single
+    fun postsApi(): PostsApi = PostsApiImpl()
+    @Single
+    internal fun repository(client: NetworkClient): PostsRepository = PostsRepositoryImpl(client)
+    @Single(binds = [ModuleRouter::class])
+    internal fun moduleRouter(repository: PostsRepository): PostsModuleRouter = PostsModuleRouter(repository)
+}
+</code></pre>
+
+<p>将每个函数视为一个句子来理解：<em>为了提供一个</em> <em>PostsRepository，我需要一个</em> <em>NetworkClient</em>。路由器上的绑定允许应用程序使用 koin.getAll<ModuleRouter>() 收集每个功能的路由器，而无需指定任何功能名称。</p>
+
+<p>该应用程序会将每个模块列出一次：</p>
+
+<pre><code class="kotlin">@Module(
+    includes = [        LoggerKoinModule::class,
+        NetworkKoinModule::class,
+        CounterKoinModule::class,
+        PostsKoinModule::class,
+    ],
+)
+internal class AppKoinModule { /* … */ }
+@KoinApplication(modules = [AppKoinModule::class])
+internal object ModularKoinApplication
+</code></pre>
+
+<p>从列表中移除 NetworkKoinModule 后，应用程序将无法编译：</p>
+
+<pre><code>e: [Koin][KOIN-D001] Missing dependency: com.example.modularapp.core.network.NetworkClient
+</code></pre>
+
+<h2>规则 4：每个依赖项都有定义</h2>
+
+<p>有三个决定值得解释。</p>
+
+<ul>
+<li><strong>为什么使用函数而不是带注解的类？</strong> 使用组件扫描的 <code>@Single class PostsRepositoryImpl</code> 类虽然更简洁，但每个类都需要导入 <code>Koin</code>，导致代码分散在数十个文件中。而使用函数，领域代码和数据代码都保持纯 Kotlin 代码，并且每个功能的配置都集中在一个地方。</li>
+<li><strong>为什么不从 <code>Koin</code> 解析视图模型？</strong> 路由通过普通的构造函数调用来构建视图模型。帖子 ID 来自路由，传递给构造函数，然后由编译器进行检查。如果从容器解析视图模型，则会将其变成运行时参数查找。</li>
+</ul>
+
+
+<h2>规则 5：所有失败都会被处理</h2>
+
+<p>Features 从不导入 Ktor。它们只看到一个接口，并且每次调用都会返回一个值，而不是抛出异常：</p>
+
+<pre><code class="kotlin">interface NetworkClient {
+    suspend fun &lt;T&gt; get(
+        path: String,
+        response: DeserializationStrategy&lt;T&gt;,
+        query: Map&lt;String, String&gt; = emptyMap(),
+    ): AppResult&lt;T&gt;
+    // post(…) likewise
+}
+sealed interface AppResult&lt;out T&gt; {
+    data class Success&lt;out T&gt;(val value: T) : AppResult&lt;T&gt;
+    data class Failure(val error: NetworkError) : AppResult&lt;Nothing&gt;
+}
+</code></pre>
+
+<p>NetworkError 是一个封闭集合：无连接、超时、HTTP 状态码错误、无法解码的响应体、未知错误。Ktor 实现会捕获所有此类错误并将其转换为其中之一，但有一个例外：协程取消会被重新抛出，因此离开当前屏幕仍然会取消其请求。</p>
+
+<p>每一层都使用自己的语言。存储库会将网络错误详尽地转换为该功能自身的故障类型：</p>
+
+<pre><code class="kotlin">private fun NetworkError.toFailure(): PostsFailure = when (this) {
+    NetworkError.NoConnection -&gt; PostsFailure.NoConnection
+    is NetworkError.Http -&gt; if (code == HTTP_NOT_FOUND) PostsFailure.NotFound else PostsFailure.Unavailable
+    NetworkError.Timeout, is NetworkError.Unknown -&gt; PostsFailure.Unavailable
+    is NetworkError.Serialization -&gt; PostsFailure.Malformed
+}
+</code></pre>
+
+<p>视图模型会将这种故障状态作为值保留下来。只有屏幕层（拥有资源访问权限）才会将其转换为翻译后的句子。由于每个步骤都是一个封闭的 when 语句，没有 else 语句，因此添加新的故障类型需要每一层都处理完毕才能编译通过。不存在那种“出了点问题”的默认回退机制来掩盖未曾预料到的情况。</p>
+
+<h2>规则 6：每个功能和路由都会被注册</h2>
+
+<p>有些错误代码格式正确，编译也完全没问题，但运行时仍然会出错：</p>
+
+<ul>
+<li><strong>某个功能的 <code>Koin</code> 模块从未添加到应用中。</strong> 应用中没有任何地方需要指定其类型，因此 <code>Koin</code> 的图看起来是完整的。但该功能只是缺少一些屏幕。</li>
+<li><strong><code>registerRoutes()</code> 中缺少一条路由。</strong> **导航正常，但在 Android 首次保存返回栈时崩溃。</li>
+</ul>
+
+
+<p>Gradle 和编译器都无法直接查看这些文件，因此 Gradle 任务会读取源代码并逐一检查。<code>./gradlew doctor</code> 会在每次拉取请求时在 CI 中运行：</p>
+
+<pre><code>doctor found problems:
+  ✖ route-not-registered: PostDetailsRoute (posts-impl) is missing from registerRoutes().
+  ✖ feature-not-registered: UserProfileKoinModule is not in the app's includes.
+</code></pre>
+
+<p>这是一个特意设计得非常小巧的工具。它了解项目的规范，因此可以检查通用代码检查工具无法检查的内容。</p>
+
+<h2>如果构建无法强制执行，就让正确的方式成为最简单的方式</h2>
+
+<p>并非每条规则都是错误的。对于其他规则而言，其目标是使做正确的事比做错误的事更省力。</p>
+
+<p><strong>新功能是自动生成的，而非复制粘贴。</strong>避免代码错误最简单的方法就是不要手动编写代码。<code>./gradlew newFeature --name=user-profile</code> 命令会生成以下模块：facade、launcher、route、route table、<code>Koin</code> 模块、view model、screen 以及一个测试用例。它还会将此功能添加到应用程序中。生成的代码可以直接通过 detekt 和 doctor 的检测。</p>
+
+<p><strong>设计系统负责实现无障碍功能。</strong> 它基于 Compose Foundation 而非 Material 构建：通过组合局部变量提供一小组标记（颜色、间距、半径、字体、动态效果），并通过一个对象读取：</p>
+
+<pre><code class="kotlin">AppText(text = post.title, style = AppTheme.typography.title)
+</code></pre>
+
+<p>这些标记使用 staticCompositionLocalOf。动态组合局部变量会跟踪所有读取它的位置，因此更改只会重新组合这些读取者。静态组合局部变量则跳过此跟踪，更改会重新组合整个子树。对于主题标记来说，这完全正确：它们会被所有地方读取，并且只有当整个主题更改时才会更改。</p>
+
+<h2>成本是多少</h2>
+
+<p>这并非免费，假装免费是一种欺骗。</p>
+
+<ul>
+<li><strong>更多模块。</strong> 每个功能需要两个模块，外加一个需要保持更新的组合根目录。Gradle 的配置缓存和构建缓存保证了速度，但也增加了导航的复杂性。</li>
+<li><strong>间接性。</strong> 打开另一个功能的页面需要通过界面和启动器，而不是直接调用。这正是设计初衷，但阅读代码时需要多一步操作。</li>
+</ul>
+
+
+<p>我的经验法则是：这种方法大约适用于十个功能，或者两个团队在同一个应用上协作开发。少于十个功能，或者两个团队在同一个应用上协作开发，就足以满足需求。多于十个功能，一个严格遵守边界的构建版本所带来的价值远超其成本。</p>
+
+<p>以上所有内容都包含在开源的 <a href="https://github.com/Yusubov-Engineering/modular-compose-template">modular-compose-template</a> 中，它会打开一个计数器页面，浏览来自 JSONPlaceholder 的帖子。这些页面故意设计得比较简洁；重点在于它们背后的逻辑。如果你在实际项目中尝试应用这些规则，我很想知道它们在哪些方面有所帮助，又在哪些方面遇到了阻碍。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[将应用迁移到Navigation 3：痛点、加班和紧急修复]]></title>
@@ -1015,865 +1351,6 @@ class MainScreenRecompositionOverlayTest {
 <p>这正是我会在下一个应用中沿用的部分。性能优化不仅仅在于你设定的优化目标。有时，它来自于使用合适的工具来发现那些早已存在于启动路径上的产品和生命周期问题。</p>
 
 <p>这也是为什么我不再把基线配置当作一个可有可无的选项。我已经在四个应用中进行了这项工作，结果并不相同。在这个应用中，基线配置确实带来了显著的提升。而在另一个应用中，它却让启动速度变得更慢了。常见的原则并非“基准配置文件总有帮助”，而是“衡量你实际拥有的应用，然后只保留那些能改进应用的功能”。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Compose中的CameraX二维码扫描器]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/05/05/scanner-in-compose/"/>
-    <updated>2026-05-05T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/05/05/scanner-in-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Goodbye AndroidView: A Real CameraX QR Scanner in Compose」，原文链接<a href="https://levelup.gitconnected.com/goodbye-androidview-a-real-camerax-qr-scanner-in-compose-9a658e1ad70c">https://levelup.gitconnected.com/goodbye-androidview-a-real-camerax-qr-scanner-in-compose-9a658e1ad70c</a>，由James Cullimore发布于2026年1月14日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*dQ0hL8953SnmuvLeQOZb1A.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在最近的一个项目中，我们需要添加一个二维码扫描器，以便用户快速连接到 Wi-Fi 网络。这并非一个新问题。多年来，我多次实现过 Wi-Fi 二维码扫描，理论上来说，这应该很简单：扫描二维码，提取 SSID 和密码，然后建立连接。</p>
-
-<p>但实际上，它总是让人有点沮丧。即使使用 Jetpack Compose，基于相机的功能几乎总是不可避免地将我拉回 <code>AndroidView</code>。这感觉像是一种倒退，尤其是在一个完全由 Compose 驱动的屏幕上。每次我重新审视这个问题时，我都会问自己同一个问题：这真的是我们能做到的最好结果吗？</p>
-
-<p>最近，答案终于改变了。</p>
-
-<p>随着 CameraX Compose 组件和 <code>CameraXViewfinder</code> 的引入，现在可以构建完整的 Compose 原生相机体验，而无需回退到视图互操作。问题不在于功能，而在于文档。虽然 API 已经存在，但找到一个清晰、贴近实际应用且超越演示的示例却并非易事。</p>
-
-<p>在偶然发现 Jolanda Verhoef 的一篇简短但极其有用的 gist（<a href="https://gist.github.com/JolandaVerhoef/74d4696b804736c698450bd34b5c9ff8%EF%BC%89%E5%90%8E%EF%BC%8C%E6%88%91%E5%BE%97%E4%BB%A5%E5%B0%86%E7%BC%BA%E5%A4%B1%E7%9A%84%E9%83%A8%E5%88%86%E6%8B%BC%E5%87%91%E8%B5%B7%E6%9D%A5%EF%BC%8C%E5%B9%B6%E5%B0%86%E5%85%B6%E9%80%82%E9%85%8D%E6%88%90%E4%B8%80%E4%B8%AA%E5%8F%AF%E7%94%A8%E4%BA%8E%E7%94%9F%E4%BA%A7%E7%8E%AF%E5%A2%83%E7%9A%84%E4%BA%8C%E7%BB%B4%E7%A0%81%E6%89%AB%E6%8F%8F%E5%99%A8%E3%80%82%E4%B9%8B%E5%90%8E%EF%BC%8C%E6%88%91%E5%B0%86%E8%BF%99%E9%A1%B9%E5%B7%A5%E4%BD%9C%E6%8F%90%E5%8F%96%E5%B9%B6%E5%AE%8C%E5%96%84%EF%BC%8C%E4%BD%BF%E5%85%B6%E6%88%90%E4%B8%BA%E6%88%91%E7%9A%84%E4%B8%80%E4%B8%AA%E5%BC%80%E6%BA%90%E9%A1%B9%E7%9B%AE%EF%BC%8C%E4%BB%A5%E4%BE%BF%E8%AF%A5%E5%AE%9E%E7%8E%B0%E8%83%BD%E5%A4%9F%E9%9A%8F%E7%9D%80%E6%97%B6%E9%97%B4%E7%9A%84%E6%8E%A8%E7%A7%BB%E8%80%8C%E4%B8%8D%E6%96%AD%E6%BC%94%E8%BF%9B%E3%80%82">https://gist.github.com/JolandaVerhoef/74d4696b804736c698450bd34b5c9ff8%EF%BC%89%E5%90%8E%EF%BC%8C%E6%88%91%E5%BE%97%E4%BB%A5%E5%B0%86%E7%BC%BA%E5%A4%B1%E7%9A%84%E9%83%A8%E5%88%86%E6%8B%BC%E5%87%91%E8%B5%B7%E6%9D%A5%EF%BC%8C%E5%B9%B6%E5%B0%86%E5%85%B6%E9%80%82%E9%85%8D%E6%88%90%E4%B8%80%E4%B8%AA%E5%8F%AF%E7%94%A8%E4%BA%8E%E7%94%9F%E4%BA%A7%E7%8E%AF%E5%A2%83%E7%9A%84%E4%BA%8C%E7%BB%B4%E7%A0%81%E6%89%AB%E6%8F%8F%E5%99%A8%E3%80%82%E4%B9%8B%E5%90%8E%EF%BC%8C%E6%88%91%E5%B0%86%E8%BF%99%E9%A1%B9%E5%B7%A5%E4%BD%9C%E6%8F%90%E5%8F%96%E5%B9%B6%E5%AE%8C%E5%96%84%EF%BC%8C%E4%BD%BF%E5%85%B6%E6%88%90%E4%B8%BA%E6%88%91%E7%9A%84%E4%B8%80%E4%B8%AA%E5%BC%80%E6%BA%90%E9%A1%B9%E7%9B%AE%EF%BC%8C%E4%BB%A5%E4%BE%BF%E8%AF%A5%E5%AE%9E%E7%8E%B0%E8%83%BD%E5%A4%9F%E9%9A%8F%E7%9D%80%E6%97%B6%E9%97%B4%E7%9A%84%E6%8E%A8%E7%A7%BB%E8%80%8C%E4%B8%8D%E6%96%AD%E6%BC%94%E8%BF%9B%E3%80%82</a></p>
-
-<p>本文将详细介绍这一过程。我们将使用最新的 CameraX Compose API 构建一个二维码扫描器屏幕，使用 ML Kit 分析 Wi-Fi 二维码，并在完全不修改 <code>AndroidView</code> 的情况下连接到网络。如果你之前因为 Compose 的相机功能不够完善或操作繁琐而一直避免使用，那么这篇文章正是你所需要的。</p>
-
-<h2>为什么 Compose 中的 Wi-Fi 二维码扫描曾经令人烦恼</h2>
-
-<p>长期以来，在 Jetpack Compose 中构建基于相机的功能都存在一个隐性的妥协。即使你的 UI 其他部分完全是声明式的，相机预览本身几乎总是位于 <code>AndroidView</code> 中。CameraX 虽然成熟可靠，但它与 Compose 的集成却相对滞后。</p>
-
-<p>这导致了一些反复出现的问题。</p>
-
-<p>首先，思维模式出现了问题。Compose 鼓励在可组合层实现状态驱动的 UI 和生命周期感知，但 <code>AndroidView</code> 又将命令式的设置、回调和视图生命周期问题带了回来。虽然可以勉强实现，但代码往往感觉像是拼凑而成，而不是一个整体。</p>
-
-<p>其次，手势处理变得很麻烦。诸如点击聚焦、叠加层或动画等操作都需要 Compose 和底层 <code>PreviewView</code> 之间进行精细的协调。调试触摸偏移和坐标转换曾经是件麻烦事，而且往往令人头疼。</p>
-
-<p>此外，这些实现方式也容易过时。每次 CameraX 或 Compose 更新，都需要重新编写粘合代码。最初只是一个小小的互操作模块，最终却往往变成了屏幕上最脆弱的部分之一。</p>
-
-<p>对于二维码扫描来说，这种繁琐的操作显得尤为不必要。它的使用场景很简单：显示相机预览、分析帧、对结果做出反应。然而，实现的复杂度却与要解决的问题不成比例。</p>
-
-<p>正因如此，CameraX Compose 支持的引入才显得意义重大。它彻底消除了对视图互操作的需求，使相机预览能够像其他可组合元素一样运行。布局、手势、生命周期和状态再次统一在一个心智模型中。</p>
-
-<p>下一节，我们将探讨究竟发生了哪些变化，以及哪些 CameraX Compose API 最终实现了这一切。</p>
-
-<h2>CameraX Compose 取代 AndroidView</h2>
-
-<p>Compose 中基于相机的功能真正迎来转折点，这要归功于 CameraX Compose artifacts 的引入，更重要的是，还引入了 <code>CameraXViewfinder</code>。现在，我们不再需要在 <code>AndroidView</code> 中嵌入 <code>PreviewView</code>，而是可以直接使用 <code>SurfaceRequest</code> 并将其渲染为可组合组件。</p>
-
-<p>这是一个细微但重要的转变。</p>
-
-<p>相机预览不再被视为不透明视图，而是成为 UI 中的一部分。它可以自然地参与 Compose 布局，可以进行裁剪、分层、动画处理，并且无需特殊处理即可响应指针输入。无需再绕过视图层级边界。</p>
-
-<p>从总体上看，流程如下：</p>
-
-<ul>
-<li><p>CameraX 生成一个 <code>SurfaceRequest</code> 请求</p></li>
-<li><p>可组合组件使用 <code>CameraXViewfinder</code> 收集并渲染该请求</p></li>
-<li><p>相机用例通过正常的生命周期感知进行绑定和解绑定</p></li>
-<li><p>手势输入和叠加层完全位于 Compose 组件中</p></li>
-</ul>
-
-
-<p>这种方法也有助于更好地分离关注点。相机设置和绑定可以放在一个 <code>ViewModel</code> 中，而可组合组件则专注于渲染状态和处理用户交互。这种分离对于二维码扫描尤其重要，因为二维码扫描的帧分析和 UI 反馈是独立演进的。</p>
-
-<p>在我们即将介绍的实现中，相机预览由一个小型、专注的 <code>CameraPreviewViewModel</code> 驱动。它公开了一个 <code>StateFlow&lt;SurfaceRequest?&gt;</code>，UI 只需收集并显示该状态流即可。没有视图互操作，可组合组件本身也没有命令式连接。</p>
-
-<p>有了这些基础，我们就可以开始查看实际的屏幕了。接下来，我们将详细分析二维码扫描器屏幕的整体架构，以及可组合组件和视图模型之间的职责划分。</p>
-
-<h2>二维码扫描器屏幕的高级架构</h2>
-
-<p>在深入探讨摄像头设置或二维码分析之前，我们不妨先回顾一下屏幕的结构。这不仅仅是一个摄像头演示，而是一个实际的生产环境屏幕，它需要处理权限、生命周期变更、UI 状态、错误处理和导航等功能。</p>
-
-<p>从顶层来看，屏幕主要分为三个职责：</p>
-
-<ol>
-<li><p>导航和屏幕入口点</p></li>
-<li><p>Wi-Fi 相关状态和业务逻辑</p></li>
-<li><p>摄像头预览和二维码分析</p></li>
-</ol>
-
-
-<p>这种职责划分直接体现在可组合组件中。</p>
-
-<p>第一个入口点是一个与导航集成的简单包装器：</p>
-
-<pre><code class="kotlin">@Composable
-fun QrScannerScreen(navController: NavHostController, onGoToSettings: () -&gt; Unit) {
-   QrScannerScreen(
-       onBack = { navController.popBackStack() },
-       onGoToSettings = onGoToSettings
-   )
-}
-</code></pre>
-
-<p>这个函数的功能只有一个：将导航相关的逻辑转换为简单的回调函数。这样做，屏幕的其他部分就无需感知 <code>NavHostController</code>，从而使 UI 更易于预览、测试和重用。</p>
-
-<p>屏幕的第二层处理权限、生命周期感知和 Wi-Fi 连接状态。<code>WiFiViewModel</code> 在此层使用，用于请求相机权限，并将二维码扫描结果转换为连接尝试。此可组合层拥有逻辑，但不拥有相机渲染本身。</p>
-
-<p>最后，最底层完全专注于 UI。它渲染脚手架、相机卡、加载状态，并通过简单的回调将扫描结果向上层发送。此层不了解 Wi-Fi、权限或导航。</p>
-
-<p>这种分离是有意为之。</p>
-
-<p>通过将相机渲染与业务逻辑隔离，可以更轻松地独立地分析每个部分。相机代码往往对生命周期变化和线程敏感，而 Wi-Fi 逻辑会随着平台 API 和用户流程的演变而发展。将它们混合在一起会使两者都难以维护。</p>
-
-<p>下一节，我们将更深入地了解权限和生命周期事件的处理方式，以及它们对于摄像头驱动的屏幕为何如此重要。</p>
-
-<h2>权限、生命周期和 UI 状态处理</h2>
-
-<p>相机界面的运行取决于生命周期。如果缺少权限，甚至无法启动。如果应用进入后台后再返回，则需要重新检查状态。如果扫描二维码触发 Wi-Fi 连接尝试，UI 必须立即做出响应。</p>
-
-<p>在你的实现中，这项职责位于可组合的中间层。这里需要整合以下功能：</p>
-
-<ul>
-<li><p>相机权限处理（通过 Accompanist 权限）</p></li>
-<li><p>生命周期观察（<code>ON_RESUME</code>）</p></li>
-<li><p>由 <code>WiFiViewModel</code> 驱动的 Wi-Fi 连接状态</p></li>
-<li><p>UI 响应（成功时返回上一级，失败时显示对话框）</p></li>
-<li><p>将干净的 <code>onAnalyze</code> 回调函数传递到相机层</p></li>
-</ul>
-
-
-<p>以下是该层的代码，未做任何修改：</p>
-
-<pre><code class="kotlin">@OptIn(ExperimentalPermissionsApi::class)
-@Composable
-fun QrScannerScreen (
-   onBack: () -&gt; Unit,
-   onGoToSettings: () -&gt; Unit,
-) {
-   val viewModel: WiFiViewModel = viewModel()
-   val permissionState = rememberPermissionState(Manifest.permission.CAMERA)
-   var password by remember { mutableStateOf("") }
-   var ssid by remember { mutableStateOf("") }
-   var security by remember { mutableStateOf(SecurityType.UNKNOWN) }
-
-   val showConnectionFailedDialog = remember { mutableStateOf(false) }
-
-   val wifiManager = LocalContext.current.getSystemService(Context.WIFI_SERVICE) as WifiManager
-   val uiState: WiFiUiState by viewModel.uiState.collectAsState()
-
-   val lifecycleOwner = LocalLifecycleOwner.current
-   DisposableEffect(lifecycleOwner) {
-       val observer = LifecycleEventObserver { _, event -&gt;
-           if (event == Lifecycle.Event.ON_RESUME) {
-               if (!permissionState.status.isGranted) {
-                   permissionState.launchPermissionRequest()
-               }
-               viewModel.isConnected(ssid, wifiManager)
-           }
-       }
-       lifecycleOwner.lifecycle.addObserver(observer)
-       onDispose {
-           lifecycleOwner.lifecycle.removeObserver(observer)
-       }
-   }
-
-   uiState.connectionState?.let {
-       when {
-           it == ConnectionState.CONNECTED -&gt; onBack.invoke()
-           !showConnectionFailedDialog.value &amp;&amp; it == ConnectionState.FAILED -&gt; showConnectionFailedDialog.value = true
-           else -&gt; { /* do nothing */ }
-       }
-   }
-
-   when {
-       showConnectionFailedDialog.value -&gt; ConnectionFailedDialog(
-           onConnectViaSettings = {
-               showConnectionFailedDialog.value = false
-               viewModel.setConnectionState(ConnectionState.NONE)
-               onGoToSettings.invoke()
-           },
-           onDismissRequest = {
-               showConnectionFailedDialog.value = false
-               viewModel.setConnectionState(ConnectionState.NONE)
-           }
-       )
-   }
-
-   QrScannerScreen(
-       connecting = uiState.connectionState == ConnectionState.CONNECTING,
-       onBack = onBack,
-       onAnalyze = {
-           ssid = it.ssid ?: ""
-           password = it.password ?: ""
-           security = when (it.encryptionType) {
-               Barcode.WiFi.TYPE_OPEN -&gt; SecurityType.OPEN
-               Barcode.WiFi.TYPE_WEP -&gt; SecurityType.WEP
-               Barcode.WiFi.TYPE_WPA -&gt; SecurityType.WPA
-               else -&gt; SecurityType.UNKNOWN
-           }
-           viewModel.suggestWiFi(wifiManager, ssid, password.ifBlank { null }, security)
-       }
-   )
-}
-</code></pre>
-
-<h3>为什么这种方法有效</h3>
-
-<p><strong>权限检查在正确的时间进行。</strong> 你请求了 <code>Manifest.permission.CAMERA</code>，但你是在 <code>ON_RESUME</code> 事件中执行的。这一点很重要，因为用户可能会跳转到“设置”再返回，或者先拒绝一次，之后再接受。如果仅在首次合成时进行一次检查，通常会错过这些流程。</p>
-
-<p><strong>生命周期观察是显式的，并且有作用域限制。</strong></p>
-
-<p>使用 <code>DisposableEffect(lifecycleOwner)</code> 可以将观察者与当前生命周期所有者绑定，并确保在 <code>onDispose</code> 中完成清理。这可以避免经典的“导航后观察者持续触发”的错误。</p>
-
-<p><strong>UI 会根据连接状态做出反应，而不是猜测。</strong></p>
-
-<p>与其假设扫描成功，不如让 <code>uiState.connectionState</code> 来决定结果：</p>
-
-<ul>
-<li><p><code>CONNECTED</code> 状态会返回上一级页面</p></li>
-<li><p><code>FAILED</code> 状态会打开一次对话框</p></li>
-<li><p><code>CONNECTING</code> 状态会成为下一个可组合组件的 UI 加载状态</p></li>
-</ul>
-
-
-<p><strong>二维码结果会立即翻译成应用程序语言。</strong></p>
-
-<p><code>Barcode.WiFi</code> 会提供原始字段。你需要对它们进行规范化处理：</p>
-
-<ul>
-<li><p><code>ssid</code> 和 <code>password</code> 存储在本地</p></li>
-<li><p><code>encryptionType</code> 映射到你自定义的 <code>SecurityType</code></p></li>
-<li><p>连接尝试由 <code>suggestWiFi(...)</code> 触发</p></li>
-</ul>
-
-
-<p>这样可以保持摄像头层的简洁。摄像头无需了解“连接到 Wi-Fi”的具体含义，它只需报告所看到的信息。</p>
-
-<h2>使用 CameraXViewfinder 进行相机预览</h2>
-
-<p>现在我们来看看之前强制使用 <code>AndroidView</code> 的部分。</p>
-
-<p>这一层的设计非常简洁。它不了解 Wi-Fi 是什么，也不管理权限，更不会决定如何处理扫描结果。它只是一个用于显示相机预览、处理点击事件并将 <code>Barcode.WiFi</code> 结果向上报告的 UI。</p>
-
-<p>首先，渲染一个包含简单顶部返回按钮、一些说明文字以及一个卡片的框架，卡片中包含进度指示器或实际的相机内容：</p>
-
-<pre><code class="kotlin">@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
-@Composable
-fun QrScannerScreen(
-   connecting: Boolean,
-   onBack: () -&gt; Unit,
-   onAnalyze: (Barcode.WiFi) -&gt; Unit
-) {
-   Scaffold (
-       topBar = {
-           Column(
-               modifier = Modifier
-                   .padding(top = 32.dp)
-           ) {
-               IconButton(onClick = onBack) {
-                   ScaledIcon(
-                       imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                       contentDescription = stringResource(R.string.back)
-                   )
-               }
-           }
-       }
-   ) { paddingValues -&gt;
-       Column(
-           modifier = Modifier
-               .padding(paddingValues)
-               .padding(horizontal = 16.dp, vertical = 16.dp)
-       ) {
-           Spacer(modifier = Modifier.weight(0.75f))
-
-           Text(
-               text = stringResource(R.string.join_wifi_scanning_qr),
-               style = MaterialTheme.typography.titleMedium,
-               modifier = Modifier.fillMaxWidth(),
-               textAlign = TextAlign.Center
-           )
-
-           Spacer(modifier = Modifier.height(16.dp))
-
-           ElevatedCard(
-               shape = RoundedCornerShape(16.dp),
-               elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
-               modifier = Modifier
-                   .fillMaxWidth()
-                   .height(320.dp)
-           ) {
-               Box(modifier = Modifier.fillMaxSize()) {
-                   if (connecting) {
-                       CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                   } else {
-                       val viewModel = remember { CameraPreviewViewModel() }
-                       CameraPreviewContent(viewModel, onAnalyze)
-                   }
-               }
-           }
-           Spacer(modifier = Modifier.weight(1f))
-       }
-   }
-}
-</code></pre>
-
-<h3>这一层的优势</h3>
-
-<p><strong>相机预览位于普通的 Compose 布局中。</strong></p>
-
-<p>它只是 <code>ElevatedCard</code> 中的内容。这意味着它的行为与其他可组合元素一样。圆角、内边距、覆盖层、加载状态，所有这些都在同一个 UI 系统中。</p>
-
-<p><strong>连接状态是可视化的，而非隐式的。</strong></p>
-
-<p><code>connecting</code> 标志由你的 <code>WiFiUiState</code> 驱动，UI 会如实显示当前状态。当扫描触发连接尝试时，你会显示进度指示器，而不是继续扫描。</p>
-
-<p><strong>相机逻辑被移至一个专用组件。</strong></p>
-
-<p>预览本身委托给 <code>CameraPreviewContent(...)</code>，其中就用到了 <code>CameraXViewfinder</code>。这样可以保持屏幕结构的可读性，并方便在不影响屏幕其他部分的情况下切换预览行为。</p>
-
-<p>这里需要注意的一点是，你使用的是 <code>CameraPreviewViewModel</code>，但它并非通常的 <code>viewModel()</code> 调用。你是通过以下方式创建它的：</p>
-
-<pre><code class="kotlin">val viewModel = remember { CameraPreviewViewModel() }
-</code></pre>
-
-<p>这样可以正常工作，并且符合你的预期：这是一个用于存放相机资源和状态的小型屏幕级组件，而不是一个应用级的模型。它在每个合成中只创建一次，并且只要该 UI 部分保持活动状态就会一直保留。</p>
-
-<p>接下来，我们将深入了解 <code>CameraPreviewContent</code>，看看 <code>SurfaceRequest</code> 是如何被收集并使用 <code>CameraXViewfinder</code> 进行渲染的。</p>
-
-<h2>使用 CameraPreviewContent 渲染 SurfaceRequest</h2>
-
-<p>这就是现代 Compose 优先相机流程的真正体现。</p>
-
-<p>你的 UI 不再嵌入 <code>PreviewView</code>，而是从 <code>StateFlow</code> 中获取一个 <code>SurfaceRequest</code> 并将其传递给 <code>CameraXViewfinder</code>。CameraX 提供 Surface，Compose 进行渲染，所有操作都保留在相同的输入和布局系统中。</p>
-
-<p>以下是实现此功能的可组合组件：</p>
-
-<pre><code class="kotlin">@androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
-@Composable
-fun CameraPreviewContent(
-   viewModel: CameraPreviewViewModel,
-   onAnalyze: (Barcode.WiFi) -&gt; Unit,
-   lifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current
-) {
-   val surfaceRequest by viewModel.surfaceRequest.collectAsStateWithLifecycle()
-   val context = LocalContext.current
-   LaunchedEffect(lifecycleOwner, onAnalyze) {
-       viewModel.bindToCamera(context.applicationContext, lifecycleOwner, onAnalyze)
-   }
-
-   var autofocusRequest by remember { mutableStateOf(UUID.randomUUID() to Offset.Unspecified) }
-   val currentOnTapToFocus by rememberUpdatedState(viewModel::tapToFocus)
-   val autofocusRequestId = autofocusRequest.first
-   val showAutofocusIndicator = autofocusRequest.second.isSpecified
-
-   if (showAutofocusIndicator) {
-       LaunchedEffect(autofocusRequestId) {
-           delay(1000)
-           autofocusRequest = autofocusRequestId to Offset.Unspecified
-       }
-   }
-
-
-   surfaceRequest?.let { request -&gt;
-       val coordinateTransformer = remember { MutableCoordinateTransformer() }
-       CameraXViewfinder(
-           surfaceRequest = request,
-           coordinateTransformer = coordinateTransformer,
-           modifier = Modifier.pointerInput(coordinateTransformer) {
-               detectTapGestures { tapCoords -&gt;
-                   with(coordinateTransformer) {
-                       currentOnTapToFocus(tapCoords.transform())
-                   }
-                   autofocusRequest = UUID.randomUUID() to tapCoords
-               }
-           }
-       )
-   }
-}
-</code></pre>
-
-<h3>这里发生了什么</h3>
-
-<p><strong>预览由状态驱动</strong> 这行代码是关键：</p>
-
-<pre><code class="kotlin">val surfaceRequest by viewModel.surfaceRequest.collectAsStateWithLifecycle()
-</code></pre>
-
-<p>当 CameraX 准备好传输帧时，<code>CameraPreviewViewModel</code> 会发布一个 <code>SurfaceRequest</code>。UI 不会主动获取它，而是在它出现时做出响应。</p>
-
-<p><strong>相机绑定具有生命周期感知能力，但仍是 Compose 原生功能</strong></p>
-
-<p>你可以在 <code>LaunchedEffect</code> 中进行绑定：</p>
-
-<pre><code class="kotlin">LaunchedEffect(lifecycleOwner, onAnalyze) {
-    viewModel.bindToCamera(context.applicationContext, lifecycleOwner, onAnalyze)
-}
-</code></pre>
-
-<p>这意味着：</p>
-
-<ul>
-<li><p>当此可组合组件变为活动状态时，绑定运行</p></li>
-<li><p>如果生命周期所有者发生更改（例如，导航或配置），则效果会干净地重新启动</p></li>
-<li><p>绑定调用是一个挂起函数，非常适合在此处使用</p></li>
-</ul>
-
-
-<p><code>**CameraXViewfinder**</code> <strong>渲染相机画面，无需视图互操作</strong></p>
-
-<p>一旦请求存在：</p>
-
-<pre><code class="kotlin">surfaceRequest?.let { request -&gt;
-    ...
-    CameraXViewfinder(
-        surfaceRequest = request,
-        coordinateTransformer = coordinateTransformer,
-        modifier = ...
-    )
-}
-</code></pre>
-
-<p>这是 <code>AndroidView(PreviewView)</code> 的替代方案。</p>
-
-<p><strong>点击聚焦功能完全保留在 Compose 输入框中</strong>
-你可以将 <code>pointerInput</code> 直接附加到取景器，并使用 <code>detectTapGestures</code> 处理点击事件。关键在于坐标转换：</p>
-
-<pre><code class="kotlin">with(coordinateTransformer) {
-    currentOnTapToFocus(tapCoords.transform())
-}
-</code></pre>
-
-<p>这是过去在互操作中令人头疼的细节之一。现在，它变得明确、可控，并且仅限于需要它的 UI 内部。</p>
-
-<p><strong>自动对焦指示器的底层逻辑已经实现</strong></p>
-
-<p>你可以通过以下方式跟踪点击坐标：</p>
-
-<pre><code class="kotlin">var autofocusRequest by remember { mutableStateOf(UUID.randomUUID() to Offset.Unspecified) }
-</code></pre>
-
-<p>并在延迟后清除它们。即使这段代码片段尚未绘制指示器，但状态已经具备支持指示器的功能。这是一个很好的模式：将交互状态与输入处理保持紧密联系，即使视觉效果稍后才会出现。</p>
-
-<p>接下来，我们将深入研究 <code>CameraPreviewViewModel</code>，了解它如何创建预览用例、发布 <code>SurfaceRequest</code>、绑定生命周期以及连接用于二维码检测的图像分析。</p>
-
-<h2>绑定 CameraX 用例并发布 SurfaceRequest</h2>
-
-<p><code>CameraPreviewViewModel</code> 是核心组件。它负责两项关键任务：</p>
-
-<ul>
-<li><p>创建一个 CameraX 预览用例，并将其 <code>SurfaceRequest</code> 作为状态暴露给 Compose。</p></li>
-<li><p>将相机绑定到一个生命周期，并设置一个 <code>ImageAnalysis</code> 管道，将二维码扫描结果反馈给 UI。</p></li>
-</ul>
-
-
-<p>以下是你的实现，无需修改：</p>
-
-<pre><code class="kotlin">@ExperimentalCamera2Interop
-class CameraPreviewViewModel : ViewModel() {
-   private val _surfaceRequest = MutableStateFlow&lt;SurfaceRequest?&gt;(null)
-   val surfaceRequest: StateFlow&lt;SurfaceRequest?&gt; = _surfaceRequest
-   private var surfaceMeteringPointFactory: SurfaceOrientedMeteringPointFactory? = null
-   private var cameraControl: CameraControl? = null
-
-   private val cameraPreviewUseCase = CameraPreview.Builder()
-       .build().apply {
-           setSurfaceProvider { newSurfaceRequest -&gt;
-               _surfaceRequest.update { newSurfaceRequest }
-               surfaceMeteringPointFactory = SurfaceOrientedMeteringPointFactory(
-                   newSurfaceRequest.resolution.width.toFloat(),
-                   newSurfaceRequest.resolution.height.toFloat()
-               )
-           }
-       }
-
-   suspend fun bindToCamera(appContext: Context, lifecycleOwner: LifecycleOwner, onAnalyze: (Barcode.WiFi) -&gt; Unit) {
-       val processCameraProvider = ProcessCameraProvider.awaitInstance(appContext)
-
-       val cameraExecutor = Executors.newSingleThreadExecutor()
-       val imageAnalysis = ImageAnalysis.Builder()
-           .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-           .build().apply {
-               setAnalyzer(cameraExecutor, QrCodeAnalyzer { qrCode -&gt;
-                   qrCode.wifi?.let { wifi -&gt; onAnalyze(wifi) }
-               })
-           }
-
-       val camera = processCameraProvider.bindToLifecycle(
-           lifecycleOwner,
-           DEFAULT_BACK_CAMERA,
-           cameraPreviewUseCase,
-           imageAnalysis
-       )
-       cameraControl = camera.cameraControl
-
-       try {
-           awaitCancellation()
-       } finally {
-           processCameraProvider.unbindAll()
-           cameraControl = null
-           cameraExecutor.shutdown()
-       }
-   }
-
-   fun tapToFocus(tapCoords: Offset) {
-       val point = surfaceMeteringPointFactory?.createPoint(tapCoords.x, tapCoords.y)
-       if (point != null) {
-           val meteringAction = FocusMeteringAction.Builder(point).build()
-           cameraControl?.startFocusAndMetering(meteringAction)
-       }
-   }
-}
-</code></pre>
-
-<h3>将 <code>SurfaceRequest</code> 发布到 Compose</h3>
-
-<p>这是 Compose 集成的核心：</p>
-
-<pre><code class="kotlin">setSurfaceProvider { newSurfaceRequest -&gt;
-    _surfaceRequest.update { newSurfaceRequest }
-    surfaceMeteringPointFactory = SurfaceOrientedMeteringPointFactory(
-        newSurfaceRequest.resolution.width.toFloat(),
-        newSurfaceRequest.resolution.height.toFloat()
-    )
-}
-</code></pre>
-
-<p>你无需为 CameraX 提供一个用于绘制的视图，而是通过 <code>StateFlow</code> 暴露 <code>SurfaceRequest</code>。UI 会收集它并将其传递给 <code>CameraXViewfinder</code>。这就是视图互操作的完整替代方案。</p>
-
-<p>同时，你需要获取预览分辨率并构建一个 <code>SurfaceOrientedMeteringPointFactory</code>。这对于后续的点击对焦功能至关重要，因为测光点必须在 CameraX 期望的坐标空间中创建。</p>
-
-<h3>将预览和分析绑定在一起</h3>
-
-<p>在 <code>bindToCamera(...)</code> 中，你需要组合两个用例：</p>
-
-<ul>
-<li><p><code>cameraPreviewUseCase</code> 用于实时预览</p></li>
-<li><p><code>imageAnalysis</code> 用于二维码解码</p></li>
-</ul>
-
-
-<p>分析用例配置为仅保留最新帧：</p>
-
-<pre><code class="kotlin">.setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-</code></pre>
-
-<p>这正是二维码扫描所需要的。解码过时的帧没有任何意义，而且你也不希望在用户移动手机时出现分析延迟。</p>
-
-<p>然后，你附加一个分析器，并通过 <code>onAnalyze</code> 将结果返回：</p>
-
-<pre><code class="kotlin">setAnalyzer(cameraExecutor, QrCodeAnalyzer { qrCode -&gt;
-    qrCode.wifi?.let { wifi -&gt; onAnalyze(wifi) }
-})
-</code></pre>
-
-<p>注意这里的边界：分析器会生成一个二维码模型，并且只有在存在 Wi-Fi 有效负载时才转发它。这保持了 UI 契约的简洁性：<code>onAnalyze</code> 只接收 <code>Barcode.WiFi</code>。</p>
-
-<h3><code>awaitCancellation()</code> 和保证的清理</h3>
-
-<p>这种模式为你做了很多工作：</p>
-
-<pre><code class="kotlin">try {
-    awaitCancellation()
-} finally {
-    processCameraProvider.unbindAll()
-    cameraControl = null
-    cameraExecutor.shutdown()
-}
-</code></pre>
-
-<p>由于 <code>bindToCamera</code> 是从 <code>LaunchedEffect</code> 中调用的，因此当可组合对象离开组合时，它将被取消。<code>awaitCancellation()</code> 会一直挂起，直到取消发生。取消发生后，你会立即在 <code>finally</code> 中解除相机绑定并关闭执行器。</p>
-
-<p>这意味着你可以获得可预测的清理，而无需第二个回调或显式的“停止相机”API。</p>
-
-<h3>点击聚焦</h3>
-
-<p>聚焦代码刻意保持简洁：</p>
-
-<pre><code class="kotlin">val point = surfaceMeteringPointFactory?.createPoint(tapCoords.x, tapCoords.y)
-if (point != null) {
-    val meteringAction = FocusMeteringAction.Builder(point).build()
-    cameraControl?.startFocusAndMetering(meteringAction)
-}
-</code></pre>
-
-<p>你只需要两个要素：</p>
-
-<ul>
-<li><p>基于预览表面分辨率创建的测光点工厂</p></li>
-<li><p>来自绑定相机的 <code>CameraControl</code> 引用</p></li>
-</ul>
-
-
-<p>其他所有代码都保留在 Compose 输入处理中，这才是它们应该在的地方。</p>
-
-<p>接下来，我们将深入探讨二维码解码本身：<code>QrCodeAnalyzer</code> 的预期功能、ML Kit 的集成方式，以及将原始条形码转换为 Wi-Fi 连接流程时需要注意的事项。</p>
-
-<h2>使用 ML Kit 和 <code>QrCodeAnalyzer</code> 进行二维码分析</h2>
-
-<p>到目前为止，我们一直在努力实现 Compose 原生预览并绑定正确的 CameraX 用例。二维码扫描部分在 <code>ImageAnalysis</code> 设置中仅通过一个很小的代码实现：</p>
-
-<pre><code class="kotlin">setAnalyzer(cameraExecutor, QrCodeAnalyzer { qrCode -&gt;
-    qrCode.wifi?.let { wifi -&gt; onAnalyze(wifi) }
-})
-</code></pre>
-
-<p>即使不查看 <code>QrCodeAnalyzer</code> 的实现，这行代码也足以说明设计思路。</p>
-
-<h3>你构建的契约非常清晰</h3>
-
-<p>你的 UI 不关心原始二维码有效载荷、二维码格式或条形码的一般内容。它只关心一件事：扫描的二维码是否包含 Wi-Fi 有效载荷？</p>
-
-<p>ML Kit 的条形码 API 可以返回多种条形码类型和数据格式，但 Wi-Fi 二维码是 <code>Barcode.WiFi</code> 提供的首选支持类型。分析器负责完成繁重的计算工作，然后返回 <code>wifi</code> 存在或不存在的结果。</p>
-
-<p>这样就形成了一个非常简洁的接口：</p>
-
-<ul>
-<li><p>输入摄像头帧</p></li>
-<li><p>输出二维码模型</p></li>
-<li><p>只将 <code>Barcode.WiFi</code> 传递给 <code>onAnalyze</code></p></li>
-</ul>
-
-
-<h3>为什么 <code>STRATEGY_KEEP_ONLY_LATEST</code> 是正确的选择</h3>
-
-<p>你这样配置了图像分析：</p>
-
-<pre><code class="kotlin">.setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-</code></pre>
-
-<p>对于二维码扫描，这正是你所需要的。如果某些设备的解码时间稍长，你不希望存在旧帧队列。你希望在分析器准备就绪时，能够立即获取最新帧。Android 的 CameraX 文档明确指出，<code>STRATEGY_KEEP_ONLY_LATEST</code> 是用于分析的非阻塞方法。</p>
-
-<h3><code>QrCodeAnalyzer</code> 的典型功能</h3>
-
-<p>你的分析器需要将 CameraX 的 <code>ImageProxy</code> 帧桥接到 ML Kit 的 <code>BarcodeScanner</code> 流水线中：</p>
-
-<ul>
-<li><p>将 <code>ImageProxy</code> 转换为 ML Kit 的 <code>InputImage</code></p></li>
-<li><p>调用 <code>barcodeScanner.process(image)</code></p></li>
-<li><p>过滤掉 Wi-Fi 有效载荷</p></li>
-<li><p>可靠地关闭 <code>ImageProxy</code>，以避免分析停滞</p></li>
-</ul>
-
-
-<p>ML Kit 的条形码扫描文档描述了如何通过 <code>BarcodeScanning.getClient(...)</code> 创建扫描器、创建 <code>InputImage</code> 以及通过扫描器处理图像。</p>
-
-<h3>可选的官方代码片段（ML Kit 设置）</h3>
-
-<p>你提供的代码中没有包含 <code>QrCodeAnalyzer</code>，因此我不会再编写它。为了更好地理解其内容，以下是官方文档中 ML Kit 的核心设置模式，仅供参考：</p>
-
-<pre><code class="kotlin">val scanner = BarcodeScanning.getClient()
-</code></pre>
-
-<p>ML Kit 还建议，在可以限制格式以获得更佳性能时，使用 <code>getClient(BarcodeScannerOptions)</code>。</p>
-
-<h3>关于 Wi-Fi 二维码的实用说明</h3>
-
-<p>你之前的映射逻辑依赖于 ML Kit 的 Wi-Fi 加密类型常量：</p>
-
-<ul>
-<li><p><code>Barcode.WiFi.TYPE_OPEN</code></p></li>
-<li><p><code>Barcode.WiFi.TYPE_WEP</code></p></li>
-<li><p><code>Barcode.WiFi.TYPE_WPA</code></p></li>
-</ul>
-
-
-<p>这段逻辑的位置恰到好处：应该放在将扫描结果转换为应用程序行为的屏幕层，而不是相机层。</p>
-
-<h2>点击对焦和坐标转换</h2>
-
-<p>点击对焦功能听起来很简单，但真正上手之后就会发现并非如此。它需要同时处理至少三个坐标系：</p>
-
-<ul>
-<li><p>拍摄模式下的点击位置</p></li>
-<li><p>预览表面的坐标</p></li>
-<li><p>相机测光坐标系</p></li>
-</ul>
-
-
-<p>如果使用 <code>AndroidView</code>，很多计算就只能靠猜测。你的实现很简洁，因为它明确地进行了坐标转换，并且每个步骤都与对应的代码紧密相关。</p>
-
-<h3>捕获取景器上的点击事件</h3>
-
-<p>你将指针输入直接附加到 <code>CameraXViewfinder</code> 并监听点击事件。</p>
-
-<p>关键在于，你没有将原始的 <code>tapCoords</code> 传递给相机。你首先使用 <code>MutableCoordinateTransformer</code> 对其进行转换，该转换器专门用于在拍摄模式下的坐标和取景器使用的底层表面坐标之间进行转换。</p>
-
-<h3>基于表面分辨率构建测光点工厂</h3>
-
-<p>在 <code>CameraPreviewViewModel</code> 中，一旦 CameraX 向你发送 <code>SurfaceRequest</code>，你就需要创建 <code>SurfaceOrientedMeteringPointFactory</code>：</p>
-
-<pre><code class="kotlin">CameraXViewfinder(
-    surfaceRequest = request,
-    coordinateTransformer = coordinateTransformer,
-    modifier = Modifier.pointerInput(coordinateTransformer) {
-        detectTapGestures { tapCoords -&gt;
-            with(coordinateTransformer) {
-                currentOnTapToFocus(tapCoords.transform())
-            }
-            autofocusRequest = UUID.randomUUID() to tapCoords
-        }
-    }
-)
-</code></pre>
-
-<p>这个工厂用于将点击位置转换为相机可用的 <code>MeteringPoint</code>。基于表面分辨率构建测光点是 CameraX 中点击对焦的常见模式。</p>
-
-<h3>使用 CameraControl 触发对焦和测光</h3>
-
-<p>获得测光点后，你需要创建一个 <code>FocusMeteringAction</code> 并将其传递给 <code>cameraControl.startFocusAndMetering(...)</code>：</p>
-
-<pre><code class="kotlin">fun tapToFocus(tapCoords: Offset) {
-    val point = surfaceMeteringPointFactory?.createPoint(tapCoords.x, tapCoords.y)
-    if (point != null) {
-        val meteringAction = FocusMeteringAction.Builder(point).build()
-        cameraControl?.startFocusAndMetering(meteringAction)
-    }
-}
-</code></pre>
-
-<p>CameraX 文档明确指出，使用 <code>FocusMeteringAction</code> 和 <code>startFocusAndMetering()</code> 是实现点击对焦的基础。</p>
-
-<p><a href="https://developer.android.com/media/camera/camerax/configuration?utm_source=chatgpt.com">https://developer.android.com/media/camera/camerax/configuration</a></p>
-
-<h3>为什么这是一个可靠的“Compose优先”方案</h3>
-
-<ul>
-<li><p>Compose负责手势及其对应的UI状态。</p></li>
-<li><p>取景器负责坐标变换。</p></li>
-<li><p>视图模型负责相机控制和测光逻辑。</p></li>
-</ul>
-
-
-<p>没有哪个组件“什么都做一点”，而这通常是相机代码开始变得臃肿的原因。</p>
-
-<p>文章中需要提及的一个小注意事项：对焦精度很大程度上取决于正确的坐标转换和预览缩放。Compose取景器和Transformer组件旨在处理这种转换，这也是为什么这种方法比手动连接要好得多的重要原因之一。</p>
-
-<h2>连接状态、用户体验和生产环境考量</h2>
-
-<p>一旦摄像头预览和分析流程正常运行，接下来的问题就不再是摄像头本身的问题，而是产品本身的问题了。</p>
-
-<p>二维码扫描速度很快，但会产生大量噪声，而且重复性很高。摄像头画面会连续检测到相同的二维码，如果每次检测到都做出响应，很容易导致连接流程被频繁触发。</p>
-
-<p>你的代码已经暗示了正确的方法：将扫描视为一个触发器，然后将用户界面移至一个受控的“连接尝试”状态。</p>
-
-<h3>连接时停止扫描</h3>
-
-<p>在你的用户界面层，你有一个清晰的门控机制：</p>
-
-<pre><code class="kotlin">if (connecting) {
-    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-} else {
-    val viewModel = remember { CameraPreviewViewModel() }
-    CameraPreviewContent(viewModel, onAnalyze)
-}
-</code></pre>
-
-<p>当 <code>uiState.connectionState == ConnectionState.CONNECTING</code> 时，摄像头预览甚至还没有被创建。这意味着绑定摄像头的 <code>LaunchedEffect</code> 会被取消，而 <code>awaitCancellation()</code> 会确保摄像头被解除绑定，并且执行器被关闭。这正是生产流程中所需要的：一旦获得有效的 Wi-Fi 有效载荷，扫描器就会失效，直到连接成功或失败。</p>
-
-<p>这是演示扫描器和实际扫描器之间最大的区别之一。演示扫描器会一直扫描下去，而实际扫描器会切换到下一个用户意图。</p>
-
-<h3>正确处理“设置跳转”</h3>
-
-<p>你的生命周期观察器会在 <code>ON_RESUME</code> 时检查权限状态和连接状态：</p>
-
-<pre><code class="kotlin">if (event == Lifecycle.Event.ON_RESUME) {
-    if (!permissionState.status.isGranted) {
-        permissionState.launchPermissionRequest()
-    }
-    viewModel.isConnected(ssid, wifiManager)
-}
-</code></pre>
-
-<p>这一点很重要，因为用户经常会跳转：</p>
-
-<ul>
-<li><p>他们拒绝相机权限</p></li>
-<li><p>你引导他们进入设置</p></li>
-<li><p>他们返回</p></li>
-<li><p>屏幕需要立即重新检查并继续流程</p></li>
-</ul>
-
-
-<p>在恢复时执行此操作对于这些实际循环来说是最佳时机。</p>
-
-<h3>避免重复扫描导致的重复连接尝试</h3>
-
-<p>目前，你的分析器会转发它检测到的每个 Wi-Fi 有效负载：</p>
-
-<pre><code class="kotlin">qrCode.wifi?.let { wifi -&gt; onAnalyze(wifi) }
-</code></pre>
-
-<p>这没问题，因为一旦状态变为 <code>CONNECTING</code>，你的 UI 层就会有效地禁用扫描。但仍然存在一个很小的例外情况：在 UI 状态切换之前，你可能会收到多个回调。</p>
-
-<p>一种常见的生产模式是在处理 <code>onAnalyze</code> 的层中添加一个简单的节流或“首次有效扫描优先”的保护机制。你无需为此更改相机管道。你已经拥有的清晰边界使得后续添加变得容易。</p>
-
-<p>如果你决定在文章中提及这一点，请这样表述：</p>
-
-<ul>
-<li><p>保持分析器的简洁性和速度</p></li>
-<li><p>在业务逻辑所在的位置控制扫描频率</p></li>
-</ul>
-
-
-<h3>保持分析的非阻塞性和响应性</h3>
-
-<p>你对以下代码的使用：</p>
-
-<pre><code class="kotlin">.setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-</code></pre>
-
-<p>是生产环境中友好的默认设置。 CameraX 将此描述为非阻塞方法，分析器会接收最新可用的帧，而不是积压帧。</p>
-
-<p>对于二维码扫描，这正是用户所期望的行为。如果用户移动摄像头，扫描器应该对当前视野中的内容做出反应，而不是对半秒前视野中的内容做出反应。</p>
-
-<h3>使清理操作可预测</h3>
-
-<p>这一点很容易被忽略，直到遇到特定于设备的摄像头问题。你的清理操作是明确的，并且与取消操作相关联：</p>
-
-<pre><code class="kotlin">try {
-    awaitCancellation()
-} finally {
-    processCameraProvider.unbindAll()
-    cameraControl = null
-    cameraExecutor.shutdown()
-}
-</code></pre>
-
-<p>对于基于 Compose 的摄像头代码来说，这是一个可靠的模式。你不会泄漏执行器，也不会在导航后保持摄像头绑定。</p>
-
-<h3>预期存在不完美的二维码</h3>
-
-<p>Wi-Fi 二维码通常得到很好的支持，ML Kit 的 <code>Barcode.WiFi</code> 直接暴露了 <code>ssid</code>、<code>password</code> 和 <code>encryptionType</code>。</p>
-
-<p>但实际上，你仍然会遇到以下情况：</p>
-
-<ul>
-<li><p>开放网络的空白密码</p></li>
-<li><p>第三方二维码生成器生成的缺失值或异常值</p></li>
-<li><p>无法正确映射的加密类型</p></li>
-</ul>
-
-
-<p>你的逻辑已经考虑到了这些问题：</p>
-
-<pre><code class="kotlin">password.ifBlank { null }
-</code></pre>
-
-<p>以及</p>
-
-<pre><code class="kotlin">else -&gt; SecurityType.UNKNOWN
-</code></pre>
-
-<p>这些小的防御措施可以防止扫描器变得脆弱。</p>
-
-<h2>结论</h2>
-
-<p>我希望这个功能实现的很简单：扫描 Wi-Fi 二维码，提取凭据，并帮助用户连接。真正令人沮丧的并非 ML Kit 或 CameraX 本身，而是现代 Compose 界面仍然需要使用 <code>AndroidView</code> 来实现像相机预览这样常见的功能。</p>
-
-<p>现在情况终于改变了。</p>
-
-<p>通过围绕 <code>SurfaceRequest</code> 构建预览并使用 <code>CameraXViewfinder</code> 进行渲染，相机不再是一个特殊情况，而是变成了一个可组合的 UI。手势和状态都保留在 Compose 中，生命周期清理也变得可预测，因为它由取消操作驱动，而不是临时的清理代码。</p>
-
-<p>最终得到的界面更易于维护和理解。顶层可组合组件负责处理导航、权限和连接状态。相机层只负责一项工作：显示预览并输出扫描结果。而视图模型则承载着绑定用例、发布 Surface 请求以及支持点击聚焦所需的底层机制。</p>
-
-<p>如果你想在实际项目中查看其集成效果，包括其随时间推移的演变过程，完整的实现代码位于我的一个开源项目中。本文中展示的二维码扫描器界面直接取自该代码库，你可以直接使用或根据自身需求进行修改：<a href="https://github.com/LethalMaus/WiFiWizard/blob/main/app/src/main/java/dev/jamescullimore/wifiwizard/ui/QrScannerScreen.kt">ScannerScreen</a></p>
-
-<p>如果你之前因为 Compose 中的相机功能显得杂乱或不完善而一直避免使用，那么本文将为你呈现第一个真正契合的方案。无需互操作脚手架，无需担心生命​​周期冲突，也无需对视图层级结构做出任何妥协。它只是一个与你的其他 UI 元素完美兼容的相机预览。</p>
 ]]></content>
   </entry>
   

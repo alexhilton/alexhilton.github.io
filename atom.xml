@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-10-07T12:46:21+00:00</updated>
+  <updated>2026-10-11T04:36:44+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,490 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[模块化Jetpack Compose架构]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/10/11/modular-jetpack-compose-dont-leave-your-architecture-to-code-review/"/>
+    <updated>2026-10-11T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/10/11/modular-jetpack-compose-dont-leave-your-architecture-to-code-review</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Modular Jetpack Compose: Don’t Leave Your Architecture to Code Review」，原文链接<a href="https://medium.com/proandroiddev/modular-jetpack-compose-dont-leave-your-architecture-to-code-review-67b1b916097c">https://medium.com/proandroiddev/modular-jetpack-compose-dont-leave-your-architecture-to-code-review-67b1b916097c</a>，由Kanan Yusubov发布于2026年10月2日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/10/11/modular-jetpack-compose-dont-leave-your-architecture-to-code-review/"><img src="https://cdn-images-1.medium.com/max/1024/1*yCvH3k0FBNABILyKskYtlg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>每个 Android 架构图在最初看起来都很简洁。功能用方框表示，箭头向下，README 文件中还会附上“功能之间不得相互依赖”的说明。</p>
+
+<p>然后，截止日期到了。有人需要在结账页面上显示用户头像，个人资料功能已经有了用户存储库，只需导入一次即可。构建已通过，审核工作正在进行，但方向却发生了转变。六个月后，任何人都无法在不破坏结账流程的情况下更改个人资料功能。</p>
+
+<p>文件夹和命名规则描述了一种架构，但它们并不强制执行。仅存在于 README 文件中的规则只是建议。</p>
+
+<p>本文选取模块化 Compose 应用通常遵循的六条规则，并将每条规则从 README 文件移至构建过程中：</p>
+
+<ol>
+<li><strong>只有应用程序可以依赖于某个实现。</strong> 由 Gradle 检查强制执行。</li>
+<li><strong>规则 2：模块的内部实现保持私有。</strong> 由 Kotlin 内部机制强制执行。</li>
+<li><strong>规则 3：只有功能可以构建自己的路由。</strong> 由内部路由和启动器强制执行。</li>
+<li><strong>规则 4：每个依赖项都有定义。</strong> 由 <code>Koin</code> 编译器插件强制执行。</li>
+<li><strong>规则 5：所有失败都会被处理。</strong> 由密封类型强制执行。</li>
+<li><strong>规则 6：每个功能和路由都会被注册。</strong> 由持续集成 (CI) 中运行的源代码检查强制执行。</li>
+</ol>
+
+
+<p>如果某项规则无法强制执行，那么最后一部分规定，正确的方法就是最简单的方法。</p>
+
+<h2>结构：每项功能都由两个模块组成</h2>
+
+<p>每个功能都会变成一对 Gradle 模块：</p>
+
+<ul>
+<li><strong>-api</strong> 定义了功能可以做什么。仅限接口。</li>
+<li><strong>-impl</strong> 定义了实现方式。包括屏幕、视图模型、存储库、DTO 和布线。</li>
+</ul>
+
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>app/                          the only module that sees implementations
+</span><span class='line'>features/
+</span><span class='line'>  posts/posts-api             PostsApi, PostsLauncher
+</span><span class='line'>  posts/posts-impl            screens, view models, data, Koin module
+</span><span class='line'>  counter/counter-api
+</span><span class='line'>  counter/counter-impl        depends on posts-api, never posts-impl
+</span><span class='line'>core/
+</span><span class='line'>  designsystem/               tokens, theme, components
+</span><span class='line'>  statemanager/               AppStateViewModel
+</span><span class='line'>  router/router-api | impl    Navigation 3
+</span><span class='line'>  network/network-api | impl  Ktor
+</span><span class='line'>  logger/logger-api | impl    Kermit</span></code></pre></td></tr></table></div></figure>
+
+
+<p>依赖关系仅向下指向：应用 → 功能 → 核心。功能之间仅通过 API 进行通信。当 checkout 需要用户头像时，它依赖于 profile-api 并通过接口进行请求。它永远不会访问 UserRepository，因此 profile 可以自由地重写它。</p>
+
+<p>规则 1：只有应用程序可以依赖于实现。</p>
+
+<p>这条规则是其他一切的基础。它使应用程序成为组合的根源：它是唯一知道每个接口背后对应哪个实现的地方。其他所有模块都是根据契约编写的。</p>
+
+<p>约定插件中的几行代码会在项目声明每个依赖项时进行检查：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">internal</span> <span class="k">fun</span> <span class="nf">Project</span><span class="p">.</span><span class="n">applyArchitectureGuard</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">self</span> <span class="p">=</span> <span class="n">path</span>
+</span><span class='line'>    <span class="n">configurations</span><span class="p">.</span><span class="n">configureEach</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">configurationName</span> <span class="p">=</span> <span class="n">name</span>
+</span><span class='line'>        <span class="n">dependencies</span><span class="p">.</span><span class="n">withType</span><span class="p">(</span><span class="n">ProjectDependency</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">).</span><span class="n">configureEach</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">target</span> <span class="p">=</span> <span class="n">path</span>
+</span><span class='line'>            <span class="k">val</span> <span class="py">violation</span> <span class="p">=</span> <span class="k">when</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">target</span> <span class="p">==</span> <span class="n">self</span> <span class="p">-&gt;</span> <span class="k">null</span> <span class="c1">// a module&#39;s own test classpaths</span>
+</span><span class='line'>                <span class="n">target</span> <span class="p">==</span> <span class="s">&quot;:app&quot;</span> <span class="p">-&gt;</span> <span class="s">&quot;nothing may depend on :app&quot;</span>
+</span><span class='line'>                <span class="n">target</span><span class="p">.</span><span class="n">endsWith</span><span class="p">(</span><span class="s">&quot;-impl&quot;</span><span class="p">)</span> <span class="p">&amp;&amp;</span> <span class="n">self</span> <span class="p">!=</span> <span class="s">&quot;:app&quot;</span> <span class="p">-&gt;</span>
+</span><span class='line'>                    <span class="s">&quot;only :app may depend on an -impl module; depend on its -api instead&quot;</span>
+</span><span class='line'>                <span class="k">else</span> <span class="p">-&gt;</span> <span class="k">null</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="k">if</span> <span class="p">(</span><span class="n">violation</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="k">throw</span> <span class="n">GradleException</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;Architecture rule broken in $self ($configurationName -&gt; $target): $violation.&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>kotlin</p>
+
+<p>将 implementation(project(&ldquo;<code>:features:posts:posts-impl</code>&rdquo;)) 添加到计数器特性中，构建会在配置期间停止，甚至在编译单个文件之前就停止了：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Architecture</span> <span class="n">rule</span> <span class="n">broken</span> <span class="k">in</span> <span class="p">:</span><span class="n">features</span><span class="p">:</span><span class="n">counter</span><span class="p">:</span><span class="n">counter</span><span class="p">-</span><span class="n">impl</span>
+</span><span class='line'><span class="p">(</span><span class="n">implementation</span> <span class="p">-&gt;</span> <span class="p">:</span><span class="n">features</span><span class="p">:</span><span class="n">posts</span><span class="p">:</span><span class="n">posts</span><span class="p">-</span><span class="n">impl</span><span class="p">):</span>
+</span><span class='line'><span class="n">only</span> <span class="p">:</span><span class="n">app</span> <span class="n">may</span> <span class="n">depend</span> <span class="n">on</span> <span class="n">an</span> <span class="p">-</span><span class="n">impl</span> <span class="n">module</span><span class="p">;</span> <span class="n">depend</span> <span class="n">on</span> <span class="n">its</span> <span class="p">-</span><span class="n">api</span> <span class="n">instead</span><span class="p">.</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>信息会说明哪里出了问题以及应该如何解决。这样就无需进行回顾对话了。</p>
+
+<p>由于该检查在 configureEach 函数中运行，因此它涵盖了所有配置：implementation、api、testImplementation 以及插件后续添加的任何配置。而且由于该规则针对的是模块路径，因此无需维护任何列表。</p>
+
+<p>每个模块都会自动获得守卫，无需请求</p>
+
+<p>只有当每个模块都启用架构保护时，它才能发挥作用；而二十个模块如果都使用相同的构建配置，就会出现差异。因此，共享的构建配置以约定插件的形式存在于 build-logic/ 目录下，Android 库插件和应用程序插件都会调用 applyArchitectureGuard() 方法。</p>
+
+<p>一个功能的构建文件只包含该功能特有的内容：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">plugins</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">id</span><span class="p">(</span><span class="s">&quot;modular.feature.impl&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:features:posts:posts-api&quot;</span><span class="p">))</span>
+</span><span class='line'>    <span class="n">implementation</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:core:network:network-api&quot;</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>modular.feature.impl 引入了 Android 库设置（以及相应的 guard）、Compose、<code>Koin</code>、序列化、detekt、设计系统、状态管理器、路由契约、日志契约和测试库。甚至 Android 命名空间也源自模块路径：<code>:features:posts:posts-impl</code> 变为 com.example.modularapp.features.posts.impl。</p>
+
+<p>规则二：模块内部信息应保密</p>
+
+<p>Kotlin 的 internal 指的是“仅在此 Gradle 模块内部可见”。在 -impl 模块中，几乎所有东西都是内部的：路由、视图模型、仓库、DTO。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">internal</span> <span class="k">class</span> <span class="nc">PostsRepositoryImpl</span><span class="p">(</span><span class="k">private</span> <span class="k">val</span> <span class="py">client</span><span class="p">:</span> <span class="n">NetworkClient</span><span class="p">)</span> <span class="p">:</span> <span class="n">PostsRepository</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>规则 1：只有应用程序可以依赖实现</h2>
+
+<p>该守卫机制可防止声明错误的依赖项。内部机制确保即使是允许依赖于 posts-impl（仅包含 app 模块）的模块，也只能找到实现该功能所需的几个类。</p>
+
+<h2>规则 2：模块的内部实现保持私有</h2>
+
+<h2>规则 3：只有功能才能构建自己的路由</h2>
+
+<p>Navigation 3 采用了一种简洁明了的模型：返回栈是一个简单的键列表，NavDisplay 会显示最后一个键对应的可组合元素。前进操作会添加一个键，后退操作会移除一个键。</p>
+
+<p>模块化的问题是：谁有权创建键？如果任何功能都可以构建 PostDetailsRoute(42)，那么每个功能都依赖于文章如何排列其屏幕。因此，路由是私有的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// posts-impl: no other module can see these</span>
+</span><span class='line'><span class="n">@Serializable</span>
+</span><span class='line'><span class="k">internal</span> <span class="n">data</span> <span class="k">object</span> <span class="nc">PostsRoute</span> <span class="p">:</span> <span class="n">AppRoute</span>
+</span><span class='line'><span class="n">@Serializable</span>
+</span><span class='line'><span class="k">internal</span> <span class="n">data</span> <span class="k">class</span> <span class="nc">PostDetailsRoute</span><span class="p">(</span><span class="k">val</span> <span class="py">postId</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">:</span> <span class="n">AppRoute</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>其他功能则从其启动器获取路由，该启动器发布在其 API 中：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// posts-api</span>
+</span><span class='line'><span class="n">interface</span> <span class="n">PostsApi</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">launcher</span><span class="p">:</span> <span class="n">PostsLauncher</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">interface</span> <span class="n">PostsLauncher</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">posts</span><span class="p">():</span> <span class="n">AppRoute</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">postDetails</span><span class="p">(</span><span class="n">postId</span><span class="p">:</span> <span class="n">Int</span><span class="p">):</span> <span class="n">AppRoute</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>启动器返回的是一条路径，而不是实际导航。启动器知道路径的<em>位置</em>，而调用者决定<em>如何操作</em>：推送路径、用路径替换当前屏幕，或者将其设为新的根目录。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// counter-impl, handling an effect from its view model</span>
+</span><span class='line'><span class="n">CollectEffects</span><span class="p">(</span><span class="n">viewModel</span><span class="p">.</span><span class="n">effects</span><span class="p">)</span> <span class="p">{</span> <span class="n">effect</span> <span class="p">-&gt;</span>
+</span><span class='line'>    <span class="k">when</span> <span class="p">(</span><span class="n">effect</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="c1">// Our own screen: use the route directly.</span>
+</span><span class='line'>        <span class="k">is</span> <span class="n">CounterEffect</span><span class="p">.</span><span class="n">OpenDetails</span> <span class="p">-&gt;</span> <span class="n">navigator</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">CounterDetailsRoute</span><span class="p">(</span><span class="n">effect</span><span class="p">.</span><span class="n">count</span><span class="p">))</span>
+</span><span class='line'>        <span class="c1">// Another feature: only through its launcher.</span>
+</span><span class='line'>        <span class="n">CounterEffect</span><span class="p">.</span><span class="n">OpenPosts</span> <span class="p">-&gt;</span> <span class="n">navigator</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">postsLauncher</span><span class="p">.</span><span class="n">posts</span><span class="p">())</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>尝试在计数器功能中写入 navigator.push(PostDetailsRoute(42))，但编译失败。该路由不可见。</p>
+
+<p>每个 -impl 都贡献一个 ModuleRouter，用于将其路由映射到屏幕。它也是构建该功能视图模型的唯一位置：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">PostsModuleRouter</span> <span class="k">internal</span> <span class="n">constructor</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">repository</span><span class="p">:</span> <span class="n">PostsRepository</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">ModuleRouter</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">PolymorphicModuleBuilder</span><span class="p">&lt;</span><span class="n">NavKey</span><span class="p">&gt;.</span><span class="n">registerRoutes</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">subclass</span><span class="p">(</span><span class="n">PostsRoute</span><span class="o">::</span><span class="k">class</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">subclass</span><span class="p">(</span><span class="n">PostDetailsRoute</span><span class="o">::</span><span class="k">class</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">EntryProviderScope</span><span class="p">&lt;</span><span class="n">NavKey</span><span class="p">&gt;.</span><span class="n">entries</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">entry</span><span class="p">&lt;</span><span class="n">PostsRoute</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">PostsScreen</span><span class="p">(</span><span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span> <span class="p">{</span> <span class="n">PostsViewModel</span><span class="p">(</span><span class="n">repository</span><span class="p">)</span> <span class="p">})</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="n">entry</span><span class="p">&lt;</span><span class="n">PostDetailsRoute</span><span class="p">&gt;</span> <span class="p">{</span> <span class="n">route</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">PostDetailsScreen</span><span class="p">(</span><span class="n">viewModel</span> <span class="p">=</span> <span class="n">viewModel</span> <span class="p">{</span> <span class="n">PostDetailsViewModel</span><span class="p">(</span><span class="n">route</span><span class="p">.</span><span class="n">postId</span><span class="p">,</span> <span class="n">repository</span><span class="p">)</span> <span class="p">})</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>kotlin</p>
+
+<p>两个细节很重要。</p>
+
+<ul>
+<li><strong>registerRoutes() 方法使得返回栈能够在进程终止后继续存在。</strong>路由使用 @Serializable 注解，并且由于它们是私有的，因此每个功能都会注册自己的子类。应用程序会将它们合并到一个序列化器中。</li>
+<li><strong>每个返回栈条目都拥有自己的</strong> <strong><code>ViewModelStore</code></strong>，这是通过 Navigation 3 的视图模型装饰器实现的。条目内的 viewModel { … } 会创建一个视图模型，该模型的生命周期与该屏幕在返回栈中停留的时间完全相同。</li>
+</ul>
+
+
+<h2>导航是效果，而不是调用</h2>
+
+<p>导航是一种效果，而非一种调用。</p>
+
+<p>屏幕遵循一个状态/事件/效果循环，这是在纯 AndroidX <code>ViewModel</code> 中实现的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">user</span> <span class="n">taps</span> <span class="err">──▶</span> <span class="n">Event</span> <span class="err">──▶</span> <span class="n">ViewModel</span> <span class="err">──▶</span> <span class="n">new</span> <span class="n">State</span> <span class="err">──▶</span> <span class="n">screen</span> <span class="n">redraws</span>
+</span><span class='line'>                            <span class="err">└────────▶</span> <span class="n">Effect</span> <span class="err">────▶</span> <span class="n">screen</span> <span class="n">navigates</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>视图模型不包含导航器或上下文。它以效果的形式描述应该发生什么，屏幕会执行该效果。效果通过缓冲通道传输，因此屏幕在后台运行时发送的效果会在屏幕恢复运行时送达，而不会丢失。</p>
+
+<p>规则 4：每个依赖项都有一个定义</p>
+
+<p>传统的 Koin 编译器会在运行时解析所有定义：如果缺少定义，则代码路径首次运行时会崩溃。而 Koin 的 K2 编译器插件则将这种检查移到了构建过程中。</p>
+
+<p>每个 -impl 都包含一个 <code>Koin</code> 模块。这些定义都是函数，因此类本身完全没有依赖注入注解：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Module</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">PostsKoinModule</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">@Single</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">postsApi</span><span class="p">():</span> <span class="n">PostsApi</span> <span class="p">=</span> <span class="n">PostsApiImpl</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">@Single</span>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">fun</span> <span class="nf">repository</span><span class="p">(</span><span class="n">client</span><span class="p">:</span> <span class="n">NetworkClient</span><span class="p">):</span> <span class="n">PostsRepository</span> <span class="p">=</span> <span class="n">PostsRepositoryImpl</span><span class="p">(</span><span class="n">client</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">@Single</span><span class="p">(</span><span class="n">binds</span> <span class="p">=</span> <span class="p">[</span><span class="n">ModuleRouter</span><span class="o">::</span><span class="k">class</span><span class="p">])</span>
+</span><span class='line'>    <span class="k">internal</span> <span class="k">fun</span> <span class="nf">moduleRouter</span><span class="p">(</span><span class="n">repository</span><span class="p">:</span> <span class="n">PostsRepository</span><span class="p">):</span> <span class="n">PostsModuleRouter</span> <span class="p">=</span> <span class="n">PostsModuleRouter</span><span class="p">(</span><span class="n">repository</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>将每个函数视为一个句子来理解：<em>为了提供一个</em> <em>PostsRepository，我需要一个</em> <em>NetworkClient</em>。路由器上的绑定允许应用程序使用 koin.getAll<ModuleRouter>() 收集每个功能的路由器，而无需指定任何功能名称。</p>
+
+<p>该应用程序会将每个模块列出一次：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Module</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">includes</span> <span class="p">=</span> <span class="p">[</span>        <span class="n">LoggerKoinModule</span><span class="o">::</span><span class="k">class</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">NetworkKoinModule</span><span class="o">::</span><span class="k">class</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">CounterKoinModule</span><span class="o">::</span><span class="k">class</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">PostsKoinModule</span><span class="o">::</span><span class="k">class</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">],</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'><span class="k">internal</span> <span class="k">class</span> <span class="nc">AppKoinModule</span> <span class="p">{</span> <span class="cm">/* … */</span> <span class="p">}</span>
+</span><span class='line'><span class="n">@KoinApplication</span><span class="p">(</span><span class="n">modules</span> <span class="p">=</span> <span class="p">[</span><span class="n">AppKoinModule</span><span class="o">::</span><span class="k">class</span><span class="p">])</span>
+</span><span class='line'><span class="k">internal</span> <span class="k">object</span> <span class="nc">ModularKoinApplication</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>从列表中移除 NetworkKoinModule 后，应用程序将无法编译：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">e</span><span class="p">:</span> <span class="p">[</span><span class="n">Koin</span><span class="p">][</span><span class="n">KOIN</span><span class="p">-</span><span class="n">D001</span><span class="p">]</span> <span class="n">Missing</span> <span class="n">dependency</span><span class="p">:</span> <span class="n">com</span><span class="p">.</span><span class="n">example</span><span class="p">.</span><span class="n">modularapp</span><span class="p">.</span><span class="n">core</span><span class="p">.</span><span class="n">network</span><span class="p">.</span><span class="n">NetworkClient</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>kotlin</p>
+
+<h2>规则 4：每个依赖项都有定义</h2>
+
+<p>有三个决定值得解释。</p>
+
+<ul>
+<li><strong>为什么使用函数而不是带注解的类？</strong> 使用组件扫描的 <code>@Single class PostsRepositoryImpl</code> 类虽然更简洁，但每个类都需要导入 <code>Koin</code>，导致代码分散在数十个文件中。而使用函数，领域代码和数据代码都保持纯 Kotlin 代码，并且每个功能的配置都集中在一个地方。</li>
+<li><strong>为什么不从 <code>Koin</code> 解析视图模型？</strong> 路由通过普通的构造函数调用来构建视图模型。帖子 ID 来自路由，传递给构造函数，然后由编译器进行检查。如果从容器解析视图模型，则会将其变成运行时参数查找。</li>
+</ul>
+
+
+<h2>规则 5：所有失败都会被处理</h2>
+
+<p>Features 从不导入 Ktor。它们只看到一个接口，并且每次调用都会返回一个值，而不是抛出异常：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">interface</span> <span class="n">NetworkClient</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="err">&lt;</span><span class="nf">T</span><span class="p">&gt;</span> <span class="k">get</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">path</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">response</span><span class="p">:</span> <span class="n">DeserializationStrategy</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;,</span>
+</span><span class='line'>        <span class="n">query</span><span class="p">:</span> <span class="n">Map</span><span class="p">&lt;</span><span class="n">String</span><span class="p">,</span> <span class="n">String</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">emptyMap</span><span class="p">(),</span>
+</span><span class='line'>    <span class="p">):</span> <span class="n">AppResult</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;</span>
+</span><span class='line'>    <span class="c1">// post(…) likewise</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">AppResult</span><span class="p">&lt;</span><span class="k">out</span> <span class="n">T</span><span class="p">&gt;</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">Success</span><span class="p">&lt;</span><span class="k">out</span> <span class="n">T</span><span class="p">&gt;(</span><span class="k">val</span> <span class="py">value</span><span class="p">:</span> <span class="n">T</span><span class="p">)</span> <span class="p">:</span> <span class="n">AppResult</span><span class="p">&lt;</span><span class="n">T</span><span class="p">&gt;</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">Failure</span><span class="p">(</span><span class="k">val</span> <span class="py">error</span><span class="p">:</span> <span class="n">NetworkError</span><span class="p">)</span> <span class="p">:</span> <span class="n">AppResult</span><span class="p">&lt;</span><span class="n">Nothing</span><span class="p">&gt;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>NetworkError 是一个封闭集合：无连接、超时、HTTP 状态码错误、无法解码的响应体、未知错误。Ktor 实现会捕获所有此类错误并将其转换为其中之一，但有一个例外：协程取消会被重新抛出，因此离开当前屏幕仍然会取消其请求。</p>
+
+<p>每一层都使用自己的语言。存储库会将网络错误详尽地转换为该功能自身的故障类型：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">NetworkError</span><span class="p">.</span><span class="n">toFailure</span><span class="p">():</span> <span class="n">PostsFailure</span> <span class="p">=</span> <span class="k">when</span> <span class="p">(</span><span class="k">this</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">NetworkError</span><span class="p">.</span><span class="n">NoConnection</span> <span class="p">-&gt;</span> <span class="n">PostsFailure</span><span class="p">.</span><span class="n">NoConnection</span>
+</span><span class='line'>    <span class="k">is</span> <span class="n">NetworkError</span><span class="p">.</span><span class="n">Http</span> <span class="p">-&gt;</span> <span class="k">if</span> <span class="p">(</span><span class="n">code</span> <span class="p">==</span> <span class="n">HTTP_NOT_FOUND</span><span class="p">)</span> <span class="n">PostsFailure</span><span class="p">.</span><span class="n">NotFound</span> <span class="k">else</span> <span class="n">PostsFailure</span><span class="p">.</span><span class="n">Unavailable</span>
+</span><span class='line'>    <span class="n">NetworkError</span><span class="p">.</span><span class="n">Timeout</span><span class="p">,</span> <span class="k">is</span> <span class="n">NetworkError</span><span class="p">.</span><span class="n">Unknown</span> <span class="p">-&gt;</span> <span class="n">PostsFailure</span><span class="p">.</span><span class="n">Unavailable</span>
+</span><span class='line'>    <span class="k">is</span> <span class="n">NetworkError</span><span class="p">.</span><span class="n">Serialization</span> <span class="p">-&gt;</span> <span class="n">PostsFailure</span><span class="p">.</span><span class="n">Malformed</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>视图模型会将这种故障状态作为值保留下来。只有屏幕层（拥有资源访问权限）才会将其转换为翻译后的句子。由于每个步骤都是一个封闭的 when 语句，没有 else 语句，因此添加新的故障类型需要每一层都处理完毕才能编译通过。不存在那种“出了点问题”的默认回退机制来掩盖未曾预料到的情况。</p>
+
+<h2>规则 6：每个功能和路由都会被注册</h2>
+
+<p>有些错误代码格式正确，编译也完全没问题，但运行时仍然会出错：</p>
+
+<ul>
+<li><strong>某个功能的 <code>Koin</code> 模块从未添加到应用中。</strong> 应用中没有任何地方需要指定其类型，因此 <code>Koin</code> 的图看起来是完整的。但该功能只是缺少一些屏幕。</li>
+<li><strong><code>registerRoutes()</code> 中缺少一条路由。</strong> **导航正常，但在 Android 首次保存返回栈时崩溃。</li>
+</ul>
+
+
+<p>Gradle 和编译器都无法直接查看这些文件，因此 Gradle 任务会读取源代码并逐一检查。<code>./gradlew doctor</code> 会在每次拉取请求时在 CI 中运行：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">doctor</span> <span class="n">found</span> <span class="n">problems</span><span class="p">:</span>
+</span><span class='line'>  <span class="err">✖</span> <span class="n">route</span><span class="p">-</span><span class="n">not</span><span class="p">-</span><span class="n">registered</span><span class="p">:</span> <span class="n">PostDetailsRoute</span> <span class="p">(</span><span class="n">posts</span><span class="p">-</span><span class="n">impl</span><span class="p">)</span> <span class="k">is</span> <span class="n">missing</span> <span class="n">from</span> <span class="n">registerRoutes</span><span class="p">().</span>
+</span><span class='line'>  <span class="err">✖</span> <span class="n">feature</span><span class="p">-</span><span class="n">not</span><span class="p">-</span><span class="n">registered</span><span class="p">:</span> <span class="n">UserProfileKoinModule</span> <span class="k">is</span> <span class="n">not</span> <span class="k">in</span> <span class="n">the</span> <span class="n">app</span><span class="err">&#39;</span><span class="n">s</span> <span class="n">includes</span><span class="p">.</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这是一个特意设计得非常小巧的工具。它了解项目的规范，因此可以检查通用代码检查工具无法检查的内容。</p>
+
+<h2>如果构建无法强制执行，就让正确的方式成为最简单的方式</h2>
+
+<p>并非每条规则都是错误的。对于其他规则而言，其目标是使做正确的事比做错误的事更省力。</p>
+
+<p><strong>新功能是自动生成的，而非复制粘贴。</strong>避免代码错误最简单的方法就是不要手动编写代码。<code>./gradlew newFeature --name=user-profile</code> 命令会生成以下模块：facade、launcher、route、route table、<code>Koin</code> 模块、view model、screen 以及一个测试用例。它还会将此功能添加到应用程序中。生成的代码可以直接通过 detekt 和 doctor 的检测。</p>
+
+<p><strong>设计系统负责实现无障碍功能。</strong> 它基于 Compose Foundation 而非 Material 构建：通过组合局部变量提供一小组标记（颜色、间距、半径、字体、动态效果），并通过一个对象读取：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">AppText</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">post</span><span class="p">.</span><span class="n">title</span><span class="p">,</span> <span class="n">style</span> <span class="p">=</span> <span class="n">AppTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">title</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这些标记使用 staticCompositionLocalOf。动态组合局部变量会跟踪所有读取它的位置，因此更改只会重新组合这些读取者。静态组合局部变量则跳过此跟踪，更改会重新组合整个子树。对于主题标记来说，这完全正确：它们会被所有地方读取，并且只有当整个主题更改时才会更改。</p>
+
+<h2>成本是多少</h2>
+
+<p>这并非免费，假装免费是一种欺骗。</p>
+
+<ul>
+<li><strong>更多模块。</strong> 每个功能需要两个模块，外加一个需要保持更新的组合根目录。Gradle 的配置缓存和构建缓存保证了速度，但也增加了导航的复杂性。</li>
+<li><strong>间接性。</strong> 打开另一个功能的页面需要通过界面和启动器，而不是直接调用。这正是设计初衷，但阅读代码时需要多一步操作。</li>
+</ul>
+
+
+<p>我的经验法则是：这种方法大约适用于十个功能，或者两个团队在同一个应用上协作开发。少于十个功能，或者两个团队在同一个应用上协作开发，就足以满足需求。多于十个功能，一个严格遵守边界的构建版本所带来的价值远超其成本。</p>
+
+<p>以上所有内容都包含在开源的 <a href="https://github.com/Yusubov-Engineering/modular-compose-template">modular-compose-template</a> 中，它会打开一个计数器页面，浏览来自 JSONPlaceholder 的帖子。这些页面故意设计得比较简洁；重点在于它们背后的逻辑。如果你在实际项目中尝试应用这些规则，我很想知道它们在哪些方面有所帮助，又在哪些方面遇到了阻碍。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[生命周期感知的多模块启动模式]]></title>
@@ -7316,450 +7800,6 @@
 
 
 <p>结语</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android上的ZeroMQ：用发布/订阅模式连接Linux服务]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/05/23/android-using-zeromq/"/>
-    <updated>2026-05-23T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/05/23/android-using-zeromq</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「ZeroMQ on Android: Bridging a Linux Service with PUB SUB」，原文链接<a href="https://levelup.gitconnected.com/zeromq-on-android-bridging-a-linux-service-with-pub-sub-43ecf52209fa">https://levelup.gitconnected.com/zeromq-on-android-bridging-a-linux-service-with-pub-sub-43ecf52209fa</a>，由James Cullimore发布于2026年3月9日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/05/23/android-using-zeromq/"><img src="https://miro.medium.com/v2/resize:fit:1400/1*jKF0CYHnFn0_HY4YdXRiuQ.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在最近的一个项目中，我们遇到了一个看似简单却又充满挑战的需求。我们需要在一个基于 Linux 的小型服务和一个 Android 应用之间建立可靠、低延迟的通信。没有云组件，没有 HTTP API，也没有长期运行的后端基础设施。只有同一台机器上的两个进程需要高效且持续地进行通信。</p>
-
-<p>传统的 REST 或 gRPC 等方法对于我们面临的问题来说显得过于繁琐。我们不需要请求/响应语义，也不想承担序列化格式、连接管理或重试逻辑带来的额外开销。我们真正需要的是一个轻量级的消息传递层，能够在数据可用时推送消息，并允许 Android 应用在需要时发布消息。</p>
-
-<p>这时，ZeroMQ 就派上了用场。</p>
-
-<p>ZeroMQ 不是消息代理，也不是框架。它是一个底层消息库，提供 PUB/SUB、PUSH/PULL 和 REQ/REP 等构建模块，并允许你根据系统需求将它们组合起来。它完全在进程内运行，使用纯 TCP 协议，并且可以在包括 Linux 和 Android 在内的不同平台上良好运行。</p>
-
-<p>在本文中，我将详细介绍我们如何使用 ZeroMQ 通过简单的 PUB/SUB 设置将 Linux 服务连接到 Android 应用。我们将探讨我们实际交付的客户端实现、其结构设计的原因以及我们在此过程中遇到的权衡取舍。</p>
-
-<h2>架构概述和消息模型</h2>
-
-<p>在编写任何代码之前，我们花时间确定了 Linux 服务和 Android 应用应该如何通信。这两个进程将在同一设备上运行，并通过 localhost 进行通信。不需要加密、身份验证或消息持久化。最重要的是简单性、可预测性和低延迟。</p>
-
-<p>ZeroMQ 的消息传递模式使这一决策变得非常简单。</p>
-
-<p>我们为主要数据流选择了发布/订阅（PUB/SUB）模型。Linux 服务充当发布者，在新数据可用时广播消息。Android 应用充当订阅者，持续监听并响应更新。这种模式非常适合传输状态变化、传感器数据或状态更新，而无需轮询。</p>
-
-<p>同时，Android 应用需要一种向 Linux 服务发送消息的方式。我们没有引入第二个协议或不同的传输方式，而是使用了反向的第二个 ZeroMQ 套接字。在 Android 端，该套接字发布消息，Linux 服务订阅这些消息。虽然这不是严格的请求/响应机制，但它保持了通信模型的对称性，并且易于理解。</p>
-
-<p>从 Android 应用的角度来看，这会产生两个独立的连接：</p>
-
-<ul>
-<li><p>一个连接到 Linux 服务发布端口的订阅套接字，用于接收消息</p></li>
-<li><p>一个连接到 Linux 服务订阅端口的发布套接字，用于发送消息</p></li>
-</ul>
-
-
-<p>两个套接字都运行在本地主机上的 TCP 协议下，每个套接字都绑定到一个专用端口。这种分离方式保持了消息流的清晰性，避免了将不相关的功能耦合到同一个通道中。</p>
-
-<p>其余的实现工作都围绕着在 Android 上安全地管理这些套接字展开。这意味着要以一种不会泄漏资源或阻塞主线程的方式来处理线程、生命周期、连接状态和清理工作。然而，核心思想依然很简单：连接、订阅、接收消息，并在需要时发布响应。</p>
-
-<h2>Android 设置和 ZeroMQ 注意事项</h2>
-
-<p>在 Android 上使用 ZeroMQ 有一些值得提前注意的实际问题。虽然 ZeroMQ 本身是平台无关的，但 Android 的运行时、线程模型和生命周期限制会影响你将其集成到实际应用程序中的方式。</p>
-
-<p>在我们的案例中，我们依赖于 Java ZeroMQ 绑定，它公开了熟悉的 ZContext 和 ZMQ.Socket API。这些绑定在 Android 上运行良好，但它们不具备生命周期感知能力。一旦创建了上下文或套接字，你就需要显式地管理其生命周期。否则，很容易导致线程泄漏或本地资源的生命周期超过创建它们的组件。</p>
-
-<p>线程是第二个主要问题。ZeroMQ 套接字默认是阻塞的。在主线程上调用 recv 或 send 是不可行之选，即使是短暂的操作，如果处理不当，也可能导致卡顿或 ANR（应用程序无响应）。因此，所有套接字创建和消息处理都被推到后台线程进行。</p>
-
-<p>Kotlin 协程非常适合这里。它们允许我们将工作卸载到 Dispatchers.IO，保持代码的可读性，并在需要时将状态更改协调回主线程。稍后你将看到的客户端实现使用协程来管理连接建立、消息接收和清理，而无需将线程问题暴露给应用程序的其他部分。</p>
-
-<p>另一个重要的细节是，如果出现问题，ZeroMQ 不会自动重新连接套接字。如果连接断开或套接字发生故障，你需要决定如何应对。在我们的设置中，我们有意保持简单。客户端通过回调报告连接状态更改，并将重新连接策略留给调用者。这使得 ZeroMQ 客户端专注于通信，而不是策略。</p>
-
-<p>考虑到这些限制，我们将所有与 ZeroMQ 相关的逻辑封装在一个类中。该类拥有上下文、套接字和协程，并向应用程序的其他部分公开了一个简洁明了的 API。</p>
-
-<h2>将 ZeroMQ 添加到 Android 项目</h2>
-
-<p>要在 Android 上使用 ZeroMQ，我们依赖于<strong>JeroMQ</strong>，它是 ZeroMQ 的纯 Java 实现。这是一个重要的区别。JeroMQ 不需要原生二进制文件或 NDK 集成，这使得设置过程非常简单，并避免了 ABI 相关问题。</p>
-
-<p>在这个项目中，依赖项使用版本目录进行管理。ZeroMQ 依赖项只需定义一次，即可在所有模块中保持一致的引用。</p>
-
-<p>首先，我们声明版本：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='toml'><span class='line'><span class="n">jeromq</span> <span class="o">=</span> <span class="s">&quot;0.6.0&quot;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>接下来，我们定义实际的库入口：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='toml'><span class='line'><span class="n">jeromq</span> <span class="o">=</span> <span class="p">{</span> <span class="n">group</span> <span class="o">=</span> <span class="s">&quot;org.zeromq&quot;</span><span class="p">,</span> <span class="n">name</span> <span class="o">=</span> <span class="s">&quot;jeromq&quot;</span><span class="p">,</span> <span class="n">version</span><span class="p">.</span><span class="n">ref</span> <span class="o">=</span> <span class="s">&quot;jeromq&quot;</span> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>完成这些步骤后，就可以像添加其他库一样，将依赖项添加到 Android 模块中：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">implementation</span><span class="p">(</span><span class="n">libs</span><span class="p">.</span><span class="n">jeromq</span><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>使用 JeroMQ 意味着 ZeroMQ 上下文和套接字完全运行在 JVM 中。这与 Android 的进程模型非常契合，并使资源管理更加可预测。这样做的缺点是无法使用 ZeroMQ 的原生实现，但对于本地低延迟通信而言，这种方法已经绰绰有余。</p>
-
-<p>添加依赖项后，无需其他配置。你可以创建 <code>ZContext</code>，打开套接字，并立即开始发送或接收消息。</p>
-
-<h2>ZeroMqClient 类及其职责</h2>
-
-<p>Android 端实现的核心是一个名为 <code>ZeroMqClient</code> 的类。它的作用是将所有 ZeroMQ 特有的细节隐藏在一个简洁、可预测的 API 之后，以便应用程序的其他部分可以安全地与之交互。</p>
-
-<p>该类负责：</p>
-
-<ul>
-<li><p>创建并拥有 ZeroMQ 上下文</p></li>
-<li><p>管理一个用于接收消息的 SUB 套接字</p></li>
-<li><p>管理一个用于发送消息的 PUB 套接字</p></li>
-<li><p>在主线程之外运行阻塞式套接字操作</p></li>
-<li><p>公开消息和连接状态的回调函数</p></li>
-<li><p>确定性地清理所有资源</p></li>
-</ul>
-
-
-<p>该类没有直接公开套接字，而是采用了一种配置驱动的方法。订阅和发布端口是可选的，这使得客户端可以根据使用场景以仅接收、仅发送或双向模式运行。</p>
-
-<p>以下是项目中完整的类定义：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.CoroutineScope</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.Dispatchers</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.Job</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">kotlinx.coroutines.launch</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.SocketType</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.ZContext</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.ZMQ</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">org.zeromq.ZMQException</span>
-</span><span class='line'><span class="k">import</span> <span class="nn">java.io.Closeable</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">class</span> <span class="nc">ZeroMqClient</span><span class="p">(</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">subPort</span><span class="p">:</span> <span class="n">Int</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span> <span class="c1">// eg. 54054,</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">pubPort</span><span class="p">:</span> <span class="n">Int</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span> <span class="c1">// eg. 54055,</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">messageCallback</span><span class="p">:</span> <span class="p">((</span><span class="n">String</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)?</span> <span class="p">=</span> <span class="k">null</span><span class="p">,</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">val</span> <span class="py">onConnectionChanged</span><span class="p">:</span> <span class="p">((</span><span class="n">Boolean</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">)?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">Closeable</span> <span class="p">{</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">context</span><span class="p">:</span> <span class="n">ZContext</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">subSocket</span><span class="p">:</span> <span class="n">ZMQ</span><span class="p">.</span><span class="n">Socket</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">pubSocket</span><span class="p">:</span> <span class="n">ZMQ</span><span class="p">.</span><span class="n">Socket</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">isRunning</span> <span class="p">=</span> <span class="k">false</span>
-</span><span class='line'>   <span class="k">private</span> <span class="k">var</span> <span class="py">receiveJob</span><span class="p">:</span> <span class="n">Job</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>该类实现了 <code>Closeable</code> 接口，使其生命周期清晰可见。调用 <code>close</code> 函数时，预期所有后台工作都会停止，所有原生资源都会被释放。这一点在之后将客户端与 Android 组件生命周期绑定时尤为重要。</p>
-
-<p><code>subPort</code> 和 <code>pubPort</code> 参数可以为空。这使得客户端可以根据调用者的需求有条件地创建套接字，而无需引入多个实现或标志。</p>
-
-<p>回调函数也以传入的方式传递，而不是作为流或可观察对象公开。这是为了保持客户端轻量级且不依赖框架而特意做出的选择。应用程序中的更高层可以根据需要将这些回调函数适配到 StateFlow、LiveData 或任何其他抽象层。</p>
-
-<p>最后，ZeroMQ 上下文、套接字和协程作业等内部状态都是私有的。应用程序的其他部分无需了解消息是如何接收或发送的，只需知道消息正在接收或发送即可。</p>
-
-<h2>连接和初始化套接字</h2>
-
-<p><code>connect()</code> 函数用于将客户端从一个普通对象转换为一个活跃的 ZeroMQ 参与者。目标很简单：创建一个上下文，创建所需的套接字，将它们连接到本地主机，并在配置了 SUB 端口后开始接收消息。</p>
-
-<p>实现过程中受到以下几个限制：</p>
-
-<ul>
-<li><p>我们绝不阻塞主线程。</p></li>
-<li><p>我们希望 SUB 和 PUB 套接字是可选的。</p></li>
-<li><p>我们希望应用程序的其他部分能够知道连接是否成功。</p></li>
-</ul>
-
-
-<p>以下是 <code>connect()</code> 函数的实现：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-<span class='line-number'>29</span>
-<span class='line-number'>30</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">connect</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>  <span class="k">if</span> <span class="p">(</span><span class="n">isRunning</span><span class="p">)</span> <span class="k">return</span>
-</span><span class='line'>  <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">try</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">context</span> <span class="p">=</span> <span class="n">ZContext</span><span class="p">()</span>
-</span><span class='line'>      <span class="n">subPort</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">subSocket</span> <span class="p">=</span> <span class="n">context</span><span class="o">?.</span><span class="n">createSocket</span><span class="p">(</span><span class="n">SocketType</span><span class="p">.</span><span class="n">SUB</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">subSocket</span><span class="o">?.</span><span class="n">subscribe</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">.</span><span class="n">toByteArray</span><span class="p">())</span>
-</span><span class='line'>        <span class="n">subSocket</span><span class="o">?.</span><span class="n">connect</span><span class="p">(</span><span class="s">&quot;tcp://127.0.0.1:$subPort&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Subbing to $subPort&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">startReceiving</span><span class="p">()</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>      <span class="n">pubPort</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">pubSocket</span> <span class="p">=</span> <span class="n">context</span><span class="o">?.</span><span class="n">createSocket</span><span class="p">(</span><span class="n">SocketType</span><span class="p">.</span><span class="n">PUB</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">pubSocket</span><span class="o">?.</span><span class="n">connect</span><span class="p">(</span><span class="s">&quot;tcp://127.0.0.1:$pubPort&quot;</span><span class="p">)</span>
-</span><span class='line'>        <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Pubbing to $pubPort&quot;</span><span class="p">)</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>      <span class="n">isRunning</span> <span class="p">=</span> <span class="n">subSocket</span> <span class="p">!=</span> <span class="k">null</span> <span class="p">||</span> <span class="n">pubSocket</span> <span class="p">!=</span> <span class="k">null</span>
-</span><span class='line'>      <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">invoke</span><span class="p">(</span><span class="k">true</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error connecting to server: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
-</span><span class='line'>      <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">let</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">invoke</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>      <span class="n">close</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>提前返回的 <code>if (isRunning) return</code> 可以防止重复连接。如果没有这个保护机制，很容易创建多个上下文和套接字，这很快就会导致混乱的行为和资源泄漏。</p>
-
-<p>所有设置都在 <code>Dispatchers.IO</code> 中启动。套接字创建和 <code>connect()</code> 调用都不是应该在主线程上运行的操作。这也让我们可以在以后添加重试或超时机制，而无需更改调用代码。</p>
-
-<p>当客户端配置了 <code>subPort</code> 时，它会创建一个 <code>SocketType.SUB</code> 套接字并立即进行订阅：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">subSocket</span><span class="o">?.</span><span class="n">subscribe</span><span class="p">(</span><span class="s">&quot;&quot;</span><span class="p">.</span><span class="n">toByteArray</span><span class="p">())</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>使用空前缀订阅意味着：订阅所有内容。这保持了客户端的灵活性。如果你之后引入了基于主题的过滤，你可以将其替换为特定的前缀，并保持其余代码不变。</p>
-
-<p>两个套接字都连接到 <code>tcp://127.0.0.1:&lt;port&gt;</code>。这是最初需求的关键部分：Linux 服务和 Android 应用之间的本地通信。</p>
-
-<p>最后，连接回调函数在主调度器上被调用。即使回调函数只是切换状态，从后台线程更新 UI 状态也常常会导致一些难以察觉的问题，因此需要显式地处理。</p>
-
-<p>如果在设置过程中出现任何错误，代码会记录错误，报告连接失败，并调用 <code>close()</code> 以确保部分创建的资源不会残留。</p>
-
-<h2>使用协程接收消息</h2>
-
-<p>SUB 套接字连接成功后，下一个问题虽然简单却至关重要：如何在不阻塞应用程序的情况下持续监听，并将接收到的消息传递给代码的其他部分。</p>
-
-<p>这就是 <code>startReceiving()</code> 的作用。它会在后台调度器上运行一个循环，阻塞在 <code>recvStr()</code> 上，并将接收到的每条消息通过回调函数转发出去。</p>
-
-<p>以下是具体的实现：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">startReceiving</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>  <span class="n">receiveJob</span> <span class="p">=</span> <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">try</span> <span class="p">{</span>
-</span><span class='line'>      <span class="k">while</span> <span class="p">(</span><span class="n">isRunning</span> <span class="p">&amp;&amp;</span> <span class="n">subSocket</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">val</span> <span class="py">message</span> <span class="p">=</span> <span class="n">subSocket</span><span class="o">?.</span><span class="n">recvStr</span><span class="p">()</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">message</span> <span class="p">!=</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>          <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Server received message: $message&quot;</span><span class="p">)</span>
-</span><span class='line'>          <span class="n">messageCallback</span><span class="o">?.</span><span class="n">invoke</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error receiving message: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>recvStr()</code> 是一个阻塞调用。在这里没问题，因为这个协程运行在 <code>Dispatchers.IO</code> 上。线程可以等待消息而不会影响 UI 的响应速度。</p>
-
-<p>循环条件会检查 <code>isRunning</code> 和 <code>subSocket != null</code>。这样，当客户端关闭或套接字意外被清理时，就可以快速、清晰地停止接收消息。结合 <code>close()</code> 中的 <code>receiveJob?.cancel()</code>，它提供了两层停止行为：基于状态的退出和协程取消。</p>
-
-<p>消息通过 <code>messageCallback</code> 向上传递。这使得该类专注于传输问题，而不是消息的解析方式。实际上，应用程序可以在回调中解析 JSON、更新 <code>StateFlow</code> 或将事件路由到应用程序的更深层。</p>
-
-<p>一个关于日志的小提示：日志标签显示“服务器已收到消息”，但这段代码位于客户端，接收来自服务器的消息。如果保持现状，它仍然可以工作，但在调试时可能会产生误导。是否要调整这一点取决于代码风格，但值得注意。</p>
-
-<p>错误会被捕获并记录，但协程不会自动重启。这符合客户端的轻量级设计。如有需要，可以在上一层实现连接策略（重试、重新连接、退避）。</p>
-
-<h2>使用 <code>sendMessage()</code> 发送消息</h2>
-
-<p>接收消息只是成功的一半。Android 应用还需要一种简单的方法将消息发布回 Linux 服务。</p>
-
-<p><code>sendMessage()</code> 函数特意设计得非常简洁。它会验证客户端是否正在运行以及 PUB 套接字是否存在，然后发送消息并记录结果。</p>
-
-<p>以下是实际使用的实现：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">fun</span> <span class="nf">sendMessage</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>  <span class="k">if</span> <span class="p">(!</span><span class="n">isRunning</span> <span class="p">||</span> <span class="n">pubSocket</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Cannot send message, client not connected&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">return</span>
-</span><span class='line'>   <span class="p">}</span>
-</span><span class='line'>  <span class="k">try</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">pubSocket</span><span class="o">?.</span><span class="n">send</span><span class="p">(</span><span class="n">message</span><span class="p">)</span>
-</span><span class='line'>    <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Sent message to server: $message&quot;</span><span class="p">)</span>
-</span><span class='line'>  <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">ZMQException</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error sending message or receiving response: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>首先，该方法预先处理了常见的误用情况。如果客户端创建时没有指定 <code>pubPort</code>，或者 <code>connect()</code> 尚未建立 PUB 套接字，我们会快速失败并记录清晰的日志消息。这避免了应用“以为”已发送消息但实际上并未发送任何消息的静默丢失。</p>
-
-<p>其次，该方法直接使用 <code>pubSocket?.send(message)</code>。在 PUB/SUB 架构中，不会立即收到确认或响应。send 调用要么在本地成功，要么抛出异常。实际的数据传输语义取决于对方是否已订阅并已连接。</p>
-
-<p>第三，错误被限定为 <code>ZMQException</code>。这样可以确保捕获的异常只针对套接字发送操作的实际预期结果，而不是吞掉所有异常。</p>
-
-<p>如果之后将其扩展为请求响应模式，API 的结构就会发生改变。在 Android 端，你可能需要将 PUB 替换为 REQ，并引入阻塞式接收或返回值的挂起函数。对于当前的设计而言，即发即弃的发送方式最为合适。</p>
-
-<h2>清理、生命周期以及安全地关闭客户端</h2>
-
-<p>在 Android 上，资源管理至关重要。ZeroMQ 上下文及其套接字可能在底层持有原生资源，除非你主动关闭，否则接收循环可能会在创建它的 UI 组件消失后继续运行很长时间。</p>
-
-<p>因此，此客户端实现了 <code>Closeable</code> 接口，并将所有清理逻辑放在 <code>close()</code> 函数中。</p>
-
-<p>以下是实际使用的实现：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">close</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>       <span class="k">try</span> <span class="p">{</span>
-</span><span class='line'>           <span class="n">isRunning</span> <span class="p">=</span> <span class="k">false</span>
-</span><span class='line'>           <span class="n">receiveJob</span><span class="o">?.</span><span class="n">cancel</span><span class="p">()</span>
-</span><span class='line'>           <span class="n">subSocket</span><span class="o">?.</span><span class="n">close</span><span class="p">()</span>
-</span><span class='line'>           <span class="n">pubSocket</span><span class="o">?.</span><span class="n">close</span><span class="p">()</span>
-</span><span class='line'>           <span class="n">context</span><span class="o">?.</span><span class="n">close</span><span class="p">()</span>
-</span><span class='line'>           <span class="n">Log</span><span class="p">.</span><span class="n">d</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Disconnected from server&quot;</span><span class="p">)</span>
-</span><span class='line'>           <span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">invoke</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
-</span><span class='line'>       <span class="p">}</span> <span class="k">catch</span> <span class="p">(</span><span class="n">e</span><span class="p">:</span> <span class="n">Exception</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>           <span class="n">Log</span><span class="p">.</span><span class="n">e</span><span class="p">(</span><span class="n">TAG</span><span class="p">,</span> <span class="s">&quot;Error disconnecting from server: ${e.message}&quot;</span><span class="p">,</span> <span class="n">e</span><span class="p">)</span>
-</span><span class='line'>       <span class="p">}</span> <span class="k">finally</span> <span class="p">{</span>
-</span><span class='line'>           <span class="n">receiveJob</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>           <span class="n">subSocket</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>           <span class="n">pubSocket</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>           <span class="n">context</span> <span class="p">=</span> <span class="k">null</span>
-</span><span class='line'>       <span class="p">}</span>
-</span><span class='line'>   <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>停止接收循环</h3>
-
-<p>第一行代码设置了 <code>isRunning = false</code>。这足以使 <code>startReceiving()</code> 中的 <code>while (isRunning &amp;&amp; subSocket != null)</code> 循环自然退出。</p>
-
-<p>然后，<code>receiveJob?.cancel()</code> 添加了第二个关闭机制。取消操作至关重要，因为 <code>recvStr()</code> 是阻塞的。实际上，取消操作和关闭套接字同时进行，有助于协程展开，而不是无限期地等待。</p>
-
-<h3>释放套接字和上下文</h3>
-
-<p>套接字会先关闭，然后是上下文：</p>
-
-<ul>
-<li><p><code>subSocket?.close()</code></p></li>
-<li><p><code>pubSocket?.close()</code></p></li>
-<li><p><code>context?.close()</code></p></li>
-</ul>
-
-
-<p>这样的顺序保证了清理过程的可预测性。在这样的系统中，需要避免在上下文已经消失后，套接字仍然处于活动状态。</p>
-
-<h3>在主线程上报告状态变更</h3>
-
-<p>断开连接后，客户端通过以下方式报告连接状态：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">CoroutineScope</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">Main</span><span class="p">).</span><span class="n">launch</span> <span class="p">{</span> <span class="n">onConnectionChanged</span><span class="o">?.</span><span class="n">invoke</span><span class="p">(</span><span class="k">false</span><span class="p">)</span> <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这与 <code>connect()</code> 中使用的方法一致：状态更新会路由回主调度器，以便调用者可以安全地更新 UI 状态。</p>
-
-<p>最后，<code>finally</code> 代码块会将引用设置为 null。这与其说是为了确保正确性，不如说是为了明确地“关闭”对象，使其可以被垃圾回收，而不会留下残留引用。</p>
-
-<h2>结论</h2>
-
-<p>这种设置之所以有效，是因为它缩小了问题的范围，并将消息传递视为基础设施，而不是架构声明。我们有一个需要广播更新的 Linux 服务，以及一个需要快速响应并偶尔发布消息的 Android 应用。ZeroMQ 以极低的开销满足了我们的需求，无需引入代理、HTTP 层或更复杂的 RPC 栈。</p>
-
-<p><code>ZeroMqClient</code> 的设计非常精简。它拥有 ZeroMQ 上下文和套接字，所有阻塞操作都在 <code>Dispatchers.IO</code> 上完成，并且只暴露应用其他部分所需的功能：<code>connect()</code>、<code>sendMessage()</code>、消息回调和连接状态回调。生命周期通过 <code>Closeable</code> 显式控制，清理工作也集中进行，因此套接字不会在创建它们的组件之后仍然存在。</p>
-
-<p>如果你正在考虑类似的方案，需要记住的主要权衡是，发布/订阅模式并非请求/响应。你优化的是流式更新和松耦合，而不是确认和保证交付。这非常适合本地低延迟通信，但这仍然是一个需要你有意做出的设计选择。</p>
-
-<p>在我们的案例中，这个选择是值得的。我们在 Linux 服务和 Android 应用之间建立了一个简洁、轻量级的通道，并且我们保持了实现的简洁性，使其易于调试和维护。</p>
 ]]></content>
   </entry>
   
