@@ -1,0 +1,757 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>Room Fts4：全文搜索替代 SQL LIKE - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="对比 Room @Fts4 与 SQL LIKE 的搜索性能，讲解倒排索引原理与 contentEntity 用法，附 5000 条数据下 9.4 倍加速的实测基准。">
+  <meta name="keywords" content="Compose, Room, Search">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">Room Fts4：全文搜索替代 SQL LIKE</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-10-20'><span class='date'><span class='date-month'>Oct</span> <span class='date-day'>20</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Scaling Android Search: Room @Fts4 vs SQL LIKE」，原文链接<a href="https://proandroiddev.com/scaling-android-search-room-fts4-vs-sql-like-b2a8232cbd12">https://proandroiddev.com/scaling-android-search-room-fts4-vs-sql-like-b2a8232cbd12</a>，由Oğuzhan Aslan发布于2026年10月11日。</p></blockquote>
+
+<p>本文将深入探讨如何使用 Android Jetpack Room 实现全文搜索索引、倒排索引和微秒级查询基准测试。</p>
+
+<p><a href="/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like/"><img src="https://cdn-images-1.medium.com/max/1024/1*O4Wm35zmkfeyGMGQRDBR7g.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在为 Android 应用程序构建搜索功能时——无论是查询离线优先的收件箱、笔记目录、文档缓存还是电子商务目录——几乎所有开发者都从相同的查询开始：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">mails</span>
+</span><span class='line'><span class="k">WHERE</span> <span class="n">subject</span> <span class="k">LIKE</span> <span class="s1">&#39;%&#39;</span> <span class="o">||</span> <span class="p">:</span><span class="n">query</span> <span class="o">||</span> <span class="s1">&#39;%&#39;</span>
+</span><span class='line'>   <span class="k">OR</span> <span class="n">body</span> <span class="k">LIKE</span> <span class="s1">&#39;%&#39;</span> <span class="o">||</span> <span class="p">:</span><span class="n">query</span> <span class="o">||</span> <span class="s1">&#39;%&#39;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>它直观易用，无需修改任何表结构，开箱即用。在早期开发阶段，即使本地数据库只包含 25 行虚拟数据，搜索查询也能立即返回结果。测试通过，用户界面流畅，该功能顺利发布。</p>
+
+<p>然后，现实给了我们当头一棒。</p>
+
+<p>随着用户积累数月的多行电子邮件、笔记或缓存数据（从数百条记录攀升至数千条记录），投诉开始纷至沓来：</p>
+
+<ul>
+<li>在搜索框中输入文字时出现按键延迟。</li>
+<li>画面出现丢帧和主线程微卡顿。</li>
+<li>进行大量搜索操作时，电池电量消耗明显。</li>
+</ul>
+
+
+<p>为什么在开发阶段感觉运行速度极快的操作，在真实数据量下却会不堪重负？要理解这一点，我们必须深入了解 SQLite 的查询规划器。</p>
+
+<h2>为什么 SQL LIKE 在大规模场景下会失效</h2>
+
+<p>在关系数据库中，开发人员依靠索引（B 树）来将查找时间复杂度控制在 O(log N) 以内。例如，如果你查询：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="k">WHERE</span> <span class="n">sender</span> <span class="k">LIKE</span> <span class="s1">&#39;alice%&#39;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>SQLite <em>可以</em>在 <code>sender</code> 上使用标准的 B 树索引，因为它知道前缀。</p>
+
+<p>然而，用户很少只使用前缀进行搜索。实际的全文搜索需要<strong>子字符串匹配</strong>：在主题或段落中查找任意单词。这迫使查询语句以通配符开头：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="k">WHERE</span> <span class="n">body</span> <span class="k">LIKE</span> <span class="s1">&#39;%architecture%&#39;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>警告：一旦查询语句包含前导通配符（<code>%query%</code>），标准 B 树索引将被完全绕过。SQLite 将被迫执行<strong>顺序全表扫描</strong>，时间复杂度为 O(N)。</p>
+
+<p>在全表扫描中：</p>
+
+<ol>
+<li>SQLite 将存储层中的每一行数据都读入内存。</li>
+<li>查询引擎按顺序遍历文本的每个字节，逐个字符地比较，查找目标子字符串。</li>
+<li>如果一封电子邮件正文包含 1500 个单词，而你有 2000 封电子邮件，那么 SQLite 会对每次击键操作逐字节地检查多达 300 万个单词！</li>
+</ol>
+
+
+<p><img src="https://cdn-images-1.medium.com/max/336/1*5kKjnzDStbkv-sL1XefF-A.png" alt="无标题图像" /></p>
+
+<p>此外，标准的 SQL LIKE 语句是“愚蠢的”：</p>
+
+<ul>
+<li><strong>未进行分词：</strong>它无法识别单词边界。搜索“cat”会错误地匹配到“catalog”、“scatter”和“vacation”。</li>
+<li><strong>未进行词干提取：</strong>搜索“optimize”会遗漏“optimizing”、“optimizer”或“optimized”。</li>
+<li><strong>未进行相关性排序：</strong>搜索结果未加权；标题中的匹配项与第四段中的匹配项权重相同。</li>
+</ul>
+
+
+<p>而 SQLite 的 <strong>FTS4（全文搜索 4）</strong> 引擎则改变了这一切。</p>
+
+<h2>解决方案：FTS4 和倒排索引的工作原理</h2>
+
+<p>SQLite 包含专用的全文搜索扩展（FTS3/FTS4 和 FTS5）。在 Android 的 Room 持久化库中，通过 <code>@Fts4</code> 和 <code>@Fts3</code> 注解原生支持这些扩展。</p>
+
+<h3>倒排索引：从 O(N) 到 O(1)</h3>
+
+<p>FTS4 不是在查询时扫描行，而是在<strong>插入时</strong>进行繁重的工作。</p>
+
+<p>当 FTS4 对文本列进行索引时，<strong>分词器</strong>会将文本分解成单个单词（词元），规范化它们的大小写，去除标点符号，并构建一个<strong>倒排索引</strong>。</p>
+
+<p>倒排索引本质上是一个词到文档的词典：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="o">+</span><span class="c1">--------------+-----------------------+</span>
+</span><span class='line'><span class="o">|</span> <span class="n">Token</span>        <span class="o">|</span> <span class="n">DocIDs</span> <span class="p">(</span><span class="n">Posting</span> <span class="n">List</span><span class="p">)</span> <span class="o">|</span>
+</span><span class='line'><span class="o">+</span><span class="c1">--------------+-----------------------+</span>
+</span><span class='line'><span class="o">|</span> <span class="n">architecture</span> <span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">492</span><span class="p">]</span>     <span class="o">|</span>
+</span><span class='line'><span class="o">|</span> <span class="n">benchmark</span>    <span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">22</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">305</span><span class="p">]</span>  <span class="o">|</span>
+</span><span class='line'><span class="o">|</span> <span class="k">database</span>     <span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">18</span><span class="p">,</span> <span class="mi">92</span><span class="p">,</span> <span class="mi">108</span><span class="p">]</span>   <span class="o">|</span>
+</span><span class='line'><span class="o">|</span> <span class="k">security</span>     <span class="o">|</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">11</span><span class="p">,</span> <span class="mi">45</span><span class="p">,</span> <span class="mi">99</span><span class="p">]</span>    <span class="o">|</span>
+</span><span class='line'><span class="o">+</span><span class="c1">--------------+-----------------------+</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://cdn-images-1.medium.com/max/346/1*vr3VjMq9mkHs9wYRB12fUA.png" alt="无标题图像" /></p>
+
+<p>当你发出类似 <code>MATCH 'benchmark*'</code> 的搜索查询时，FTS4：</p>
+
+<ol>
+<li>对搜索字符串进行分词。</li>
+<li>在词元词典中执行即时查找。</li>
+<li>获取包含该单词的完整文档 ID 列表。</li>
+<li>返回记录，不扫描任何无关文本字节。</li>
+</ol>
+
+
+<p>无论有 100 行还是 10 万行，查找操作都在不到一毫秒内完成。</p>
+
+<h2>在 Android Room 中的实现</h2>
+
+<p>一个常见的误解是，使用 FTS 需要复制数据，导致数据库大小翻倍。而 Room 的 <code>contentEntity</code> 模式则完全避免了这个问题。</p>
+
+<p>让我们来看看 Mail Showcase 应用中的生产级实现。</p>
+
+<p>首先，创建包含所有原始字段的基础表。这是你的唯一可信数据源：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// MailEntity.kt</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.room.Entity</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.room.PrimaryKey</span>
+</span><span class='line'><span class="n">@Entity</span><span class="p">(</span><span class="n">tableName</span> <span class="p">=</span> <span class="s">&quot;mails&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">MailEntity</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">@PrimaryKey</span><span class="p">(</span><span class="n">autoGenerate</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">Long</span> <span class="p">=</span> <span class="m">0</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sender</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">recipient</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">subject</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">body</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">timestamp</span><span class="p">:</span> <span class="n">Long</span> <span class="p">=</span> <span class="n">System</span><span class="p">.</span><span class="n">currentTimeMillis</span><span class="p">()</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>接下来，定义虚拟 FTS 实体。通过声明 <code>contentEntity = MailEntity::class</code>，Room 指示 SQLite 使用<strong>外部内容表</strong>。</p>
+
+<p>FTS 表仅维护索引结构和词元倒排记录。文本本身按需从基础 <code>mails</code> 表中获取，从而避免了存储重复：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">androidx.room.Entity</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.room.Fts4</span>
+</span><span class='line'><span class="n">@Entity</span><span class="p">(</span><span class="n">tableName</span> <span class="p">=</span> <span class="s">&quot;mails_fts&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="n">@Fts4</span><span class="p">(</span><span class="n">contentEntity</span> <span class="p">=</span> <span class="n">MailEntity</span><span class="o">::</span><span class="k">class</span><span class="p">)</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">MailFtsEntity</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sender</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">subject</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">body</span><span class="p">:</span> <span class="n">String</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>提示：Room 会在后台自动为 <code>mails</code> 表创建 SQLite 数据库触发器（AFTER INSERT、AFTER UPDATE、AFTER DELETE）。每当你插入或更新 <code>MailEntity</code> 时，<code>mails_fts</code> 索引都会自动更新！</p>
+
+<p>在 <code>@Database</code> 声明中注册这两个类：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Database</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">entities</span> <span class="p">=</span> <span class="p">[</span><span class="n">MailEntity</span><span class="o">::</span><span class="k">class</span><span class="p">,</span> <span class="n">MailFtsEntity</span><span class="o">::</span><span class="k">class</span><span class="p">],</span>
+</span><span class='line'>    <span class="n">version</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">exportSchema</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'><span class="k">abstract</span> <span class="k">class</span> <span class="nc">MailDatabase</span> <span class="p">:</span> <span class="n">RoomDatabase</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">abstract</span> <span class="k">fun</span> <span class="nf">mailDao</span><span class="p">():</span> <span class="n">MailDao</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在我们可以在 <code>MailDao</code> 中比较这两个查询。</p>
+
+<p>请注意 FTS 查询是如何将 <code>mails.id</code> 与 <code>mails_fts.docid</code> 连接起来的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Dao</span>
+</span><span class='line'><span class="n">interface</span> <span class="n">MailDao</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">@Insert</span><span class="p">(</span><span class="n">onConflict</span> <span class="p">=</span> <span class="n">OnConflictStrategy</span><span class="p">.</span><span class="n">REPLACE</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">insertMails</span><span class="p">(</span><span class="n">mails</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">MailEntity</span><span class="p">&gt;):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Long</span><span class="p">&gt;</span>
+</span><span class='line'>    <span class="cm">/**</span>
+</span><span class='line'><span class="cm">     * Standard SQL LIKE operator search.</span>
+</span><span class='line'><span class="cm">     * Triggers an O(N) sequential scan across every row.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="n">@Query</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>        <span class="n">SELECT</span> <span class="p">*</span> <span class="n">FROM</span> <span class="n">mails</span>
+</span><span class='line'>        <span class="n">WHERE</span> <span class="n">subject</span> <span class="n">LIKE</span> <span class="sc">&#39;%&#39;</span> <span class="p">||</span> <span class="p">:</span><span class="n">query</span> <span class="p">||</span> <span class="sc">&#39;%&#39;</span>
+</span><span class='line'>           <span class="n">OR</span> <span class="n">body</span> <span class="n">LIKE</span> <span class="sc">&#39;%&#39;</span> <span class="p">||</span> <span class="p">:</span><span class="n">query</span> <span class="p">||</span> <span class="sc">&#39;%&#39;</span>
+</span><span class='line'>           <span class="n">OR</span> <span class="n">sender</span> <span class="n">LIKE</span> <span class="sc">&#39;%&#39;</span> <span class="p">||</span> <span class="p">:</span><span class="n">query</span> <span class="p">||</span> <span class="sc">&#39;%&#39;</span>
+</span><span class='line'>        <span class="n">ORDER</span> <span class="n">BY</span> <span class="n">timestamp</span> <span class="n">DESC</span>
+</span><span class='line'>        <span class="n">LIMIT</span> <span class="p">:</span><span class="n">limit</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">searchMailsLike</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">200</span><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">MailEntity</span><span class="p">&gt;</span>
+</span><span class='line'>    <span class="cm">/**</span>
+</span><span class='line'><span class="cm">     * SQLite FTS4 (Full Text Search) MATCH query.</span>
+</span><span class='line'><span class="cm">     * Uses inverted index token lookups.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="n">@Query</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>        <span class="n">SELECT</span> <span class="n">mails</span><span class="p">.*</span> <span class="n">FROM</span> <span class="n">mails</span>
+</span><span class='line'>        <span class="n">JOIN</span> <span class="n">mails_fts</span> <span class="n">ON</span> <span class="n">mails</span><span class="p">.</span><span class="n">id</span> <span class="p">=</span> <span class="n">mails_fts</span><span class="p">.</span><span class="n">docid</span>
+</span><span class='line'>        <span class="n">WHERE</span> <span class="n">mails_fts</span> <span class="n">MATCH</span> <span class="p">:</span><span class="n">query</span>
+</span><span class='line'>        <span class="n">ORDER</span> <span class="n">BY</span> <span class="n">mails</span><span class="p">.</span><span class="n">timestamp</span> <span class="n">DESC</span>
+</span><span class='line'>        <span class="n">LIMIT</span> <span class="p">:</span><span class="n">limit</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">searchMailsFts</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">200</span><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">MailEntity</span><span class="p">&gt;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了提供“边输入边搜索”的体验，请对输入进行清理，并在每个词元后附加通配符 <code>*</code>，以便输入 <code>arch</code> 时匹配“architecture”：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">sanitizeFtsQuery</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">String</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sanitized</span> <span class="p">=</span> <span class="n">query</span><span class="p">.</span><span class="n">replace</span><span class="p">(</span><span class="s">&quot;\&quot;&quot;</span><span class="p">,</span> <span class="s">&quot;&quot;</span><span class="p">).</span><span class="n">replace</span><span class="p">(</span><span class="s">&quot;&#39;&quot;</span><span class="p">,</span> <span class="s">&quot;&quot;</span><span class="p">).</span><span class="n">trim</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">tokens</span> <span class="p">=</span> <span class="n">sanitized</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s">&quot;\\s+&quot;</span><span class="p">.</span><span class="n">toRegex</span><span class="p">()).</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">isNotEmpty</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">tokens</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">())</span> <span class="k">return</span> <span class="s">&quot;&quot;</span>
+</span><span class='line'>    <span class="c1">// Appending &#39;*&#39; enables fast token prefix matching in FTS</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">tokens</span><span class="p">.</span><span class="n">joinToString</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">)</span> <span class="p">{</span> <span class="s">&quot;$it*&quot;</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了衡量实际性能，我们在展示应用程序中构建了一个基准测试套件，该套件可以测量数据库在相同数据集上的执行时间，精确到微秒级（<code>measureNanoTime</code>）。</p>
+
+<p>我们向数据库中填充了多行电子邮件，并测量了不同数据集规模下的搜索延迟：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">+--------------+-------------------------+-------------------------+----------------+</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Dataset</span>      <span class="p">|</span> <span class="n">SQL</span> <span class="n">LIKE</span> <span class="n">Latency</span>        <span class="p">|</span> <span class="n">Room</span> <span class="n">@Fts4</span> <span class="n">MATCH</span>        <span class="p">|</span> <span class="n">Speedup</span> <span class="n">Factor</span> <span class="p">|</span>
+</span><span class='line'><span class="p">+--------------+-------------------------+-------------------------+----------------+</span>
+</span><span class='line'><span class="p">|</span> <span class="m">100</span> <span class="n">mails</span>    <span class="p">|</span>  <span class="m">2.840</span> <span class="n">ms</span> <span class="p">(</span><span class="m">39</span> <span class="n">matches</span><span class="p">)</span>  <span class="p">|</span>  <span class="m">1.800</span> <span class="n">ms</span> <span class="p">(</span><span class="m">39</span> <span class="n">matches</span><span class="p">)</span>  <span class="p">|</span> <span class="m">1.6</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="m">500</span> <span class="n">mails</span>    <span class="p">|</span>  <span class="m">8.114</span> <span class="n">ms</span> <span class="p">(</span><span class="m">179</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span>  <span class="m">3.892</span> <span class="n">ms</span> <span class="p">(</span><span class="m">179</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">2.1</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="m">2</span><span class="p">,</span><span class="m">000</span> <span class="n">mails</span>  <span class="p">|</span> <span class="m">30.181</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">13.071</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">2.3</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="m">5</span><span class="p">,</span><span class="m">000</span> <span class="n">mails</span>  <span class="p">|</span> <span class="m">63.762</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span>  <span class="m">6.811</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">9.4</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">+--------------+-------------------------+-------------------------+----------------+</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Query</span> <span class="n">Execution</span> <span class="n">Time</span> <span class="n">vs</span> <span class="n">Dataset</span> <span class="n">Size</span>
+</span><span class='line'><span class="n">Latency</span> <span class="p">(</span><span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>  <span class="m">70</span> <span class="err">┼</span>                                                  <span class="err">●</span> <span class="n">SQL</span> <span class="n">LIKE</span> <span class="p">(</span><span class="m">63.8</span> <span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>  <span class="m">60</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">50</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">40</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">30</span> <span class="err">┼</span>                                  <span class="err">●</span> <span class="p">(</span><span class="m">30.2</span> <span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>  <span class="m">20</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">10</span> <span class="err">┼</span>                    <span class="err">●</span> <span class="p">(</span><span class="m">8.1</span> <span class="n">ms</span><span class="p">)</span>             <span class="err">●</span> <span class="n">FTS4</span> <span class="p">(</span><span class="m">6.8</span> <span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>   <span class="m">0</span> <span class="err">┼───●</span> <span class="p">(</span><span class="m">2.8</span> <span class="n">ms</span><span class="p">)</span><span class="err">───────●</span> <span class="p">(</span><span class="m">3.9</span> <span class="n">ms</span><span class="p">)</span><span class="err">────●</span> <span class="p">(</span><span class="m">13.1</span> <span class="n">ms</span><span class="p">)</span><span class="err">──────</span>
+</span><span class='line'>     <span class="err">└──────┬─────────────────┬──────────────┬──────────────┬────────</span>
+</span><span class='line'>          <span class="m">100</span>               <span class="m">500</span>           <span class="m">2</span><span class="p">,</span><span class="m">000</span>          <span class="m">5</span><span class="p">,</span><span class="m">000</span>
+</span><span class='line'>                                 <span class="n">Email</span> <span class="n">Records</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>主要观察结果</h3>
+
+<ol>
+<li><strong>16 毫秒帧预算限制</strong>：处理 2000 封邮件时，SQL LIKE 查询耗时约 30.18 毫秒，超过了 60Hz 显示器约 16.6 毫秒的帧目标（120Hz 显示器约 8.3 毫秒）。处理 5000 封邮件时（约 63.76 毫秒），在 UI 线程或其附近执行 <code>LIKE</code> 会导致丢帧和明显的 UI 卡顿。</li>
+<li><strong>规模化下的性能分化</strong>：虽然 FTS4 在中小型数据集上能提供稳定的 1.6–2.3 倍加速，但到 5000 条记录时优势急剧扩大，执行速度比 LIKE 快 <strong>9.4 倍</strong>（约 6.81 毫秒对约 63.76 毫秒）。</li>
+<li><strong>前缀支持</strong>：FTS4 能够即时处理 <code>arch*</code> 查询，因为词元前缀可以直接在索引结构中遍历。</li>
+</ol>
+
+
+<h2>何时使用哪个</h2>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">|</span> <span class="n">Feature</span>                   <span class="p">|</span> <span class="n">SQL</span> <span class="n">LIKE</span> <span class="err">&#39;</span><span class="p">%</span><span class="n">query</span><span class="p">%</span><span class="err">&#39;</span>                <span class="p">|</span> <span class="n">Room</span> <span class="n">@Fts4</span> <span class="p">(</span><span class="n">MATCH</span><span class="p">)</span>                           <span class="p">|</span>
+</span><span class='line'><span class="p">+---------------------------+-----------------------------------+----------------------------------------------+</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Algorithmic</span> <span class="n">Complexity</span>    <span class="p">|</span> <span class="n">O</span><span class="p">(</span><span class="n">N</span><span class="p">)</span> <span class="n">Sequential</span> <span class="n">full</span> <span class="n">table</span> <span class="n">scan</span>   <span class="p">|</span> <span class="n">O</span><span class="p">(</span><span class="m">1</span><span class="p">)</span> <span class="p">/</span> <span class="n">Sublinear</span> <span class="n">Inverted</span> <span class="n">index</span> <span class="n">lookup</span>       <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Execution</span> <span class="n">Time</span> <span class="n">at</span> <span class="n">Scale</span>   <span class="p">|</span> <span class="n">Degrades</span> <span class="n">linearly</span> <span class="n">with</span> <span class="n">row</span> <span class="n">count</span>  <span class="p">|</span> <span class="n">Remains</span> <span class="n">consistently</span> <span class="k">in</span> <span class="n">low</span> <span class="n">single</span><span class="p">-</span><span class="n">digit</span> <span class="n">ms</span>  <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Word</span> <span class="n">Boundary</span> <span class="n">Awareness</span>   <span class="p">|</span> <span class="n">No</span> <span class="p">(</span><span class="n">matches</span> <span class="n">substrings</span> <span class="n">blindly</span><span class="p">)</span>   <span class="p">|</span> <span class="n">Yes</span> <span class="p">(</span><span class="n">tokenized</span> <span class="n">at</span> <span class="n">word</span> <span class="n">boundaries</span><span class="p">)</span>           <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Stemming</span> <span class="n">Support</span>          <span class="p">|</span> <span class="n">No</span>                                <span class="p">|</span> <span class="n">Yes</span> <span class="p">(</span><span class="n">Porter</span> <span class="n">stemmer</span> <span class="n">available</span><span class="p">)</span>               <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Prefix</span> <span class="n">Matching</span>           <span class="p">|</span> <span class="n">Wildcards</span> <span class="k">break</span> <span class="n">B</span><span class="p">-</span><span class="n">Tree</span> <span class="n">index</span>      <span class="p">|</span> <span class="n">Native</span> <span class="p">(</span><span class="n">MATCH</span> <span class="err">&#39;</span><span class="n">token</span><span class="p">*</span><span class="err">&#39;</span><span class="p">)</span>                      <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Storage</span> <span class="n">Impact</span>            <span class="p">|</span> <span class="n">Zero</span> <span class="n">overhead</span>                     <span class="p">|</span> <span class="n">Minimal</span> <span class="n">index</span> <span class="n">metadata</span> <span class="p">(</span><span class="n">via</span> <span class="n">contentEntity</span><span class="p">)</span>   <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Insert</span> <span class="n">Overhead</span>           <span class="p">|</span> <span class="n">Minimal</span>                           <span class="p">|</span> <span class="n">Slight</span> <span class="n">cost</span> <span class="n">during</span> <span class="n">insert</span> <span class="n">to</span> <span class="n">update</span> <span class="n">index</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">+---------------------------+-----------------------------------+----------------------------------------------+</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>结论</h2>
+
+<p>SQL LIKE 是一个很棒的工具，可以用来创建原型或查询离散的编码列（例如状态码或简短标识符）。但是，一旦你的应用程序处理人类文本——消息、文档、笔记、产品目录——依赖 <code>LIKE '%...%'</code> 就会成为一个迫在眉睫的性能瓶颈。</p>
+
+<p>通过将 Room 的 <code>@Fts4</code> 与 <code>contentEntity</code> 模式结合使用：</p>
+
+<ul>
+<li>你保留了清晰的关系型实体作为唯一可信数据源。</li>
+<li>你可以获得高性能的倒排索引查找，轻松扩展到数万条记录。</li>
+<li>你的用户界面依然流畅，充分尊重了用户的帧预算和电池续航。</li>
+</ul>
+
+
+<p>如果你的 Android 应用包含用于查询文本字段的搜索栏，请不要等到生产环境中的数据集膨胀后才行动。立即迁移到 Room FTS，为用户带来他们喜爱的即时搜索体验。</p>
+
+<h3>参考</h3>
+
+<p><a href="https://developer.android.com/reference/androidx/room/Fts4">Fts4 | API 参考 | Android 开发者</a></p>
+
+<p><a href="https://www.linkedin.com/in/o%C4%9Fuzhan-aslan-sofdev/">LinkedIn</a></p>
+
+<p><a href="https://www.youtube.com/@oguzhanaslannDev">Youtube</a></p>
+
+<p><strong><em>爱你们所有人。</em></strong></p>
+
+<p><strong><em>敬请期待后续博客。</em></strong></p>
+
+<p><strong><em>保重。</em></strong></p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-10-20'><span class='date'><span class='date-month'>Oct</span> <span class='date-day'>20</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/10/14/why-your-lazycolumn-is-still-janky/" title="Previous Post: 为什么你的 LazyColumn 仍然卡顿">&laquo; 为什么你的 LazyColumn 仍然卡顿</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

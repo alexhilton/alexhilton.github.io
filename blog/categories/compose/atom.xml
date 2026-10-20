@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-10-14T12:37:05+00:00</updated>
+  <updated>2026-10-20T13:46:21+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,302 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Room Fts4：全文搜索替代 SQL LIKE]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like/"/>
+    <updated>2026-10-20T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Scaling Android Search: Room @Fts4 vs SQL LIKE」，原文链接<a href="https://proandroiddev.com/scaling-android-search-room-fts4-vs-sql-like-b2a8232cbd12">https://proandroiddev.com/scaling-android-search-room-fts4-vs-sql-like-b2a8232cbd12</a>，由Oğuzhan Aslan发布于2026年10月11日。</p></blockquote>
+
+<p>本文将深入探讨如何使用 Android Jetpack Room 实现全文搜索索引、倒排索引和微秒级查询基准测试。</p>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*O4Wm35zmkfeyGMGQRDBR7g.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在为 Android 应用程序构建搜索功能时——无论是查询离线优先的收件箱、笔记目录、文档缓存还是电子商务目录——几乎所有开发者都从相同的查询开始：</p>
+
+<pre><code class="sql">SELECT * FROM mails 
+WHERE subject LIKE '%' || :query || '%' 
+   OR body LIKE '%' || :query || '%'
+</code></pre>
+
+<p>它直观易用，无需修改任何表结构，开箱即用。在早期开发阶段，即使本地数据库只包含 25 行虚拟数据，搜索查询也能立即返回结果。测试通过，用户界面流畅，该功能顺利发布。</p>
+
+<p>然后，现实给了我们当头一棒。</p>
+
+<p>随着用户积累数月的多行电子邮件、笔记或缓存数据（从数百条记录攀升至数千条记录），投诉开始纷至沓来：</p>
+
+<ul>
+<li>在搜索框中输入文字时出现按键延迟。</li>
+<li>画面出现丢帧和主线程微卡顿。</li>
+<li>进行大量搜索操作时，电池电量消耗明显。</li>
+</ul>
+
+
+<p>为什么在开发阶段感觉运行速度极快的操作，在真实数据量下却会不堪重负？要理解这一点，我们必须深入了解 SQLite 的查询规划器。</p>
+
+<h2>为什么 SQL LIKE 在大规模场景下会失效</h2>
+
+<p>在关系数据库中，开发人员依靠索引（B 树）来将查找时间复杂度控制在 O(log N) 以内。例如，如果你查询：</p>
+
+<pre><code class="sql">WHERE sender LIKE 'alice%'
+</code></pre>
+
+<p>SQLite <em>可以</em>在 <code>sender</code> 上使用标准的 B 树索引，因为它知道前缀。</p>
+
+<p>然而，用户很少只使用前缀进行搜索。实际的全文搜索需要<strong>子字符串匹配</strong>：在主题或段落中查找任意单词。这迫使查询语句以通配符开头：</p>
+
+<pre><code class="sql">WHERE body LIKE '%architecture%'
+</code></pre>
+
+<p>警告：一旦查询语句包含前导通配符（<code>%query%</code>），标准 B 树索引将被完全绕过。SQLite 将被迫执行<strong>顺序全表扫描</strong>，时间复杂度为 O(N)。</p>
+
+<p>在全表扫描中：</p>
+
+<ol>
+<li>SQLite 将存储层中的每一行数据都读入内存。</li>
+<li>查询引擎按顺序遍历文本的每个字节，逐个字符地比较，查找目标子字符串。</li>
+<li>如果一封电子邮件正文包含 1500 个单词，而你有 2000 封电子邮件，那么 SQLite 会对每次击键操作逐字节地检查多达 300 万个单词！</li>
+</ol>
+
+
+<p><img src="https://cdn-images-1.medium.com/max/336/1*5kKjnzDStbkv-sL1XefF-A.png" alt="无标题图像" /></p>
+
+<p>此外，标准的 SQL LIKE 语句是“愚蠢的”：</p>
+
+<ul>
+<li><strong>未进行分词：</strong>它无法识别单词边界。搜索“cat”会错误地匹配到“catalog”、“scatter”和“vacation”。</li>
+<li><strong>未进行词干提取：</strong>搜索“optimize”会遗漏“optimizing”、“optimizer”或“optimized”。</li>
+<li><strong>未进行相关性排序：</strong>搜索结果未加权；标题中的匹配项与第四段中的匹配项权重相同。</li>
+</ul>
+
+
+<p>而 SQLite 的 <strong>FTS4（全文搜索 4）</strong> 引擎则改变了这一切。</p>
+
+<h2>解决方案：FTS4 和倒排索引的工作原理</h2>
+
+<p>SQLite 包含专用的全文搜索扩展（FTS3/FTS4 和 FTS5）。在 Android 的 Room 持久化库中，通过 <code>@Fts4</code> 和 <code>@Fts3</code> 注解原生支持这些扩展。</p>
+
+<h3>倒排索引：从 O(N) 到 O(1)</h3>
+
+<p>FTS4 不是在查询时扫描行，而是在<strong>插入时</strong>进行繁重的工作。</p>
+
+<p>当 FTS4 对文本列进行索引时，<strong>分词器</strong>会将文本分解成单个单词（词元），规范化它们的大小写，去除标点符号，并构建一个<strong>倒排索引</strong>。</p>
+
+<p>倒排索引本质上是一个词到文档的词典：</p>
+
+<pre><code>+--------------+-----------------------+
+| Token        | DocIDs (Posting List) |
++--------------+-----------------------+
+| architecture | [1, 14, 108, 492]     |
+| benchmark    | [1, 7, 22, 108, 305]  |
+| database     | [1, 4, 18, 92, 108]   |
+| security     | [2, 6, 11, 45, 99]    |
++--------------+-----------------------+
+</code></pre>
+
+<p><img src="https://cdn-images-1.medium.com/max/346/1*vr3VjMq9mkHs9wYRB12fUA.png" alt="无标题图像" /></p>
+
+<p>当你发出类似 <code>MATCH 'benchmark*'</code> 的搜索查询时，FTS4：</p>
+
+<ol>
+<li>对搜索字符串进行分词。</li>
+<li>在词元词典中执行即时查找。</li>
+<li>获取包含该单词的完整文档 ID 列表。</li>
+<li>返回记录，不扫描任何无关文本字节。</li>
+</ol>
+
+
+<p>无论有 100 行还是 10 万行，查找操作都在不到一毫秒内完成。</p>
+
+<h2>在 Android Room 中的实现</h2>
+
+<p>一个常见的误解是，使用 FTS 需要复制数据，导致数据库大小翻倍。而 Room 的 <code>contentEntity</code> 模式则完全避免了这个问题。</p>
+
+<p>让我们来看看 Mail Showcase 应用中的生产级实现。</p>
+
+<p>首先，创建包含所有原始字段的基础表。这是你的唯一可信数据源：</p>
+
+<pre><code class="kotlin">// MailEntity.kt
+import androidx.room.Entity
+import androidx.room.PrimaryKey
+@Entity(tableName = "mails")
+data class MailEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val sender: String,
+    val recipient: String,
+    val subject: String,
+    val body: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+</code></pre>
+
+<p>接下来，定义虚拟 FTS 实体。通过声明 <code>contentEntity = MailEntity::class</code>，Room 指示 SQLite 使用<strong>外部内容表</strong>。</p>
+
+<p>FTS 表仅维护索引结构和词元倒排记录。文本本身按需从基础 <code>mails</code> 表中获取，从而避免了存储重复：</p>
+
+<pre><code class="kotlin">import androidx.room.Entity
+import androidx.room.Fts4
+@Entity(tableName = "mails_fts")
+@Fts4(contentEntity = MailEntity::class)
+data class MailFtsEntity(
+    val sender: String,
+    val subject: String,
+    val body: String
+)
+</code></pre>
+
+<p>提示：Room 会在后台自动为 <code>mails</code> 表创建 SQLite 数据库触发器（AFTER INSERT、AFTER UPDATE、AFTER DELETE）。每当你插入或更新 <code>MailEntity</code> 时，<code>mails_fts</code> 索引都会自动更新！</p>
+
+<p>在 <code>@Database</code> 声明中注册这两个类：</p>
+
+<pre><code class="kotlin">@Database(
+    entities = [MailEntity::class, MailFtsEntity::class],
+    version = 1,
+    exportSchema = false
+)
+abstract class MailDatabase : RoomDatabase() {
+    abstract fun mailDao(): MailDao
+}
+</code></pre>
+
+<p>现在我们可以在 <code>MailDao</code> 中比较这两个查询。</p>
+
+<p>请注意 FTS 查询是如何将 <code>mails.id</code> 与 <code>mails_fts.docid</code> 连接起来的：</p>
+
+<pre><code class="kotlin">@Dao
+interface MailDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMails(mails: List&lt;MailEntity&gt;): List&lt;Long&gt;
+    /**
+     * Standard SQL LIKE operator search.
+     * Triggers an O(N) sequential scan across every row.
+     */
+    @Query(
+        """
+        SELECT * FROM mails
+        WHERE subject LIKE '%' || :query || '%'
+           OR body LIKE '%' || :query || '%'
+           OR sender LIKE '%' || :query || '%'
+        ORDER BY timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun searchMailsLike(query: String, limit: Int = 200): List&lt;MailEntity&gt;
+    /**
+     * SQLite FTS4 (Full Text Search) MATCH query.
+     * Uses inverted index token lookups.
+     */
+    @Query(
+        """
+        SELECT mails.* FROM mails
+        JOIN mails_fts ON mails.id = mails_fts.docid
+        WHERE mails_fts MATCH :query
+        ORDER BY mails.timestamp DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun searchMailsFts(query: String, limit: Int = 200): List&lt;MailEntity&gt;
+}
+</code></pre>
+
+<p>为了提供“边输入边搜索”的体验，请对输入进行清理，并在每个词元后附加通配符 <code>*</code>，以便输入 <code>arch</code> 时匹配“architecture”：</p>
+
+<pre><code class="kotlin">private fun sanitizeFtsQuery(query: String): String {
+    val sanitized = query.replace("\"", "").replace("'", "").trim()
+    val tokens = sanitized.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+    if (tokens.isEmpty()) return ""
+    // Appending '*' enables fast token prefix matching in FTS
+    return tokens.joinToString(" ") { "$it*" }
+}
+</code></pre>
+
+<p>为了衡量实际性能，我们在展示应用程序中构建了一个基准测试套件，该套件可以测量数据库在相同数据集上的执行时间，精确到微秒级（<code>measureNanoTime</code>）。</p>
+
+<p>我们向数据库中填充了多行电子邮件，并测量了不同数据集规模下的搜索延迟：</p>
+
+<pre><code>+--------------+-------------------------+-------------------------+----------------+
+| Dataset      | SQL LIKE Latency        | Room @Fts4 MATCH        | Speedup Factor |
++--------------+-------------------------+-------------------------+----------------+
+| 100 mails    |  2.840 ms (39 matches)  |  1.800 ms (39 matches)  | 1.6x faster    |
+| 500 mails    |  8.114 ms (179 matches) |  3.892 ms (179 matches) | 2.1x faster    |
+| 2,000 mails  | 30.181 ms (200 matches) | 13.071 ms (200 matches) | 2.3x faster    |
+| 5,000 mails  | 63.762 ms (200 matches) |  6.811 ms (200 matches) | 9.4x faster    |
++--------------+-------------------------+-------------------------+----------------+
+</code></pre>
+
+<pre><code>Query Execution Time vs Dataset Size
+Latency (ms)
+  70 ┼                                                  ● SQL LIKE (63.8 ms)
+  60 ┼                                                 
+  50 ┼                                                
+  40 ┼                                              
+  30 ┼                                  ● (30.2 ms) 
+  20 ┼                                              
+  10 ┼                    ● (8.1 ms)             ● FTS4 (6.8 ms)
+   0 ┼───● (2.8 ms)───────● (3.9 ms)────● (13.1 ms)──────
+     └──────┬─────────────────┬──────────────┬──────────────┬────────
+          100               500           2,000          5,000
+                                 Email Records
+</code></pre>
+
+<h3>主要观察结果</h3>
+
+<ol>
+<li><strong>16 毫秒帧预算限制</strong>：处理 2000 封邮件时，SQL LIKE 查询耗时约 30.18 毫秒，超过了 60Hz 显示器约 16.6 毫秒的帧目标（120Hz 显示器约 8.3 毫秒）。处理 5000 封邮件时（约 63.76 毫秒），在 UI 线程或其附近执行 <code>LIKE</code> 会导致丢帧和明显的 UI 卡顿。</li>
+<li><strong>规模化下的性能分化</strong>：虽然 FTS4 在中小型数据集上能提供稳定的 1.6–2.3 倍加速，但到 5000 条记录时优势急剧扩大，执行速度比 LIKE 快 <strong>9.4 倍</strong>（约 6.81 毫秒对约 63.76 毫秒）。</li>
+<li><strong>前缀支持</strong>：FTS4 能够即时处理 <code>arch*</code> 查询，因为词元前缀可以直接在索引结构中遍历。</li>
+</ol>
+
+
+<h2>何时使用哪个</h2>
+
+<pre><code>| Feature                   | SQL LIKE '%query%'                | Room @Fts4 (MATCH)                           |
++---------------------------+-----------------------------------+----------------------------------------------+
+| Algorithmic Complexity    | O(N) Sequential full table scan   | O(1) / Sublinear Inverted index lookup       |
+| Execution Time at Scale   | Degrades linearly with row count  | Remains consistently in low single-digit ms  |
+| Word Boundary Awareness   | No (matches substrings blindly)   | Yes (tokenized at word boundaries)           |
+| Stemming Support          | No                                | Yes (Porter stemmer available)               |
+| Prefix Matching           | Wildcards break B-Tree index      | Native (MATCH 'token*')                      |
+| Storage Impact            | Zero overhead                     | Minimal index metadata (via contentEntity)   |
+| Insert Overhead           | Minimal                           | Slight cost during insert to update index    |
++---------------------------+-----------------------------------+----------------------------------------------+
+</code></pre>
+
+<h2>结论</h2>
+
+<p>SQL LIKE 是一个很棒的工具，可以用来创建原型或查询离散的编码列（例如状态码或简短标识符）。但是，一旦你的应用程序处理人类文本——消息、文档、笔记、产品目录——依赖 <code>LIKE '%...%'</code> 就会成为一个迫在眉睫的性能瓶颈。</p>
+
+<p>通过将 Room 的 <code>@Fts4</code> 与 <code>contentEntity</code> 模式结合使用：</p>
+
+<ul>
+<li>你保留了清晰的关系型实体作为唯一可信数据源。</li>
+<li>你可以获得高性能的倒排索引查找，轻松扩展到数万条记录。</li>
+<li>你的用户界面依然流畅，充分尊重了用户的帧预算和电池续航。</li>
+</ul>
+
+
+<p>如果你的 Android 应用包含用于查询文本字段的搜索栏，请不要等到生产环境中的数据集膨胀后才行动。立即迁移到 Room FTS，为用户带来他们喜爱的即时搜索体验。</p>
+
+<h3>参考</h3>
+
+<p><a href="https://developer.android.com/reference/androidx/room/Fts4">Fts4 | API 参考 | Android 开发者</a></p>
+
+<p><a href="https://www.linkedin.com/in/o%C4%9Fuzhan-aslan-sofdev/">LinkedIn</a></p>
+
+<p><a href="https://www.youtube.com/@oguzhanaslannDev">Youtube</a></p>
+
+<p><strong><em>爱你们所有人。</em></strong></p>
+
+<p><strong><em>敬请期待后续博客。</em></strong></p>
+
+<p><strong><em>保重。</em></strong></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[为什么你的 LazyColumn 仍然卡顿]]></title>
@@ -935,320 +1231,6 @@ NavDisplay(
 <p><strong>关于 Android 框架 (API 35) 的说明</strong> 如果你仔细查看最新的 Android 开源项目 (AOSP) 更新，你会发现 Android 实际上从 API 35 开始将其自己的本机 RemoteCompose 播放器直接烘焙到框架中。它为标准系统小部件的新 DrawInstructions 提供支持。然而，依赖框架播放器意味着将你的主机与操作系统更新周期联系起来。通过使用上述 AndroidX 播放器工件，第三方启动器和 OEM 主机现在就可以采用这种下一代架构，即使在较旧的 Android 版本上也是如此，同时支持比基本系统更新的操作。</p>
 
 <p>局限性和悬而未决的问题</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[如何用Perfetto来对启动优化去伪存真]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/05/16/perfetto-real-startup/"/>
-    <updated>2026-05-16T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/05/16/perfetto-real-startup</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「How I Used Perfetto to Separate Real Startup Improvements From Plausible Ones」，原文链接<a href="https://levelup.gitconnected.com/how-i-used-perfetto-to-separate-real-startup-improvements-from-plausible-ones-d5497b25544c">https://levelup.gitconnected.com/how-i-used-perfetto-to-separate-real-startup-improvements-from-plausible-ones-d5497b25544c</a>，由James Cullimore发布于2026年4月21日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/1*zpbAbI_8a1lwD938CkykEw.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>当我打开 Perfetto 时，应用的速度已经提升了。</p>
-
-<p>问题就在这里。</p>
-
-<p>启动优化工作最简单的情况是应用明显运行过载，基准测试结果惨不忍睹，几乎任何合理的清理都能带来一些提升。而更难的情况则出现在应用已经运行良好之后，此时下一轮的改动很容易被合理化。</p>
-
-<p>我当时就处于这种情况。</p>
-
-<p>我已经有了启动基准测试数据，也已经有了基准性能数据。一次全面的清理已经显著缩短了启动时间。图表看起来已经足够好了，我可以就此打住，讲述一个现代 Android 应用速度提升的精彩故事。</p>
-
-<p>但我对剩余的启动路径并不完全信任，所以没有停止。</p>
-
-<p>我可以测量它，但却无法总是解释它。有些工作似乎发生在“启动前后”，却无法明确判断它究竟是阻塞了首次绘制、安全地延迟执行、重复执行，还是仅仅发生在不恰当的时间点。这种不确定性正是性能改进效果不佳的根源。你开始修改代码，并非因为证据确凿，而是因为代码的结构让某种理论听起来合情合理。</p>
-
-<p>Perfetto 正是在这个时候出现的。</p>
-
-<p>它并非救世主，也并非最大的胜利，而是我不再将看似合理的解释视为证据的转折点。</p>
-
-<p>如果你读过之前那篇关于启动的文章，那么这篇文章是它的后续，而非替代品。第一篇文章是关于如何在现代 Compose 应用中找到一个有意义的启动优势，并用基准测试来验证它。而这篇文章则探讨了之后出现的一个更有趣的问题：</p>
-
-<blockquote><p>哪些工作真正值得保留？</p></blockquote>
-
-<h2>这是对实际创业工作的后续跟进，而非起点</h2>
-
-<p>重要的背景是，Perfetto 并非与糟糕的基准进行比较。它是在前两个阶段已经完成实际工作之后推出的：</p>
-
-<ul>
-<li><p>基准测试结果已经展现出可重复的成功</p></li>
-<li><p>更广泛的清理工作已经大幅降低了创业成本</p></li>
-</ul>
-
-
-<p>这一点至关重要，因为它改变了标准。</p>
-
-<p>在创业初期，几乎任何合理的改进都会让人兴奋。但在创业后期，兴奋感就显得廉价了。你需要一种方法来区分“这看起来可行”和“这经得起衡量”。</p>
-
-<p>这正是我在此重视 Perfetto 的真正原因。</p>
-
-<p>如果你想了解这款应用是如何发展到如今的，请先阅读之前的文章：</p>
-
-<p><a href="https://juejin.cn/post/7636050861055672358">我是如何打造一款现代作文应用，并最终获得 34% 的启动成功</a></p>
-
-<p>这篇后续文章将探讨第一篇文章中略有提及的一个更具体的问题：当应用速度已经提升之后，追踪功能还能带来什么好处？</p>
-
-<h2>在 Perfetto 出现之前，基准测试结果已经相当不错</h2>
-
-<p>在跟踪流程之前，启动过程已经呈现出可观的趋势。</p>
-
-<p>在最初验证过的流程树中，仅基线分析就节省了：</p>
-
-<ul>
-<li><p>主流程：112 毫秒</p></li>
-<li><p>设置流程：126 毫秒</p></li>
-</ul>
-
-
-<p>两条启动路径合计节省了 238 毫秒。</p>
-
-<p>随后，更广泛的清理流程生效，启动时间的绝对值发生了显著变化。相对于之前的验证状态，分析后的启动时间中位数又下降了 248 毫秒。</p>
-
-<p>这已经是一个相当可观的结果了。本来可以就此止步，将数据整理成简洁的图表，然后就此结束。</p>
-
-<p>但我仍然对剩余的启动路径不够信任，所以没有就此止步。</p>
-
-<p>仍然存在一些地方，感觉这款应用在“启动前后”执行着一些工作，但却没有明确解释这些工作是否在关键路径上、是否被安全地推迟、是否重复执行，或者只是在不恰当的时机出现。</p>
-
-<p>正是这种不确定性导致了后续工作的糟糕表现。</p>
-
-<h2>Perfetto 恰好出现在最容易被滥用的阶段</h2>
-
-<p>我认为性能优化文章很少提及这一点。</p>
-
-<p>当应用已经运行良好时，跟踪功能最容易被滥用。</p>
-
-<p>这时，你打开跟踪日志，看到某个服务提前启动、进行了网络检查或执行了回调序列，就很容易说服自己进行看似技术严谨、规范的“巧妙”生命周期重写。有时这确实是个好改动。有时，这只是制造新的不确定性的花哨手段。</p>
-
-<p>这就是这里存在的风险。</p>
-
-<p>在这个阶段，我的确做了一些看似合理但最终被放弃的改动。这并非流程的失败。这就是流程运作的方式。</p>
-
-<p>真正有用的结果并非“Perfetto 向我展示了一个巨大的隐藏瓶颈”。而有用的结果是：</p>
-
-<ul>
-<li><p>它展示了在第一次抽签之前哪些工作真正发生了</p></li>
-<li><p>它验证了某些检查可以在第一次抽签之后安全地进行</p></li>
-<li><p>它展示了何时某个服务端的想法仍然过于嘈杂或结论不明确，以至于无法保留</p></li>
-</ul>
-
-
-<p>这比仅仅依靠图表所能展现的要成熟得多。它在幻灯片上可能不够吸引人，但在实际代码库中却实用得多。</p>
-
-<p>跟踪标签本身很简单：</p>
-
-<pre><code class="kotlin">trace("AppStartup") {
-    registerEarlyListeners()
-    resolveInitialState()
-    renderRootUi()
-}
-
-trace("RuntimeConnect") {
-    startLocalWatchers()
-    createRuntimeClient()
-    openRuntimeConnection()
-}
-
-trace("TransportConnect") {
-    bindInputChannel()
-    bindOutputChannel()
-    beginReceiveLoop()
-}
-</code></pre>
-
-<p>这并非复杂的工具。它只是提供了足够的结构，让我们不再空泛地谈论“启动工作”，而是开始询问在第一次抽签之前究竟是哪些工作真正完成了。</p>
-
-<h2>最佳的 Perfetto 驱动改进是微小、具体且不起眼的</h2>
-
-<p>最站得住脚的基于追踪的优化并非大规模的架构重写。</p>
-
-<p>而是将一组主屏幕启动检查从可见的启动路径中移除：</p>
-
-<ul>
-<li><p>初始文件监视器</p></li>
-<li><p>初始网络验证</p></li>
-<li><p>首次服务器 ping</p></li>
-</ul>
-
-
-<p>这些检查仍然重要。它们只是不需要与首次绘制争用。</p>
-
-<p>追踪到位后，问题就变得简单多了：</p>
-
-<p>这些检查是否出于正当理由而阻止可见的启动，还是仅仅因为从未强制执行而提前执行？</p>
-
-<p>答案是后者。</p>
-
-<p>因此，改进之处在于让第一帧落地，报告已完全绘制，然后启用第一轮监控和连接工作。改进后的正常追踪显示，这些切片出现在它们应该在的位置：首次绘制之后，而不是之前。</p>
-
-<p>该更改的伪代码版本如下：</p>
-
-<pre><code class="kotlin">var postDrawWorkEnabled by remember { mutableStateOf(false) }
-
-onFirstFrameRendered {
-    markStartupComplete()
-    postDrawWorkEnabled = true
-}
-
-onScreenVisible(postDrawWorkEnabled) {
-    updateConnectivityFlags()
-    if (postDrawWorkEnabled) {
-        probePeripheralState()
-        validateNetworkState()
-    }
-}
-
-when(postDrawWorkEnabled &amp;&amp; networkIsAvailable) {
-    runInitialServerCheck()
-}
-</code></pre>
-
-<p>这种优化不会在社交媒体上引起轰动。但它恰恰是那种经得起现实考验的优化。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*mTyH65mLxUvSDi4Pd7iCxw.png" alt="" /></p>
-
-<h2>Perfetto 最有价值的贡献在于拒绝工作</h2>
-
-<p>这对我来说才是真正的教训。</p>
-
-<p>最终 Perfetto 指导的迭代带来的性能提升是正的，但比之前的阶段要小：</p>
-
-<ul>
-<li><p><code>verify</code> 端总共节省了 142 毫秒</p></li>
-<li><p><code>speed-profile</code> 端总共节省了 44.5 毫秒</p></li>
-</ul>
-
-
-<p>如果只看这些数字，你可能会觉得 Perfetto 可有可无。但我认为这忽略了重点。</p>
-
-<p>到这个阶段，应用已经运行得更加稳定了。剩下的工作不再是寻找新的突破，而是确保上一轮工作的有效性。</p>
-
-<p>Perfetto 在这方面发挥了作用，它让我们能够做出以下判断：</p>
-
-<ul>
-<li><p>这项更改明显地将工作从关键路径中移开，保留它</p></li>
-<li><p>这项更改在不改变行为的前提下改进了归因，保留它</p></li>
-<li><p>这项服务生命周期调整没有产生足够清晰的结果，撤销它</p></li>
-</ul>
-
-
-<p>最后一类更改的一个例子是延迟运行时启动路径，它在理论上看起来合理：</p>
-
-<pre><code class="kotlin">onStartupRouteReady {
-    postToNextUiTurn {
-        waitBrieflyForFirstFrameToSettle()
-
-        trace("DeferredRuntimeStartup") {
-            startBackgroundService()
-            requestMissingStorageAccessIfNeeded()
-            initializeFileWatcher()
-            connectRuntimeClient()
-        }
-    }
-}
-</code></pre>
-
-<p>这类更改正是追踪功能发挥作用的地方。很容易就能想出一个简洁的解释来说明为什么将服务和客户端启动时间推迟会有帮助。但要证明由此产生的追踪结果更清晰、更稳定，并且值得增加生命周期的复杂性，就困难得多。在这种情况下，这个标准比想法听起来是否严谨更重要。</p>
-
-<p>这就是为什么我不会把这个阶段描述为“Perfetto 让启动速度更快”。清理工作已经完成了更多类似的工作。基线分析也已经完成了更多类似的工作。</p>
-
-<p>我会这样描述：</p>
-
-<blockquote><p>Perfetto 严格控制了剩余的启动工作，确保只有那些站得住脚的改动才能保留下来。</p></blockquote>
-
-<p>这听起来并不花哨，但这正是后期性能优化工作所需要的。后期工作很少需要惊天动地的壮举，而是要让系统更难被欺骗。</p>
-
-<h2>逐步比较比最终结果更有意思</h2>
-
-<p>最终的启动数据固然不错，但步骤顺序更重要。</p>
-
-<p>步骤顺序表明，不同的工具以不同的方式发挥了作用：</p>
-
-<ul>
-<li><p>基准配置文件带来了第一个清晰、可衡量的成果</p></li>
-<li><p>清理工作带来了最大的绝对节省</p></li>
-<li><p>Perfetto 带来的直接收益较小，但决策质量却大大提高</p></li>
-</ul>
-
-
-<p>这正是我希望其他团队能够借鉴的部分。</p>
-
-<p>人们往往会认为故事中最后一个工具的功劳最大。这就是为什么人们最终会把追踪过程当作优化本身。</p>
-
-<p>事实并非如此。</p>
-
-<p>追踪过程的作用在于提供足够的可见性，让你能够判断优化是否真的有必要。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/1*t7cyNzM0b5JMHZIeI4IzEQ.png" alt="" /></p>
-
-<h2>这篇后续文章改变了我的想法</h2>
-
-<p>之前那篇关于创业的文章让我得出了一个总体结论：很多有意义的创业工作并非始于“创业优化”。</p>
-
-<p>这篇后续文章又补充了第二个结论：</p>
-
-<blockquote><p>一旦取得重大进展，最难的部分往往是拒绝保留那些看似明智的改动。</p></blockquote>
-
-<p>因此，我现在不再把 Perfetto 看作一个“寻找瓶颈”的工具，而更像是后期绩效工作的“吐真剂”。</p>
-
-<p>当然，在更早期阶段它仍然有用。但它的价值不在于揭示了什么惊人的秘密，而在于它提高了标准。</p>
-
-<p>它迫使最后一轮的改动去回答更棘手的问题：</p>
-
-<ul>
-<li><p>这些改动真的能把工作往后推进吗？</p></li>
-<li><p>它优化了关键路径，还是仅仅重新排列了代码？</p></li>
-<li><p>基准测试结果是否有所提升？</p></li>
-<li><p>如果跟踪信息仍然不明确，我为什么要保留它？</p></li>
-</ul>
-
-
-<p>这些问题让我避免保留更多无关紧要的更改，而这些更改实际上并没有直接保存以毫秒为单位的跟踪信息。这或许是对跟踪价值最诚实的描述，尤其是在那些显而易见的优势消失之​​后。</p>
-
-<h2>下次我会重复的步骤</h2>
-
-<p>如果我在另一个应用上再次进行这项工作，我会遵循以下步骤：</p>
-
-<ol>
-<li><p>对真实的启动路径进行基准测试，而不仅仅是针对某个启动器。</p></li>
-<li><p>验证基线配置文件，而不是想当然地认为它们会有帮助。</p></li>
-<li><p>进行清理工作，使启动路径更加健康。</p></li>
-<li><p>当下一个问题不再是“启动慢吗？”而是“为什么这里仍然会出现这种情况？”时，添加跟踪功能。</p></li>
-<li><p>只保留那些能够显著改善启动时间或启动清晰度，并足以证明其复杂性的更改。</p></li>
-</ol>
-
-
-<p>最后一点至关重要。</p>
-
-<p>我认为并非每个性能更改都需要以毫秒级的提升来衡量。有些更改值得保留，因为它们使系统更容易理解，也更容易发现未来的回归问题。</p>
-
-<p>但即便如此，我仍然希望它们能够真正发挥作用。</p>
-
-<p>Perfetto 就是如此。</p>
-
-<p>这并非因为它是创业初期最大的成功案例，而是因为它有助于使最终的创业故事更具说服力。</p>
-
-<h2>结语</h2>
-
-<p>我认为，性能优化案例往往过于简化这一部分。我们喜欢那种“某项技术胜出，一张图表证明其有效性，然后结论完美契合”的版本。</p>
-
-<p>但这次的体验并非如此。</p>
-
-<p>这次的体验更像是先获得显而易见的提升，然后发现最后阶段的性能优化工作与其说是寻找新的“奇迹”，不如说是拒绝自欺欺人。拒绝因为某些改动听起来很高级就保留它们。拒绝将那些并未真正节省成本的追踪数据归功于自身。拒绝将“可能更好”等同于“经过测量和解释”。</p>
-
-<p>这就是为什么我仍然认为 Perfetto 是值得的，即使它并非启动阶段节省成本的最大来源。</p>
-
-<p>基线配置文件首先实现了干净编译的提升。清理工作完成了大部分繁重的工作。Perfetto 使最后一轮工作足够严格，让我能够信任最终保留下来的部分。</p>
-
-<p>从长远来看，这或许才是更有价值的结果。</p>
-
-<p>启动速度快固然好，但启动路径清晰易懂则更好。能够帮助你明确哪些改动是真正必要的流程，才是你在开发下一个应用时能够继续沿用的部分。</p>
 ]]></content>
   </entry>
   

@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-10-14T12:37:05+00:00</updated>
+  <updated>2026-10-20T13:46:21+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,431 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[Room Fts4：全文搜索替代 SQL LIKE]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like/"/>
+    <updated>2026-10-20T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Scaling Android Search: Room @Fts4 vs SQL LIKE」，原文链接<a href="https://proandroiddev.com/scaling-android-search-room-fts4-vs-sql-like-b2a8232cbd12">https://proandroiddev.com/scaling-android-search-room-fts4-vs-sql-like-b2a8232cbd12</a>，由Oğuzhan Aslan发布于2026年10月11日。</p></blockquote>
+
+<p>本文将深入探讨如何使用 Android Jetpack Room 实现全文搜索索引、倒排索引和微秒级查询基准测试。</p>
+
+<p><a href="https://alexhilton.github.io/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like/"><img src="https://cdn-images-1.medium.com/max/1024/1*O4Wm35zmkfeyGMGQRDBR7g.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>在为 Android 应用程序构建搜索功能时——无论是查询离线优先的收件箱、笔记目录、文档缓存还是电子商务目录——几乎所有开发者都从相同的查询开始：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">mails</span>
+</span><span class='line'><span class="k">WHERE</span> <span class="n">subject</span> <span class="k">LIKE</span> <span class="s1">&#39;%&#39;</span> <span class="o">||</span> <span class="p">:</span><span class="n">query</span> <span class="o">||</span> <span class="s1">&#39;%&#39;</span>
+</span><span class='line'>   <span class="k">OR</span> <span class="n">body</span> <span class="k">LIKE</span> <span class="s1">&#39;%&#39;</span> <span class="o">||</span> <span class="p">:</span><span class="n">query</span> <span class="o">||</span> <span class="s1">&#39;%&#39;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>它直观易用，无需修改任何表结构，开箱即用。在早期开发阶段，即使本地数据库只包含 25 行虚拟数据，搜索查询也能立即返回结果。测试通过，用户界面流畅，该功能顺利发布。</p>
+
+<p>然后，现实给了我们当头一棒。</p>
+
+<p>随着用户积累数月的多行电子邮件、笔记或缓存数据（从数百条记录攀升至数千条记录），投诉开始纷至沓来：</p>
+
+<ul>
+<li>在搜索框中输入文字时出现按键延迟。</li>
+<li>画面出现丢帧和主线程微卡顿。</li>
+<li>进行大量搜索操作时，电池电量消耗明显。</li>
+</ul>
+
+
+<p>为什么在开发阶段感觉运行速度极快的操作，在真实数据量下却会不堪重负？要理解这一点，我们必须深入了解 SQLite 的查询规划器。</p>
+
+<h2>为什么 SQL LIKE 在大规模场景下会失效</h2>
+
+<p>在关系数据库中，开发人员依靠索引（B 树）来将查找时间复杂度控制在 O(log N) 以内。例如，如果你查询：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="k">WHERE</span> <span class="n">sender</span> <span class="k">LIKE</span> <span class="s1">&#39;alice%&#39;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>SQLite <em>可以</em>在 <code>sender</code> 上使用标准的 B 树索引，因为它知道前缀。</p>
+
+<p>然而，用户很少只使用前缀进行搜索。实际的全文搜索需要<strong>子字符串匹配</strong>：在主题或段落中查找任意单词。这迫使查询语句以通配符开头：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="k">WHERE</span> <span class="n">body</span> <span class="k">LIKE</span> <span class="s1">&#39;%architecture%&#39;</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>警告：一旦查询语句包含前导通配符（<code>%query%</code>），标准 B 树索引将被完全绕过。SQLite 将被迫执行<strong>顺序全表扫描</strong>，时间复杂度为 O(N)。</p>
+
+<p>在全表扫描中：</p>
+
+<ol>
+<li>SQLite 将存储层中的每一行数据都读入内存。</li>
+<li>查询引擎按顺序遍历文本的每个字节，逐个字符地比较，查找目标子字符串。</li>
+<li>如果一封电子邮件正文包含 1500 个单词，而你有 2000 封电子邮件，那么 SQLite 会对每次击键操作逐字节地检查多达 300 万个单词！</li>
+</ol>
+
+
+<p><img src="https://cdn-images-1.medium.com/max/336/1*5kKjnzDStbkv-sL1XefF-A.png" alt="无标题图像" /></p>
+
+<p>此外，标准的 SQL LIKE 语句是“愚蠢的”：</p>
+
+<ul>
+<li><strong>未进行分词：</strong>它无法识别单词边界。搜索“cat”会错误地匹配到“catalog”、“scatter”和“vacation”。</li>
+<li><strong>未进行词干提取：</strong>搜索“optimize”会遗漏“optimizing”、“optimizer”或“optimized”。</li>
+<li><strong>未进行相关性排序：</strong>搜索结果未加权；标题中的匹配项与第四段中的匹配项权重相同。</li>
+</ul>
+
+
+<p>而 SQLite 的 <strong>FTS4（全文搜索 4）</strong> 引擎则改变了这一切。</p>
+
+<h2>解决方案：FTS4 和倒排索引的工作原理</h2>
+
+<p>SQLite 包含专用的全文搜索扩展（FTS3/FTS4 和 FTS5）。在 Android 的 Room 持久化库中，通过 <code>@Fts4</code> 和 <code>@Fts3</code> 注解原生支持这些扩展。</p>
+
+<h3>倒排索引：从 O(N) 到 O(1)</h3>
+
+<p>FTS4 不是在查询时扫描行，而是在<strong>插入时</strong>进行繁重的工作。</p>
+
+<p>当 FTS4 对文本列进行索引时，<strong>分词器</strong>会将文本分解成单个单词（词元），规范化它们的大小写，去除标点符号，并构建一个<strong>倒排索引</strong>。</p>
+
+<p>倒排索引本质上是一个词到文档的词典：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='sql'><span class='line'><span class="o">+</span><span class="c1">--------------+-----------------------+</span>
+</span><span class='line'><span class="o">|</span> <span class="n">Token</span>        <span class="o">|</span> <span class="n">DocIDs</span> <span class="p">(</span><span class="n">Posting</span> <span class="n">List</span><span class="p">)</span> <span class="o">|</span>
+</span><span class='line'><span class="o">+</span><span class="c1">--------------+-----------------------+</span>
+</span><span class='line'><span class="o">|</span> <span class="n">architecture</span> <span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">492</span><span class="p">]</span>     <span class="o">|</span>
+</span><span class='line'><span class="o">|</span> <span class="n">benchmark</span>    <span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">22</span><span class="p">,</span> <span class="mi">108</span><span class="p">,</span> <span class="mi">305</span><span class="p">]</span>  <span class="o">|</span>
+</span><span class='line'><span class="o">|</span> <span class="k">database</span>     <span class="o">|</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">18</span><span class="p">,</span> <span class="mi">92</span><span class="p">,</span> <span class="mi">108</span><span class="p">]</span>   <span class="o">|</span>
+</span><span class='line'><span class="o">|</span> <span class="k">security</span>     <span class="o">|</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">11</span><span class="p">,</span> <span class="mi">45</span><span class="p">,</span> <span class="mi">99</span><span class="p">]</span>    <span class="o">|</span>
+</span><span class='line'><span class="o">+</span><span class="c1">--------------+-----------------------+</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p><img src="https://cdn-images-1.medium.com/max/346/1*vr3VjMq9mkHs9wYRB12fUA.png" alt="无标题图像" /></p>
+
+<p>当你发出类似 <code>MATCH 'benchmark*'</code> 的搜索查询时，FTS4：</p>
+
+<ol>
+<li>对搜索字符串进行分词。</li>
+<li>在词元词典中执行即时查找。</li>
+<li>获取包含该单词的完整文档 ID 列表。</li>
+<li>返回记录，不扫描任何无关文本字节。</li>
+</ol>
+
+
+<p>无论有 100 行还是 10 万行，查找操作都在不到一毫秒内完成。</p>
+
+<h2>在 Android Room 中的实现</h2>
+
+<p>一个常见的误解是，使用 FTS 需要复制数据，导致数据库大小翻倍。而 Room 的 <code>contentEntity</code> 模式则完全避免了这个问题。</p>
+
+<p>让我们来看看 Mail Showcase 应用中的生产级实现。</p>
+
+<p>首先，创建包含所有原始字段的基础表。这是你的唯一可信数据源：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// MailEntity.kt</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.room.Entity</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.room.PrimaryKey</span>
+</span><span class='line'><span class="n">@Entity</span><span class="p">(</span><span class="n">tableName</span> <span class="p">=</span> <span class="s">&quot;mails&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">MailEntity</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">@PrimaryKey</span><span class="p">(</span><span class="n">autoGenerate</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">Long</span> <span class="p">=</span> <span class="m">0</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sender</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">recipient</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">subject</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">body</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">timestamp</span><span class="p">:</span> <span class="n">Long</span> <span class="p">=</span> <span class="n">System</span><span class="p">.</span><span class="n">currentTimeMillis</span><span class="p">()</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>接下来，定义虚拟 FTS 实体。通过声明 <code>contentEntity = MailEntity::class</code>，Room 指示 SQLite 使用<strong>外部内容表</strong>。</p>
+
+<p>FTS 表仅维护索引结构和词元倒排记录。文本本身按需从基础 <code>mails</code> 表中获取，从而避免了存储重复：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">androidx.room.Entity</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.room.Fts4</span>
+</span><span class='line'><span class="n">@Entity</span><span class="p">(</span><span class="n">tableName</span> <span class="p">=</span> <span class="s">&quot;mails_fts&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="n">@Fts4</span><span class="p">(</span><span class="n">contentEntity</span> <span class="p">=</span> <span class="n">MailEntity</span><span class="o">::</span><span class="k">class</span><span class="p">)</span>
+</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">MailFtsEntity</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sender</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">subject</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">body</span><span class="p">:</span> <span class="n">String</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>提示：Room 会在后台自动为 <code>mails</code> 表创建 SQLite 数据库触发器（AFTER INSERT、AFTER UPDATE、AFTER DELETE）。每当你插入或更新 <code>MailEntity</code> 时，<code>mails_fts</code> 索引都会自动更新！</p>
+
+<p>在 <code>@Database</code> 声明中注册这两个类：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Database</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">entities</span> <span class="p">=</span> <span class="p">[</span><span class="n">MailEntity</span><span class="o">::</span><span class="k">class</span><span class="p">,</span> <span class="n">MailFtsEntity</span><span class="o">::</span><span class="k">class</span><span class="p">],</span>
+</span><span class='line'>    <span class="n">version</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">exportSchema</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'><span class="p">)</span>
+</span><span class='line'><span class="k">abstract</span> <span class="k">class</span> <span class="nc">MailDatabase</span> <span class="p">:</span> <span class="n">RoomDatabase</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">abstract</span> <span class="k">fun</span> <span class="nf">mailDao</span><span class="p">():</span> <span class="n">MailDao</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在我们可以在 <code>MailDao</code> 中比较这两个查询。</p>
+
+<p>请注意 FTS 查询是如何将 <code>mails.id</code> 与 <code>mails_fts.docid</code> 连接起来的：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Dao</span>
+</span><span class='line'><span class="n">interface</span> <span class="n">MailDao</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">@Insert</span><span class="p">(</span><span class="n">onConflict</span> <span class="p">=</span> <span class="n">OnConflictStrategy</span><span class="p">.</span><span class="n">REPLACE</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">insertMails</span><span class="p">(</span><span class="n">mails</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">MailEntity</span><span class="p">&gt;):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Long</span><span class="p">&gt;</span>
+</span><span class='line'>    <span class="cm">/**</span>
+</span><span class='line'><span class="cm">     * Standard SQL LIKE operator search.</span>
+</span><span class='line'><span class="cm">     * Triggers an O(N) sequential scan across every row.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="n">@Query</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>        <span class="n">SELECT</span> <span class="p">*</span> <span class="n">FROM</span> <span class="n">mails</span>
+</span><span class='line'>        <span class="n">WHERE</span> <span class="n">subject</span> <span class="n">LIKE</span> <span class="sc">&#39;%&#39;</span> <span class="p">||</span> <span class="p">:</span><span class="n">query</span> <span class="p">||</span> <span class="sc">&#39;%&#39;</span>
+</span><span class='line'>           <span class="n">OR</span> <span class="n">body</span> <span class="n">LIKE</span> <span class="sc">&#39;%&#39;</span> <span class="p">||</span> <span class="p">:</span><span class="n">query</span> <span class="p">||</span> <span class="sc">&#39;%&#39;</span>
+</span><span class='line'>           <span class="n">OR</span> <span class="n">sender</span> <span class="n">LIKE</span> <span class="sc">&#39;%&#39;</span> <span class="p">||</span> <span class="p">:</span><span class="n">query</span> <span class="p">||</span> <span class="sc">&#39;%&#39;</span>
+</span><span class='line'>        <span class="n">ORDER</span> <span class="n">BY</span> <span class="n">timestamp</span> <span class="n">DESC</span>
+</span><span class='line'>        <span class="n">LIMIT</span> <span class="p">:</span><span class="n">limit</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">searchMailsLike</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">200</span><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">MailEntity</span><span class="p">&gt;</span>
+</span><span class='line'>    <span class="cm">/**</span>
+</span><span class='line'><span class="cm">     * SQLite FTS4 (Full Text Search) MATCH query.</span>
+</span><span class='line'><span class="cm">     * Uses inverted index token lookups.</span>
+</span><span class='line'><span class="cm">     */</span>
+</span><span class='line'>    <span class="n">@Query</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>        <span class="n">SELECT</span> <span class="n">mails</span><span class="p">.*</span> <span class="n">FROM</span> <span class="n">mails</span>
+</span><span class='line'>        <span class="n">JOIN</span> <span class="n">mails_fts</span> <span class="n">ON</span> <span class="n">mails</span><span class="p">.</span><span class="n">id</span> <span class="p">=</span> <span class="n">mails_fts</span><span class="p">.</span><span class="n">docid</span>
+</span><span class='line'>        <span class="n">WHERE</span> <span class="n">mails_fts</span> <span class="n">MATCH</span> <span class="p">:</span><span class="n">query</span>
+</span><span class='line'>        <span class="n">ORDER</span> <span class="n">BY</span> <span class="n">mails</span><span class="p">.</span><span class="n">timestamp</span> <span class="n">DESC</span>
+</span><span class='line'>        <span class="n">LIMIT</span> <span class="p">:</span><span class="n">limit</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">searchMailsFts</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span> <span class="n">limit</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">200</span><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">MailEntity</span><span class="p">&gt;</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了提供“边输入边搜索”的体验，请对输入进行清理，并在每个词元后附加通配符 <code>*</code>，以便输入 <code>arch</code> 时匹配“architecture”：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">sanitizeFtsQuery</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">String</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sanitized</span> <span class="p">=</span> <span class="n">query</span><span class="p">.</span><span class="n">replace</span><span class="p">(</span><span class="s">&quot;\&quot;&quot;</span><span class="p">,</span> <span class="s">&quot;&quot;</span><span class="p">).</span><span class="n">replace</span><span class="p">(</span><span class="s">&quot;&#39;&quot;</span><span class="p">,</span> <span class="s">&quot;&quot;</span><span class="p">).</span><span class="n">trim</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">tokens</span> <span class="p">=</span> <span class="n">sanitized</span><span class="p">.</span><span class="n">split</span><span class="p">(</span><span class="s">&quot;\\s+&quot;</span><span class="p">.</span><span class="n">toRegex</span><span class="p">()).</span><span class="n">filter</span> <span class="p">{</span> <span class="n">it</span><span class="p">.</span><span class="n">isNotEmpty</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">tokens</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">())</span> <span class="k">return</span> <span class="s">&quot;&quot;</span>
+</span><span class='line'>    <span class="c1">// Appending &#39;*&#39; enables fast token prefix matching in FTS</span>
+</span><span class='line'>    <span class="k">return</span> <span class="n">tokens</span><span class="p">.</span><span class="n">joinToString</span><span class="p">(</span><span class="s">&quot; &quot;</span><span class="p">)</span> <span class="p">{</span> <span class="s">&quot;$it*&quot;</span> <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>为了衡量实际性能，我们在展示应用程序中构建了一个基准测试套件，该套件可以测量数据库在相同数据集上的执行时间，精确到微秒级（<code>measureNanoTime</code>）。</p>
+
+<p>我们向数据库中填充了多行电子邮件，并测量了不同数据集规模下的搜索延迟：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">+--------------+-------------------------+-------------------------+----------------+</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Dataset</span>      <span class="p">|</span> <span class="n">SQL</span> <span class="n">LIKE</span> <span class="n">Latency</span>        <span class="p">|</span> <span class="n">Room</span> <span class="n">@Fts4</span> <span class="n">MATCH</span>        <span class="p">|</span> <span class="n">Speedup</span> <span class="n">Factor</span> <span class="p">|</span>
+</span><span class='line'><span class="p">+--------------+-------------------------+-------------------------+----------------+</span>
+</span><span class='line'><span class="p">|</span> <span class="m">100</span> <span class="n">mails</span>    <span class="p">|</span>  <span class="m">2.840</span> <span class="n">ms</span> <span class="p">(</span><span class="m">39</span> <span class="n">matches</span><span class="p">)</span>  <span class="p">|</span>  <span class="m">1.800</span> <span class="n">ms</span> <span class="p">(</span><span class="m">39</span> <span class="n">matches</span><span class="p">)</span>  <span class="p">|</span> <span class="m">1.6</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="m">500</span> <span class="n">mails</span>    <span class="p">|</span>  <span class="m">8.114</span> <span class="n">ms</span> <span class="p">(</span><span class="m">179</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span>  <span class="m">3.892</span> <span class="n">ms</span> <span class="p">(</span><span class="m">179</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">2.1</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="m">2</span><span class="p">,</span><span class="m">000</span> <span class="n">mails</span>  <span class="p">|</span> <span class="m">30.181</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">13.071</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">2.3</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="m">5</span><span class="p">,</span><span class="m">000</span> <span class="n">mails</span>  <span class="p">|</span> <span class="m">63.762</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span>  <span class="m">6.811</span> <span class="n">ms</span> <span class="p">(</span><span class="m">200</span> <span class="n">matches</span><span class="p">)</span> <span class="p">|</span> <span class="m">9.4</span><span class="n">x</span> <span class="n">faster</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">+--------------+-------------------------+-------------------------+----------------+</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Query</span> <span class="n">Execution</span> <span class="n">Time</span> <span class="n">vs</span> <span class="n">Dataset</span> <span class="n">Size</span>
+</span><span class='line'><span class="n">Latency</span> <span class="p">(</span><span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>  <span class="m">70</span> <span class="err">┼</span>                                                  <span class="err">●</span> <span class="n">SQL</span> <span class="n">LIKE</span> <span class="p">(</span><span class="m">63.8</span> <span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>  <span class="m">60</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">50</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">40</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">30</span> <span class="err">┼</span>                                  <span class="err">●</span> <span class="p">(</span><span class="m">30.2</span> <span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>  <span class="m">20</span> <span class="err">┼</span>
+</span><span class='line'>  <span class="m">10</span> <span class="err">┼</span>                    <span class="err">●</span> <span class="p">(</span><span class="m">8.1</span> <span class="n">ms</span><span class="p">)</span>             <span class="err">●</span> <span class="n">FTS4</span> <span class="p">(</span><span class="m">6.8</span> <span class="n">ms</span><span class="p">)</span>
+</span><span class='line'>   <span class="m">0</span> <span class="err">┼───●</span> <span class="p">(</span><span class="m">2.8</span> <span class="n">ms</span><span class="p">)</span><span class="err">───────●</span> <span class="p">(</span><span class="m">3.9</span> <span class="n">ms</span><span class="p">)</span><span class="err">────●</span> <span class="p">(</span><span class="m">13.1</span> <span class="n">ms</span><span class="p">)</span><span class="err">──────</span>
+</span><span class='line'>     <span class="err">└──────┬─────────────────┬──────────────┬──────────────┬────────</span>
+</span><span class='line'>          <span class="m">100</span>               <span class="m">500</span>           <span class="m">2</span><span class="p">,</span><span class="m">000</span>          <span class="m">5</span><span class="p">,</span><span class="m">000</span>
+</span><span class='line'>                                 <span class="n">Email</span> <span class="n">Records</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>主要观察结果</h3>
+
+<ol>
+<li><strong>16 毫秒帧预算限制</strong>：处理 2000 封邮件时，SQL LIKE 查询耗时约 30.18 毫秒，超过了 60Hz 显示器约 16.6 毫秒的帧目标（120Hz 显示器约 8.3 毫秒）。处理 5000 封邮件时（约 63.76 毫秒），在 UI 线程或其附近执行 <code>LIKE</code> 会导致丢帧和明显的 UI 卡顿。</li>
+<li><strong>规模化下的性能分化</strong>：虽然 FTS4 在中小型数据集上能提供稳定的 1.6–2.3 倍加速，但到 5000 条记录时优势急剧扩大，执行速度比 LIKE 快 <strong>9.4 倍</strong>（约 6.81 毫秒对约 63.76 毫秒）。</li>
+<li><strong>前缀支持</strong>：FTS4 能够即时处理 <code>arch*</code> 查询，因为词元前缀可以直接在索引结构中遍历。</li>
+</ol>
+
+
+<h2>何时使用哪个</h2>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="p">|</span> <span class="n">Feature</span>                   <span class="p">|</span> <span class="n">SQL</span> <span class="n">LIKE</span> <span class="err">&#39;</span><span class="p">%</span><span class="n">query</span><span class="p">%</span><span class="err">&#39;</span>                <span class="p">|</span> <span class="n">Room</span> <span class="n">@Fts4</span> <span class="p">(</span><span class="n">MATCH</span><span class="p">)</span>                           <span class="p">|</span>
+</span><span class='line'><span class="p">+---------------------------+-----------------------------------+----------------------------------------------+</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Algorithmic</span> <span class="n">Complexity</span>    <span class="p">|</span> <span class="n">O</span><span class="p">(</span><span class="n">N</span><span class="p">)</span> <span class="n">Sequential</span> <span class="n">full</span> <span class="n">table</span> <span class="n">scan</span>   <span class="p">|</span> <span class="n">O</span><span class="p">(</span><span class="m">1</span><span class="p">)</span> <span class="p">/</span> <span class="n">Sublinear</span> <span class="n">Inverted</span> <span class="n">index</span> <span class="n">lookup</span>       <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Execution</span> <span class="n">Time</span> <span class="n">at</span> <span class="n">Scale</span>   <span class="p">|</span> <span class="n">Degrades</span> <span class="n">linearly</span> <span class="n">with</span> <span class="n">row</span> <span class="n">count</span>  <span class="p">|</span> <span class="n">Remains</span> <span class="n">consistently</span> <span class="k">in</span> <span class="n">low</span> <span class="n">single</span><span class="p">-</span><span class="n">digit</span> <span class="n">ms</span>  <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Word</span> <span class="n">Boundary</span> <span class="n">Awareness</span>   <span class="p">|</span> <span class="n">No</span> <span class="p">(</span><span class="n">matches</span> <span class="n">substrings</span> <span class="n">blindly</span><span class="p">)</span>   <span class="p">|</span> <span class="n">Yes</span> <span class="p">(</span><span class="n">tokenized</span> <span class="n">at</span> <span class="n">word</span> <span class="n">boundaries</span><span class="p">)</span>           <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Stemming</span> <span class="n">Support</span>          <span class="p">|</span> <span class="n">No</span>                                <span class="p">|</span> <span class="n">Yes</span> <span class="p">(</span><span class="n">Porter</span> <span class="n">stemmer</span> <span class="n">available</span><span class="p">)</span>               <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Prefix</span> <span class="n">Matching</span>           <span class="p">|</span> <span class="n">Wildcards</span> <span class="k">break</span> <span class="n">B</span><span class="p">-</span><span class="n">Tree</span> <span class="n">index</span>      <span class="p">|</span> <span class="n">Native</span> <span class="p">(</span><span class="n">MATCH</span> <span class="err">&#39;</span><span class="n">token</span><span class="p">*</span><span class="err">&#39;</span><span class="p">)</span>                      <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Storage</span> <span class="n">Impact</span>            <span class="p">|</span> <span class="n">Zero</span> <span class="n">overhead</span>                     <span class="p">|</span> <span class="n">Minimal</span> <span class="n">index</span> <span class="n">metadata</span> <span class="p">(</span><span class="n">via</span> <span class="n">contentEntity</span><span class="p">)</span>   <span class="p">|</span>
+</span><span class='line'><span class="p">|</span> <span class="n">Insert</span> <span class="n">Overhead</span>           <span class="p">|</span> <span class="n">Minimal</span>                           <span class="p">|</span> <span class="n">Slight</span> <span class="n">cost</span> <span class="n">during</span> <span class="n">insert</span> <span class="n">to</span> <span class="n">update</span> <span class="n">index</span>    <span class="p">|</span>
+</span><span class='line'><span class="p">+---------------------------+-----------------------------------+----------------------------------------------+</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>结论</h2>
+
+<p>SQL LIKE 是一个很棒的工具，可以用来创建原型或查询离散的编码列（例如状态码或简短标识符）。但是，一旦你的应用程序处理人类文本——消息、文档、笔记、产品目录——依赖 <code>LIKE '%...%'</code> 就会成为一个迫在眉睫的性能瓶颈。</p>
+
+<p>通过将 Room 的 <code>@Fts4</code> 与 <code>contentEntity</code> 模式结合使用：</p>
+
+<ul>
+<li>你保留了清晰的关系型实体作为唯一可信数据源。</li>
+<li>你可以获得高性能的倒排索引查找，轻松扩展到数万条记录。</li>
+<li>你的用户界面依然流畅，充分尊重了用户的帧预算和电池续航。</li>
+</ul>
+
+
+<p>如果你的 Android 应用包含用于查询文本字段的搜索栏，请不要等到生产环境中的数据集膨胀后才行动。立即迁移到 Room FTS，为用户带来他们喜爱的即时搜索体验。</p>
+
+<h3>参考</h3>
+
+<p><a href="https://developer.android.com/reference/androidx/room/Fts4">Fts4 | API 参考 | Android 开发者</a></p>
+
+<p><a href="https://www.linkedin.com/in/o%C4%9Fuzhan-aslan-sofdev/">LinkedIn</a></p>
+
+<p><a href="https://www.youtube.com/@oguzhanaslannDev">Youtube</a></p>
+
+<p><strong><em>爱你们所有人。</em></strong></p>
+
+<p><strong><em>敬请期待后续博客。</em></strong></p>
+
+<p><strong><em>保重。</em></strong></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[为什么你的 LazyColumn 仍然卡顿]]></title>
@@ -7817,200 +8242,6 @@
 <p>**这一切背后有一个值得大声说出来的战略要点。我们花了十年时间优化深度链接、应用索引和搜索，以吸引用户进入应用。 AppFunctions 进行了相反的优化——应用程序永远不会打开，屏幕永远不会亮起，代理和业务逻辑之间没有 UI。这改变了“最低权限”在实践中的样子：用户界面不再询问“你确定吗？”代表你。</p>
 
 <p>结束语</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[车载系统中的可扩展UI：从UI嵌入到系统窗口编排]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android/"/>
-    <updated>2026-06-06T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Scalable UI in Android Automotive OS: From UI Embedding to System Window Orchestration」，原文链接<a href="https://medium.com/proandroiddev/scalable-ui-in-aaos-from-ui-embedding-to-system-window-orchestration-dae03b335eee">https://medium.com/proandroiddev/scalable-ui-in-aaos-from-ui-embedding-to-system-window-orchestration-dae03b335eee</a>，由Daniel Georg发布于20264月23日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/06/06/scalable-ui-in-android/"><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*9Xu2aaQTu6ecj9iVhBWkfA.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>在 Android Automotive 的原生主屏幕上，所有内容都位于同一个 Activity 中。CarLauncher 会同时绘制地图、媒体卡片和状态小部件。切换应用意味着需要替换整个 UI。 <a href="https://source.android.com/docs/automotive/scalableui">Scalable UI</a> 框架采用了不同的方法：每个面板都拥有自己独立的 Activity，所有 Activity 并排运行，完全由 RRO 覆盖层中的声明式 XML 驱动。</p>
-
-<p>这源于另一个问题。在我之前的<a href="https://medium.com/@passenger6/remote-compose-in-android-automotive-os-embed-rich-ui-without-the-usual-pain-90b857d59d8c">文章</a>中，我探讨了远程组合 (Remote Compose) 作为在 AAOS 中跨应用边界共享 UI 的新方法。它提供了一种解决方案，避免了通常的跨进程开销和耦合。然而，来自 <a href="https://www.linkedin.com/in/ralph-thomas"><strong>Ralph Thomas</strong></a> <strong>(Google)</strong> 的一条<a href="https://www.linkedin.com/feed/update/urn:li:activity:7444753922419761152?commentUrn=urn%3Ali%3Acomment%3A%28activity%3A7444753922419761152%2C7444763415753060352%29&amp;dashCommentUrn=urn%3Ali%3Afsd_comment%3A%287444763415753060352%2Curn%3Ali%3Aactivity%3A7444753922419761152%29">评论</a> 改变了我的想法更广阔的视野引领我深入探索，彻底改变了我的视角。</p>
-
-<p>我一直密切关注着可扩展用户界面（Scalable UI），但那条评论让我停下来思考另一个问题。远程配置（Remote Compose）解决了嵌入外部用户界面而不耦合的问题，但如果<strong>嵌入本身</strong>是一种错误的抽象方式呢？</p>
-
-<blockquote><p>我们不再需要在启动器内部构建组件，因为在可扩展用户界面时代，应用程序<strong>本身就是组件</strong>。</p></blockquote>
-
-<p>OEM厂商现在不再使用启动器来协调嵌入的内容，而是通过RRO覆盖层在系统UI配置中声明布局。传统意义上的“主页”Activity已不复存在，因为系统本身就成为了启动器。每个应用程序都拥有自己的域，独立运行，无需共享界面、进程间通信（IPC）或嵌入。</p>
-
-<p>在这种模式下，包括面板大小、Activity位置和过渡效果在内的所有配置都用XML声明。从 OEM 的角度来看，这意味着无需编写任何 Java/Kotlin 代码，只需 XML 覆盖层，即可实现复杂的窗口行为。</p>
-
-<p>可扩展 UI 背后的完整愿景有一个名称，至少我个人认为它应该叫：<strong>状态驱动的驾驶舱编排</strong>。整个驾驶舱，包括应用程序、系统栏、HUN 和覆盖层，都变成了一个协调一致的界面，在同步状态之间切换，而不是一系列独立管理的窗口。系统 UI 在 XML 中声明状态；窗口管理器驱动每个应用程序、每个系统栏和每个覆盖层同步完成状态转换。</p>
-
-<p>本文的其余部分将介绍这在实践中是如何实现的：构建模块、完全使用 XML 构建的概念验证仪表板，以及这种架构带来的权衡取舍。我还会介绍我开发的用于创建可扩展 UI 的可视化编辑器，无需手动编写 XML。</p>
-
-<p>沉重的遗留问题：启动器为何沦为噩梦</p>
-
-<p>当标准的嵌入技术无法满足复杂的多窗口布局需求时，下一步就是深入系统内部，例如，创建一个 CustomDisplayAreaProvider 并直接编排 TaskDisplayArea (TDA)。</p>
-
-<p>我花了几个月的时间来实现这种自定义的底层窗口逻辑。要实际放置和动画化这些显示区域，你必须在系统 UI 中注册一个自定义的 TaskDisplayAreaOrganizer。设置布局需要一个 WindowContainerTransaction 来告知 WindowManager 新的 TDA 边界，而动画则必须逐帧驱动，直接使用 SurfaceControl.Transaction 控制显示区域的边界。</p>
-
-<p>每个过渡效果都是一个手动编写的 ValueAnimator，它插值边界并将其应用到 SurfaceFlinger，可以直接应用，也可以通过扩展 WMShell 过渡框架并添加自定义的 TransitionHandler 来实现。到了这一步，你不再是在编写应用程序代码，而是在编写窗口管理管道的一部分。</p>
-
-<p>WinScope 成了你在这个过程中唯一的帮手。它是唯一能让你直观地理解窗口管理器中层、焦点转移和可见性标志等复杂机制的工具。没有它，你基本上就是在盲目摸索。</p>
-
-<p>经过数月的工程开发，你终于运行了兼容性测试套件 (CTS)。几个小时后，结果显示你的信息娱乐系统不再符合 CTS 标准。这标志着一场痛苦的 bug 修复马拉松的开始，每次修复 Google 强制测试中的 bug 都会破坏你自定义的 UX。自定义窗口管理逻辑是一把双刃剑，很容易导致认证进度被打乱。</p>
-
-<p>在分析了旧方法失效的原因之后，下一个问题显而易见：是否存在更好的抽象方案？</p>
-
-<p>编排 vs. 嵌入</p>
-
-<p>具体来说，可扩展 UI 由四个基本元素构成，全部以 XML 声明。“驾驶舱状态”是唯一的数据源——你不再需要编写动画代码，而是定义：</p>
-
-<ul>
-<li><strong>任务面板：</strong> 矩形容器，映射到专用的根任务栈，用于承载完整的应用程序（导航或媒体），作为功能性组件。</li>
-</ul>
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;TaskPanel</span> <span class="na">id=</span><span class="s">&quot;navigation&quot;</span> <span class="na">defaultVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">displayId=</span><span class="s">&quot;0&quot;</span><span class="nt">&gt;</span>
-</span><span class='line'><span class="nt">&lt;/TaskPanel&gt;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<ul>
-<li><strong>装饰面板：</strong> 用于注入自定义 UI/覆盖层的通用容器，可与应用程序任务完美同步。</li>
-</ul>
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;DecorPanel</span> <span class="na">id=</span><span class="s">&quot;navigation_decor&quot;</span> <span class="na">defaultVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">displayId=</span><span class="s">&quot;0&quot;</span><span class="nt">&gt;</span>
-</span><span class='line'><span class="nt">&lt;/DecorPanel&gt;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<ul>
-<li><strong>变体：</strong> 管理精确边界、Z 轴顺序和可见性的视觉状态。</li>
-</ul>
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;Variant</span> <span class="na">id=</span><span class="s">&quot;@+id/base&quot;</span><span class="nt">&gt;</span> <span class="nt">&lt;/Variant&gt;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>过渡：</strong> 由窗口管理器协调的同步动画，用于根据系统事件在变体之间切换面板。 OEM 厂商还可以定义自己的自定义事件，并通过面板控制器触发这些事件，或将其绑定到意图，从而将系统扩展到内置的 <em>System</em>* 事件之外。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;Transitions&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Transition</span> <span class="na">onEvent=</span><span class="s">&quot;_System_TaskOpenEvent&quot;</span> <span class="na">fromVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">toVariant=</span><span class="s">&quot;@id/open&quot;</span> <span class="na">duration=</span><span class="s">&quot;300&quot;</span> <span class="na">interpolator=</span><span class="s">&quot;@android:anim/accelerate_decelerate_interpolator&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'> <span class="nt">&lt;/Transitions&gt;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>以下是一个导航面板的实际示例，该面板定义了两种视觉状态（变体）和一个动画过渡：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;TaskPanel</span> <span class="na">id=</span><span class="s">&quot;navigation&quot;</span> <span class="na">defaultVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">displayId=</span><span class="s">&quot;0&quot;</span><span class="nt">&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;Variant</span> <span class="na">id=</span><span class="s">&quot;@+id/base&quot;</span><span class="nt">&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Layer</span> <span class="na">layer=</span><span class="s">&quot;2&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Visibility</span> <span class="na">isVisible=</span><span class="s">&quot;true&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Alpha</span> <span class="na">alpha=</span><span class="s">&quot;1.0&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Bounds</span> <span class="na">left=</span><span class="s">&quot;0dp&quot;</span> <span class="na">top=</span><span class="s">&quot;0dp&quot;</span> <span class="na">right=</span><span class="s">&quot;850dp&quot;</span> <span class="na">bottom=</span><span class="s">&quot;1600dp&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;/Variant&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;Variant</span> <span class="na">id=</span><span class="s">&quot;@+id/open&quot;</span><span class="nt">&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Layer</span> <span class="na">layer=</span><span class="s">&quot;2&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Visibility</span> <span class="na">isVisible=</span><span class="s">&quot;true&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Alpha</span> <span class="na">alpha=</span><span class="s">&quot;1.0&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Bounds</span> <span class="na">left=</span><span class="s">&quot;0dp&quot;</span> <span class="na">top=</span><span class="s">&quot;0dp&quot;</span> <span class="na">right=</span><span class="s">&quot;2480dp&quot;</span> <span class="na">bottom=</span><span class="s">&quot;1600dp&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;/Variant&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;Transitions&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;Transition</span> <span class="na">onEvent=</span><span class="s">&quot;_System_TaskOpenEvent&quot;</span> <span class="na">fromVariant=</span><span class="s">&quot;@id/base&quot;</span> <span class="na">toVariant=</span><span class="s">&quot;@id/open&quot;</span> <span class="na">duration=</span><span class="s">&quot;300&quot;</span> <span class="na">interpolator=</span><span class="s">&quot;@android:anim/accelerate_decelerate_interpolator&quot;</span><span class="nt">/&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;/Transitions&gt;</span>
-</span><span class='line'><span class="nt">&lt;/TaskPanel&gt;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>重要性：</strong> 请注意，计算 850dp 和 2480dp 之间的插值无需任何代码。<strong>可扩展 UI</strong> 框架基于此 XML 协调过渡，确保窗口管理器能够与容器完美同步地缩放底层任务。</p>
-
-<p>这就是 <strong>状态驱动的驾驶舱编排</strong> 的实际应用——系统栏和 HUN 也是可扩展 UI 面板，由与应用程序相同的驾驶舱状态驱动。</p>
-
-<p>这直接解决了之前提到的 CTS 问题。由于该框架已预先通过认证并符合 CTS 标准，因此消除了后期测试失败的主要风险。过去需要数月时间进行自定义窗口逻辑设置以及可能出现的认证回归才能实现的功能，现在<strong>开箱即用</strong>。</p>
-
-<p>以上是核心组件。我不会在这里重写手册——如果你需要完整的技术规格、库源代码，或者想了解它是如何集成到 SystemUI 中的，请查看以下资源：</p>
-
-<ul>
-<li><p><strong>官方文档：</strong> <a href="https://source.android.com/docs/automotive/scalableui">带有可扩展 UI 的高级窗口</a></p></li>
-<li><p><strong>库：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/systemlibs/car-scalable-ui-lib/">car-scalable-ui-lib</a>（声明式核心）</p></li>
-<li><p><strong>窗口 Shell：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/services/Car/libs/car-wm-shell-lib/">car-wm-shell-lib</a>（核心任务布局和内边距管理）</p></li>
-<li><p><strong>SystemUI 集成：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/SystemUI/src/com/android/systemui/car/wm/scalableui/">可缩放 UI 窗口管理器逻辑</a></p></li>
-<li><p><strong>代码实验室和示例：</strong> <a href="https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/apps/Car/References/scalable-ui/">参考实现</a></p></li>
-</ul>
-
-
-<p>验证：无需 Kotlin/Java 代码即可实现的 3 列仪表盘</p>
-
-<p>一旦所有三个部分都就位，框架就会启动，发现你的面板清单，并开始进行编排。你现在可以构建自己的自定义多窗口信息娱乐系统了。</p>
-
-<p>完整的 PoC，包括配置叠加层和所有面板 XML，也可以在我的 <a href="https://github.com/passenger6/MultiPanelLandscapeRRO">GitHub</a> 上找到。</p>
-
-<p>超越 XML：面板控制器</p>
-
-<p>任何设计都存在权衡取舍，而我想在此深入探讨的，是你在决定使用 Scalable UI 构建生产级控制面板之前，务必了解的一点。我通过自身实验观察到的行为，可能是出于有意设计，也可能是集中式编排带来的副作用。我并不总是能确定究竟是哪一种，而且在实践中，区分二者远不如理解它如何影响实际部署重要。</p>
-
-<p><strong>系统 UI 成为单点故障</strong></p>
-
-<p>这种架构转变从根本上改变了控制面板的故障模型。由于系统本身充当了编排器的角色，系统 UI 实际上成为了整个 UI 的单点故障。</p>
-
-<p>在 Scalable UI 出现之前，启动器崩溃可能会导致主屏幕消失，但状态栏、HVAC 控制、通知和自定义 OEM SystemUIOverlayWindows 仍会继续独立运行。相反，系统 UI 崩溃会导致这些系统界面瘫痪，而启动器和托管应用程序则“幸存”下来。</p>
-
-<p>使用 Scalable UI 时，当系统 UI 崩溃时，框架会移除系统 UI 作为 TaskOrganizer 创建的所有面板根任务。这些面板内的所有应用，无论是导航、电话、设置还是其他正在运行的活动，都会连同其任务一起被终止。系统 UI 会快速重启，但由于 Scalable UI 不会保存上次的活动状态，它会从初始配置而非用户离开时的状态重建面板布局。只有配置为自动启动的应用才会自动重启，并且只会重启到其默认的面板位置。所有应用状态、导航历史记录和滚动位置都会丢失。例如，在我的概念验证中，无论用户重新排列了哪些面板或哪个面板处于活动状态，系统始终以三列布局重启。</p>
-
-<p>对于 OEM 厂商而言，这改变了系统 UI 故障时的风险。添加到系统 UI 的每个新功能、每个面板控制器、过渡动画器和事件分发器都会扩大单次崩溃的影响范围。面板控制器中一个未被捕获的异常，不仅会导致驾驶员失去状态栏，还会导致整个信息娱乐体验的丧失。</p>
-
-<p><strong>我希望添加的功能</strong></p>
-
-<p>除了上述权衡之外，我还希望 Scalable UI 能添加以下几个功能：</p>
-
-<ul>
-<li><p><strong>Scalable UI 配置的热重载。</strong> 目前，应用更新后的面板布局需要终止 System UI，这会销毁所有面板根任务并终止其中托管的所有应用程序。如果有一种热重载机制，能够在不重启 System UI 的情况下获取新的面板定义、变体更改和过渡更新，那么 OEM 厂商就可以在运行时更新其仪表板布局，而无需终止正在运行的会话。</p></li>
-<li><p><strong>面板动画的缩放和矩阵变换。</strong> <em>SurfaceControl.Transaction</em> 已经在框架级别支持 <em>setScale()</em> 和 <em>setMatrix()</em>，但 Scalable UI 框架并未公开这些方法。如果在 Variant 模型和 Panel 接口中添加缩放和旋转属性，就可以在过渡期间实现缩放、缩小和倾斜效果，而无需自定义窗口管理技巧。</p></li>
-<li><p><strong>每个属性的动画时序。</strong> 目前，所有动画属性共享同一个持续时间和插值器。框架的自定义动画路径虽然存在，但由于缺少属性设置器、缺少起始值/目标值注入以及任务预定位，因此对边界动画不起作用。修复这三个问题将允许每个属性的交错过渡，例如边界滑动时带有过冲，而透明度则线性淡入淡出。</p></li>
-<li><p><strong>同步应用过渡。</strong> Scalable UI 在内部处理所有任务过渡，没有为外部动画参与者提供钩子。集成 <em>RemoteAnimationAdapter</em> 支持将允许 OEM 启动器在应用进入面板时为其表面添加动画，例如将应用从控件图标变形到目标面板，而不是简单地出现在目标边界处。</p></li>
-<li><p><strong>重启后的状态持久性。</strong> Scalable UI 不会持久化上次活动的变体状态。每次重启后，每个面板都会恢复到其默认配置。为每个面板保留当前变体可以让信息娱乐系统从用户离开的地方继续运行。</p></li>
-</ul>
-
-
-<p><strong>隆重推出 Scalable UI 编辑器</strong></p>
-
-<p>在过去几个月使用 Scalable UI 的过程中，我发现一个问题反复出现：手动编写 Scalable UI 意味着需要在多个 XML 文件中处理变体、Z 图层和过渡效果，而且只有在刷入 RRO 并重启 SystemUI 后才能看到效果。工作流程并没有跟上框架的强大功能。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:2000/format:webp/1*TBlXAvuYmRG4dFD2E-02iA.png" alt="captionless image" /></p>
-
-<p>因此，我开始开发自己的工具——一个 Scalable UI 可视化编辑器，可以直接从布局设计导出 RRO 项目。你可以将 TaskPanel 放置在画布上，切换变体来定义状态，并调整过渡效果，所有操作均可实时预览。只需单击一下，即可将 RRO 直接写入正在运行的模拟器或设备。输出为标准的 RRO 文件，与手动工作流程完全兼容。</p>
-
-<p>如果你的团队正在基于 Scalable UI 进行开发，欢迎与我们联系。</p>
-
-<p><strong>结语</strong></p>
 ]]></content>
   </entry>
   
