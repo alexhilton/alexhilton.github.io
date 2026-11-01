@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Effectiveandroid | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/effectiveandroid/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-10-20T13:46:21+00:00</updated>
+  <updated>2026-11-01T03:13:44+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,727 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[用Konsist与Lint强制执行设计系统契约]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint/"/>
+    <updated>2026-11-01T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Your Design System Is a Contract. Enforce It with Konsist and Android Lint」，原文链接<a href="https://proandroiddev.com/konsist-design-system-validator-jetpack-compose-d5c3814fe462">https://proandroiddev.com/konsist-design-system-validator-jetpack-compose-d5c3814fe462</a>，由Ravi Rawal发布于2026年10月21日。</p></blockquote>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*wf9HLLqTSDtRjV2H3Cb-cA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>本文将介绍如何在 Jetpack Compose 中强制执行颜色、间距、排版、形状和组件规范，并演示如何配合自定义 Android Lint 规则实现这一目标。</p>
+
+<p>设计系统的可靠性取决于防止团队绕过它的规则的可靠性。</p>
+
+<p>大多数安卓开发团队都有设计系统。</p>
+
+<blockquote><p>它们定义了字体、颜色、间距、形状、尺寸和可重用的 Compose 组件。<br/>
+它们编写了使用指南，发布了组件库，并要求开发者遵循既定的规范。</p></blockquote>
+
+<p>然而，经过几个月的开发，同样的问题又开始出现了。</p>
+
+<p>一个屏幕使用 16dp 的水平内边距；另一个屏幕使用 18dp。一位开发者创建了一个自定义文本样式，因为现有的字体看起来不太合适。</p>
+
+<p>一项功能引入了一个<strong>硬编码的</strong>十六进制颜色值。一个按钮的<strong>圆角半径</strong>与应用程序的其他部分不同。有人创建了<strong>另一个</strong>卡片组件，因为现有的卡片组件似乎不方便重用。</p>
+
+<p>这些决定单独来看似乎都不算特别危险。但它们结合起来，却破坏了设计系统原本应该提供的连贯性。</p>
+
+<p>代码审查可以发现一些违规行为，但它并非可靠的强制执行机制。审查人员时间有限，规范容易被忽略，而且相同的反馈会在不同的拉取请求中重复出现。</p>
+
+<p>更好的方法是将设计系统视为工程合同，并通过自动化检查来执行该合同。</p>
+
+<p>对于使用 Jetpack Compose 的 Android 团队来说，<strong>Konsist 和自定义 Android Lint 规则可以互补地解决此问题。</strong> Konsist 可以强制执行架构和结构规范。Android Lint 可以检查源代码中是否存在禁止的模式。Compose UI 测试可以验证最终界面在运行时的行为。</p>
+
+<p>它们共同将设计系统规范从文档转化为可执行的规则。</p>
+
+<h2>首先要明确合同的实际含义</h2>
+
+<p>在编写测试或代码检查器之前，请确定你的团队希望每个功能遵循的规则。</p>
+
+<p>并非所有设计系统规范都适用于同一种强制执行机制。有些规则涉及模块边界，有些涉及源代码表达式，还有一些涉及渲染后的界面。</p>
+
+<p>例如：</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*yy2aO8lErT4stQ_aQDh3xQ.png" alt="无标题图像" /></p>
+
+<p>这种区别很重要，因为没有任何一种工具能够同样有效地执行每一种规则。</p>
+
+<p>Konsist 适用于结构约束。Lint 更适合检测禁止的源代码模式。运行时测试验证仅通过检查源代码无法确定的行为。</p>
+
+<p>目标不是增加更多检查，而是将每条规则都放到执行层，以便能够可靠地进行检查。</p>
+
+<h2>基于已批准的 Token 构建设计系统</h2>
+
+<p>设计系统在实施之前需要一个清晰的真理来源。</p>
+
+<p>考虑一个间距不一致的 Compose 应用程序：</p>
+
+<pre><code class="kotlin">@Composable
+fun ProductDetailsScreen() {
+    Column(
+        modifier = Modifier.padding(17.dp),
+    ) {
+        Text(
+            text = "Product details",
+            fontSize = 22.sp,
+        )
+        Spacer(modifier = Modifier.height(13.dp))
+        Button(
+            onClick = {},
+            modifier = Modifier.height(47.dp),
+        ) {
+            Text("Continue")
+        }
+    }
+}
+</code></pre>
+
+<p>问题不在于 17.dp、22.sp 或 47.dp 本身是否错误，而在于功能代码没有遵循系统已建立的值，而是自行做出独立的设计决策。</p>
+
+<p>首先定义 Token。</p>
+
+<h3>间距和尺寸</h3>
+
+<pre><code class="kotlin">package com.acme.designsystem.tokens
+import androidx.compose.ui.unit.dp
+object AppSpacing {
+    val xs = 4.dp
+    val sm = 8.dp
+    val md = 16.dp
+    val lg = 24.dp
+    val xl = 32.dp
+}
+object AppDimensions {
+    val buttonHeight = 48.dp
+    val iconSmall = 16.dp
+    val iconMedium = 24.dp
+    val iconLarge = 32.dp
+}
+</code></pre>
+
+<p>功能代码现在可以传达意图：</p>
+
+<pre><code>Column(
+    modifier = Modifier.padding(AppSpacing.md),
+) {
+    // Screen content
+}
+</code></pre>
+
+<p>Token 名称体现了设计意图，其实际值仍由设计系统统一管理。</p>
+
+<p>如果设计系统将其中心间距从 16.dp 更改为另一个值，则可以在一个地方进行更改，而不是分散在各个功能模块中。</p>
+
+<h3>排版</h3>
+
+<p>Material 3 的排版为文本角色提供了有用的基础。</p>
+
+<pre><code class="kotlin">package com.acme.designsystem.tokens
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+val AppTypography = Typography(
+    titleLarge = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+    ),
+    bodyLarge = TextStyle(
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+    ),
+)
+</code></pre>
+
+<p>这些数值仅供参考。生产设计系统应根据其实际设计规范定义排版角色，包括字体系列、字重、行高、字间距和支持的文本变体。</p>
+
+<p>重要的原则是，功能代码应该使用语义角色，而不是自行创造排版格式。</p>
+
+<pre><code>Text(
+    text = "Product details",
+    style = MaterialTheme.typography.titleLarge,
+)
+</code></pre>
+
+<h3>颜色和形状</h3>
+
+<p>颜色和形状应遵循相同的原则。在设计系统中，应尽可能使用 Material 3 的颜色角色：</p>
+
+<pre><code>Text(
+    text = "Available",
+    color = MaterialTheme.colorScheme.primary,
+)
+</code></pre>
+
+<p>对于自定义品牌颜色，在设计系统拥有的包中定义已批准的值，并向消费者公开语义名称。</p>
+
+<p>同样，应该集中定义已批准的形状，而不是允许每个特征选择自己的拐角半径。</p>
+
+<p>Token 系统构建了契约的词汇表。自动化检查能有效防止绕过这些约定。</p>
+
+<h2>使用 Konsist 保护架构边界</h2>
+
+<p>Konsist 是一个 Kotlin 架构测试库。它允许团队针对包结构、依赖关系、命名约定和其他源代码级架构规则编写测试。</p>
+
+<p>当设计系统被拆分为公共 API 和内部实现包时，这种方法尤其有用。</p>
+
+<p>想象一下这样的软件包结构：</p>
+
+<pre><code class="kotlin">com.acme
+├── feature
+│   ├── home
+│   └── product
+└── designsystem
+    ├── components
+    ├── tokens
+    └── internal
+        └── palette
+</code></pre>
+
+<p>功能模块应该使用公共的组件和 Token API，而不应直接依赖 <code>designsystem.internal</code> 下的实现细节。</p>
+
+<p>Konsist架构测试可以表达这种边界。</p>
+
+<pre><code class="kotlin">
+import com.lemonappdev.konsist.api.Konsist
+import com.lemonappdev.konsist.api.architecture.Layer
+import org.junit.Test
+class DesignSystemArchitectureTest {
+    @Test
+    fun `features must not depend on design system internals`() {
+        Konsist.scopeFromProject()
+            .assertArchitecture {
+                val features = Layer(
+                    "Features",
+                    "com.acme.feature..",
+                )
+                val designSystemInternal = Layer(
+                    "Design System Internal",
+                    "com.acme.designsystem.internal..",
+                )
+                features.doesNotDependOn(designSystemInternal)
+            }
+    }
+}
+</code></pre>
+
+<p>包模式必须与你仓库中的实际包布局相匹配。测试应在预期的项目范围内运行，并且 Konsist 版本应已锁定，并已根据你项目使用的 API 进行验证。</p>
+
+<p>这样做的好处是，架构决策可以执行。</p>
+
+<p>如果某个功能开始导入内部调色板或实现类，则在更改合并之前，架构测试可能会失败。</p>
+
+<p>Konsist还能强制执行哪些其他措施？</p>
+
+<p>同样的方法也适用于命名和包规范。</p>
+
+<p>例如，一个团队可能需要：</p>
+
+<ul>
+<li>公共设计系统组件位于 <code>designsystem.components</code> 下。</li>
+<li>Token 定义应放在 tokens 包内。</li>
+<li>特定于功能的 UI 组件位于其所属功能包内。</li>
+<li>内部实现类型遵循约定的命名规则。</li>
+<li>架构层保持其预期的依赖关系方向。</li>
+</ul>
+
+
+<p>这些检查有助于防止结构漂移。</p>
+
+<p>然而，存在一个重要的限制：<strong>包架构测试不会自动强制执行可组合组件内部的每种使用约定。</strong>一个功能可以仅依赖于已批准的包，并且仍然可以直接构造 Color(0xFF1769E0)。</p>
+
+<p>这时，<strong>Android Lint</strong> 就派上用场了。</p>
+
+<h2>使用自定义 Android Lint 规则来捕获设计系统违规</h2>
+
+<p>Android Lint 会分析 Android 源代码并报告潜在的错误和问题。它还提供用于编写自定义检测器的 API。</p>
+
+<p>对于设计系统而言，自定义 Lint 规则可以检查 Kotlin 源代码并标记违反团队约定的模式。</p>
+
+<p>例如：</p>
+
+<ul>
+<li>在功能代码中使用数值字面量构建颜色。</li>
+<li>使用原始 sp 值而非已批准的排版角色。</li>
+<li>在需要标记的地方使用原始 dp 值设置间距。</li>
+<li>调用已弃用的设计系统 API。</li>
+<li>使用未经批准的组件实现。</li>
+<li>引用功能包中的内部设计系统符号。</li>
+</ul>
+
+
+<p>每条规则都应该有明确的适用范围和清晰的失败信息。过于宽泛的规则如果会标记出所有合理的异常情况，就会造成不必要的干扰，最终导致开发者禁用这些检查。</p>
+
+<p>让我们实现一个具体的例子：检测 Compose Color 构造函数调用中的数值颜色字面量。</p>
+
+<h2>禁止在特征代码中使用原始数值颜色构造函数</h2>
+
+<p>请看以下代码：</p>
+
+<pre><code class="kotlin">val accent = Color(0xFF1769E0L)
+</code></pre>
+
+<p>颜色可能与当前的品牌色调相符，但该功能现在拥有了本应属于设计系统的设计决策权。</p>
+
+<p>我们可以创建一个自定义检测器，用于标记未经批准的软件包中的这种模式。</p>
+
+<p>以下示例针对直接传递给 androidx.compose.ui.graphics.Color 构造函数的数值字面量。这是一个重点突出的入门规则，并非对所有可能的硬编码颜色进行全面检测。</p>
+
+<pre><code class="kotlin">package com.acme.designsystem.lint
+import com.android.tools.lint.detector.api.Category
+import com.android.tools.lint.detector.api.Detector
+import com.android.tools.lint.detector.api.Implementation
+import com.android.tools.lint.detector.api.Issue
+import com.android.tools.lint.detector.api.JavaContext
+import com.android.tools.lint.detector.api.Scope
+import com.android.tools.lint.detector.api.Severity
+import com.android.tools.lint.detector.api.SourceCodeScanner
+import com.intellij.psi.PsiMethod
+import org.jetbrains.uast.UCallExpression
+import org.jetbrains.uast.ULiteralExpression
+class NoHardcodedColorDetector : Detector(), SourceCodeScanner {
+    override fun getApplicableConstructorTypes(): List&lt;String&gt; =
+        listOf(COLOR_CLASS)
+    override fun visitConstructor(
+        context: JavaContext,
+        node: UCallExpression,
+        constructor: PsiMethod,
+    ) {
+        val packageName = context.uastFile?.packageName.orEmpty()
+        if (isAllowedPackage(packageName)) return
+        val hasNumericLiteral = node.valueArguments.any { argument -&gt;
+            argument is ULiteralExpression &amp;&amp;
+                argument.value is Number
+        }
+        if (!hasNumericLiteral) return
+        context.report(
+            ISSUE,
+            node,
+            context.getLocation(node),
+            "Use an approved design-system color or " +
+                "MaterialTheme.colorScheme instead of " +
+                "constructing a Color from a numeric literal.",
+        )
+    }
+    private fun isAllowedPackage(packageName: String): Boolean =
+        ALLOWED_PACKAGES.any { allowed -&gt;
+            packageName == allowed ||
+                packageName.startsWith("$allowed.")
+        }
+    companion object {
+        private const val COLOR_CLASS =
+            "androidx.compose.ui.graphics.Color"
+        private val ALLOWED_PACKAGES = setOf(
+            "com.acme.designsystem.tokens",
+            "com.acme.designsystem.internal.palette",
+        )
+        @JvmField
+        val ISSUE: Issue = Issue.create(
+            id = "HardcodedDesignColor",
+            briefDescription = "Hardcoded design-system color",
+            explanation = """
+                Feature code must use approved design-system
+                colors or semantic MaterialTheme color roles.
+                Raw numeric color definitions belong in
+                approved design-system packages.
+            """.trimIndent(),
+            category = Category.CORRECTNESS,
+            priority = 8,
+            severity = Severity.ERROR,
+            implementation = Implementation(
+                NoHardcodedColorDetector::class.java,
+                Scope.JAVA_FILE_SCOPE,
+            ),
+        )
+    }
+}
+</code></pre>
+
+<p>该探测器由三个重要部分组成。</p>
+
+<p>首先，getApplicableConstructorTypes() 将检测器需要检查的调用限制为 Compose Color 类型的构造函数。</p>
+
+<p>其次，visitConstructor() 检查参数中是否存在数值字面量，并跳过明确允许定义颜色的包。</p>
+
+<p>第三，所报告的问题严重级别为 ERROR。这意味着 Lint 将此违规行为报告为错误。它是否会阻塞特定的 CI 作业取决于该作业的运行方式以及 Lint 的配置。</p>
+
+<p>此允许列表是有意为之。设计系统必须能够定义自己的调色板。该规则可防止任意的功能级定义，同时又不妨碍中心令牌实现正常工作。</p>
+
+<p>应根据项目中选择的 Android Lint 版本验证具体的检测器 API。自定义 Lint 对版本敏感，因此请确保 lint-api 和 lint-tests 与兼容的 Android Gradle 插件工具链保持一致。</p>
+
+<h2>登记问题</h2>
+
+<p>Lint 需要一个问题注册表来发现自定义问题。</p>
+
+<pre><code class="kotlin">package com.acme.designsystem.lint
+import com.android.tools.lint.client.api.IssueRegistry
+import com.android.tools.lint.client.api.Vendor
+import com.android.tools.lint.detector.api.CURRENT_API
+class DesignSystemIssueRegistry : IssueRegistry() {
+    override val issues = listOf(
+        NoHardcodedColorDetector.ISSUE,
+    )
+    override val api: Int = CURRENT_API
+    override val minApi: Int = 8
+    override val vendor = Vendor(
+        vendorName = "Acme Engineering",
+        feedbackUrl = "https://example.com/engineering/issues",
+        contact = "mobile-platform@example.com",
+    )
+}
+</code></pre>
+
+<p>请将示例中的供应商信息替换为贵公司的详细信息。</p>
+
+<p>自定义 Lint 模块还必须通过服务加载器注册问题注册表。创建以下文件：</p>
+
+<pre><code class="kotlin">design-system-lint/
+└── src/main/resources/
+    └── META-INF/services/
+        └── com.android.tools.lint.client.api.IssueRegistry
+</code></pre>
+
+<p>文件内容应为完整的注册表类名：</p>
+
+<pre><code class="kotlin">com.acme.designsystem.lint.DesignSystemIssueRegistry
+</code></pre>
+
+<p>这样，Lint 就可以在加载自定义规则工件时发现自定义问题。</p>
+
+<h2>配置自定义 Lint 模块</h2>
+
+<p>一个典型的基于 JVM 的自定义 Lint 模块需要 Lint API 进行编译，以及 Lint 测试基础架构进行单元测试。</p>
+
+<pre><code class="kotlin">plugins {
+    kotlin("jvm")
+}
+dependencies {
+    compileOnly(
+        "com.android.tools.lint:lint-api:$lintVersion",
+    )
+    testImplementation(
+        "com.android.tools.lint:lint-tests:$lintVersion",
+    )
+    testImplementation("junit:junit:4.13.2")
+}
+</code></pre>
+
+<p>此处，lintVersion 代表与你的 Android Gradle 插件和 Lint 环境兼容的版本。请勿脱离 Android 构建工具链单独选择此版本。</p>
+
+<p>在 Android 应用模块中，通过 lintChecks 配置来使用这些规则：</p>
+
+<pre><code class="kotlin">dependencies {
+    lintChecks(project(":design-system-lint"))
+}
+</code></pre>
+
+<p>一旦将模块包含在构建中，Lint 就可以在分析应用程序时加载已注册的检测器。</p>
+
+<h2>在强制执行规则之前先进行测试</h2>
+
+<p>没有测试的自定义检测器只不过是另一段可能悄无声息停止工作的代码。</p>
+
+<p>Lint 提供了一个测试基础架构，允许你提供源代码片段并断言所报告的问题。</p>
+
+<p>以下测试类展示了检测器测试的预期结构。请确保 Lint 测试依赖项与项目使用的版本保持一致，并在将其应用于持续集成 (CI) 之前，使用该版本验证代码片段。</p>
+
+<pre><code class="kotlin">package com.acme.designsystem.lint
+import com.android.tools.lint.checks.infrastructure.TestFiles.kotlin
+import com.android.tools.lint.detector.api.Detector
+import com.android.tools.lint.detector.api.Issue
+import com.android.tools.lint.detector.api.LintDetectorTest
+import org.junit.Test
+class NoHardcodedColorDetectorTest : LintDetectorTest() {
+    override fun getDetector(): Detector =
+        NoHardcodedColorDetector()
+    override fun getIssues(): List&lt;Issue&gt; =
+        listOf(NoHardcodedColorDetector.ISSUE)
+    private val colorStub = kotlin(
+        "src/main/java/androidx/compose/ui/graphics/Color.kt",
+        """
+        package androidx.compose.ui.graphics
+        class Color(val value: Long) {
+            constructor(value: Int) : this(value.toLong())
+        }
+        """.trimIndent(),
+    )
+    @Test
+    fun `flags numeric colors in feature code`() {
+        lint()
+            .files(
+                colorStub,
+                kotlin(
+                    "src/main/java/com/acme/feature/home/Colors.kt",
+                    """
+                    package com.acme.feature.home
+                    import androidx.compose.ui.graphics.Color
+                    val accent = Color(0xFF1769E0L)
+                    """.trimIndent(),
+                ),
+            )
+            .run()
+            .expectErrorCount(1)
+            .expectContains("[HardcodedDesignColor]")
+    }
+
+    @Test
+    fun `allows numeric colors in token package`() {
+        lint()
+            .files(
+                colorStub,
+                kotlin(
+                    "src/main/java/com/acme/designsystem/tokens/AppColors.kt",
+                    """
+                    package com.acme.designsystem.tokens
+                    import androidx.compose.ui.graphics.Color
+                    val primary = Color(0xFF1769E0L)
+                    """.trimIndent(),
+                ),
+            )
+            .run()
+            .expectClean()
+    }
+}
+</code></pre>
+
+<p>第一个测试验证了特征包中的数值颜色构造函数会产生错误。第二个测试验证了相同的模式在已批准的标记包中是否允许。</p>
+
+<p>测试桩为测试环境提供了一个最基本的 Compose Color 类型。实际的检测器仍需针对项目使用的 Lint 版本和源代码配置进行测试。</p>
+
+<p>这些测试也证明了一个关键原则：<strong>既要测试违规行为，也要测试合法的例外情况。</strong>否则，一条规则可能看起来有效，但实际上却破坏了它本应保护的代码。</p>
+
+<h2>了解探测器的局限性</h2>
+
+<p>这个启动检测器并不能检测到颜色绕过设计系统的所有方式。</p>
+
+<p>例如，它并未全面处理以下问题：</p>
+
+<pre><code>Color.Red
+</code></pre>
+
+<p>或者存储在常量中的颜色、从辅助函数返回的颜色、从资源加载的颜色，或者通过别名传递的颜色。</p>
+
+<p>这也不能证明命名标记在语义上适合使用它的组件。</p>
+
+<p>生产环境检测器可能需要检查已解析的符号、附加构造函数形式、属性访问或其他表达式。它应该包含针对组织希望禁止的具体模式的测试。</p>
+
+<p>正确的做法是根据实际违规情况和设计系统契约逐步扩展检测器，而不是声称单个语法检查可以保证完全的颜色控制。</p>
+
+<p>将同样的方法应用于字体排印、间距和尺寸。</p>
+
+<p>一旦第一个自定义规则生效，其他规则就可以强制执行其他设计系统约定。</p>
+
+<p>不要试图把所有规则都塞进一个庞大的检测器里。要给每条规则都赋予明确的目的、范围和测试套件。</p>
+
+<h3>排版</h3>
+
+<p>当项目需要语义化的排版角色时，排版规则可能会标记功能代码中直接赋值的 fontSize。</p>
+
+<p>例如：</p>
+
+<pre><code>Text(
+    text = "Product title",
+    fontSize = 19.sp,
+)
+</code></pre>
+
+<p>首选方案是使用已定义的角色：</p>
+
+<pre><code>Text(
+    text = "Product title",
+    style = MaterialTheme.typography.titleLarge,
+)
+</code></pre>
+
+<p>该实现需要明确规定禁止哪些操作。如果一概禁止所有 TextStyle 或 fontSize 表达式，则可能会误判一些合法情况，例如自定义绘图、特殊编辑内容或内部设计系统实现。</p>
+
+<p>明确合同是禁止所有直接文本尺寸调整，还是仅禁止指定功能包中的某些特定模式。</p>
+
+<h3>间距和尺寸</h3>
+
+<p>类似的规则可以检测原始维度文字：</p>
+
+<pre><code>Modifier.padding(17.dp)
+</code></pre>
+
+<p>并引导开发者使用 Token：</p>
+
+<pre><code>Modifier.padding(AppSpacing.md)
+</code></pre>
+
+<p>然而，并非所有的 dp 值都代表间距。尺寸还可以表示组件的最小触摸目标、边框宽度、图标大小或特定的布局约束。</p>
+
+<p>检测器应该能够区分设计系统实际控制的 API 和上下文。如果团队想要强制执行间距标记，那么围绕已知间距 API 制定一个范围较窄的规则，比制定一个标记整个代码库中所有维度字面量的规则更有用。</p>
+
+<h3>形状</h3>
+
+<p>假设设计系统定义了卡片和按钮的认可形状。一条规则可以检测特征代码中直接构造的形状对象，并要求改用设计系统中指定的形状。</p>
+
+<p>具体检测器取决于应用程序如何对形状进行建模以及允许使用哪些 API。它还应该能够区分合法的自定义形状和意外重复的形状。</p>
+
+<h3>命名规则</h3>
+
+<p>命名规则通常可以通过 Konsist 来强制执行，尤其是在要求涉及包和类结构时。</p>
+
+<p>例如，团队可以要求设计系统可组合体使用一致的命名约定，或者将实现类限制在内部包中。</p>
+
+<p>规则应该反映团队实际采用的惯例，而不是仅仅因为命名限制容易自动化就强加这些限制。</p>
+
+<h2>强制组件重用，而不是仅仅强制使用 Token</h2>
+
+<p>集中管理的 Token 可以防止数值漂移，但无法保证组件行为的一致性。</p>
+
+<p>考虑两个功能，它们都使用相同的间距和颜色标记，但各自实现了不同的按钮。一个功能能正确处理加载状态；另一个功能允许重复点击。一个功能具有预期的最小高度；另一个功能则没有。一个功能提供了适当的辅助功能语义；另一个功能则没有。</p>
+
+<p>这两个功能虽然都能通过令牌检查，但仍然会呈现不同的用户体验。</p>
+
+<p>因此，组件约定应该成为合同的一部分。</p>
+
+<p>例如，一个设计系统可能提供：</p>
+
+<pre><code class="kotlin">@Composable
+fun AppPrimaryButton(
+    text: String,
+    onClick: () -&gt; Unit,
+    enabled: Boolean = true,
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.height(AppDimensions.buttonHeight),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+}
+</code></pre>
+
+<p>这个例子特意做得比较简单。一个真正的组件可能还会定义加载行为、图标、内容内边距、语义和分析钩子。</p>
+
+<p>关键在于，功能会使用公共组件，而不是独立地重新创建相同的行为。</p>
+
+<p>Lint 规则可以标记出直接使用底层组件的情况，而这些组件必须使用特定的包装器。Konsist 可以帮助保护这些组件周围的包和模块边界。</p>
+
+<p>不过，全局禁令要谨慎使用。有时，某个功能确实需要专门的控制。可以通过经过审核的 API 或范围较小的抑制机制来允许显式的例外情况，并保持这些例外情况的可见性。</p>
+
+<h2>使用 Compose UI 测试确保运行时正确性</h2>
+
+<p>静态分析可以识别源代码模式，但无法确定渲染界面的所有属性。</p>
+
+<p>例如，Lint 规则可能会确认某个功能使用了 MaterialTheme.typography.bodyLarge，但它本身无法证明最终屏幕在大字体比例下仍然可读，也无法证明文本不会被其父布局裁剪。</p>
+
+<p>Compose UI 测试应该涵盖这些运行时要求。</p>
+
+<p>有用的测试目标包括：</p>
+
+<ul>
+<li>辅助功能语义和有意义的标签。</li>
+<li>支持的字体大小下的布局行为。</li>
+<li>启用、禁用、加载和错误状态。</li>
+<li>最小触摸目标要求。</li>
+<li>内容溢出和用户生成的长文本。</li>
+<li>交互行为和状态转换。</li>
+</ul>
+
+
+<p>这将创建一个更完善的执法模式。</p>
+
+<p>Konsist 检查架构边界。Lint 检测禁止的源代码模式。Compose UI 测试验证渲染行为。每一层都保护着契约的不同部分。</p>
+
+<h2>在 CI 中暴露违规行为</h2>
+
+<p>规则只有始终如一地执行才能有效。</p>
+
+<p>将架构测试和自定义 Lint 检查作为常规验证流程的一部分运行。具体的 Gradle 任务路径取决于模块的名称和配置，但典型的流程可能包括：</p>
+
+<pre><code class="bash">./gradlew :design-system-lint:test
+./gradlew :app:lint
+</code></pre>
+
+<p>作为项目单元测试或验证任务的一部分，运行相关的 Konsist 测试任务。</p>
+
+<p>期望的结果很明确：引入禁止的设计系统模式的拉取请求会未能通过相应的检查，并解释如何修复它。</p>
+
+<p>一条有用的错误信息应该回答三个问题：</p>
+
+<ol>
+<li>违反了哪条规则？</li>
+<li>这条规则存在的意义是什么？</li>
+<li>开发人员应该使用什么替代方法？</li>
+</ol>
+
+
+<p>例如：</p>
+
+<p>检测到硬编码的设计系统颜色。请使用已批准的设计系统颜色或语义化的 MaterialTheme 颜色角色。</p>
+
+<p>这比“颜色使用无效”之类的通用消息更有用。</p>
+
+<h2>平稳落地规则，不影响交付节奏</h2>
+
+<p>如果一个代码库已经包含了多年不一致的 UI 代码，那么在第一天就将每条规则都变成阻塞性错误可能会导致大量的故障。</p>
+
+<p>首先对现有代码库进行检查，了解违规之处。优先修复高价值案例，然后分阶段引入规则。</p>
+
+<p>实际推广流程如下：</p>
+
+<ol>
+<li>建立令牌和组件 API。</li>
+<li>添加架构边界测试。</li>
+<li>实现并测试一条自定义 Lint 规则。</li>
+<li>对现有功能模块运行该规则，并评估误报情况。</li>
+<li>修复违规或记录合理的例外情况。</li>
+<li>将该规则设置为阻止新变更。</li>
+<li>随着设计系统的完善，添加更多规则。</li>
+</ol>
+
+
+<p>避免为了让持续集成（CI）通过而随意压制违规行为。例外情况应具体、合理且可审查。</p>
+
+<p>此外，还应追踪违规次数、规则被抑制的频率以及哪些规则会产生误报。这些信息有助于区分有效的系统设计规范和一堆无意义的检查结果。</p>
+
+<p>设计系统成为开发工作流程的一部分</p>
+
+<p>这种方法的真正价值不在于团队编写了多少自定义规则。</p>
+
+<p>这是责任的转移。</p>
+
+<p>如果没有自动化强制执行机制，保持视觉一致性很大程度上依赖于开发人员对规范的记忆以及审核人员对偏差的发现。随着团队、模块和屏幕数量的增加，这变得越来越困难。</p>
+
+<p>通过可执行规则，存储库本身可以传达哪些决策属于设计系统，哪些是合法的功能级选择。</p>
+
+<p>开发人员仍然可以构建新屏幕，但屏幕必须遵守相同的架构边界，使用已批准的令牌，并遵循组织已建立的组件约定。</p>
+
+<p>这在大型 Android 代码库中尤其有用，因为设计系统偏差通常会在各个独立功能团队之间逐渐显现。修复单个不一致的颜色或间距值的成本很小，但维护数百个略有不同的实现的成本却不低。</p>
+
+<p>Konsist 和 Android Lint 并不能取代设计评审、用户体验评估或无障碍测试。它们只是从这些流程中移除了重复性的机械检查，以便评审人员能够将更多时间用于需要人为判断的决策。</p>
+
+<p>这一原则不仅适用于 Compose 系统，也适用于更广泛的场景：<strong>如果一项约定重要到需要记录下来，并且足够精确需要描述，那么它可能也重要到需要自动强制执行。</strong></p>
+
+<p>设计系统不应依赖于每个人都记住约定。它应该让正确的路径易于遵循，并在意外违规行为进入生产环境之前将其暴露出来。</p>
+
+<h2>参考</h2>
+
+<ul>
+<li><a href="https://github.com/LemonAppDev/konsist">Konsist - Kotlin 架构测试</a></li>
+<li><a href="https://developer.android.com/studio/write/lint">Android 开发者 - 使用 lint 检查改进代码</a></li>
+<li><a href="https://googlesamples.github.io/android-custom-lint-rules/">Android 开发者 - 自定义 lint 检查</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/designsystems/material3">Material 3 - Jetpack Compose 中的主题化</a></li>
+</ul>
+
+
+<p>实现说明：Kotlin 示例仅供参考。在将这些规则应用到生产 CI 流水线之前，请先根据项目中指定的版本验证 Konsist 和 Android Lint API，并运行检测器测试和 Gradle 检查。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[生命周期感知的多模块启动模式]]></title>
@@ -1971,88 +2692,6 @@ android skills list --installed
 <p>Android XR 仍在不断发展，这使得现在成为探索它的特别宝贵的时间。该平台足够新，开发人员可以帮助塑造其模式，但也足够熟悉，经验丰富的 Android 开发人员可以在不放弃他们已经了解的生态系统的情况下开始构建。</p>
 
 <p><strong>下一代 Android 应用程序可能不会驻留在屏幕内。但它们仍然可以在 Android Studio 中开始。</strong></p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[探究Android Views、Flutter和Compose如何渲染你的UI]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/08/08/android-views-flutter-and-compose/"/>
-    <updated>2026-08-08T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/08/08/android-views-flutter-and-compose</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「One Tap, Three Machines: How Android Views, Flutter, and Compose Actually Render Your UI」，原文链接<a href="https://medium.com/proandroiddev/one-tap-three-machines-how-android-views-flutter-and-compose-actually-render-your-ui-ad31c30ec279">https://medium.com/proandroiddev/one-tap-three-machines-how-android-views-flutter-and-compose-actually-render-your-ui-ad31c30ec279</a>，由Angelina Andronova发布于2026年7月16日。</p></blockquote>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*CKDWImmVOIeeIeHhmP3_mg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>_Android Native vs Flutter vs KMP — 本系列文章对比了三种移动技术栈如何以不同的方式解决相同的问题。第一部分：渲染，围绕每个 UI 框架都必须回答的一个问题展开。</p>
-
-<p>UI 框架经常被比作功能目录：这个框架支持热重载，那个框架提供原生外观和体验，第三个框架共享代码。记住这些功能并不等同于理解它们。更深层次的问题始终如一：<strong>当状态改变时，框架敢于重做多少屏幕内容？</strong></p>
-
-<p>每一种渲染架构都是对这个问题的答案，而每个答案都会在某些方面提升效率，并在其他方面付出代价。UI 渲染没有免费的午餐。</p>
-
-<p>本系列文章是我对三大移动技术栈的个人研究——追踪它们的渲染管线，并比较它们对相同问题的解答。追踪一次状态变更在机制中的运行过程，这三种架构可以归结为三种策略：</p>
-
-<p><strong>Android Views：</strong> <em>原地修改树状结构。</em></p>
-
-<p><strong>Flutter：</strong> <em>快速重建所有内容，进行差异比较和修补。</em></p>
-
-<p><strong>Compose：</strong> <em>订阅状态，仅重新运行读取器。</em></p>
-
-<p>本文将追踪一次状态变更——点击后计数器递增——在每种架构中的运行过程：哪些工作被执行，哪些工作被跳过，以及每种设计旨在避免哪些故障。</p>
-
-<p>第一部分 — Android Views：可变树状结构</p>
-
-<p>Flutter 考虑了同步问题，并做出了一个激进的赌注：如果保持可变树真实是困难的部分，那就停止变异。每次从状态描述整个 UI，并让框架找到差异。</p>
-
-<p>这个赌注之所以有效，是因为 Flutter 将 UI 分成了<strong>三棵树</strong>：</p>
-
-<p><strong>小部件</strong> — 不可变的描述，自由重建。从设计上来说，创建它们的成本很低；它们是配置，而不是机械。
-<strong>元素</strong> - 幸存下来的持久中间层会重建并保持状态。
-<strong>渲染对象</strong> — 用于测量、布局和绘制的昂贵机器。</p>
-
-<p>相同的计数器，Flutter 风格：</p>
-
-<pre><code class="dart">class _CounterScreenState extends State&lt;CounterScreen&gt; {
-  int count = 0;
-  @override
-  Widget build(BuildContext context) {
-    return Column(children: [      Text('$count'),
-      ElevatedButton(
-        onPressed: () =&gt; setState(() =&gt; count++),
-        child: const Text('+'),
-      ),
-    ]);
-  }
-}
-</code></pre>
-
-<p>没有任何视图可以进入。 “build”方法是同步：状态和 UI 不能不一致，因为 UI 每次都会根据状态重新计算。</p>
-
-<p>我们的水龙头调用“setState”。该框架为该小部件的子树重新运行“build()”，生成一个新的小部件树 - 包括新的“Text(&lsquo;1&rsquo;)”描述。然后元素树将新的与旧的进行比较：相同的运行时类型和键 → 保留现有的 Element 和 RenderObject，只需更新它们即可；不同→拆除并重新创建。这个一位数的变化结束了它的旅程，作为对现有渲染对象的一个​​小更新，就像视图世界一样——但没有人必须记住去做它。</p>
-
-<p><strong>这可以防止失败：</strong> 状态 UI 漂移。每次更改时屏幕都会从模型中重新派生，因此它<em>不能</em>默默地不同意它。而且，由于 Flutter 通过自己的引擎（现在是 Impeller，历史上是 Skia）自行绘制每个像素，因此同一棵树在 Android、iOS 及其他平台上的渲染效果相同——通过完全拥有画布解决了碎片问题。</p>
-
-<p><strong>它的回报是：</strong>乐观的工作。无论是否发生任何变化，重建都会发生，并且差异的存在是为了在事后扔掉废物。在预算紧张的情况下——长清单、低端设备——无纪律的重建会变得很糟糕，而社区的工具箱（“const”构造函数、细粒度的“BlocBuilder”放置、键）在很大程度上是一个手动缩小爆炸半径的工具箱。拥有每一个像素还意味着重新实现操作系统免费提供的功能：文本编辑、滚动物理、可访问性桥梁——永远追逐平台的发展。</p>
-
-<p>第三部分 — 撰写：订阅和补丁</p>
-
-<p>跟踪所有三台机器的一位数变化，并将策略压缩到一个表中：</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*OfpE1jYDAzQYv5f_xEDhEg.png" alt="无字幕图像" /></p>
-
-<p>当突变很少且层次结构稳定时，<strong>Views</strong> 是正确的机器 - 并且它仍然是每个 Android 开发人员必须了解的世界，因为这两种新机器都可以解决其弱点。</p>
-
-<p>当产品要求像素相同的多平台 UI，并且你的团队对重建范围有严格要求时，<strong>Flutter</strong> 是合适的机器。</p>
-
-<p>当你希望框架承担真实性负担和效率负担，并且愿意学习它悄悄要求你遵守的稳定性合同时，<strong>Compose</strong> 是合适的机器。</p>
-
-<p>生产中的大多数渲染性能问题不是由于选择了错误的机器而引起的，而是由于使用一台机器而精神上却生活在另一台机器中——像 Flutter 中的 Views 开发人员一样变异，或者像 Compose 中的 Flutter 开发人员一样提升状态读取。这些框架的不同之处并不在于它们可以做什么，而在于它们默默地期望你做什么。</p>
-
-<p>本系列的下一篇：<a href="https://medium.com/@angelinaballerina/one-badge-third-deliveries-how-android-flutter-and-compose-keep-your-ui-in-sync-2ef1e84a6038">状态管理</a> —“LiveData”、“Bloc”、“StateFlow”，以及为什么每个生态系统从不同方向汇聚到流上。</p>
-
-<p><em>本系列是作者对 Android Native、KMP 和 Flutter 的个人研究——它们在幕后如何工作、它们的不同之处以及它们各自对你的期望。</em></p>
 ]]></content>
   </entry>
   

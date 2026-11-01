@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-10-20T13:46:21+00:00</updated>
+  <updated>2026-11-01T03:13:44+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,1033 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[用Konsist与Lint强制执行设计系统契约]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint/"/>
+    <updated>2026-11-01T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Your Design System Is a Contract. Enforce It with Konsist and Android Lint」，原文链接<a href="https://proandroiddev.com/konsist-design-system-validator-jetpack-compose-d5c3814fe462">https://proandroiddev.com/konsist-design-system-validator-jetpack-compose-d5c3814fe462</a>，由Ravi Rawal发布于2026年10月21日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint/"><img src="https://cdn-images-1.medium.com/max/1024/1*wf9HLLqTSDtRjV2H3Cb-cA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>本文将介绍如何在 Jetpack Compose 中强制执行颜色、间距、排版、形状和组件规范，并演示如何配合自定义 Android Lint 规则实现这一目标。</p>
+
+<p>设计系统的可靠性取决于防止团队绕过它的规则的可靠性。</p>
+
+<p>大多数安卓开发团队都有设计系统。</p>
+
+<blockquote><p>它们定义了字体、颜色、间距、形状、尺寸和可重用的 Compose 组件。<br/>
+它们编写了使用指南，发布了组件库，并要求开发者遵循既定的规范。</p></blockquote>
+
+<p>然而，经过几个月的开发，同样的问题又开始出现了。</p>
+
+<p>一个屏幕使用 16dp 的水平内边距；另一个屏幕使用 18dp。一位开发者创建了一个自定义文本样式，因为现有的字体看起来不太合适。</p>
+
+<p>一项功能引入了一个<strong>硬编码的</strong>十六进制颜色值。一个按钮的<strong>圆角半径</strong>与应用程序的其他部分不同。有人创建了<strong>另一个</strong>卡片组件，因为现有的卡片组件似乎不方便重用。</p>
+
+<p>这些决定单独来看似乎都不算特别危险。但它们结合起来，却破坏了设计系统原本应该提供的连贯性。</p>
+
+<p>代码审查可以发现一些违规行为，但它并非可靠的强制执行机制。审查人员时间有限，规范容易被忽略，而且相同的反馈会在不同的拉取请求中重复出现。</p>
+
+<p>更好的方法是将设计系统视为工程合同，并通过自动化检查来执行该合同。</p>
+
+<p>对于使用 Jetpack Compose 的 Android 团队来说，<strong>Konsist 和自定义 Android Lint 规则可以互补地解决此问题。</strong> Konsist 可以强制执行架构和结构规范。Android Lint 可以检查源代码中是否存在禁止的模式。Compose UI 测试可以验证最终界面在运行时的行为。</p>
+
+<p>它们共同将设计系统规范从文档转化为可执行的规则。</p>
+
+<h2>首先要明确合同的实际含义</h2>
+
+<p>在编写测试或代码检查器之前，请确定你的团队希望每个功能遵循的规则。</p>
+
+<p>并非所有设计系统规范都适用于同一种强制执行机制。有些规则涉及模块边界，有些涉及源代码表达式，还有一些涉及渲染后的界面。</p>
+
+<p>例如：</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*yy2aO8lErT4stQ_aQDh3xQ.png" alt="无标题图像" /></p>
+
+<p>这种区别很重要，因为没有任何一种工具能够同样有效地执行每一种规则。</p>
+
+<p>Konsist 适用于结构约束。Lint 更适合检测禁止的源代码模式。运行时测试验证仅通过检查源代码无法确定的行为。</p>
+
+<p>目标不是增加更多检查，而是将每条规则都放到执行层，以便能够可靠地进行检查。</p>
+
+<h2>基于已批准的 Token 构建设计系统</h2>
+
+<p>设计系统在实施之前需要一个清晰的真理来源。</p>
+
+<p>考虑一个间距不一致的 Compose 应用程序：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ProductDetailsScreen</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Column</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">17.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product details&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">fontSize</span> <span class="p">=</span> <span class="m">22.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="n">Spacer</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">13.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>        <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">onClick</span> <span class="p">=</span> <span class="p">{},</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">47.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Continue&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>问题不在于 17.dp、22.sp 或 47.dp 本身是否错误，而在于功能代码没有遵循系统已建立的值，而是自行做出独立的设计决策。</p>
+
+<p>首先定义 Token。</p>
+
+<h3>间距和尺寸</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.tokens</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.unit.dp</span>
+</span><span class='line'><span class="k">object</span> <span class="nc">AppSpacing</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">xs</span> <span class="p">=</span> <span class="m">4.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sm</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">md</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">lg</span> <span class="p">=</span> <span class="m">24.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">xl</span> <span class="p">=</span> <span class="m">32.</span><span class="n">dp</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="k">object</span> <span class="nc">AppDimensions</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">buttonHeight</span> <span class="p">=</span> <span class="m">48.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">iconSmall</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">iconMedium</span> <span class="p">=</span> <span class="m">24.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">iconLarge</span> <span class="p">=</span> <span class="m">32.</span><span class="n">dp</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>功能代码现在可以传达意图：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Column</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">AppSpacing</span><span class="p">.</span><span class="n">md</span><span class="p">),</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Screen content</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Token 名称体现了设计意图，其实际值仍由设计系统统一管理。</p>
+
+<p>如果设计系统将其中心间距从 16.dp 更改为另一个值，则可以在一个地方进行更改，而不是分散在各个功能模块中。</p>
+
+<h3>排版</h3>
+
+<p>Material 3 的排版为文本角色提供了有用的基础。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.tokens</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.material3.Typography</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.text.TextStyle</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.text.font.FontWeight</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.unit.sp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">AppTypography</span> <span class="p">=</span> <span class="n">Typography</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">titleLarge</span> <span class="p">=</span> <span class="n">TextStyle</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">SemiBold</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontSize</span> <span class="p">=</span> <span class="m">22.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">lineHeight</span> <span class="p">=</span> <span class="m">28.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">),</span>
+</span><span class='line'>    <span class="n">bodyLarge</span> <span class="p">=</span> <span class="n">TextStyle</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">Normal</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontSize</span> <span class="p">=</span> <span class="m">16.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">lineHeight</span> <span class="p">=</span> <span class="m">24.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">),</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这些数值仅供参考。生产设计系统应根据其实际设计规范定义排版角色，包括字体系列、字重、行高、字间距和支持的文本变体。</p>
+
+<p>重要的原则是，功能代码应该使用语义角色，而不是自行创造排版格式。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product details&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">titleLarge</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>颜色和形状</h3>
+
+<p>颜色和形状应遵循相同的原则。在设计系统中，应尽可能使用 Material 3 的颜色角色：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Available&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">primary</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于自定义品牌颜色，在设计系统拥有的包中定义已批准的值，并向消费者公开语义名称。</p>
+
+<p>同样，应该集中定义已批准的形状，而不是允许每个特征选择自己的拐角半径。</p>
+
+<p>Token 系统构建了契约的词汇表。自动化检查能有效防止绕过这些约定。</p>
+
+<h2>使用 Konsist 保护架构边界</h2>
+
+<p>Konsist 是一个 Kotlin 架构测试库。它允许团队针对包结构、依赖关系、命名约定和其他源代码级架构规则编写测试。</p>
+
+<p>当设计系统被拆分为公共 API 和内部实现包时，这种方法尤其有用。</p>
+
+<p>想象一下这样的软件包结构：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">com</span><span class="p">.</span><span class="n">acme</span>
+</span><span class='line'><span class="err">├──</span> <span class="n">feature</span>
+</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">home</span>
+</span><span class='line'><span class="err">│</span>   <span class="err">└──</span> <span class="n">product</span>
+</span><span class='line'><span class="err">└──</span> <span class="n">designsystem</span>
+</span><span class='line'>    <span class="err">├──</span> <span class="n">components</span>
+</span><span class='line'>    <span class="err">├──</span> <span class="n">tokens</span>
+</span><span class='line'>    <span class="err">└──</span> <span class="k">internal</span>
+</span><span class='line'>        <span class="err">└──</span> <span class="n">palette</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>功能模块应该使用公共的组件和 Token API，而不应直接依赖 <code>designsystem.internal</code> 下的实现细节。</p>
+
+<p>Konsist架构测试可以表达这种边界。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">com.lemonappdev.konsist.api.Konsist</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.lemonappdev.konsist.api.architecture.Layer</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.junit.Test</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">DesignSystemArchitectureTest</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="err">`</span><span class="nf">features</span> <span class="n">must</span> <span class="n">not</span> <span class="n">depend</span> <span class="n">on</span> <span class="n">design</span> <span class="n">system</span> <span class="n">internals</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Konsist</span><span class="p">.</span><span class="n">scopeFromProject</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">assertArchitecture</span> <span class="p">{</span>
+</span><span class='line'>                <span class="k">val</span> <span class="py">features</span> <span class="p">=</span> <span class="n">Layer</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;Features&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;com.acme.feature..&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>                <span class="k">val</span> <span class="py">designSystemInternal</span> <span class="p">=</span> <span class="n">Layer</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;Design System Internal&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;com.acme.designsystem.internal..&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>                <span class="n">features</span><span class="p">.</span><span class="n">doesNotDependOn</span><span class="p">(</span><span class="n">designSystemInternal</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>包模式必须与你仓库中的实际包布局相匹配。测试应在预期的项目范围内运行，并且 Konsist 版本应已锁定，并已根据你项目使用的 API 进行验证。</p>
+
+<p>这样做的好处是，架构决策可以执行。</p>
+
+<p>如果某个功能开始导入内部调色板或实现类，则在更改合并之前，架构测试可能会失败。</p>
+
+<p>Konsist还能强制执行哪些其他措施？</p>
+
+<p>同样的方法也适用于命名和包规范。</p>
+
+<p>例如，一个团队可能需要：</p>
+
+<ul>
+<li>公共设计系统组件位于 <code>designsystem.components</code> 下。</li>
+<li>Token 定义应放在 tokens 包内。</li>
+<li>特定于功能的 UI 组件位于其所属功能包内。</li>
+<li>内部实现类型遵循约定的命名规则。</li>
+<li>架构层保持其预期的依赖关系方向。</li>
+</ul>
+
+
+<p>这些检查有助于防止结构漂移。</p>
+
+<p>然而，存在一个重要的限制：<strong>包架构测试不会自动强制执行可组合组件内部的每种使用约定。</strong>一个功能可以仅依赖于已批准的包，并且仍然可以直接构造 Color(0xFF1769E0)。</p>
+
+<p>这时，<strong>Android Lint</strong> 就派上用场了。</p>
+
+<h2>使用自定义 Android Lint 规则来捕获设计系统违规</h2>
+
+<p>Android Lint 会分析 Android 源代码并报告潜在的错误和问题。它还提供用于编写自定义检测器的 API。</p>
+
+<p>对于设计系统而言，自定义 Lint 规则可以检查 Kotlin 源代码并标记违反团队约定的模式。</p>
+
+<p>例如：</p>
+
+<ul>
+<li>在功能代码中使用数值字面量构建颜色。</li>
+<li>使用原始 sp 值而非已批准的排版角色。</li>
+<li>在需要标记的地方使用原始 dp 值设置间距。</li>
+<li>调用已弃用的设计系统 API。</li>
+<li>使用未经批准的组件实现。</li>
+<li>引用功能包中的内部设计系统符号。</li>
+</ul>
+
+
+<p>每条规则都应该有明确的适用范围和清晰的失败信息。过于宽泛的规则如果会标记出所有合理的异常情况，就会造成不必要的干扰，最终导致开发者禁用这些检查。</p>
+
+<p>让我们实现一个具体的例子：检测 Compose Color 构造函数调用中的数值颜色字面量。</p>
+
+<h2>禁止在特征代码中使用原始数值颜色构造函数</h2>
+
+<p>请看以下代码：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">accent</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF1769E0L</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>颜色可能与当前的品牌色调相符，但该功能现在拥有了本应属于设计系统的设计决策权。</p>
+
+<p>我们可以创建一个自定义检测器，用于标记未经批准的软件包中的这种模式。</p>
+
+<p>以下示例针对直接传递给 androidx.compose.ui.graphics.Color 构造函数的数值字面量。这是一个重点突出的入门规则，并非对所有可能的硬编码颜色进行全面检测。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+<span class='line-number'>66</span>
+<span class='line-number'>67</span>
+<span class='line-number'>68</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.lint</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Category</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Detector</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Implementation</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Issue</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.JavaContext</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Scope</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Severity</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.SourceCodeScanner</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.intellij.psi.PsiMethod</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.jetbrains.uast.UCallExpression</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.jetbrains.uast.ULiteralExpression</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">NoHardcodedColorDetector</span> <span class="p">:</span> <span class="n">Detector</span><span class="p">(),</span> <span class="n">SourceCodeScanner</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">getApplicableConstructorTypes</span><span class="p">():</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">String</span><span class="p">&gt;</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">listOf</span><span class="p">(</span><span class="n">COLOR_CLASS</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">visitConstructor</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">context</span><span class="p">:</span> <span class="n">JavaContext</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">node</span><span class="p">:</span> <span class="n">UCallExpression</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">constructor</span><span class="p">:</span> <span class="n">PsiMethod</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">packageName</span> <span class="p">=</span> <span class="n">context</span><span class="p">.</span><span class="n">uastFile</span><span class="o">?.</span><span class="n">packageName</span><span class="p">.</span><span class="n">orEmpty</span><span class="p">()</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">isAllowedPackage</span><span class="p">(</span><span class="n">packageName</span><span class="p">))</span> <span class="k">return</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">hasNumericLiteral</span> <span class="p">=</span> <span class="n">node</span><span class="p">.</span><span class="n">valueArguments</span><span class="p">.</span><span class="n">any</span> <span class="p">{</span> <span class="n">argument</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">argument</span> <span class="k">is</span> <span class="n">ULiteralExpression</span> <span class="p">&amp;&amp;</span>
+</span><span class='line'>                <span class="n">argument</span><span class="p">.</span><span class="n">value</span> <span class="k">is</span> <span class="n">Number</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(!</span><span class="n">hasNumericLiteral</span><span class="p">)</span> <span class="k">return</span>
+</span><span class='line'>        <span class="n">context</span><span class="p">.</span><span class="n">report</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">ISSUE</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">node</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">context</span><span class="p">.</span><span class="n">getLocation</span><span class="p">(</span><span class="n">node</span><span class="p">),</span>
+</span><span class='line'>            <span class="s">&quot;Use an approved design-system color or &quot;</span> <span class="p">+</span>
+</span><span class='line'>                <span class="s">&quot;MaterialTheme.colorScheme instead of &quot;</span> <span class="p">+</span>
+</span><span class='line'>                <span class="s">&quot;constructing a Color from a numeric literal.&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">isAllowedPackage</span><span class="p">(</span><span class="n">packageName</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">Boolean</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">ALLOWED_PACKAGES</span><span class="p">.</span><span class="n">any</span> <span class="p">{</span> <span class="n">allowed</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">packageName</span> <span class="p">==</span> <span class="n">allowed</span> <span class="p">||</span>
+</span><span class='line'>                <span class="n">packageName</span><span class="p">.</span><span class="n">startsWith</span><span class="p">(</span><span class="s">&quot;$allowed.&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="n">companion</span> <span class="k">object</span> <span class="err">{</span>
+</span><span class='line'>        <span class="k">private</span> <span class="n">const</span> <span class="k">val</span> <span class="py">COLOR_CLASS</span> <span class="p">=</span>
+</span><span class='line'>            <span class="s">&quot;androidx.compose.ui.graphics.Color&quot;</span>
+</span><span class='line'>        <span class="k">private</span> <span class="k">val</span> <span class="py">ALLOWED_PACKAGES</span> <span class="p">=</span> <span class="n">setOf</span><span class="p">(</span>
+</span><span class='line'>            <span class="s">&quot;com.acme.designsystem.tokens&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="s">&quot;com.acme.designsystem.internal.palette&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="n">@JvmField</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">ISSUE</span><span class="p">:</span> <span class="n">Issue</span> <span class="p">=</span> <span class="n">Issue</span><span class="p">.</span><span class="n">create</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">id</span> <span class="p">=</span> <span class="s">&quot;HardcodedDesignColor&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">briefDescription</span> <span class="p">=</span> <span class="s">&quot;Hardcoded design-system color&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">explanation</span> <span class="p">=</span> <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>                <span class="n">Feature</span> <span class="n">code</span> <span class="n">must</span> <span class="n">use</span> <span class="n">approved</span> <span class="n">design</span><span class="p">-</span><span class="n">system</span>
+</span><span class='line'>                <span class="n">colors</span> <span class="n">or</span> <span class="n">semantic</span> <span class="n">MaterialTheme</span> <span class="n">color</span> <span class="n">roles</span><span class="p">.</span>
+</span><span class='line'>                <span class="n">Raw</span> <span class="n">numeric</span> <span class="n">color</span> <span class="n">definitions</span> <span class="n">belong</span> <span class="k">in</span>
+</span><span class='line'>                <span class="n">approved</span> <span class="n">design</span><span class="p">-</span><span class="n">system</span> <span class="n">packages</span><span class="p">.</span>
+</span><span class='line'>            <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>            <span class="n">category</span> <span class="p">=</span> <span class="n">Category</span><span class="p">.</span><span class="n">CORRECTNESS</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">priority</span> <span class="p">=</span> <span class="m">8</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">severity</span> <span class="p">=</span> <span class="n">Severity</span><span class="p">.</span><span class="n">ERROR</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">implementation</span> <span class="p">=</span> <span class="n">Implementation</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">NoHardcodedColorDetector</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">Scope</span><span class="p">.</span><span class="n">JAVA_FILE_SCOPE</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>该探测器由三个重要部分组成。</p>
+
+<p>首先，getApplicableConstructorTypes() 将检测器需要检查的调用限制为 Compose Color 类型的构造函数。</p>
+
+<p>其次，visitConstructor() 检查参数中是否存在数值字面量，并跳过明确允许定义颜色的包。</p>
+
+<p>第三，所报告的问题严重级别为 ERROR。这意味着 Lint 将此违规行为报告为错误。它是否会阻塞特定的 CI 作业取决于该作业的运行方式以及 Lint 的配置。</p>
+
+<p>此允许列表是有意为之。设计系统必须能够定义自己的调色板。该规则可防止任意的功能级定义，同时又不妨碍中心令牌实现正常工作。</p>
+
+<p>应根据项目中选择的 Android Lint 版本验证具体的检测器 API。自定义 Lint 对版本敏感，因此请确保 lint-api 和 lint-tests 与兼容的 Android Gradle 插件工具链保持一致。</p>
+
+<h2>登记问题</h2>
+
+<p>Lint 需要一个问题注册表来发现自定义问题。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.lint</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.client.api.IssueRegistry</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.client.api.Vendor</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.CURRENT_API</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">DesignSystemIssueRegistry</span> <span class="p">:</span> <span class="n">IssueRegistry</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">issues</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">NoHardcodedColorDetector</span><span class="p">.</span><span class="n">ISSUE</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">api</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="n">CURRENT_API</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">minApi</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">8</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">vendor</span> <span class="p">=</span> <span class="n">Vendor</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">vendorName</span> <span class="p">=</span> <span class="s">&quot;Acme Engineering&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">feedbackUrl</span> <span class="p">=</span> <span class="s">&quot;https://example.com/engineering/issues&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">contact</span> <span class="p">=</span> <span class="s">&quot;mobile-platform@example.com&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>请将示例中的供应商信息替换为贵公司的详细信息。</p>
+
+<p>自定义 Lint 模块还必须通过服务加载器注册问题注册表。创建以下文件：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">design</span><span class="p">-</span><span class="n">system</span><span class="p">-</span><span class="n">lint</span><span class="p">/</span>
+</span><span class='line'><span class="err">└──</span> <span class="n">src</span><span class="p">/</span><span class="n">main</span><span class="p">/</span><span class="n">resources</span><span class="p">/</span>
+</span><span class='line'>    <span class="err">└──</span> <span class="n">META</span><span class="p">-</span><span class="n">INF</span><span class="p">/</span><span class="n">services</span><span class="p">/</span>
+</span><span class='line'>        <span class="err">└──</span> <span class="n">com</span><span class="p">.</span><span class="n">android</span><span class="p">.</span><span class="n">tools</span><span class="p">.</span><span class="n">lint</span><span class="p">.</span><span class="n">client</span><span class="p">.</span><span class="n">api</span><span class="p">.</span><span class="n">IssueRegistry</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>文件内容应为完整的注册表类名：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">com</span><span class="p">.</span><span class="n">acme</span><span class="p">.</span><span class="n">designsystem</span><span class="p">.</span><span class="n">lint</span><span class="p">.</span><span class="n">DesignSystemIssueRegistry</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这样，Lint 就可以在加载自定义规则工件时发现自定义问题。</p>
+
+<h2>配置自定义 Lint 模块</h2>
+
+<p>一个典型的基于 JVM 的自定义 Lint 模块需要 Lint API 进行编译，以及 Lint 测试基础架构进行单元测试。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">plugins</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">kotlin</span><span class="p">(</span><span class="s">&quot;jvm&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">compileOnly</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;com.android.tools.lint:lint-api:$lintVersion&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">testImplementation</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;com.android.tools.lint:lint-tests:$lintVersion&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">testImplementation</span><span class="p">(</span><span class="s">&quot;junit:junit:4.13.2&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>此处，lintVersion 代表与你的 Android Gradle 插件和 Lint 环境兼容的版本。请勿脱离 Android 构建工具链单独选择此版本。</p>
+
+<p>在 Android 应用模块中，通过 lintChecks 配置来使用这些规则：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">lintChecks</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:design-system-lint&quot;</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>一旦将模块包含在构建中，Lint 就可以在分析应用程序时加载已注册的检测器。</p>
+
+<h2>在强制执行规则之前先进行测试</h2>
+
+<p>没有测试的自定义检测器只不过是另一段可能悄无声息停止工作的代码。</p>
+
+<p>Lint 提供了一个测试基础架构，允许你提供源代码片段并断言所报告的问题。</p>
+
+<p>以下测试类展示了检测器测试的预期结构。请确保 Lint 测试依赖项与项目使用的版本保持一致，并在将其应用于持续集成 (CI) 之前，使用该版本验证代码片段。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.lint</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.checks.infrastructure.TestFiles.kotlin</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Detector</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Issue</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.LintDetectorTest</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.junit.Test</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">NoHardcodedColorDetectorTest</span> <span class="p">:</span> <span class="n">LintDetectorTest</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">getDetector</span><span class="p">():</span> <span class="n">Detector</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">NoHardcodedColorDetector</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">getIssues</span><span class="p">():</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Issue</span><span class="p">&gt;</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">listOf</span><span class="p">(</span><span class="n">NoHardcodedColorDetector</span><span class="p">.</span><span class="n">ISSUE</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">colorStub</span> <span class="p">=</span> <span class="n">kotlin</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;src/main/java/androidx/compose/ui/graphics/Color.kt&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>        <span class="k">package</span> <span class="nn">androidx.compose.ui.graphics</span>
+</span><span class='line'>        <span class="k">class</span> <span class="nc">Color</span><span class="p">(</span><span class="k">val</span> <span class="py">value</span><span class="p">:</span> <span class="n">Long</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">constructor</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">:</span> <span class="k">this</span><span class="p">(</span><span class="n">value</span><span class="p">.</span><span class="n">toLong</span><span class="p">())</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="err">`</span><span class="nf">flags</span> <span class="n">numeric</span> <span class="n">colors</span> <span class="k">in</span> <span class="n">feature</span> <span class="n">code</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">lint</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">files</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">colorStub</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">kotlin</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;src/main/java/com/acme/feature/home/Colors.kt&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>                    <span class="k">package</span> <span class="nn">com.acme.feature.home</span>
+</span><span class='line'>                    <span class="k">import</span> <span class="nn">androidx.compose.ui.graphics.Color</span>
+</span><span class='line'>                    <span class="k">val</span> <span class="py">accent</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF1769E0L</span><span class="p">)</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>                <span class="p">),</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">run</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">expectErrorCount</span><span class="p">(</span><span class="m">1</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">expectContains</span><span class="p">(</span><span class="s">&quot;[HardcodedDesignColor]&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="err">`</span><span class="nf">allows</span> <span class="n">numeric</span> <span class="n">colors</span> <span class="k">in</span> <span class="n">token</span> <span class="k">package</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">lint</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">files</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">colorStub</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">kotlin</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;src/main/java/com/acme/designsystem/tokens/AppColors.kt&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>                    <span class="k">package</span> <span class="nn">com.acme.designsystem.tokens</span>
+</span><span class='line'>                    <span class="k">import</span> <span class="nn">androidx.compose.ui.graphics.Color</span>
+</span><span class='line'>                    <span class="k">val</span> <span class="py">primary</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF1769E0L</span><span class="p">)</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>                <span class="p">),</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">run</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">expectClean</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>第一个测试验证了特征包中的数值颜色构造函数会产生错误。第二个测试验证了相同的模式在已批准的标记包中是否允许。</p>
+
+<p>测试桩为测试环境提供了一个最基本的 Compose Color 类型。实际的检测器仍需针对项目使用的 Lint 版本和源代码配置进行测试。</p>
+
+<p>这些测试也证明了一个关键原则：<strong>既要测试违规行为，也要测试合法的例外情况。</strong>否则，一条规则可能看起来有效，但实际上却破坏了它本应保护的代码。</p>
+
+<h2>了解探测器的局限性</h2>
+
+<p>这个启动检测器并不能检测到颜色绕过设计系统的所有方式。</p>
+
+<p>例如，它并未全面处理以下问题：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Color</span><span class="p">.</span><span class="n">Red</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>或者存储在常量中的颜色、从辅助函数返回的颜色、从资源加载的颜色，或者通过别名传递的颜色。</p>
+
+<p>这也不能证明命名标记在语义上适合使用它的组件。</p>
+
+<p>生产环境检测器可能需要检查已解析的符号、附加构造函数形式、属性访问或其他表达式。它应该包含针对组织希望禁止的具体模式的测试。</p>
+
+<p>正确的做法是根据实际违规情况和设计系统契约逐步扩展检测器，而不是声称单个语法检查可以保证完全的颜色控制。</p>
+
+<p>将同样的方法应用于字体排印、间距和尺寸。</p>
+
+<p>一旦第一个自定义规则生效，其他规则就可以强制执行其他设计系统约定。</p>
+
+<p>不要试图把所有规则都塞进一个庞大的检测器里。要给每条规则都赋予明确的目的、范围和测试套件。</p>
+
+<h3>排版</h3>
+
+<p>当项目需要语义化的排版角色时，排版规则可能会标记功能代码中直接赋值的 fontSize。</p>
+
+<p>例如：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product title&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">fontSize</span> <span class="p">=</span> <span class="m">19.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>首选方案是使用已定义的角色：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product title&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">titleLarge</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>该实现需要明确规定禁止哪些操作。如果一概禁止所有 TextStyle 或 fontSize 表达式，则可能会误判一些合法情况，例如自定义绘图、特殊编辑内容或内部设计系统实现。</p>
+
+<p>明确合同是禁止所有直接文本尺寸调整，还是仅禁止指定功能包中的某些特定模式。</p>
+
+<h3>间距和尺寸</h3>
+
+<p>类似的规则可以检测原始维度文字：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">17.</span><span class="n">dp</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>并引导开发者使用 Token：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">AppSpacing</span><span class="p">.</span><span class="n">md</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>然而，并非所有的 dp 值都代表间距。尺寸还可以表示组件的最小触摸目标、边框宽度、图标大小或特定的布局约束。</p>
+
+<p>检测器应该能够区分设计系统实际控制的 API 和上下文。如果团队想要强制执行间距标记，那么围绕已知间距 API 制定一个范围较窄的规则，比制定一个标记整个代码库中所有维度字面量的规则更有用。</p>
+
+<h3>形状</h3>
+
+<p>假设设计系统定义了卡片和按钮的认可形状。一条规则可以检测特征代码中直接构造的形状对象，并要求改用设计系统中指定的形状。</p>
+
+<p>具体检测器取决于应用程序如何对形状进行建模以及允许使用哪些 API。它还应该能够区分合法的自定义形状和意外重复的形状。</p>
+
+<h3>命名规则</h3>
+
+<p>命名规则通常可以通过 Konsist 来强制执行，尤其是在要求涉及包和类结构时。</p>
+
+<p>例如，团队可以要求设计系统可组合体使用一致的命名约定，或者将实现类限制在内部包中。</p>
+
+<p>规则应该反映团队实际采用的惯例，而不是仅仅因为命名限制容易自动化就强加这些限制。</p>
+
+<h2>强制组件重用，而不是仅仅强制使用 Token</h2>
+
+<p>集中管理的 Token 可以防止数值漂移，但无法保证组件行为的一致性。</p>
+
+<p>考虑两个功能，它们都使用相同的间距和颜色标记，但各自实现了不同的按钮。一个功能能正确处理加载状态；另一个功能允许重复点击。一个功能具有预期的最小高度；另一个功能则没有。一个功能提供了适当的辅助功能语义；另一个功能则没有。</p>
+
+<p>这两个功能虽然都能通过令牌检查，但仍然会呈现不同的用户体验。</p>
+
+<p>因此，组件约定应该成为合同的一部分。</p>
+
+<p>例如，一个设计系统可能提供：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">AppPrimaryButton</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">enabled</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">true</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">enabled</span> <span class="p">=</span> <span class="n">enabled</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="n">AppDimensions</span><span class="p">.</span><span class="n">buttonHeight</span><span class="p">),</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="n">text</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">labelLarge</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个例子特意做得比较简单。一个真正的组件可能还会定义加载行为、图标、内容内边距、语义和分析钩子。</p>
+
+<p>关键在于，功能会使用公共组件，而不是独立地重新创建相同的行为。</p>
+
+<p>Lint 规则可以标记出直接使用底层组件的情况，而这些组件必须使用特定的包装器。Konsist 可以帮助保护这些组件周围的包和模块边界。</p>
+
+<p>不过，全局禁令要谨慎使用。有时，某个功能确实需要专门的控制。可以通过经过审核的 API 或范围较小的抑制机制来允许显式的例外情况，并保持这些例外情况的可见性。</p>
+
+<h2>使用 Compose UI 测试确保运行时正确性</h2>
+
+<p>静态分析可以识别源代码模式，但无法确定渲染界面的所有属性。</p>
+
+<p>例如，Lint 规则可能会确认某个功能使用了 MaterialTheme.typography.bodyLarge，但它本身无法证明最终屏幕在大字体比例下仍然可读，也无法证明文本不会被其父布局裁剪。</p>
+
+<p>Compose UI 测试应该涵盖这些运行时要求。</p>
+
+<p>有用的测试目标包括：</p>
+
+<ul>
+<li>辅助功能语义和有意义的标签。</li>
+<li>支持的字体大小下的布局行为。</li>
+<li>启用、禁用、加载和错误状态。</li>
+<li>最小触摸目标要求。</li>
+<li>内容溢出和用户生成的长文本。</li>
+<li>交互行为和状态转换。</li>
+</ul>
+
+
+<p>这将创建一个更完善的执法模式。</p>
+
+<p>Konsist 检查架构边界。Lint 检测禁止的源代码模式。Compose UI 测试验证渲染行为。每一层都保护着契约的不同部分。</p>
+
+<h2>在 CI 中暴露违规行为</h2>
+
+<p>规则只有始终如一地执行才能有效。</p>
+
+<p>将架构测试和自定义 Lint 检查作为常规验证流程的一部分运行。具体的 Gradle 任务路径取决于模块的名称和配置，但典型的流程可能包括：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>./gradlew :design-system-lint:test
+</span><span class='line'>./gradlew :app:lint
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>作为项目单元测试或验证任务的一部分，运行相关的 Konsist 测试任务。</p>
+
+<p>期望的结果很明确：引入禁止的设计系统模式的拉取请求会未能通过相应的检查，并解释如何修复它。</p>
+
+<p>一条有用的错误信息应该回答三个问题：</p>
+
+<ol>
+<li>违反了哪条规则？</li>
+<li>这条规则存在的意义是什么？</li>
+<li>开发人员应该使用什么替代方法？</li>
+</ol>
+
+
+<p>例如：</p>
+
+<p>检测到硬编码的设计系统颜色。请使用已批准的设计系统颜色或语义化的 MaterialTheme 颜色角色。</p>
+
+<p>这比“颜色使用无效”之类的通用消息更有用。</p>
+
+<h2>平稳落地规则，不影响交付节奏</h2>
+
+<p>如果一个代码库已经包含了多年不一致的 UI 代码，那么在第一天就将每条规则都变成阻塞性错误可能会导致大量的故障。</p>
+
+<p>首先对现有代码库进行检查，了解违规之处。优先修复高价值案例，然后分阶段引入规则。</p>
+
+<p>实际推广流程如下：</p>
+
+<ol>
+<li>建立令牌和组件 API。</li>
+<li>添加架构边界测试。</li>
+<li>实现并测试一条自定义 Lint 规则。</li>
+<li>对现有功能模块运行该规则，并评估误报情况。</li>
+<li>修复违规或记录合理的例外情况。</li>
+<li>将该规则设置为阻止新变更。</li>
+<li>随着设计系统的完善，添加更多规则。</li>
+</ol>
+
+
+<p>避免为了让持续集成（CI）通过而随意压制违规行为。例外情况应具体、合理且可审查。</p>
+
+<p>此外，还应追踪违规次数、规则被抑制的频率以及哪些规则会产生误报。这些信息有助于区分有效的系统设计规范和一堆无意义的检查结果。</p>
+
+<p>设计系统成为开发工作流程的一部分</p>
+
+<p>这种方法的真正价值不在于团队编写了多少自定义规则。</p>
+
+<p>这是责任的转移。</p>
+
+<p>如果没有自动化强制执行机制，保持视觉一致性很大程度上依赖于开发人员对规范的记忆以及审核人员对偏差的发现。随着团队、模块和屏幕数量的增加，这变得越来越困难。</p>
+
+<p>通过可执行规则，存储库本身可以传达哪些决策属于设计系统，哪些是合法的功能级选择。</p>
+
+<p>开发人员仍然可以构建新屏幕，但屏幕必须遵守相同的架构边界，使用已批准的令牌，并遵循组织已建立的组件约定。</p>
+
+<p>这在大型 Android 代码库中尤其有用，因为设计系统偏差通常会在各个独立功能团队之间逐渐显现。修复单个不一致的颜色或间距值的成本很小，但维护数百个略有不同的实现的成本却不低。</p>
+
+<p>Konsist 和 Android Lint 并不能取代设计评审、用户体验评估或无障碍测试。它们只是从这些流程中移除了重复性的机械检查，以便评审人员能够将更多时间用于需要人为判断的决策。</p>
+
+<p>这一原则不仅适用于 Compose 系统，也适用于更广泛的场景：<strong>如果一项约定重要到需要记录下来，并且足够精确需要描述，那么它可能也重要到需要自动强制执行。</strong></p>
+
+<p>设计系统不应依赖于每个人都记住约定。它应该让正确的路径易于遵循，并在意外违规行为进入生产环境之前将其暴露出来。</p>
+
+<h2>参考</h2>
+
+<ul>
+<li><a href="https://github.com/LemonAppDev/konsist">Konsist - Kotlin 架构测试</a></li>
+<li><a href="https://developer.android.com/studio/write/lint">Android 开发者 - 使用 lint 检查改进代码</a></li>
+<li><a href="https://googlesamples.github.io/android-custom-lint-rules/">Android 开发者 - 自定义 lint 检查</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/designsystems/material3">Material 3 - Jetpack Compose 中的主题化</a></li>
+</ul>
+
+
+<p>实现说明：Kotlin 示例仅供参考。在将这些规则应用到生产 CI 流水线之前，请先根据项目中指定的版本验证 Konsist 和 Android Lint API，并运行检测器测试和 Gradle 检查。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Room Fts4：全文搜索替代 SQL LIKE]]></title>
@@ -7543,705 +8570,6 @@
 <p><strong>清单合并需要注意。</strong> 当 AAR 的清单合并到使用应用程序时，可能会出现冲突 - 例如，如果应用程序已经声明了具有不同设置的“uses-feature”。 Android 的<a href="https://developer.android.com/build/manage-manifests">清单合并工具</a> 会自动处理大多数情况，但冲突需要使用合并规则手动解决。</p>
 
 <p>参考文献</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[AppFunctions：让你的Android应用更容易被AI智能体发现]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/06/13/appfunctions/"/>
-    <updated>2026-06-13T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/06/13/appfunctions</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「AppFunctions: Making Your Android App Discoverable by AI Agents」，原文链接<a href="https://proandroiddev.com/appfunctions-making-your-android-app-discoverable-by-ai-agents-fbfbeddf8103">https://proandroiddev.com/appfunctions-making-your-android-app-discoverable-by-ai-agents-fbfbeddf8103</a>，由Ioannis Anifantakis发布于2026年5月25日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/06/13/appfunctions/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Dn57jNq0tE2pyme711CuQw.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>简介</p>
-
-<p>如果你之前没有使用过 <strong>模型上下文协议 (MCP)</strong>，那么一页入门将使接下来的一切变得更加容易。</p>
-
-<p><strong>MCP</strong> 是一项开放标准，最初由 Anthropic 于 2024 年末发布，现已被越来越多的人工智能产品采用，它定义了人工智能代理连接到外部<strong>工具</strong>和<strong>数据源</strong>的单一方式。该模型很简单：</p>
-
-<ul>
-<li><strong>MCP 服务器</strong> 是一个公开工具列表的小进程。每个工具都有一个名称、一个简单语言描述以及一个描述其参数和返回值的 JSON 架构。</li>
-<li><strong>MCP 客户端</strong>（通常是 AI 代理）连接到服务器，询问“你有什么工具？”，阅读说明，并根据用户的请求决定调用哪个工具。</li>
-<li>它们之间的对话是<strong>JSON-RPC</strong>，通过<strong>stdio</strong>（对于本地服务器）或HTTP（对于远程服务器）进行。</li>
-</ul>
-
-
-<p>在 MCP 之前，每个集成都是定制的。也就是说，每个人工智能产品都有自己的连接工具的方法。借助 MCP，任何兼容 MCP 的代理都可以使用公开“搜索我的电子邮件”的单个服务器，而无需在任何一方进行集成更改。</p>
-
-<p><strong>挑战在于</strong>传统的 MCP 服务器在你的应用程序之外**运行，通常作为单独的进程或云服务。他们缺乏对你应用程序状态的特权访问权限。如果你想要一个 MCP 风格的工具来读取笔记应用程序中未发送的草稿，你要么需要通过 API 公开该草稿，要么在应用程序自己的进程中运行 MCP 服务器。这两种选择在移动设备上都不方便。</p>
-
-<p><strong>这就是 AppFunctions 填补的空白。</strong></p>
-
-<p>AppFunction 实际上是什么</p>
-
-<p>基础应用程序是一个小型 Compose 应用程序，它使用 Ktor 从远程源获取笑话并让用户标记收藏夹。它使用 Room 进行离线缓存和本地收藏夹存储以及典型的分层架构：DAO、数据源、存储库、视图模型、屏幕。这里没有什么不寻常的。它与大多数 Android 应用程序的骨架相同。</p>
-
-<p>我故意添加的第一个功能很小：<strong>清除所有最喜欢的笑话</strong>。可以通过两种方式获得完全相同的功能：</p>
-
-<ul>
-<li>用户可以点击顶栏中的菜单项。</li>
-<li>AI 代理可以调用​​ <code>clearFavorites</code> AppFunction。</li>
-</ul>
-
-
-<p>两条路径最终都会调用相同的存储库方法。在我们看代码之前，这是我想告诉你的原则：<strong>AppFunction 是普通应用程序逻辑的薄壳，绝不是它的副本</strong>。</p>
-
-<p>我们从这一个函数开始，然后在基础知识就位后添加另外两个函数，“getFavorites”和“setFavorite”。</p>
-
-<p>第 1 步——依赖关系</p>
-
-<p>操作系统在安装时需要知道两件事：</p>
-
-<ol>
-<li>在哪里读取应用程序的 AppFunction 元数据，</li>
-<li>当代理想要执行你的某个功能时要绑定哪个服务。</li>
-</ol>
-
-
-<p>两者都位于“AndroidManifest.xml”中的“<application>”内部：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class='xml'><span class='line'><span class="nt">&lt;application</span>
-</span><span class='line'>    <span class="err">...</span><span class="nt">&gt;</span>
-</span><span class='line'><span class="nt">&lt;property</span>
-</span><span class='line'>        <span class="na">android:name=</span><span class="s">&quot;android.app.appfunctions.app_metadata&quot;</span>
-</span><span class='line'>        <span class="na">android:resource=</span><span class="s">&quot;@xml/app_metadata&quot;</span> <span class="nt">/&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;service</span>
-</span><span class='line'>        <span class="na">android:name=</span><span class="s">&quot;androidx.appfunctions.service.PlatformAppFunctionService&quot;</span>
-</span><span class='line'>        <span class="na">android:permission=</span><span class="s">&quot;android.permission.BIND_APP_FUNCTION_SERVICE&quot;</span>
-</span><span class='line'>        <span class="na">android:exported=</span><span class="s">&quot;true&quot;</span>
-</span><span class='line'>        <span class="na">tools:targetApi=</span><span class="s">&quot;36&quot;</span><span class="nt">&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;intent-filter&gt;</span>
-</span><span class='line'>            <span class="nt">&lt;action</span> <span class="na">android:name=</span><span class="s">&quot;android.app.appfunctions.AppFunctionService&quot;</span> <span class="nt">/&gt;</span>
-</span><span class='line'>        <span class="nt">&lt;/intent-filter&gt;</span>
-</span><span class='line'>    <span class="nt">&lt;/service&gt;</span>
-</span><span class='line'>    <span class="c">&lt;!-- your activities here --&gt;</span>
-</span><span class='line'><span class="nt">&lt;/application&gt;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>每件作品的作用：</p>
-
-<ul>
-<li><code>&lt;property&gt;</code> 元素将操作系统指向 <code>app_metadata.xml</code>，其中包含 <strong>应用程序级别</strong> 描述；这就是这个应用程序的整体用途，因此人工智能代理可以知道每个应用程序的用途。每个函数的描述是一个单独的问题：它们来自每个“@AppFunction”方法的 KDoc。</li>
-<li><code>&lt;service&gt;</code> 声明公开了 <code>PlatformAppFunctionService</code>，它是平台用来调用函数的桥梁。幸运的是，你<strong>不是</strong>自己编写此服务；它包含在“appfunctions-service”库中。你只需使用正确的权限和意图过滤器在清单中声明它，以便系统可以找到并绑定到它。</li>
-</ul>
-
-
-<p>“BIND_APP_FUNCTION_SERVICE”权限确保只有平台可以绑定到服务。你不需要请求“EXECUTE_APP_FUNCTIONS”；这是<strong>调用者</strong>的许可，而不是你的。</p>
-
-<p>第 3 步 — 在“app_metadata.xml”中描述应用程序本身</p>
-
-<p>在我们接触任何 AppFunctions 代码之前，我们通过现有层添加新的业务功能。我之前提出的观点<em>（AppFunction 是正常逻辑之上的一个薄壳）</em> 仅当正常逻辑首先存在时才有效。</p>
-
-<p><strong>DAO</strong>（<code>JokesDao.kt</code>）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Query</span><span class="p">(</span><span class="s">&quot;UPDATE joke SET isFavorite = 0&quot;</span><span class="p">)</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">clearAllFavorites</span><span class="p">()</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>本地数据源</strong>（<code>LocalJokesDataSource.kt</code>及其实现）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">interface</span> <span class="n">LocalJokesDataSource</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">clearAllFavorites</span><span class="p">()</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">class</span> <span class="nc">LocalJokesDataSourceImpl</span><span class="p">(</span><span class="cm">/* ... */</span><span class="p">)</span> <span class="p">:</span> <span class="n">LocalJokesDataSource</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">clearAllFavorites</span><span class="p">()</span> <span class="p">{</span>
-</span><span class='line'>        <span class="n">database</span><span class="p">.</span><span class="n">clearAllFavorites</span><span class="p">()</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><strong>存储库</strong>（<code>JokesRepository.kt</code> 及其实现）：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">interface</span> <span class="n">JokesRepository</span> <span class="p">{</span>
-</span><span class='line'>    <span class="c1">// ...</span>
-</span><span class='line'>    <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">clearAllFavorites</span><span class="p">():</span> <span class="n">Result</span><span class="p">&lt;</span><span class="n">Unit</span><span class="p">&gt;</span>
-</span><span class='line'><span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="k">class</span> <span class="nc">JokesRepositoryImpl</span><span class="p">(</span><span class="cm">/* ... */</span><span class="p">)</span> <span class="p">:</span> <span class="n">JokesRepository</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">override</span> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">clearAllFavorites</span><span class="p">():</span> <span class="n">Result</span><span class="p">&lt;</span><span class="n">Unit</span><span class="p">&gt;</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">return</span> <span class="n">safeCall</span> <span class="p">{</span>
-</span><span class='line'>            <span class="n">localDataSource</span><span class="p">.</span><span class="n">clearAllFavorites</span><span class="p">()</span>
-</span><span class='line'>        <span class="p">}</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这里没有任何东西知道或关心 AppFunctions。这只是普通的 Android 架构，这就是重点。</p>
-
-<p>第 5 步——AppFunction 本身</p>
-
-<p><code>clearFavorites</code> 是一个故意最小化的“hello world”：没有参数，纯字符串返回，除了状态语句之外没有错误表面。</p>
-
-<p>大多数真正的 AppFunction 需要更多，而他们最常需要的三件事正是平台支持的开箱即用的三件事：</p>
-
-<ul>
-<li>结构化返回值，</li>
-<li>输入参数，</li>
-<li>和输入错误。</li>
-</ul>
-
-
-<p>同一类上的另外两个函数显示了所有这三个函数。</p>
-
-<h3>使用@AppFunctionSerialized返回结构化数据</h3>
-
-<p>当你希望代理接收数据时，它可以读取、计数或引用<em>（不仅仅是句子）</em>，返回可序列化类型而不是字符串。你用“<strong>@AppFunctionSerialized</strong>”注释一个普通数据类，并直接返回它<em>（或它的</em>“<em>List</em>”）_。</p>
-
-<p>我们已经有了三个笑话模型：</p>
-
-<ul>
-<li>域名“笑话”，</li>
-<li>网络“JokeDto”，</li>
-<li>和房间“JokeEntity”。</li>
-</ul>
-
-
-<p>添加第四个 <em>(an</em> <code>_@AppFunctionSerialized_</code> <em>class)</em> 看起来多余，但它与其他人遵循的边界模型模式相同。我们无法注释域“Joke”：“@AppFunctionSerialized”存在于“androidx.appfunctions”中，将 Android 依赖项拖到域层会破坏其纯粹性。</p>
-
-<p>因此，AppFunctions 边界有自己的 DTO，就像网络和持久性边界一样。而且，作为奖励，代理看到的模式可以独立于域进行塑造（请注意，此 DTO 删除了“isFavorite”，这在收藏夹列表中始终为真，并且对模型来说只是噪音）。转换是一个映射器，类似于现有的 <code>toJoke()</code>/<code>toEntity()</code> 扩展：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// AppFunctionJoke.kt</span>
-</span><span class='line'><span class="c1">// Developer rationale lives in a plain `//` comment on purpose (see the note below): this is the</span>
-</span><span class='line'><span class="c1">// agent-facing boundary DTO, the counterpart of the network JokeDto and the Room JokeEntity. We</span>
-</span><span class='line'><span class="c1">// can&#39;t annotate the domain Joke (androidx code would break domain purity), so the AppFunctions</span>
-</span><span class='line'><span class="c1">// boundary gets its own model — and we drop isFavorite, which is noise for a favorites list.</span>
-</span><span class='line'><span class="cm">/**</span>
-</span><span class='line'><span class="cm"> * A single joke from this app, modelled as a question-and-answer pair: the question is the set-up</span>
-</span><span class='line'><span class="cm"> * and the answer is the punchline. Returned by joke-reading functions such as the user&#39;s favorites</span>
-</span><span class='line'><span class="cm"> * list, and identified by a stable numeric id that other functions accept to act on this joke.</span>
-</span><span class='line'><span class="cm"> */</span>
-</span><span class='line'><span class="n">@AppFunctionSerializable</span><span class="p">(</span><span class="n">isDescribedByKDoc</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span>
-</span><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">AppFunctionJoke</span><span class="p">(</span>
-</span><span class='line'>    <span class="cm">/** Stable unique identifier of the joke. Pass this back to functions that act on a single joke. */</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">id</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span>
-</span><span class='line'>    <span class="cm">/** The set-up line of the joke (its &quot;question&quot; part). */</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">question</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'>    <span class="cm">/** The punchline of the joke (its &quot;answer&quot; part). */</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">answer</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span>
-</span><span class='line'><span class="c1">// AppFunctionJokeMapper.kt — the boundary mapper, like toJoke()/toEntity()</span>
-</span><span class='line'><span class="k">fun</span> <span class="nf">Joke</span><span class="p">.</span><span class="n">toAppFunctionJoke</span><span class="p">():</span> <span class="n">AppFunctionJoke</span> <span class="p">=</span> <span class="n">AppFunctionJoke</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">id</span> <span class="p">=</span> <span class="n">id</span><span class="p">,</span> <span class="n">question</span> <span class="p">=</span> <span class="n">question</span><span class="p">,</span> <span class="n">answer</span> <span class="p">=</span> <span class="n">answer</span><span class="p">,</span>
-</span><span class='line'><span class="p">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="cm">/**</span>
-</span><span class='line'><span class="cm"> * Lists every joke the user has currently marked as a favorite, including its set-up and punchline.</span>
-</span><span class='line'><span class="cm"> *</span>
-</span><span class='line'><span class="cm"> * Returns structured data rather than a sentence, so a calling agent can read, count, or quote</span>
-</span><span class='line'><span class="cm"> * individual jokes. Use the id of a returned joke when calling &quot;setFavorite&quot; to unmark a specific</span>
-</span><span class='line'><span class="cm"> * one. An empty list means the user has no favorites.</span>
-</span><span class='line'><span class="cm"> *</span>
-</span><span class='line'><span class="cm"> * @return The user&#39;s favorite jokes; an empty list if there are none.</span>
-</span><span class='line'><span class="cm"> */</span>
-</span><span class='line'><span class="n">@AppFunction</span><span class="p">(</span><span class="n">isDescribedByKDoc</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">getFavorites</span><span class="p">(</span><span class="n">context</span><span class="p">:</span> <span class="n">AppFunctionContext</span><span class="p">):</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">AppFunctionJoke</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">result</span> <span class="p">=</span> <span class="n">AppModule</span><span class="p">.</span><span class="n">jokesRepository</span><span class="p">.</span><span class="n">getFavorites</span><span class="p">()</span>
-</span><span class='line'>    <span class="n">result</span><span class="p">.</span><span class="n">getOrDefault</span><span class="p">(</span><span class="n">emptyList</span><span class="p">()).</span><span class="n">map</span> <span class="p">{</span> <span class="n">joke</span> <span class="p">-&gt;</span> <span class="n">joke</span><span class="p">.</span><span class="n">toAppFunctionJoke</span><span class="p">()</span> <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>关于可序列化上的 KDoc，有两个不明显的事情值得大声说出来，因为两者都“默默地”——它们编译得很好，只有在运行时、在代理内部表现不佳。</p>
-
-<p>首先，KSP 看起来在哪里：</p>
-
-<blockquote><p><strong><em>KSP 仅提取直接在每个属性上方内联编写的 KDoc，特别是用于</em></strong> <code>**_@AppFunctionSerialized_**</code> <strong><em>classes.</em></strong></p>
-
-<p><em>如果你使用类级别</em> <code>_@param_</code> <em>或</em> <code>_@property_</code> <em>标记来记录属性，KSP 不会提取这些属性的任何内容，并且该函数在运行时显示为“元数据丢失”/“AppFunction 不可用”。</em></p>
-
-<p><em>将文档放在属性上，而不是放在类标头中。</em></p></blockquote>
-
-<p>这是本文中两种文档风格真正不同的地方，值得确定，因为重用“@param”的本能是如此强烈。 <code>@param</code> 用法是在函数中使用的方式，但不是在数据类构造函数中使用的方式。</p>
-
-<p><strong>第二，也是容易错过的：</strong></p>
-
-<p><strong>类级 KDoc 摘要成为该类型面向代理的描述。</strong> 使用“isDescribedByKDoc = true”，你在类上方的 KDoc 块中编写的任何内容都会作为该类型的描述发送到生成的模式中，就像函数的 KDoc 摘要成为函数描述一样。</p>
-
-<p><strong>任何为 AppFunctions 注释的 KDoc 都是面向代理的副本。</strong> 在常规注释中保留仅限开发人员的基本原理（KSP 会忽略这一点），并使 KDoc 本身保持干净、具体的描述。</p>
-
-<p><strong>同样的陷阱解释了上面函数 KDoc 中的一个小而真实的细节：</strong> 它用普通引号表示“setFavorite”，而不是 KDoc 链接“[setFavorite]”。 KDoc 链接括号在进入架构的过程中未得到解析。它们会逐字保存，因此代理会读取原始的“[setFavorite]”（更糟糕的是，还会读取“[AppFunctionJoke.id]”等内部符号路径）。简单地引用名字；保存人们在 IDE 中阅读的 KDoc 的“[&hellip;]”链接。</p>
-
-<p><strong>关于支持的类型的注释，</strong>因为一旦你将“String”抛在后面，你就会立即使用它们。从这个 alpha 版本开始，<code>@AppFunction</code> 参数或返回值可以是： 原语 (<code>Int</code>、<code>Long</code>、<code>Float</code>、<code>Double</code>、<code>Boolean</code>)；原始数组（<code>IntArray</code>、<code>LongArray</code>、<code>FloatArray</code>、<code>DoubleArray</code>、<code>BooleanArray</code>）；本机类型（“String”、“PendingIntent”、“Uri”、“LocalTime”、“LocalDate”、“LocalDateTime”、“Instant”）、“@AppFunctionSerialized”对象；或任何受支持的非基本类型的“List”。该集合之外的任何内容都不会在架构往返过程中幸存下来。</p>
-
-<h3>类型参数和类型错误</h3>
-
-<p>第二个函数采用参数并按照平台期望的方式报告失败，通过抛出而不是返回错误字符串：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-<span class='line-number'>25</span>
-<span class='line-number'>26</span>
-<span class='line-number'>27</span>
-<span class='line-number'>28</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="cm">/**</span>
-</span><span class='line'><span class="cm"> * Marks or unmarks a single joke as a favorite, identified by its id.</span>
-</span><span class='line'><span class="cm"> *</span>
-</span><span class='line'><span class="cm"> * Required workflow: call [getFavorites] first when you need a valid joke id to act on.</span>
-</span><span class='line'><span class="cm"> * This sets the favorite flag to an absolute value rather than toggling it, so the call is safe to</span>
-</span><span class='line'><span class="cm"> * repeat — requesting `isFavorite = true` on a joke that is already a favorite leaves it a favorite.</span>
-</span><span class='line'><span class="cm"> *</span>
-</span><span class='line'><span class="cm"> * @param jokeId The unique identifier of the joke to update.</span>
-</span><span class='line'><span class="cm"> * @param isFavorite The desired favorite state: `true` to mark as a favorite, `false` to unmark it.</span>
-</span><span class='line'><span class="cm"> * @return A short human-readable status message describing the new state of the joke.</span>
-</span><span class='line'><span class="cm"> * @throws AppFunctionElementNotFoundException If no joke exists with the given [jokeId]; suggest the</span>
-</span><span class='line'><span class="cm"> * user call getFavorites or browse the jokes list to obtain a valid id.</span>
-</span><span class='line'><span class="cm"> */</span>
-</span><span class='line'><span class="n">@AppFunction</span><span class="p">(</span><span class="n">isDescribedByKDoc</span> <span class="p">=</span> <span class="k">true</span><span class="p">)</span>
-</span><span class='line'><span class="n">suspend</span> <span class="k">fun</span> <span class="nf">setFavorite</span><span class="p">(</span>
-</span><span class='line'>    <span class="n">context</span><span class="p">:</span> <span class="n">AppFunctionContext</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">jokeId</span><span class="p">:</span> <span class="n">Int</span><span class="p">,</span>
-</span><span class='line'>    <span class="n">isFavorite</span><span class="p">:</span> <span class="n">Boolean</span><span class="p">,</span>
-</span><span class='line'><span class="p">):</span> <span class="n">String</span> <span class="p">=</span> <span class="n">withContext</span><span class="p">(</span><span class="n">Dispatchers</span><span class="p">.</span><span class="n">IO</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">joke</span> <span class="p">=</span> <span class="n">AppModule</span><span class="p">.</span><span class="n">jokesRepository</span><span class="p">.</span><span class="n">getJokeById</span><span class="p">(</span><span class="n">jokeId</span><span class="p">).</span><span class="n">getOrNull</span><span class="p">()</span>
-</span><span class='line'>        <span class="o">?:</span> <span class="k">throw</span> <span class="n">AppFunctionElementNotFoundException</span><span class="p">(</span><span class="s">&quot;No joke found with id $jokeId.&quot;</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">val</span> <span class="py">result</span> <span class="p">=</span> <span class="n">AppModule</span><span class="p">.</span><span class="n">jokesRepository</span><span class="p">.</span><span class="n">setFavorite</span><span class="p">(</span><span class="n">jokeId</span><span class="p">,</span> <span class="n">isFavorite</span><span class="p">)</span>
-</span><span class='line'>    <span class="k">if</span> <span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">isSuccess</span><span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">isFavorite</span><span class="p">)</span> <span class="s">&quot;Joke ${joke.id} is now a favorite.&quot;</span> <span class="k">else</span> <span class="s">&quot;Joke ${joke.id} is no longer a favorite.&quot;</span>
-</span><span class='line'>    <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-</span><span class='line'>        <span class="s">&quot;Failed to update joke ${joke.id}: ${result.exceptionOrNull()?.message}&quot;</span>
-</span><span class='line'>    <span class="p">}</span>
-</span><span class='line'><span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>第二个函数演示了四件事：</p>
-
-<ul>
-<li><strong>类型化参数将其含义带入模式中。</strong> <code>jokeId: Int</code> 和 <code>isFavorite: Boolean</code> 可以清楚地读取模型来决定传递什么内容。这正是之前关于参数名称是合约一部分的观点。</li>
-<li><strong>抛出错误，而不是返回。</strong> 要向调用者报告真正的失败，请抛出<code>androidx.appfunctions.AppFunctionException</code>的子类。这里，当“id”不存在时，会出现“AppFunctionElementNotFoundException”。代理接收一个键入的错误，而不必解析句子，并且“@throws”行告诉它要建议什么恢复。 （该库提供了一系列这些：无效参数、元素未找到、需要许可等等。）</li>
-<li><strong>所需的工作流程：是一种记录在案的约定。</strong> 当一个功能依赖于另一个功能时，Google 的 KDoc 指南会用该确切的短语拼写出来。 “所需的工作流程：首先调用 getFavorites&hellip;”，以便代理学会在写入之前调用读取。</li>
-<li><strong>线程是显式的。</strong> AppFunction 实现默认在 UI 线程上运行，因此这两个函数本身切换到 <code>withContext(Dispatchers.IO)</code>。 （“clearFavorites”没有它就可以逃脱，因为它的单个 Room 调用已经在内部跳出主线程 - 但显式切换是更安全的默认值，也是要教授的规则。）</li>
-</ul>
-
-
-<p>有了这些，该类现在公开了三个函数。 “clearFavorites”、“getFavorites”和“setFavorite”，下一步的工厂会同时覆盖所有这些，因为它们位于同一个封闭类中。</p>
-
-<p>第 6 步 — 告诉操作系统如何构建你的 AppFunction 类</p>
-
-<p>到目前为止，我们已经创建了几个新类型：<code>JokesAppFunctions</code>、<code>AppFunctionJoke</code> 和一个映射器。对于任何使用分层代码库的人来说，自然而然会问：它们属于哪一层？示例中使用了常见的 <code>data</code> / <code>domain</code> / <code>presentation</code> 结构，每个功能都对应一个层，因此很容易将 AppFunctions 代码放到这三层中的某一层。</p>
-
-<p>请克制住这种想法；一旦你真正理解了 AppFunction 的本质，正确的答案就会直接来自清晰架构。</p>
-
-<p><strong>AppFunction 是一个入站入口点</strong>；一个驱动（主要）适配器。应用外部的某些东西（操作系统、代理）会介入并驱动你的业务逻辑。这与 Compose UI 扮演的角色完全相同；唯一的区别在于调用者。用户点击屏幕，代理调用函数。两者都位于外部的“接口适配器”环中，并向内部调用存储库。这与你的 <code>data</code> 层形成对比，<code>data</code> 层包含驱动型（辅助型）适配器——应用程序调用的出站网关（例如 Room、Ktor）。AppFunctions 指向相反的方向。</p>
-
-<p>这一分类就决定了选项：</p>
-
-<ul>
-<li><p><strong>不属于</strong> <code>data</code> 层。<code>data</code> 层用于出站网关，而 AppFunctionJoke 不是持久化或网络 DTO。它是入站接口的边界模型。将入口点放在 <code>data</code> 层会混淆“驱动我们的事物”和“我们驱动的事物”。</p></li>
-<li><p><strong>不属于根/应用程序包。</strong> 根包用于真正跨功能、应用程序范围的粘合层。<code>clearFavorites</code>、<code>getFavorites</code> 和 <code>setFavorite</code> 与笑话有关，因此它们属于笑话功能。</p></li>
-<li><p><strong>不属于</strong> <code>core</code> 包。一个共享的、与功能无关的模块不应该依赖于笑话领域；此处的特性逻辑会颠倒依赖关系规则。</p></li>
-</ul>
-
-
-<p><code>数据</code>/<code>领域</code>/<code>表示</code>三元组`是常见的架构结构，并非硬性规定。整洁架构的核心是领域，其外层环绕着接口适配器，这些适配器承载着所有交付机制。</p>
-
-<p>包括用户界面、控件、磁贴、深度链接和应用程序函数。在这个环中，表示层和应用程序函数是同级关系，而非父子关系。因此，最简洁的方案是在 presentation 之外添加第四个包，其作用域限定于功能：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>features/jokes/
-</span><span class='line'>├─ data/          ← driven adapters: Room, Ktor, DTOs, mappers
-</span><span class='line'>├─ domain/        ← Joke, JokesRepository <span class="o">(</span>no Android, no androidx.appfunctions<span class="o">)</span>
-</span><span class='line'>├─ presentation/  ← Compose screens + ViewModels   <span class="o">(</span>delivery to a human<span class="o">)</span>
-</span><span class='line'>└─ appfunctions/  ← JokesAppFunctions, AppFunctionJoke, mapper  <span class="o">(</span>delivery to an agent<span class="o">)</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<blockquote><p><em>值得保留的思维模型：</em> <strong><em>appfunctions/ 之于代理，正如 presentation/ 之于用户</em></strong></p>
-
-<p>_架构级别相同，受众不同。 <code>AppFunctionJoke</code> 之所以应该位于其适配器旁边，原因与 UI 模型位于展示层、<code>JokeDto</code> 位于数据层相同：边界模型与其边界位于同一层，并且它仅依赖于内部的领域 Joke。</p></blockquote>
-
-<p><strong>另一个区别使拆分更加清晰。</strong> AppFunctions 代码有两种类型，它们位于两个不同的位置：</p>
-
-<p>这是有意为之。之所以采用应用级配置，正是因为它将每个功能的 AppFunctions 聚合到一个模式中（回想一下步骤 1 中的 <code>aggregateAppFunctions</code> 标志）。</p>
-
-<p>每个功能都贡献自己的函数；应用模块将它们组装起来。这也为多模块拆分提供了前瞻性：<code>:jokes:appfunctions</code> 将依赖于 <code>:jokes:domain</code>，而聚合标志和 <code>Provider</code> 则保留在 <code>:app</code> 中。</p>
-
-<p>第 7 步 — 测试（adb、真实代理或两者）</p>
-
-<p>验证接线的最快方法是通过“adb shell cmd app_function”。值得精确说明此命令的作用，因为它不是假的或模拟的 - 它是同一操作系统级“AppFunctionService”的瘦壳前端，任何代理都可以通过 Kotlin 代码中的“AppFunctionManager”与其进行通信。</p>
-
-<p>你在这里不是在模拟代理人；而是在模拟代理人。你正在绕过它并直接与操作系统对话。这使得 adb 成为端到端验证的理想工具，因为它删除了每个人工智能产品变量，只留下你自己的线路进行测试。</p>
-
-<p>在运行 Android 16 或更高版本的设备或模拟器上构建并安装应用程序，然后列出已注册的 AppFunctions：</p>
-
-<p>在运行 <strong>Android 16 或更高版本</strong>的设备或模拟器上构建并安装应用程序，并在模拟器上使用 Google 系统映像 <strong>（Google API 或 Google Play）</strong>，因为纯 AOSP 映像上缺少 <code>cmd app_function</code> 工具 <em>（在下面的当路由 A (adb) 可能会碰壁时详细说明）</em>。</p>
-
-<p>然后列出已注册的AppFunctions：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># You Type this for the first 10 lines of app functions for our package</span>
-</span><span class='line'>adb shell cmd app_function list-app-functions <span class="p">|</span> grep -A <span class="m">10</span> <span class="s2">&quot;eu.anifantakis.networkapp.jokes&quot;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果所有内容均已编译且清单设置正确，你应该会看到如下内容：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># OUTPUT of first 10 lines:</span>
-</span><span class='line'><span class="s2">&quot;eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites&quot;</span>
-</span><span class='line'>        <span class="o">]</span>,
-</span><span class='line'>        <span class="s2">&quot;packageNameHash&quot;</span>: <span class="o">[</span>        -1179891122<span class="o">]</span>,
-</span><span class='line'>        <span class="s2">&quot;scope&quot;</span>: <span class="o">[</span> <span class="s2">&quot;global&quot;</span>        <span class="o">]</span>,
-</span><span class='line'>        <span class="s2">&quot;mobileApplicationQualifiedId&quot;</span>: <span class="o">[</span> <span class="s2">&quot;android$apps-db\/apps#eu.anifantakis.networkapp&quot;</span>        <span class="o">]</span>,
-</span><span class='line'>--
-</span><span class='line'>            <span class="s2">&quot;android$apps-db\/app_functions#eu.anifantakis.networkapp\/eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions\\#clearFavorites&quot;</span>
-</span><span class='line'>          <span class="o">]</span>,
-</span><span class='line'>          <span class="s2">&quot;functionId&quot;</span>: <span class="o">[</span> <span class="s2">&quot;eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites&quot;</span>          <span class="o">]</span>,
-</span><span class='line'>          <span class="s2">&quot;packageName&quot;</span>: <span class="o">[</span><span class="s2">&quot;eu.anifantakis.networkapp&quot;</span>          <span class="o">]</span>
-</span><span class='line'>        <span class="o">}</span>
-</span><span class='line'>      <span class="o">}</span>
-</span><span class='line'>    <span class="o">}</span>
-</span><span class='line'>  <span class="o">]</span>,
-</span><span class='line'>  <span class="s2">&quot;com.google.android.permissioncontroller&quot;</span>: <span class="o">[</span>
-</span><span class='line'>  <span class="o">{</span>
-</span><span class='line'>ioannisanif@192 MitropolitikoNetworkApp %
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>此输出中有一些值得指出的事情：</p>
-
-<ul>
-<li><code>**functionId**</code> 是我们 AppFunction 的规范标识符：<code>eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites</code>。请注意完全限定类名和方法名之间的“#”分隔符。这正是你在下一个命令中传递给“&ndash;function”的字符串，因此请从此输出中复制它，而不是从内存中键入它。</li>
-<li><code>**packageName**</code> 是 <code>eu.anifantakis.networkapp</code> — 应用程序的 <code>applicationId</code>。这是你传递给“&ndash;package”的内容，它与包含函数类的包不同。 （函数类位于“eu.anifantakis.networkapp.jokes.features.jokes.appfunctions”，但应用程序标识符只是“eu.anifantakis.networkapp”。）</li>
-<li><code>**mobileApplicationQualifiedId**</code> 指向 <code>android$apps-db/apps#eu.anifantakis.networkapp</code>。 “apps-db”前缀是操作系统级数据库<em>（AppSearch，内部）</em>，系统使用它来索引已安装的应用程序。我们的函数在同一数据库中的“app_functions”下有自己的条目。</li>
-<li><code>**scope: global**</code> 确认该函数是可见的，无需进一步的门控。如果我们使用了“@AppFunction(isEnabled = false, &hellip;)”并且尚未在运行时启用它，则此条目根本不会显示在此处。</li>
-</ul>
-
-
-<p>值得一提的是，这个输出并不是一个对开发人员来说看起来很漂亮的诊断界面。它是操作系统 AppFunctions 注册表的字面视图；当代理询问“这个应用程序公开哪些功能？”时，它会读取相同的注册表。代理将看到的有关你的职能的所有内容都在这里。</p>
-
-<p><strong>端到端尝试：</strong></p>
-
-<p>要实际查看该功能的运行情况，请运行这个简短的演示：</p>
-
-<ol>
-<li><strong>运行应用程序</strong>，然后点击你想要保留的笑话旁边的心形图标，将一些笑话标记为收藏夹。</li>
-<li><strong>关闭并重新打开应用程序。</strong> 你应该注意到，当其余笑话从网络刷新时，你标记的收藏夹将被保留。</li>
-<li><strong>运行下面的脚本</strong>，然后观看喜爱的标记立即从屏幕上清除。请注意，你无需运行应用程序即可生效。</li>
-</ol>
-
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>adb shell cmd app_function execute-app-function <span class="se">\</span>
-</span><span class='line'>  --package eu.anifantakis.networkapp <span class="se">\</span>
-</span><span class='line'>  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#clearFavorites <span class="se">\</span>
-</span><span class='line'>  --parameters <span class="s1">&#39;{}&#39;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>如果你的收藏夹表之前有标记为“isFavorite = 1”的行，那么它们现在全部重置为“0”，并且 adb 会打印函数返回的字符串。</p>
-
-<blockquote><p><strong>上面也提到了重要的观察：</strong></p>
-
-<p><strong><em>无论你的应用程序是在前台、后台还是完全关闭，这都有效。</em></strong></p>
-
-<p><em>操作系统通过</em> <code>_AppFunctionService_</code> <em>独立于你的活动生命周期来访问你的函数。这就是本文开头“由操作系统索引”的实际现金价值。</em></p>
-
-<p><strong><em>代理不需要你的 UI 处于活动状态即可访问你的代码。</em></strong></p></blockquote>
-
-<p>步骤 5b 中的两个函数可以通过相同的方式访问。 getFavorites 不带参数并返回结构化列表：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>adb shell cmd app_function execute-app-function <span class="se">\</span>
-</span><span class='line'>  --package eu.anifantakis.networkapp <span class="se">\</span>
-</span><span class='line'>  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#getFavorites <span class="se">\</span>
-</span><span class='line'>  --parameters <span class="s1">&#39;{}&#39;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>setFavorite</code> 将类型化参数作为 JSON。请注意键如何与 Kotlin 参数名称完全匹配。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'>adb shell <span class="s2">&quot;cmd app_function execute-app-function \</span>
-</span><span class='line'><span class="s2">  --package eu.anifantakis.networkapp \</span>
-</span><span class='line'><span class="s2">  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#setFavorite \</span>
-</span><span class='line'><span class="s2">  --parameters &#39;{\&quot;jokeId\&quot;:179,\&quot;isFavorite\&quot;:true}&#39;&quot;</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>返回“笑话 179 现在是最喜欢的。”，后续的 getFavorites 然后将笑话 179 包含在其结构化列表中。传递一个不存在的jokeId，你可以看到类型错误路径触发 - <code>Errorexecutingappfunction:android.app.appfunctions.AppFunctionException: Nojokefound with id 999999. (code 1500)</code> - 调用者得到一个结构化错误，而不是状态语句。</p>
-
-<p>还有一些值得使用的 adb 子命令放在后面的口袋里：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="c"># Confirm the device even supports AppFunctions (prints a help page if so).</span>
-</span><span class='line'><span class="c"># &quot;cmd: Can&#39;t find service: app_function&quot; → no AppFunctions support on this build.</span>
-</span><span class='line'><span class="c"># &quot;No shell command implementation.&quot;</span>
-</span><span class='line'>
-</span><span class='line'>→ AOSP image: the service is present but its adb
-</span><span class='line'><span class="c">#</span>
-</span><span class='line'>
-</span><span class='line'>front-end is not <span class="o">(</span>see <span class="s2">&quot;When Route A might hit a wall&quot;</span>
-</span><span class='line'><span class="c">#</span>
-</span><span class='line'>
-</span><span class='line'>below<span class="p">;</span> use <span class="sb">`</span>dumpsys app_function<span class="sb">`</span> to inspect instead<span class="o">)</span>.
-</span><span class='line'>adb shell cmd app_function <span class="nb">help</span>
-</span><span class='line'><span class="c"># Append --brief-yaml to any execute call for terser, more readable output.</span>
-</span><span class='line'>adb shell cmd app_function execute-app-function --brief-yaml <span class="se">\</span>
-</span><span class='line'>  --package eu.anifantakis.networkapp <span class="se">\</span>
-</span><span class='line'>  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#getFavorites <span class="se">\</span>
-</span><span class='line'>  --parameters <span class="s1">&#39;{}&#39;</span>
-</span><span class='line'><span class="c"># Toggle a single function on or off at runtime (ties into the @AppFunction(isEnabled = false) flag).</span>
-</span><span class='line'>adb shell cmd app_function <span class="nb">set</span>-enabled <span class="se">\</span>
-</span><span class='line'>  --package eu.anifantakis.networkapp <span class="se">\</span>
-</span><span class='line'>  --function eu.anifantakis.networkapp.jokes.features.jokes.appfunctions.JokesAppFunctions#setFavorite <span class="se">\</span>
-</span><span class='line'>  --state disable
-</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>当路线 A (adb) 可能会碰壁时</h3>
-
-<p>上面的所有内容都是在 Google API 图像上捕获的。在纯 AOSP 映像（例如“sdk_phone64_arm64”）上，每个 cmd“app_function”子命令都会打印“No shell command implementation.”：</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class='bash'><span class='line'><span class="nv">$ </span>adb shell cmd app_function
-</span><span class='line'>**No shell <span class="nb">command </span>implementation.**
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>看起来 AppFunctions 不受支持，但事实并非如此。</p>
-
-<p>该行是框架的默认“Binder.onShellCommand()”输出，而不是 AppFunctions 消息。整个过程依赖于同一个 AppFunctionManagerService 的两个方法：</p>
-
-<ul>
-<li><code>**onShellCommand()**</code> ：可选的 Binder 钩子。 Google 系统映像 <em>(</em><strong><em>Google API</em></strong> <em>and</em> <strong><em>Google Play</em></strong><em>)</em> 会覆盖它。 AOSP 版本没有，因此 cmd 会退回到该存根消息。 （<code>cmd app_search</code> 的行为方式相同。）</li>
-<li><code>**executeAppFunction()**</code>：<code>IAppFunctionManager</code> Binder 接口的必需方法，因此无论图像如何，服务都会实现它。</li>
-</ul>
-
-
-<p><strong>因此，在 AOSP 上，仅缺少 adb shell 包装器，而不缺少 API 本身。</strong></p>
-
-<p>这与“cmd: Can&rsquo;t find service: app_function”相反，这确实意味着不支持 AppFunctions；使用 <code>adb shell getprop ro.build.fingerprint</code> 区分两者（<code>sdk_gphone</code>&hellip; 有命令，<code>sdk_phone.../test-keys</code> 没有）。</p>
-
-<p><strong>实际影响：</strong></p>
-
-<p><code>adb shell dumpsys app_function</code> 可在 AOSP 和 Google API/Play 模拟器中工作，但 <code>cmd</code> 仅适用于 Google API/Play 模拟器。</p>
-
-<p>因此，“execute-app-function”子命令依赖于缺少的“onShellCommand()”，而“executeAppFunction()”绑定器方法只能通过“AppFunctionManager”以编程方式访问。</p>
-
-<p>也就是下面的B路。因此，在 AOSP 上，主机应用程序不再是可选的。 <em>（两种风格都可以支持它；Google API 也为你提供 cmd。）</em></p>
-
-<p>其他路径（我还没尝试过）</p>
-
-<p>本文中的“clearFavorites”功能碰巧可以安全地重复使用。无论调用一次还是十次，“UPDATE SET isFavorite = 0”都会产生相同的结果。这个事故值得暂停，因为当你编写一个破坏性的 AppFunction 时，重复调用会造成伤害，你已经重新打开了 REST 为确定性调用者解决的每个问题，并出现了一个新的问题：调用者现在是一个 LLM，可以产生幻觉、重试或出于错误的原因选择你的函数。</p>
-
-<p>调用两次的“deleteJoke(id)”充其量是一个错误。调用两次的“sendPayment(amount)”是一个真正的问题。在用“@AppFunction”注释写入之前，请处理 REST 迫使你回答的相同问题：重试时会发生什么，部分失败时会发生什么，以及首先允许谁调用它？</p>
-
-<p><strong>REST 时代的一些值得继承的模式：</strong></p>
-
-<h3>1) 通过设计确保写入安全，以便在可以的情况下重复写入</h3>
-
-<ul>
-<li>优先选择绝对集操作而不是增量操作，</li>
-<li>接受客户端提供的请求 ID，以便可以检测并忽略重复的调用，</li>
-<li>对于无操作和真正的改变同样返回成功</li>
-</ul>
-
-
-<p>让我们更详细地看看这些项目符号&hellip;&hellip;</p>
-
-<p><strong>> 优先选择绝对集操作而不是增量操作</strong></p>
-
-<p>写入最终值的 UPDATE，例如“SET status = &lsquo;active&#8217;”，每次运行时都会给出相同的结果。</p>
-
-<p>像“SET value = value + 1”这样的增量 - 每次重试都会累积，因此两次调用都会使计数器保持在 +2，即使调用者只是意味着 +1。</p>
-
-<p>对于 AppFunctions，“markAsFavorite(jokeId)”是绝对的并且可以安全地重复； <code>incrementFavoriteCount(jokeId)</code> 是一个增量，但不是。</p>
-
-<p><strong>> 接受客户端提供的请求 ID</strong></p>
-
-<p>让呼叫者在每次呼叫时发送一个唯一的密钥。</p>
-
-<p>你的函数会保留最近看到的键的一小部分记录；如果相同的键到达两次，你将返回第一次调用的缓存结果，而不是再次运行该操作。</p>
-
-<p>这正是像 Stripe 这样的支付 API 能够在网络重试中幸存下来而无需重复收费的方式。它们在每个请求上都需要一个“Idempotency-Key”标头，并且你可以为任何敏感写入借用相同的模式。</p>
-
-<p><strong>> 无论操作是否真正起作用还是无操作，都以相同的方式返回成功</strong></p>
-
-<p>我们的“clearFavorites”已经做到了这一点。</p>
-
-<p>两个分支都会返回“所有喜欢的笑话已成功清除”，无论十个笑话是不喜欢的还是零个。</p>
-
-<p>不同的消息（“Cleared 10”与“Nothing to Clear”）会向调用者泄露状态，并诱使法学硕士根据答案选择不同的下一步。</p>
-
-<h3>2) 自由地暴露读取，保守地暴露写入。</h3>
-
-<p>没有任何规则规定存储库中的每个方法都应该有一个@AppFunction。选择对特工真正有用的最小表面。</p>
-
-<h3>3) 假设没有人看守门</h3>
-
-<p>今天，“EXECUTE_APP_FUNCTIONS”已获得特权，但代理和函数之间的执行故事仍在定义中。后续的主机应用程序文章将详细探讨该层。 <em>在那之前，你的功能是最后一层防御，而不是第一层。</em></p>
-
-<p>**这一切背后有一个值得大声说出来的战略要点。我们花了十年时间优化深度链接、应用索引和搜索，以吸引用户进入应用。 AppFunctions 进行了相反的优化——应用程序永远不会打开，屏幕永远不会亮起，代理和业务逻辑之间没有 UI。这改变了“最低权限”在实践中的样子：用户界面不再询问“你确定吗？”代表你。</p>
-
-<p>结束语</p>
 ]]></content>
   </entry>
   

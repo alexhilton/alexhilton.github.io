@@ -1,0 +1,1359 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>用Konsist与Lint强制执行设计系统契约 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="通过 Konsist 和自定义 Android Lint 规则，将设计系统规范从文档转化为可执行的检查，涵盖 Token、组件、架构边界及 CI 落地实践。">
+  <meta name="keywords" content="Android, Compose, Design, Konsist">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">用Konsist与Lint强制执行设计系统契约</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-11-01'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>1</span><span class='date-suffix'>st</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Your Design System Is a Contract. Enforce It with Konsist and Android Lint」，原文链接<a href="https://proandroiddev.com/konsist-design-system-validator-jetpack-compose-d5c3814fe462">https://proandroiddev.com/konsist-design-system-validator-jetpack-compose-d5c3814fe462</a>，由Ravi Rawal发布于2026年10月21日。</p></blockquote>
+
+<p><a href="/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint/"><img src="https://cdn-images-1.medium.com/max/1024/1*wf9HLLqTSDtRjV2H3Cb-cA.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>本文将介绍如何在 Jetpack Compose 中强制执行颜色、间距、排版、形状和组件规范，并演示如何配合自定义 Android Lint 规则实现这一目标。</p>
+
+<p>设计系统的可靠性取决于防止团队绕过它的规则的可靠性。</p>
+
+<p>大多数安卓开发团队都有设计系统。</p>
+
+<blockquote><p>它们定义了字体、颜色、间距、形状、尺寸和可重用的 Compose 组件。<br/>
+它们编写了使用指南，发布了组件库，并要求开发者遵循既定的规范。</p></blockquote>
+
+<p>然而，经过几个月的开发，同样的问题又开始出现了。</p>
+
+<p>一个屏幕使用 16dp 的水平内边距；另一个屏幕使用 18dp。一位开发者创建了一个自定义文本样式，因为现有的字体看起来不太合适。</p>
+
+<p>一项功能引入了一个<strong>硬编码的</strong>十六进制颜色值。一个按钮的<strong>圆角半径</strong>与应用程序的其他部分不同。有人创建了<strong>另一个</strong>卡片组件，因为现有的卡片组件似乎不方便重用。</p>
+
+<p>这些决定单独来看似乎都不算特别危险。但它们结合起来，却破坏了设计系统原本应该提供的连贯性。</p>
+
+<p>代码审查可以发现一些违规行为，但它并非可靠的强制执行机制。审查人员时间有限，规范容易被忽略，而且相同的反馈会在不同的拉取请求中重复出现。</p>
+
+<p>更好的方法是将设计系统视为工程合同，并通过自动化检查来执行该合同。</p>
+
+<p>对于使用 Jetpack Compose 的 Android 团队来说，<strong>Konsist 和自定义 Android Lint 规则可以互补地解决此问题。</strong> Konsist 可以强制执行架构和结构规范。Android Lint 可以检查源代码中是否存在禁止的模式。Compose UI 测试可以验证最终界面在运行时的行为。</p>
+
+<p>它们共同将设计系统规范从文档转化为可执行的规则。</p>
+
+<h2>首先要明确合同的实际含义</h2>
+
+<p>在编写测试或代码检查器之前，请确定你的团队希望每个功能遵循的规则。</p>
+
+<p>并非所有设计系统规范都适用于同一种强制执行机制。有些规则涉及模块边界，有些涉及源代码表达式，还有一些涉及渲染后的界面。</p>
+
+<p>例如：</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*yy2aO8lErT4stQ_aQDh3xQ.png" alt="无标题图像" /></p>
+
+<p>这种区别很重要，因为没有任何一种工具能够同样有效地执行每一种规则。</p>
+
+<p>Konsist 适用于结构约束。Lint 更适合检测禁止的源代码模式。运行时测试验证仅通过检查源代码无法确定的行为。</p>
+
+<p>目标不是增加更多检查，而是将每条规则都放到执行层，以便能够可靠地进行检查。</p>
+
+<h2>基于已批准的 Token 构建设计系统</h2>
+
+<p>设计系统在实施之前需要一个清晰的真理来源。</p>
+
+<p>考虑一个间距不一致的 Compose 应用程序：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ProductDetailsScreen</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Column</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">17.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product details&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">fontSize</span> <span class="p">=</span> <span class="m">22.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="n">Spacer</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">13.</span><span class="n">dp</span><span class="p">))</span>
+</span><span class='line'>        <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">onClick</span> <span class="p">=</span> <span class="p">{},</span>
+</span><span class='line'>            <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="m">47.</span><span class="n">dp</span><span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">Text</span><span class="p">(</span><span class="s">&quot;Continue&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>问题不在于 17.dp、22.sp 或 47.dp 本身是否错误，而在于功能代码没有遵循系统已建立的值，而是自行做出独立的设计决策。</p>
+
+<p>首先定义 Token。</p>
+
+<h3>间距和尺寸</h3>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.tokens</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.unit.dp</span>
+</span><span class='line'><span class="k">object</span> <span class="nc">AppSpacing</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">xs</span> <span class="p">=</span> <span class="m">4.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">sm</span> <span class="p">=</span> <span class="m">8.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">md</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">lg</span> <span class="p">=</span> <span class="m">24.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">xl</span> <span class="p">=</span> <span class="m">32.</span><span class="n">dp</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="k">object</span> <span class="nc">AppDimensions</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">buttonHeight</span> <span class="p">=</span> <span class="m">48.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">iconSmall</span> <span class="p">=</span> <span class="m">16.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">iconMedium</span> <span class="p">=</span> <span class="m">24.</span><span class="n">dp</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">iconLarge</span> <span class="p">=</span> <span class="m">32.</span><span class="n">dp</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>功能代码现在可以传达意图：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Column</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">AppSpacing</span><span class="p">.</span><span class="n">md</span><span class="p">),</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="c1">// Screen content</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Token 名称体现了设计意图，其实际值仍由设计系统统一管理。</p>
+
+<p>如果设计系统将其中心间距从 16.dp 更改为另一个值，则可以在一个地方进行更改，而不是分散在各个功能模块中。</p>
+
+<h3>排版</h3>
+
+<p>Material 3 的排版为文本角色提供了有用的基础。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.tokens</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.material3.Typography</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.text.TextStyle</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.text.font.FontWeight</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">androidx.compose.ui.unit.sp</span>
+</span><span class='line'><span class="k">val</span> <span class="py">AppTypography</span> <span class="p">=</span> <span class="n">Typography</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">titleLarge</span> <span class="p">=</span> <span class="n">TextStyle</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">SemiBold</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontSize</span> <span class="p">=</span> <span class="m">22.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">lineHeight</span> <span class="p">=</span> <span class="m">28.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">),</span>
+</span><span class='line'>    <span class="n">bodyLarge</span> <span class="p">=</span> <span class="n">TextStyle</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">fontWeight</span> <span class="p">=</span> <span class="n">FontWeight</span><span class="p">.</span><span class="n">Normal</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">fontSize</span> <span class="p">=</span> <span class="m">16.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">lineHeight</span> <span class="p">=</span> <span class="m">24.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">),</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这些数值仅供参考。生产设计系统应根据其实际设计规范定义排版角色，包括字体系列、字重、行高、字间距和支持的文本变体。</p>
+
+<p>重要的原则是，功能代码应该使用语义角色，而不是自行创造排版格式。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product details&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">titleLarge</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h3>颜色和形状</h3>
+
+<p>颜色和形状应遵循相同的原则。在设计系统中，应尽可能使用 Material 3 的颜色角色：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Available&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">color</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">colorScheme</span><span class="p">.</span><span class="n">primary</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于自定义品牌颜色，在设计系统拥有的包中定义已批准的值，并向消费者公开语义名称。</p>
+
+<p>同样，应该集中定义已批准的形状，而不是允许每个特征选择自己的拐角半径。</p>
+
+<p>Token 系统构建了契约的词汇表。自动化检查能有效防止绕过这些约定。</p>
+
+<h2>使用 Konsist 保护架构边界</h2>
+
+<p>Konsist 是一个 Kotlin 架构测试库。它允许团队针对包结构、依赖关系、命名约定和其他源代码级架构规则编写测试。</p>
+
+<p>当设计系统被拆分为公共 API 和内部实现包时，这种方法尤其有用。</p>
+
+<p>想象一下这样的软件包结构：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">com</span><span class="p">.</span><span class="n">acme</span>
+</span><span class='line'><span class="err">├──</span> <span class="n">feature</span>
+</span><span class='line'><span class="err">│</span>   <span class="err">├──</span> <span class="n">home</span>
+</span><span class='line'><span class="err">│</span>   <span class="err">└──</span> <span class="n">product</span>
+</span><span class='line'><span class="err">└──</span> <span class="n">designsystem</span>
+</span><span class='line'>    <span class="err">├──</span> <span class="n">components</span>
+</span><span class='line'>    <span class="err">├──</span> <span class="n">tokens</span>
+</span><span class='line'>    <span class="err">└──</span> <span class="k">internal</span>
+</span><span class='line'>        <span class="err">└──</span> <span class="n">palette</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>功能模块应该使用公共的组件和 Token API，而不应直接依赖 <code>designsystem.internal</code> 下的实现细节。</p>
+
+<p>Konsist架构测试可以表达这种边界。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">import</span> <span class="nn">com.lemonappdev.konsist.api.Konsist</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.lemonappdev.konsist.api.architecture.Layer</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.junit.Test</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">DesignSystemArchitectureTest</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="err">`</span><span class="nf">features</span> <span class="n">must</span> <span class="n">not</span> <span class="n">depend</span> <span class="n">on</span> <span class="n">design</span> <span class="n">system</span> <span class="n">internals</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Konsist</span><span class="p">.</span><span class="n">scopeFromProject</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">assertArchitecture</span> <span class="p">{</span>
+</span><span class='line'>                <span class="k">val</span> <span class="py">features</span> <span class="p">=</span> <span class="n">Layer</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;Features&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;com.acme.feature..&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>                <span class="k">val</span> <span class="py">designSystemInternal</span> <span class="p">=</span> <span class="n">Layer</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;Design System Internal&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;com.acme.designsystem.internal..&quot;</span><span class="p">,</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>                <span class="n">features</span><span class="p">.</span><span class="n">doesNotDependOn</span><span class="p">(</span><span class="n">designSystemInternal</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>包模式必须与你仓库中的实际包布局相匹配。测试应在预期的项目范围内运行，并且 Konsist 版本应已锁定，并已根据你项目使用的 API 进行验证。</p>
+
+<p>这样做的好处是，架构决策可以执行。</p>
+
+<p>如果某个功能开始导入内部调色板或实现类，则在更改合并之前，架构测试可能会失败。</p>
+
+<p>Konsist还能强制执行哪些其他措施？</p>
+
+<p>同样的方法也适用于命名和包规范。</p>
+
+<p>例如，一个团队可能需要：</p>
+
+<ul>
+<li>公共设计系统组件位于 <code>designsystem.components</code> 下。</li>
+<li>Token 定义应放在 tokens 包内。</li>
+<li>特定于功能的 UI 组件位于其所属功能包内。</li>
+<li>内部实现类型遵循约定的命名规则。</li>
+<li>架构层保持其预期的依赖关系方向。</li>
+</ul>
+
+
+<p>这些检查有助于防止结构漂移。</p>
+
+<p>然而，存在一个重要的限制：<strong>包架构测试不会自动强制执行可组合组件内部的每种使用约定。</strong>一个功能可以仅依赖于已批准的包，并且仍然可以直接构造 Color(0xFF1769E0)。</p>
+
+<p>这时，<strong>Android Lint</strong> 就派上用场了。</p>
+
+<h2>使用自定义 Android Lint 规则来捕获设计系统违规</h2>
+
+<p>Android Lint 会分析 Android 源代码并报告潜在的错误和问题。它还提供用于编写自定义检测器的 API。</p>
+
+<p>对于设计系统而言，自定义 Lint 规则可以检查 Kotlin 源代码并标记违反团队约定的模式。</p>
+
+<p>例如：</p>
+
+<ul>
+<li>在功能代码中使用数值字面量构建颜色。</li>
+<li>使用原始 sp 值而非已批准的排版角色。</li>
+<li>在需要标记的地方使用原始 dp 值设置间距。</li>
+<li>调用已弃用的设计系统 API。</li>
+<li>使用未经批准的组件实现。</li>
+<li>引用功能包中的内部设计系统符号。</li>
+</ul>
+
+
+<p>每条规则都应该有明确的适用范围和清晰的失败信息。过于宽泛的规则如果会标记出所有合理的异常情况，就会造成不必要的干扰，最终导致开发者禁用这些检查。</p>
+
+<p>让我们实现一个具体的例子：检测 Compose Color 构造函数调用中的数值颜色字面量。</p>
+
+<h2>禁止在特征代码中使用原始数值颜色构造函数</h2>
+
+<p>请看以下代码：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">accent</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF1769E0L</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>颜色可能与当前的品牌色调相符，但该功能现在拥有了本应属于设计系统的设计决策权。</p>
+
+<p>我们可以创建一个自定义检测器，用于标记未经批准的软件包中的这种模式。</p>
+
+<p>以下示例针对直接传递给 androidx.compose.ui.graphics.Color 构造函数的数值字面量。这是一个重点突出的入门规则，并非对所有可能的硬编码颜色进行全面检测。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+<span class='line-number'>60</span>
+<span class='line-number'>61</span>
+<span class='line-number'>62</span>
+<span class='line-number'>63</span>
+<span class='line-number'>64</span>
+<span class='line-number'>65</span>
+<span class='line-number'>66</span>
+<span class='line-number'>67</span>
+<span class='line-number'>68</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.lint</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Category</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Detector</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Implementation</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Issue</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.JavaContext</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Scope</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Severity</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.SourceCodeScanner</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.intellij.psi.PsiMethod</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.jetbrains.uast.UCallExpression</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.jetbrains.uast.ULiteralExpression</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">NoHardcodedColorDetector</span> <span class="p">:</span> <span class="n">Detector</span><span class="p">(),</span> <span class="n">SourceCodeScanner</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">getApplicableConstructorTypes</span><span class="p">():</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">String</span><span class="p">&gt;</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">listOf</span><span class="p">(</span><span class="n">COLOR_CLASS</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">visitConstructor</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">context</span><span class="p">:</span> <span class="n">JavaContext</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">node</span><span class="p">:</span> <span class="n">UCallExpression</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">constructor</span><span class="p">:</span> <span class="n">PsiMethod</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">packageName</span> <span class="p">=</span> <span class="n">context</span><span class="p">.</span><span class="n">uastFile</span><span class="o">?.</span><span class="n">packageName</span><span class="p">.</span><span class="n">orEmpty</span><span class="p">()</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(</span><span class="n">isAllowedPackage</span><span class="p">(</span><span class="n">packageName</span><span class="p">))</span> <span class="k">return</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">hasNumericLiteral</span> <span class="p">=</span> <span class="n">node</span><span class="p">.</span><span class="n">valueArguments</span><span class="p">.</span><span class="n">any</span> <span class="p">{</span> <span class="n">argument</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">argument</span> <span class="k">is</span> <span class="n">ULiteralExpression</span> <span class="p">&amp;&amp;</span>
+</span><span class='line'>                <span class="n">argument</span><span class="p">.</span><span class="n">value</span> <span class="k">is</span> <span class="n">Number</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="k">if</span> <span class="p">(!</span><span class="n">hasNumericLiteral</span><span class="p">)</span> <span class="k">return</span>
+</span><span class='line'>        <span class="n">context</span><span class="p">.</span><span class="n">report</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">ISSUE</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">node</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">context</span><span class="p">.</span><span class="n">getLocation</span><span class="p">(</span><span class="n">node</span><span class="p">),</span>
+</span><span class='line'>            <span class="s">&quot;Use an approved design-system color or &quot;</span> <span class="p">+</span>
+</span><span class='line'>                <span class="s">&quot;MaterialTheme.colorScheme instead of &quot;</span> <span class="p">+</span>
+</span><span class='line'>                <span class="s">&quot;constructing a Color from a numeric literal.&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">isAllowedPackage</span><span class="p">(</span><span class="n">packageName</span><span class="p">:</span> <span class="n">String</span><span class="p">):</span> <span class="n">Boolean</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">ALLOWED_PACKAGES</span><span class="p">.</span><span class="n">any</span> <span class="p">{</span> <span class="n">allowed</span> <span class="p">-&gt;</span>
+</span><span class='line'>            <span class="n">packageName</span> <span class="p">==</span> <span class="n">allowed</span> <span class="p">||</span>
+</span><span class='line'>                <span class="n">packageName</span><span class="p">.</span><span class="n">startsWith</span><span class="p">(</span><span class="s">&quot;$allowed.&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="n">companion</span> <span class="k">object</span> <span class="err">{</span>
+</span><span class='line'>        <span class="k">private</span> <span class="n">const</span> <span class="k">val</span> <span class="py">COLOR_CLASS</span> <span class="p">=</span>
+</span><span class='line'>            <span class="s">&quot;androidx.compose.ui.graphics.Color&quot;</span>
+</span><span class='line'>        <span class="k">private</span> <span class="k">val</span> <span class="py">ALLOWED_PACKAGES</span> <span class="p">=</span> <span class="n">setOf</span><span class="p">(</span>
+</span><span class='line'>            <span class="s">&quot;com.acme.designsystem.tokens&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="s">&quot;com.acme.designsystem.internal.palette&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="n">@JvmField</span>
+</span><span class='line'>        <span class="k">val</span> <span class="py">ISSUE</span><span class="p">:</span> <span class="n">Issue</span> <span class="p">=</span> <span class="n">Issue</span><span class="p">.</span><span class="n">create</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">id</span> <span class="p">=</span> <span class="s">&quot;HardcodedDesignColor&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">briefDescription</span> <span class="p">=</span> <span class="s">&quot;Hardcoded design-system color&quot;</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">explanation</span> <span class="p">=</span> <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>                <span class="n">Feature</span> <span class="n">code</span> <span class="n">must</span> <span class="n">use</span> <span class="n">approved</span> <span class="n">design</span><span class="p">-</span><span class="n">system</span>
+</span><span class='line'>                <span class="n">colors</span> <span class="n">or</span> <span class="n">semantic</span> <span class="n">MaterialTheme</span> <span class="n">color</span> <span class="n">roles</span><span class="p">.</span>
+</span><span class='line'>                <span class="n">Raw</span> <span class="n">numeric</span> <span class="n">color</span> <span class="n">definitions</span> <span class="n">belong</span> <span class="k">in</span>
+</span><span class='line'>                <span class="n">approved</span> <span class="n">design</span><span class="p">-</span><span class="n">system</span> <span class="n">packages</span><span class="p">.</span>
+</span><span class='line'>            <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>            <span class="n">category</span> <span class="p">=</span> <span class="n">Category</span><span class="p">.</span><span class="n">CORRECTNESS</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">priority</span> <span class="p">=</span> <span class="m">8</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">severity</span> <span class="p">=</span> <span class="n">Severity</span><span class="p">.</span><span class="n">ERROR</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">implementation</span> <span class="p">=</span> <span class="n">Implementation</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">NoHardcodedColorDetector</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">Scope</span><span class="p">.</span><span class="n">JAVA_FILE_SCOPE</span><span class="p">,</span>
+</span><span class='line'>            <span class="p">),</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>该探测器由三个重要部分组成。</p>
+
+<p>首先，getApplicableConstructorTypes() 将检测器需要检查的调用限制为 Compose Color 类型的构造函数。</p>
+
+<p>其次，visitConstructor() 检查参数中是否存在数值字面量，并跳过明确允许定义颜色的包。</p>
+
+<p>第三，所报告的问题严重级别为 ERROR。这意味着 Lint 将此违规行为报告为错误。它是否会阻塞特定的 CI 作业取决于该作业的运行方式以及 Lint 的配置。</p>
+
+<p>此允许列表是有意为之。设计系统必须能够定义自己的调色板。该规则可防止任意的功能级定义，同时又不妨碍中心令牌实现正常工作。</p>
+
+<p>应根据项目中选择的 Android Lint 版本验证具体的检测器 API。自定义 Lint 对版本敏感，因此请确保 lint-api 和 lint-tests 与兼容的 Android Gradle 插件工具链保持一致。</p>
+
+<h2>登记问题</h2>
+
+<p>Lint 需要一个问题注册表来发现自定义问题。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.lint</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.client.api.IssueRegistry</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.client.api.Vendor</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.CURRENT_API</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">DesignSystemIssueRegistry</span> <span class="p">:</span> <span class="n">IssueRegistry</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">issues</span> <span class="p">=</span> <span class="n">listOf</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">NoHardcodedColorDetector</span><span class="p">.</span><span class="n">ISSUE</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">api</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="n">CURRENT_API</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">minApi</span><span class="p">:</span> <span class="n">Int</span> <span class="p">=</span> <span class="m">8</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">val</span> <span class="py">vendor</span> <span class="p">=</span> <span class="n">Vendor</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">vendorName</span> <span class="p">=</span> <span class="s">&quot;Acme Engineering&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">feedbackUrl</span> <span class="p">=</span> <span class="s">&quot;https://example.com/engineering/issues&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">contact</span> <span class="p">=</span> <span class="s">&quot;mobile-platform@example.com&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>请将示例中的供应商信息替换为贵公司的详细信息。</p>
+
+<p>自定义 Lint 模块还必须通过服务加载器注册问题注册表。创建以下文件：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">design</span><span class="p">-</span><span class="n">system</span><span class="p">-</span><span class="n">lint</span><span class="p">/</span>
+</span><span class='line'><span class="err">└──</span> <span class="n">src</span><span class="p">/</span><span class="n">main</span><span class="p">/</span><span class="n">resources</span><span class="p">/</span>
+</span><span class='line'>    <span class="err">└──</span> <span class="n">META</span><span class="p">-</span><span class="n">INF</span><span class="p">/</span><span class="n">services</span><span class="p">/</span>
+</span><span class='line'>        <span class="err">└──</span> <span class="n">com</span><span class="p">.</span><span class="n">android</span><span class="p">.</span><span class="n">tools</span><span class="p">.</span><span class="n">lint</span><span class="p">.</span><span class="n">client</span><span class="p">.</span><span class="n">api</span><span class="p">.</span><span class="n">IssueRegistry</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>文件内容应为完整的注册表类名：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">com</span><span class="p">.</span><span class="n">acme</span><span class="p">.</span><span class="n">designsystem</span><span class="p">.</span><span class="n">lint</span><span class="p">.</span><span class="n">DesignSystemIssueRegistry</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这样，Lint 就可以在加载自定义规则工件时发现自定义问题。</p>
+
+<h2>配置自定义 Lint 模块</h2>
+
+<p>一个典型的基于 JVM 的自定义 Lint 模块需要 Lint API 进行编译，以及 Lint 测试基础架构进行单元测试。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">plugins</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">kotlin</span><span class="p">(</span><span class="s">&quot;jvm&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">compileOnly</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;com.android.tools.lint:lint-api:$lintVersion&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">testImplementation</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;com.android.tools.lint:lint-tests:$lintVersion&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">testImplementation</span><span class="p">(</span><span class="s">&quot;junit:junit:4.13.2&quot;</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>此处，lintVersion 代表与你的 Android Gradle 插件和 Lint 环境兼容的版本。请勿脱离 Android 构建工具链单独选择此版本。</p>
+
+<p>在 Android 应用模块中，通过 lintChecks 配置来使用这些规则：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">dependencies</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">lintChecks</span><span class="p">(</span><span class="n">project</span><span class="p">(</span><span class="s">&quot;:design-system-lint&quot;</span><span class="p">))</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>一旦将模块包含在构建中，Lint 就可以在分析应用程序时加载已注册的检测器。</p>
+
+<h2>在强制执行规则之前先进行测试</h2>
+
+<p>没有测试的自定义检测器只不过是另一段可能悄无声息停止工作的代码。</p>
+
+<p>Lint 提供了一个测试基础架构，允许你提供源代码片段并断言所报告的问题。</p>
+
+<p>以下测试类展示了检测器测试的预期结构。请确保 Lint 测试依赖项与项目使用的版本保持一致，并在将其应用于持续集成 (CI) 之前，使用该版本验证代码片段。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">package</span> <span class="nn">com.acme.designsystem.lint</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.checks.infrastructure.TestFiles.kotlin</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Detector</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.Issue</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">com.android.tools.lint.detector.api.LintDetectorTest</span>
+</span><span class='line'><span class="k">import</span> <span class="nn">org.junit.Test</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">NoHardcodedColorDetectorTest</span> <span class="p">:</span> <span class="n">LintDetectorTest</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">getDetector</span><span class="p">():</span> <span class="n">Detector</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">NoHardcodedColorDetector</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">getIssues</span><span class="p">():</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Issue</span><span class="p">&gt;</span> <span class="p">=</span>
+</span><span class='line'>        <span class="n">listOf</span><span class="p">(</span><span class="n">NoHardcodedColorDetector</span><span class="p">.</span><span class="n">ISSUE</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">colorStub</span> <span class="p">=</span> <span class="n">kotlin</span><span class="p">(</span>
+</span><span class='line'>        <span class="s">&quot;src/main/java/androidx/compose/ui/graphics/Color.kt&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>        <span class="k">package</span> <span class="nn">androidx.compose.ui.graphics</span>
+</span><span class='line'>        <span class="k">class</span> <span class="nc">Color</span><span class="p">(</span><span class="k">val</span> <span class="py">value</span><span class="p">:</span> <span class="n">Long</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">constructor</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">Int</span><span class="p">)</span> <span class="p">:</span> <span class="k">this</span><span class="p">(</span><span class="n">value</span><span class="p">.</span><span class="n">toLong</span><span class="p">())</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>        <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="err">`</span><span class="nf">flags</span> <span class="n">numeric</span> <span class="n">colors</span> <span class="k">in</span> <span class="n">feature</span> <span class="n">code</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">lint</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">files</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">colorStub</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">kotlin</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;src/main/java/com/acme/feature/home/Colors.kt&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>                    <span class="k">package</span> <span class="nn">com.acme.feature.home</span>
+</span><span class='line'>                    <span class="k">import</span> <span class="nn">androidx.compose.ui.graphics.Color</span>
+</span><span class='line'>                    <span class="k">val</span> <span class="py">accent</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF1769E0L</span><span class="p">)</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>                <span class="p">),</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">run</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">expectErrorCount</span><span class="p">(</span><span class="m">1</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">expectContains</span><span class="p">(</span><span class="s">&quot;[HardcodedDesignColor]&quot;</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>
+</span><span class='line'>    <span class="n">@Test</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="err">`</span><span class="nf">allows</span> <span class="n">numeric</span> <span class="n">colors</span> <span class="k">in</span> <span class="n">token</span> <span class="k">package</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">lint</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">files</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">colorStub</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">kotlin</span><span class="p">(</span>
+</span><span class='line'>                    <span class="s">&quot;src/main/java/com/acme/designsystem/tokens/AppColors.kt&quot;</span><span class="p">,</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;</span>
+</span><span class='line'>                    <span class="k">package</span> <span class="nn">com.acme.designsystem.tokens</span>
+</span><span class='line'>                    <span class="k">import</span> <span class="nn">androidx.compose.ui.graphics.Color</span>
+</span><span class='line'>                    <span class="k">val</span> <span class="py">primary</span> <span class="p">=</span> <span class="n">Color</span><span class="p">(</span><span class="m">0</span><span class="n">xFF1769E0L</span><span class="p">)</span>
+</span><span class='line'>                    <span class="s">&quot;&quot;&quot;.trimIndent(),</span>
+</span><span class='line'>                <span class="p">),</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">run</span><span class="p">()</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">expectClean</span><span class="p">()</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>第一个测试验证了特征包中的数值颜色构造函数会产生错误。第二个测试验证了相同的模式在已批准的标记包中是否允许。</p>
+
+<p>测试桩为测试环境提供了一个最基本的 Compose Color 类型。实际的检测器仍需针对项目使用的 Lint 版本和源代码配置进行测试。</p>
+
+<p>这些测试也证明了一个关键原则：<strong>既要测试违规行为，也要测试合法的例外情况。</strong>否则，一条规则可能看起来有效，但实际上却破坏了它本应保护的代码。</p>
+
+<h2>了解探测器的局限性</h2>
+
+<p>这个启动检测器并不能检测到颜色绕过设计系统的所有方式。</p>
+
+<p>例如，它并未全面处理以下问题：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Color</span><span class="p">.</span><span class="n">Red</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>或者存储在常量中的颜色、从辅助函数返回的颜色、从资源加载的颜色，或者通过别名传递的颜色。</p>
+
+<p>这也不能证明命名标记在语义上适合使用它的组件。</p>
+
+<p>生产环境检测器可能需要检查已解析的符号、附加构造函数形式、属性访问或其他表达式。它应该包含针对组织希望禁止的具体模式的测试。</p>
+
+<p>正确的做法是根据实际违规情况和设计系统契约逐步扩展检测器，而不是声称单个语法检查可以保证完全的颜色控制。</p>
+
+<p>将同样的方法应用于字体排印、间距和尺寸。</p>
+
+<p>一旦第一个自定义规则生效，其他规则就可以强制执行其他设计系统约定。</p>
+
+<p>不要试图把所有规则都塞进一个庞大的检测器里。要给每条规则都赋予明确的目的、范围和测试套件。</p>
+
+<h3>排版</h3>
+
+<p>当项目需要语义化的排版角色时，排版规则可能会标记功能代码中直接赋值的 fontSize。</p>
+
+<p>例如：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product title&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">fontSize</span> <span class="p">=</span> <span class="m">19.</span><span class="n">sp</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>首选方案是使用已定义的角色：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Product title&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">titleLarge</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>该实现需要明确规定禁止哪些操作。如果一概禁止所有 TextStyle 或 fontSize 表达式，则可能会误判一些合法情况，例如自定义绘图、特殊编辑内容或内部设计系统实现。</p>
+
+<p>明确合同是禁止所有直接文本尺寸调整，还是仅禁止指定功能包中的某些特定模式。</p>
+
+<h3>间距和尺寸</h3>
+
+<p>类似的规则可以检测原始维度文字：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="m">17.</span><span class="n">dp</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>并引导开发者使用 Token：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">AppSpacing</span><span class="p">.</span><span class="n">md</span><span class="p">)</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>然而，并非所有的 dp 值都代表间距。尺寸还可以表示组件的最小触摸目标、边框宽度、图标大小或特定的布局约束。</p>
+
+<p>检测器应该能够区分设计系统实际控制的 API 和上下文。如果团队想要强制执行间距标记，那么围绕已知间距 API 制定一个范围较窄的规则，比制定一个标记整个代码库中所有维度字面量的规则更有用。</p>
+
+<h3>形状</h3>
+
+<p>假设设计系统定义了卡片和按钮的认可形状。一条规则可以检测特征代码中直接构造的形状对象，并要求改用设计系统中指定的形状。</p>
+
+<p>具体检测器取决于应用程序如何对形状进行建模以及允许使用哪些 API。它还应该能够区分合法的自定义形状和意外重复的形状。</p>
+
+<h3>命名规则</h3>
+
+<p>命名规则通常可以通过 Konsist 来强制执行，尤其是在要求涉及包和类结构时。</p>
+
+<p>例如，团队可以要求设计系统可组合体使用一致的命名约定，或者将实现类限制在内部包中。</p>
+
+<p>规则应该反映团队实际采用的惯例，而不是仅仅因为命名限制容易自动化就强加这些限制。</p>
+
+<h2>强制组件重用，而不是仅仅强制使用 Token</h2>
+
+<p>集中管理的 Token 可以防止数值漂移，但无法保证组件行为的一致性。</p>
+
+<p>考虑两个功能，它们都使用相同的间距和颜色标记，但各自实现了不同的按钮。一个功能能正确处理加载状态；另一个功能允许重复点击。一个功能具有预期的最小高度；另一个功能则没有。一个功能提供了适当的辅助功能语义；另一个功能则没有。</p>
+
+<p>这两个功能虽然都能通过令牌检查，但仍然会呈现不同的用户体验。</p>
+
+<p>因此，组件约定应该成为合同的一部分。</p>
+
+<p>例如，一个设计系统可能提供：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">AppPrimaryButton</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">text</span><span class="p">:</span> <span class="n">String</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onClick</span><span class="p">:</span> <span class="p">()</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">enabled</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">true</span><span class="p">,</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Button</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">onClick</span> <span class="p">=</span> <span class="n">onClick</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">enabled</span> <span class="p">=</span> <span class="n">enabled</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">height</span><span class="p">(</span><span class="n">AppDimensions</span><span class="p">.</span><span class="n">buttonHeight</span><span class="p">),</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">Text</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">text</span> <span class="p">=</span> <span class="n">text</span><span class="p">,</span>
+</span><span class='line'>            <span class="n">style</span> <span class="p">=</span> <span class="n">MaterialTheme</span><span class="p">.</span><span class="n">typography</span><span class="p">.</span><span class="n">labelLarge</span><span class="p">,</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这个例子特意做得比较简单。一个真正的组件可能还会定义加载行为、图标、内容内边距、语义和分析钩子。</p>
+
+<p>关键在于，功能会使用公共组件，而不是独立地重新创建相同的行为。</p>
+
+<p>Lint 规则可以标记出直接使用底层组件的情况，而这些组件必须使用特定的包装器。Konsist 可以帮助保护这些组件周围的包和模块边界。</p>
+
+<p>不过，全局禁令要谨慎使用。有时，某个功能确实需要专门的控制。可以通过经过审核的 API 或范围较小的抑制机制来允许显式的例外情况，并保持这些例外情况的可见性。</p>
+
+<h2>使用 Compose UI 测试确保运行时正确性</h2>
+
+<p>静态分析可以识别源代码模式，但无法确定渲染界面的所有属性。</p>
+
+<p>例如，Lint 规则可能会确认某个功能使用了 MaterialTheme.typography.bodyLarge，但它本身无法证明最终屏幕在大字体比例下仍然可读，也无法证明文本不会被其父布局裁剪。</p>
+
+<p>Compose UI 测试应该涵盖这些运行时要求。</p>
+
+<p>有用的测试目标包括：</p>
+
+<ul>
+<li>辅助功能语义和有意义的标签。</li>
+<li>支持的字体大小下的布局行为。</li>
+<li>启用、禁用、加载和错误状态。</li>
+<li>最小触摸目标要求。</li>
+<li>内容溢出和用户生成的长文本。</li>
+<li>交互行为和状态转换。</li>
+</ul>
+
+
+<p>这将创建一个更完善的执法模式。</p>
+
+<p>Konsist 检查架构边界。Lint 检测禁止的源代码模式。Compose UI 测试验证渲染行为。每一层都保护着契约的不同部分。</p>
+
+<h2>在 CI 中暴露违规行为</h2>
+
+<p>规则只有始终如一地执行才能有效。</p>
+
+<p>将架构测试和自定义 Lint 检查作为常规验证流程的一部分运行。具体的 Gradle 任务路径取决于模块的名称和配置，但典型的流程可能包括：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='bash'><span class='line'>./gradlew :design-system-lint:test
+</span><span class='line'>./gradlew :app:lint
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>作为项目单元测试或验证任务的一部分，运行相关的 Konsist 测试任务。</p>
+
+<p>期望的结果很明确：引入禁止的设计系统模式的拉取请求会未能通过相应的检查，并解释如何修复它。</p>
+
+<p>一条有用的错误信息应该回答三个问题：</p>
+
+<ol>
+<li>违反了哪条规则？</li>
+<li>这条规则存在的意义是什么？</li>
+<li>开发人员应该使用什么替代方法？</li>
+</ol>
+
+
+<p>例如：</p>
+
+<p>检测到硬编码的设计系统颜色。请使用已批准的设计系统颜色或语义化的 MaterialTheme 颜色角色。</p>
+
+<p>这比“颜色使用无效”之类的通用消息更有用。</p>
+
+<h2>平稳落地规则，不影响交付节奏</h2>
+
+<p>如果一个代码库已经包含了多年不一致的 UI 代码，那么在第一天就将每条规则都变成阻塞性错误可能会导致大量的故障。</p>
+
+<p>首先对现有代码库进行检查，了解违规之处。优先修复高价值案例，然后分阶段引入规则。</p>
+
+<p>实际推广流程如下：</p>
+
+<ol>
+<li>建立令牌和组件 API。</li>
+<li>添加架构边界测试。</li>
+<li>实现并测试一条自定义 Lint 规则。</li>
+<li>对现有功能模块运行该规则，并评估误报情况。</li>
+<li>修复违规或记录合理的例外情况。</li>
+<li>将该规则设置为阻止新变更。</li>
+<li>随着设计系统的完善，添加更多规则。</li>
+</ol>
+
+
+<p>避免为了让持续集成（CI）通过而随意压制违规行为。例外情况应具体、合理且可审查。</p>
+
+<p>此外，还应追踪违规次数、规则被抑制的频率以及哪些规则会产生误报。这些信息有助于区分有效的系统设计规范和一堆无意义的检查结果。</p>
+
+<p>设计系统成为开发工作流程的一部分</p>
+
+<p>这种方法的真正价值不在于团队编写了多少自定义规则。</p>
+
+<p>这是责任的转移。</p>
+
+<p>如果没有自动化强制执行机制，保持视觉一致性很大程度上依赖于开发人员对规范的记忆以及审核人员对偏差的发现。随着团队、模块和屏幕数量的增加，这变得越来越困难。</p>
+
+<p>通过可执行规则，存储库本身可以传达哪些决策属于设计系统，哪些是合法的功能级选择。</p>
+
+<p>开发人员仍然可以构建新屏幕，但屏幕必须遵守相同的架构边界，使用已批准的令牌，并遵循组织已建立的组件约定。</p>
+
+<p>这在大型 Android 代码库中尤其有用，因为设计系统偏差通常会在各个独立功能团队之间逐渐显现。修复单个不一致的颜色或间距值的成本很小，但维护数百个略有不同的实现的成本却不低。</p>
+
+<p>Konsist 和 Android Lint 并不能取代设计评审、用户体验评估或无障碍测试。它们只是从这些流程中移除了重复性的机械检查，以便评审人员能够将更多时间用于需要人为判断的决策。</p>
+
+<p>这一原则不仅适用于 Compose 系统，也适用于更广泛的场景：<strong>如果一项约定重要到需要记录下来，并且足够精确需要描述，那么它可能也重要到需要自动强制执行。</strong></p>
+
+<p>设计系统不应依赖于每个人都记住约定。它应该让正确的路径易于遵循，并在意外违规行为进入生产环境之前将其暴露出来。</p>
+
+<h2>参考</h2>
+
+<ul>
+<li><a href="https://github.com/LemonAppDev/konsist">Konsist - Kotlin 架构测试</a></li>
+<li><a href="https://developer.android.com/studio/write/lint">Android 开发者 - 使用 lint 检查改进代码</a></li>
+<li><a href="https://googlesamples.github.io/android-custom-lint-rules/">Android 开发者 - 自定义 lint 检查</a></li>
+<li><a href="https://developer.android.com/develop/ui/compose/designsystems/material3">Material 3 - Jetpack Compose 中的主题化</a></li>
+</ul>
+
+
+<p>实现说明：Kotlin 示例仅供参考。在将这些规则应用到生产 CI 流水线之前，请先根据项目中指定的版本验证 Konsist 和 Android Lint API，并运行检测器测试和 Gradle 检查。</p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-11-01'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>1</span><span class='date-suffix'>st</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/effectiveandroid/'>effectiveandroid</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/10/20/scaling-android-search-room-fts4-vs-sql-like/" title="Previous Post: Room Fts4：全文搜索替代 SQL LIKE">&laquo; Room Fts4：全文搜索替代 SQL LIKE</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>
