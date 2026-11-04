@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Compose | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/compose/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-11-01T03:13:44+00:00</updated>
+  <updated>2026-11-04T13:29:09+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,146 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[提升 Android Compose 页面的流畅度]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/04/improving-the-smoothness-of-android-compose-screens/"/>
+    <updated>2026-11-04T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/04/improving-the-smoothness-of-android-compose-screens</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Improving the Smoothness of Android Compose Screens」，原文链接<a href="https://proandroiddev.com/improving-the-smoothness-of-android-compose-screens-47607da631c8">https://proandroiddev.com/improving-the-smoothness-of-android-compose-screens-47607da631c8</a>，由@ruyouwei发布于2026年10月22日。</p></blockquote>
+
+<p>随着 Android 开发从传统的 View 系统转向 Jetpack Compose，更现代的 Compose 方法带来了截然不同的开发体验。两者在工具和性能跟踪工作流程方面也存在显著差异。除了帧率监控之外，View 系统通常依赖 ANR 报告来识别问题堆栈跟踪。然而，Compose 会根据数据变化更新 UI，因此 ANR 堆栈跟踪可能无法直接指出导致问题的代码。</p>
+
+<h2>影响 Compose 页面性能的因素</h2>
+
+<p>Compose 会将页面状态保存在内存中。当页面状态发生变化时，它会触发 UI 相应部分的重组。以下因素会影响渲染性能：</p>
+
+<ol>
+<li>重组触发的频率</li>
+<li>方法参数是否稳定</li>
+<li>触发状态变更的 UI 层级结构</li>
+</ol>
+
+
+<p>稳定性是 Compose 用来决定是否可以跳过重组的因素之一。在日常开发中，将不会改变的值声明为 <code>val</code> 可以避免不必要的状态更新和重组。开源 IDE 插件也可以直接在编辑器中显示可组合函数的参数是否稳定。</p>
+
+<p><a href="https://skydoves.github.io/compose-stability-analyzer/">Compose Stability Analyzer</a></p>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*MfoP6Fg9eQfjcsueB6jKLw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>Compose 性能问题的最常见原因是频繁的状态变化触发了过多的重组。识别频繁变化的状态是找到根本原因的关键。</p>
+
+<h2>监控 Compose 触发的 UI 更新</h2>
+
+<p>一种方法是收集所有状态和参数，在可组合函数重组时比较它们的值，并将差异打印到 logcat。Rebugger 等工具已经提供了这种功能，其 IDE 插件可以添加监控代码。</p>
+
+<p><a href="https://github.com/theapache64/rebugger">GitHub - theapache64/rebugger：一个简单的 Compose Multiplatform 库，旨在将重组的原因打印到你的控制台/Logcat 窗口中。</a></p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*ZlFCXJqkOKmgapgaG13o3g.png" alt="captionless image" /></p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*kopwkr9GgyHy3_R6vfSjLQ.png" alt="captionless image" /></p>
+
+<h2>通过自动注入监控代码来最大程度减少侵入</h2>
+
+<p>大多数情况下，日常开发过程中无需监控状态变化。只有当出现性能问题时才需要监控。在其他情况下，让插桩代码不进入源代码，有助于保持代码库整洁。</p>
+
+<p>添加和移除监控代码并非唯一的维护负担。随着业务逻辑的变更，可组合函数可能会增加或减少状态变量和参数，所有这些都需要手动维护。这增加了额外的工作量。是否可以改为在编译时自动注入监控代码，将其从发布构建中排除，仅在启用某个功能开关时才插入？</p>
+
+<p>在 Android 构建流水线中，可以使用与 ASM 相关的工具（<a href="https://asm.ow2.io/">https://asm.ow2.io/</a>）将监控代码注入到编译后的字节码中。</p>
+
+<pre><code>compileDebugKotlin / compileDebugJavaWithJavac
+                                    │
+                                    │ finalizedBy
+                                    ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ Pass 1 — generateVariableInfoDebug  (GenerateVariableInfoTask)        │
+│   reads  build/tmp/kotlin-classes/debug/**/*.class                    │
+│   for each method annotated @ComposableMonitor:                       │
+│     record every local var (name, descriptor, signature, slot,        │
+│     isMutableState, line of its last ASTORE)                          │
+│   writes build/asm-analysis/&lt;Class&gt;_&lt;method&gt;.json                     │
+└───────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ Pass 2 — transformDebugClassesWithAsm (ComposableStateMonitorLogger…) │
+│   for each method annotated @ComposableMonitor:                       │
+│     load its JSON, then inject bytecode that                          │
+│       • builds an ArrayList&lt;Pair&lt;String, Any&gt;&gt; on entry               │
+│       • adds every parameter on entry                                 │
+│       • adds every State/MutableState local right after it's stored   │
+│       • calls CollectAndPrintValues(...) before every exit            │
+└───────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│ Runtime — composemonitorhelper                                        │
+│   CollectAndPrintValues → unwrap MutableState, strip "$delegate"      │
+│   Inspector → remember previous values, diff, Log.d("Inspector", …)   │
+└───────────────────────────────────────────────────────────────────────┘
+</code></pre>
+
+<p>实现过程始于一个注解：只需将 <code>@ComposableMonitor</code> 添加到需要监控状态变化的可组合函数即可。字节码注入插件可随时通过配置启用或禁用。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*HyDdTQQ6J9TjZQl70hGczA.png" alt="captionless image" /></p>
+
+<p>该实现会在编译时执行两遍字节码处理。第一遍收集状态变量的位置；第二遍注入监控代码。之所以需要两遍，是因为 ASM 必须先完成对方法的遍历，才能获取完整的局部变量符号集和帧布局。注入的代码有两个主要职责：收集所有状态和方法参数，以及在可组合函数触发重组时比较新旧值，以确定是哪个状态或参数发生了变化。</p>
+
+<p>主要挑战在于，可组合函数生成的 JVM 字节码在经过 Compose 编译器编译后，可能与其源代码存在显著差异。编译器会添加一些检查，例如针对 UI 更新的脏检查。因此，插桩必须在不破坏栈帧中变量索引的情况下，找到正确的插入点。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*g4NGQD705N69JVsmebasdw.png" alt="captionless image" /></p>
+
+<h2>更好的方法：为 Compose Multiplatform 编译</h2>
+
+<p>尽管 ASM 使得在 Android 上自动注入监控代码成为可能，但这种方法仍不完善。该插桩机制依赖于为可组合函数生成的字节码中的固定模式。由于 Compose 编译器会随着版本更新而不断发展和优化，匹配这些固定模式可能无法兼容未来的变化。此外，该监控工具仅支持 Android，而 Compose Multiplatform 目前已被广泛采用，需要更广泛的平台支持。因此，我们需要一种更好的代码注入方法。</p>
+
+<p>Kotlin Multiplatform (KMP) 的核心编译原则是“一次编写，到处运行”——代码在每个平台上都能原生运行。与 Flutter 使用 Skia/Impeller 引擎或 React Native 使用 JavaScript 桥接器在非原生平台上封装虚拟机不同，KMP 使用统一的编译器前端分析代码，然后使用不同的编译器后端将相同的 Kotlin 源代码编译成适用于各个平台的原生二进制文件或字节码。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*xt5phhtToIV4ugbd25S_Zg.png" alt="captionless image" /></p>
+
+<p>这样就可以通过修改 Kotlin 前端生成的 IR 来注入代码。</p>
+
+<pre><code>Kotlin source ──► FIR (frontend) ──► IR
+                                      │
+                                      ▼
+               ┌──────────────────────────────────────┐
+               │ composemonitor IR extension          │  inserts plain @Composable calls
+               │ (MonitorFunctionTransformer)         │  before every exit
+               └──────────────────────────────────────┘
+                                      │   -Xcompiler-plugin-order
+                                      ▼
+               ┌──────────────────────────────────────┐
+               │ Compose compiler IR extension        │  adds $composer/$changed, groups,
+               │                                      │  skipping, to user code AND ours
+               └──────────────────────────────────────┘
+                                      │
+                                      ▼
+           JVM / Android bytecode, Kotlin/Native, wasm, js backends
+</code></pre>
+
+<p>实现 IR 编译器扩展的主要挑战在于，不同 Kotlin 版本之间的 IR 编辑插件 API 存在差异。早期版本中，由于 API 不稳定，这些 API 也曾发生过更改。鉴于 Compose Monitor 编译器插件需要支持使用不同 Kotlin 版本的项目，因此它已针对大多数 Kotlin 2.0 及更高版本进行了适配。</p>
+
+<pre><code>user applies io.github.hellsong.composemonitor (Java, KGP 2.0 API)
+        │  reads the project's Kotlin version, e.g. 2.2.10
+        ▼
+KotlinVersionSupport.lineFor("2.2.10") → k22
+        │  getPluginArtifact()
+        ▼
+KGP resolves composemonitor-compiler-k22
+        = shared/ + compat/{params, lookup-reference, registrar-legacy}
+          compiled against Kotlin 2.2.0
+        ▼
+runs inside kotlinc 2.2.10 and transforms the IR before Compose
+</code></pre>
+
+<p>我为此创建了一个新的<strong>Gradle 插件</strong>，该插件已发布在<strong>GitHub</strong>上。你可以在下方找到源代码和使用说明：</p>
+
+<p><a href="https://github.com/hellsong/ComposeStateMonitor">GitHub - hellsong/ComposeStateMonitor：初始提交</a></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[Room Fts4：全文搜索替代 SQL LIKE]]></title>
@@ -1108,129 +1248,6 @@ NavDisplay(
 <p>希望我的经验可以帮助你避免我的错误，让你的迁移更快、更少痛苦！</p>
 
 <p>祝撸码快乐！ 😃</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android车载OS中的Remote Compose]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/07/03/remote-compose-in-andorid-auto/"/>
-    <updated>2026-07-03T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/07/03/remote-compose-in-andorid-auto</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Remote Compose in Android Automotive OS: Embed rich UI without the usual pain」，原文链接<a href="https://proandroiddev.com/remote-compose-in-android-automotive-os-embed-rich-ui-without-the-usual-pain-90b857d59d8c">https://proandroiddev.com/remote-compose-in-android-automotive-os-embed-rich-ui-without-the-usual-pain-90b857d59d8c</a>，由Daniel Georg发布于2026年5月31日。</p></blockquote>
-
-<p>在 Android Automotive OS 上构建信息娱乐系统时，一个问题会反复出现：你需要将一个应用程序的用户界面显示在另一个应用程序的界面中。例如，在启动器中添加手机小部件，在仪表盘中添加媒体卡片，或者在 OEM 系统界面中嵌入第三方应用程序的内容。听起来很简单——直到你真正尝试实现它。</p>
-
-<p><a href=""><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Zwt8BF_TM0Yx_XPszrEycg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>Android 提供了多种跨应用 UI 共享机制，每种机制都有其优缺点。让我们来看看目前有哪些机制：</p>
-
-<p><strong>内部组件/视图</strong>——这是显而易见的首选：所有内容都直接构建在宿主应用内部（例如启动器）。没有跨进程开销。缺点是需要掌握相关知识，并且存在耦合问题。在汽车领域，要构建一个媒体卡片，你的团队需要学习并理解完整的 MediaSession/MediaBrowser 堆栈。要构建一个电话组件，他们需要深入了解 Telephony API。再加上汽车 API、OEM 内部 API 以及每个领域特有的特性——你的团队就变成了<strong>十几个互不相关领域的专家</strong>。每个组件都与其依赖的 API 紧密耦合，而当 API 发生变化时，没有人记得当初为何如此设计。</p>
-
-<p><strong>TaskView / CarTaskView</strong> — 在系统级别运行，将另一个应用的完整 Activity 嵌入到你的窗口层级结构中。它仅限于系统应用，需要特权权限，会在主机和客户端之间建立紧密的生命周期耦合，并添加一个专用的 SurfaceFlinger 层——会迅速消耗 Hardware Composer 的叠加层预算，尤其是在多用户多显示器 (MUMD) 设置中，例如主机、乘客显示屏和后排屏幕/用户同时运行的情况下。</p>
-
-<p><strong>SurfaceControlViewHost</strong> — 避免了特权权限，并共享相同的层开销，但引入了脆弱的进程间通信 (IPC) 边界。虽然基本渲染功能正常，但同步结构更改、处理客户端进程崩溃以及管理 AAOS 旋转焦点或无缝触摸手势切换都迫使主机采用复杂的手动变通方案。</p>
-
-<p><strong>RemoteViews</strong> — 任何应用均可使用，无需特殊权限。但它的组件库过于原始，无法构建任何严肃的用户界面：只有寥寥几个 TextView、ImageView 和 Button。除此之外，其他功能都无法实现。</p>
-
-<p>Remote Compose方案</p>
-
-<p>从本质上讲，RemoteCompose 文档是 Canvas 绘制调用的序列化记录——与 Android 用于渲染任何 UI 的原语（绘制矩形、设置颜色、剪辑区域）相同。提供程序不会立即执行这些调用，而是将它们打包成紧凑的、独立的二进制格式。它包含构建 UI 所需的一切：形状、带有字体和样式的文本、图像，甚至动画表达式。</p>
-
-<p>当主机收到此文档时，它只需根据其本地 Canvas 迭代指令即可。主机不需要了解数据来自何处的领域知识——它只需回放数据即可。虽然这就像浏览器呈现静态页面一样，但提供者可以以 IPC 允许的速度推送更新的文档。这将流程转变为高频流，从而实现流畅、状态驱动的 UI 更新，完全无需 XML 膨胀的开销。</p>
-
-<p>动画通过在记录时间嵌入到文档中的表达式来工作。提供程序不是对值进行硬编码，而是编写一个类似于 ContinuousSec() * 360 的表达式 - 主机在每一帧上本地对其进行计算，从而生成流畅的动画，而无需与提供程序进程进行任何往返。</p>
-
-<h3>PoC：将理论付诸实践</h3>
-
-<p>我想看看 RemoteCompose 作为跨应用程序 UI 机制可以发展到什么程度。在 AAOS 堆栈中工作多年后，我看到 OEM 编写了数千行样板文件只是为了共享一个简单的小部件。汽车发射器是完美的试验场。</p>
-
-<p>模拟环境</p>
-
-<p>目标还在于证明 RemoteCompose 可以与现有 AAOS 渲染技术共存。新的三列启动器布局完美地证明了这一点。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*gI0bbbw8NILSTNQwPEPA-Q.png" alt="无字幕图像" /></p>
-
-<p>从左到右查看主显示屏。这是一个实时共存测试：</p>
-
-<ul>
-<li><strong>第 1 列：Native Widget。</strong> 直接在 Launcher 进程中实现的标准视图。在传统设置中，每个小部件都会像这样，迫使启动器管理电话 API 和复杂的观察者。</li>
-<li><strong>第 2 列：RemoteCompose。</strong> 我们的 PoC 电话小部件。通过将其转移到 RemoteCompose，启动器在设计上仍然是愚蠢的。它仅管理布局槽并回放传入的 UI 描述。 Phone 团队可以独立更新其 UI，而无需触及任何 Launcher 代码。</li>
-<li><strong>第 3 列：CarTaskView。</strong> 嵌入在启动器表面中的另一个应用程序的完整映射活动。</li>
-</ul>
-
-
-<p>此次集成确认 RemoteCompose 可以与传统的基于 View 的系统和复杂的 CarTaskView 环境共存，而不会产生副作用。这验证了无中断的采用路径：原始设备制造商可以将现代的远程驱动组件逐步引入其生产堆栈，从而避免整个系统重写的风险和成本。</p>
-
-<p>PoC 架构</p>
-
-<p>RemoteCompose 没有提及如何传送二进制流。它仅定义格式，这意味着传输完全取决于你。以下是一些在 AAOS 环境中有意义的选项：</p>
-
-<ul>
-<li><strong>AIDL：</strong> 低延迟，直接进程间通信，非常适合频繁更新。这就是 PoC 使用的内容。</li>
-<li><strong>ContentProvider：</strong> 如果小部件数据已经建模为内容（如媒体元数据或联系人），那么这是一个自然的选择。它使用基于拉动的模型，非常适合静态或缓慢变化的 UI。</li>
-<li><strong>BroadcastReceiver：</strong> 提供简单的推送模型。然而，缺乏背压和严格的有效负载大小限制使得除了微小更新之外的任何事情都变得尴尬。</li>
-<li><strong>WebSocket：</strong> 对于服务器驱动的 UI 场景来说，这是一个有趣的选项，其中文档直接来自后端而不是本地进程。</li>
-</ul>
-
-
-<p>对于 PoC，<strong>AIDL</strong> 是显而易见的选择。它提供低开销、基于回调的推送传递，并直接控制提供者何时将新文档推送到主机。</p>
-
-<p>我之前提到过，这两个应用程序之间的契约非常小。这是证据。我们来看看实际的实现。</p>
-
-<p>PoC 中的 AIDL 合约</p>
-
-<p>提供者使用熟悉的 Compose 语法编写 UI。它使用远程等效项，而不是列、行或文本。结果永远不会呈现到屏幕上。相反，它使用 captureSingleRemoteDocument 直接打包到字节数组中。</p>
-
-<pre><code class="kotlin">// 1. Build the document familiar Compose syntax, but with Remote* components
- suspend fun createIdleDocument(context: Context, callLog: List&lt;CallLogEntry&gt;): ByteArray {                                                      
-      return captureSingleRemoteDocument(context) { IdleScreen(callLog) }.bytes                                                                   
-  }       
-
-// 2. The composable itself looks like regular Compose                                                                                                                                                 
-  @RemoteComposable                                                                                                                               
-  @Composable                                                                                                                                     
-  private fun IdleScreen(entries: List&lt;CallLogEntry&gt;) {                                                                                           
-      RemoteColumn(modifier = RemoteModifier.fillMaxSize().padding(16.dp)) {                                                                      
-          RemoteText(text = "Recent Calls", fontSize = 24.rsp)                                                                                    
-
-          entries.forEachIndexed { index, entry -&gt;                                                                                              
-              RemoteRow(                                                                                                                          
-                  modifier = RemoteModifier   
-                      .fillMaxWidth()                                                                                                             
-                      .clickable(HostAction(RemoteString("${2000 + index}")))                                                                   
-              ) {                                                                                                                                 
-                  RemoteText(text = entry.name, fontSize = 16.rsp)
-                  RemoteText(text = entry.number, fontSize = 12.rsp)                                                                              
-              }                                                                                                                                 
-          }                                                                                                                                     
-      }                                                                                                                                           
-  }
-</code></pre>
-
-<p>语法几乎与标准 Compose 相同。唯一的区别是 Remote 前缀以及输出是 ByteArray 而不是屏幕上的像素这一事实。</p>
-
-<p>主持人：渲染</p>
-
-<p>现代 UI 框架的一个常见问题是采用成本。对于此 PoC，我使用标准 <strong>AAOS CarLauncher</strong> 作为主机。与大部分核心 Automotive 堆栈一样，它构建在传统 Android 视图系统上：XML 布局、片段和自定义视图。对于 OEM 而言，仅仅为了支持一些“小部件”而将生产级系统 shell 迁移到 Jetpack Compose 很少是现实的选择。</p>
-
-<p>幸运的是，RemoteCompose 就是针对这一现实而设计的。它附带两个不同的玩家工件：</p>
-
-<ul>
-<li><strong>remote-player-compose：</strong> 对于已在 Jetpack Compose 上运行的主机。</li>
-<li><strong>remote-player-view：</strong> 对于传统的基于视图的应用程序。</li>
-</ul>
-
-
-<p>由于参考 CarLauncher 是基于视图的，因此我使用了远程播放器视图工件。 RemoteDocumentPlayer 是一个普通的 FrameLayout，你可以将其直接放入任何 XML 布局中。你只需调用 setDocument(bytes)，它就会通过 Canvas 呈现提供者的 UI。</p>
-
-<p>主机端不需要 Compose 依赖项，不需要 ComposeView 包装器，并且迁移工作量为零。提供者端保持完全相同：无论谁渲染它，它都会推送相同的字节数组。这证明了行业采用的关键点：一个提供商可以以零耦合的方式为现代和传统主机提供服务。</p>
-
-<p><strong>关于 Android 框架 (API 35) 的说明</strong> 如果你仔细查看最新的 Android 开源项目 (AOSP) 更新，你会发现 Android 实际上从 API 35 开始将其自己的本机 RemoteCompose 播放器直接烘焙到框架中。它为标准系统小部件的新 DrawInstructions 提供支持。然而，依赖框架播放器意味着将你的主机与操作系统更新周期联系起来。通过使用上述 AndroidX 播放器工件，第三方启动器和 OEM 主机现在就可以采用这种下一代架构，即使在较旧的 Android 版本上也是如此，同时支持比基本系统更新的操作。</p>
-
-<p>局限性和悬而未决的问题</p>
 ]]></content>
   </entry>
   

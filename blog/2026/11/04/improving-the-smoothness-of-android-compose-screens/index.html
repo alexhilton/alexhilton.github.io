@@ -1,0 +1,529 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>提升 Android Compose 页面的流畅度 - 稀有猿诉</title>
+  <meta name="author" content="Alex Hilton">
+
+  
+  <meta name="description" content="文章分析 Compose 页面卡顿的常见原因，介绍监控重组与参数稳定性的工具，并演示如何通过 ASM 字节码插桩和 Kotlin IR 编译器插件自动注入监控代码，兼顾 Compose Multiplatform。">
+  <meta name="keywords" content="Performance, Compose">
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://alexhilton.github.io/blog/2026/11/04/improving-the-smoothness-of-android-compose-screens">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <link href="/atom.xml" rel="alternate" title="稀有猿诉" type="application/atom+xml">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.4.min.js" integrity="sha256-oP6HI9z1XaZNBrJURtCoUT5SUnxFr8s3BzRl+cbzUq8=" crossorigin="anonymous"></script>
+  <script>!window.jQuery && document.write(unescape('%3Cscript src="./javascripts/libs/jquery.min.js"%3E%3C/script%3E'))</script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <script src="/javascripts/toolbar.js" type="text/javascript"></script>
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.lug.ustc.edu.cn/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+<!-- for Gitment -->
+<link rel="stylesheet" href="https://imsun.github.io/gitment/style/default.css">
+
+<!-- for favicon -->
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#da532c">
+<meta name="theme-color" content="#ffffff">
+
+  
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">稀有猿诉</a></h1>
+  
+    <h2>十年磨一剑，历炼出锋芒，说话千百句，不如码二行。</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com.hk/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="q" value="site:alexhilton.github.io" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Home</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+  <li><a href="/donation">Donation</a></li>
+  <li><a href="/about">About</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">提升 Android Compose 页面的流畅度</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2026-11-04'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>4</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><blockquote><p>本文译自「Improving the Smoothness of Android Compose Screens」，原文链接<a href="https://proandroiddev.com/improving-the-smoothness-of-android-compose-screens-47607da631c8">https://proandroiddev.com/improving-the-smoothness-of-android-compose-screens-47607da631c8</a>，由@ruyouwei发布于2026年10月22日。</p></blockquote>
+
+<p>随着 Android 开发从传统的 View 系统转向 Jetpack Compose，更现代的 Compose 方法带来了截然不同的开发体验。两者在工具和性能跟踪工作流程方面也存在显著差异。除了帧率监控之外，View 系统通常依赖 ANR 报告来识别问题堆栈跟踪。然而，Compose 会根据数据变化更新 UI，因此 ANR 堆栈跟踪可能无法直接指出导致问题的代码。</p>
+
+<h2>影响 Compose 页面性能的因素</h2>
+
+<p>Compose 会将页面状态保存在内存中。当页面状态发生变化时，它会触发 UI 相应部分的重组。以下因素会影响渲染性能：</p>
+
+<ol>
+<li>重组触发的频率</li>
+<li>方法参数是否稳定</li>
+<li>触发状态变更的 UI 层级结构</li>
+</ol>
+
+
+<p>稳定性是 Compose 用来决定是否可以跳过重组的因素之一。在日常开发中，将不会改变的值声明为 <code>val</code> 可以避免不必要的状态更新和重组。开源 IDE 插件也可以直接在编辑器中显示可组合函数的参数是否稳定。</p>
+
+<p><a href="https://skydoves.github.io/compose-stability-analyzer/">Compose Stability Analyzer</a></p>
+
+<p><a href="/blog/2026/11/04/improving-the-smoothness-of-android-compose-screens/"><img src="https://cdn-images-1.medium.com/max/1024/1*MfoP6Fg9eQfjcsueB6jKLw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>Compose 性能问题的最常见原因是频繁的状态变化触发了过多的重组。识别频繁变化的状态是找到根本原因的关键。</p>
+
+<h2>监控 Compose 触发的 UI 更新</h2>
+
+<p>一种方法是收集所有状态和参数，在可组合函数重组时比较它们的值，并将差异打印到 logcat。Rebugger 等工具已经提供了这种功能，其 IDE 插件可以添加监控代码。</p>
+
+<p><a href="https://github.com/theapache64/rebugger">GitHub - theapache64/rebugger：一个简单的 Compose Multiplatform 库，旨在将重组的原因打印到你的控制台/Logcat 窗口中。</a></p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*ZlFCXJqkOKmgapgaG13o3g.png" alt="captionless image" /></p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*kopwkr9GgyHy3_R6vfSjLQ.png" alt="captionless image" /></p>
+
+<h2>通过自动注入监控代码来最大程度减少侵入</h2>
+
+<p>大多数情况下，日常开发过程中无需监控状态变化。只有当出现性能问题时才需要监控。在其他情况下，让插桩代码不进入源代码，有助于保持代码库整洁。</p>
+
+<p>添加和移除监控代码并非唯一的维护负担。随着业务逻辑的变更，可组合函数可能会增加或减少状态变量和参数，所有这些都需要手动维护。这增加了额外的工作量。是否可以改为在编译时自动注入监控代码，将其从发布构建中排除，仅在启用某个功能开关时才插入？</p>
+
+<p>在 Android 构建流水线中，可以使用与 ASM 相关的工具（<a href="https://asm.ow2.io/">https://asm.ow2.io/</a>）将监控代码注入到编译后的字节码中。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>compileDebugKotlin / compileDebugJavaWithJavac
+</span><span class='line'>                                    │
+</span><span class='line'>                                    │ finalizedBy
+</span><span class='line'>                                    ▼
+</span><span class='line'>┌───────────────────────────────────────────────────────────────────────┐
+</span><span class='line'>│ Pass 1 — generateVariableInfoDebug  (GenerateVariableInfoTask)        │
+</span><span class='line'>│   reads  build/tmp/kotlin-classes/debug/**/*.class                    │
+</span><span class='line'>│   for each method annotated @ComposableMonitor:                       │
+</span><span class='line'>│     record every local var (name, descriptor, signature, slot,        │
+</span><span class='line'>│     isMutableState, line of its last ASTORE)                          │
+</span><span class='line'>│   writes build/asm-analysis/&lt;Class&gt;_&lt;method&gt;.json                     │
+</span><span class='line'>└───────────────────────────────────────────────────────────────────────┘
+</span><span class='line'>                                    │
+</span><span class='line'>                                    ▼
+</span><span class='line'>┌───────────────────────────────────────────────────────────────────────┐
+</span><span class='line'>│ Pass 2 — transformDebugClassesWithAsm (ComposableStateMonitorLogger…) │
+</span><span class='line'>│   for each method annotated @ComposableMonitor:                       │
+</span><span class='line'>│     load its JSON, then inject bytecode that                          │
+</span><span class='line'>│       • builds an ArrayList&lt;Pair&lt;String, Any&gt;&gt; on entry               │
+</span><span class='line'>│       • adds every parameter on entry                                 │
+</span><span class='line'>│       • adds every State/MutableState local right after it's stored   │
+</span><span class='line'>│       • calls CollectAndPrintValues(...) before every exit            │
+</span><span class='line'>└───────────────────────────────────────────────────────────────────────┘
+</span><span class='line'>                                    │
+</span><span class='line'>                                    ▼
+</span><span class='line'>┌───────────────────────────────────────────────────────────────────────┐
+</span><span class='line'>│ Runtime — composemonitorhelper                                        │
+</span><span class='line'>│   CollectAndPrintValues → unwrap MutableState, strip "$delegate"      │
+</span><span class='line'>│   Inspector → remember previous values, diff, Log.d("Inspector", …)   │
+</span><span class='line'>└───────────────────────────────────────────────────────────────────────┘</span></code></pre></td></tr></table></div></figure>
+
+
+<p>实现过程始于一个注解：只需将 <code>@ComposableMonitor</code> 添加到需要监控状态变化的可组合函数即可。字节码注入插件可随时通过配置启用或禁用。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*HyDdTQQ6J9TjZQl70hGczA.png" alt="captionless image" /></p>
+
+<p>该实现会在编译时执行两遍字节码处理。第一遍收集状态变量的位置；第二遍注入监控代码。之所以需要两遍，是因为 ASM 必须先完成对方法的遍历，才能获取完整的局部变量符号集和帧布局。注入的代码有两个主要职责：收集所有状态和方法参数，以及在可组合函数触发重组时比较新旧值，以确定是哪个状态或参数发生了变化。</p>
+
+<p>主要挑战在于，可组合函数生成的 JVM 字节码在经过 Compose 编译器编译后，可能与其源代码存在显著差异。编译器会添加一些检查，例如针对 UI 更新的脏检查。因此，插桩必须在不破坏栈帧中变量索引的情况下，找到正确的插入点。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*g4NGQD705N69JVsmebasdw.png" alt="captionless image" /></p>
+
+<h2>更好的方法：为 Compose Multiplatform 编译</h2>
+
+<p>尽管 ASM 使得在 Android 上自动注入监控代码成为可能，但这种方法仍不完善。该插桩机制依赖于为可组合函数生成的字节码中的固定模式。由于 Compose 编译器会随着版本更新而不断发展和优化，匹配这些固定模式可能无法兼容未来的变化。此外，该监控工具仅支持 Android，而 Compose Multiplatform 目前已被广泛采用，需要更广泛的平台支持。因此，我们需要一种更好的代码注入方法。</p>
+
+<p>Kotlin Multiplatform (KMP) 的核心编译原则是“一次编写，到处运行”——代码在每个平台上都能原生运行。与 Flutter 使用 Skia/Impeller 引擎或 React Native 使用 JavaScript 桥接器在非原生平台上封装虚拟机不同，KMP 使用统一的编译器前端分析代码，然后使用不同的编译器后端将相同的 Kotlin 源代码编译成适用于各个平台的原生二进制文件或字节码。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*xt5phhtToIV4ugbd25S_Zg.png" alt="captionless image" /></p>
+
+<p>这样就可以通过修改 Kotlin 前端生成的 IR 来注入代码。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Kotlin source ──► FIR (frontend) ──► IR
+</span><span class='line'>                                      │
+</span><span class='line'>                                      ▼
+</span><span class='line'>               ┌──────────────────────────────────────┐
+</span><span class='line'>               │ composemonitor IR extension          │  inserts plain @Composable calls
+</span><span class='line'>               │ (MonitorFunctionTransformer)         │  before every exit
+</span><span class='line'>               └──────────────────────────────────────┘
+</span><span class='line'>                                      │   -Xcompiler-plugin-order
+</span><span class='line'>                                      ▼
+</span><span class='line'>               ┌──────────────────────────────────────┐
+</span><span class='line'>               │ Compose compiler IR extension        │  adds $composer/$changed, groups,
+</span><span class='line'>               │                                      │  skipping, to user code AND ours
+</span><span class='line'>               └──────────────────────────────────────┘
+</span><span class='line'>                                      │
+</span><span class='line'>                                      ▼
+</span><span class='line'>           JVM / Android bytecode, Kotlin/Native, wasm, js backends</span></code></pre></td></tr></table></div></figure>
+
+
+<p>实现 IR 编译器扩展的主要挑战在于，不同 Kotlin 版本之间的 IR 编辑插件 API 存在差异。早期版本中，由于 API 不稳定，这些 API 也曾发生过更改。鉴于 Compose Monitor 编译器插件需要支持使用不同 Kotlin 版本的项目，因此它已针对大多数 Kotlin 2.0 及更高版本进行了适配。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>user applies io.github.hellsong.composemonitor (Java, KGP 2.0 API)
+</span><span class='line'>        │  reads the project's Kotlin version, e.g. 2.2.10
+</span><span class='line'>        ▼
+</span><span class='line'>KotlinVersionSupport.lineFor("2.2.10") → k22
+</span><span class='line'>        │  getPluginArtifact()
+</span><span class='line'>        ▼
+</span><span class='line'>KGP resolves composemonitor-compiler-k22
+</span><span class='line'>        = shared/ + compat/{params, lookup-reference, registrar-legacy}
+</span><span class='line'>          compiled against Kotlin 2.2.0
+</span><span class='line'>        ▼
+</span><span class='line'>runs inside kotlinc 2.2.10 and transforms the IR before Compose</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我为此创建了一个新的<strong>Gradle 插件</strong>，该插件已发布在<strong>GitHub</strong>上。你可以在下方找到源代码和使用说明：</p>
+
+<p><a href="https://github.com/hellsong/ComposeStateMonitor">GitHub - hellsong/ComposeStateMonitor：初始提交</a></p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">Alex Hilton</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2026-11-04'><span class='date'><span class='date-month'>Nov</span> <span class='date-day'>4</span><span class='date-suffix'>th</span>, <span class='date-year'>2026</span></span> <span class='time'>12:00 am</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/compose/'>compose</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+  
+    <!-- JiaThis Button BEGIN -->
+<div class="jiathis_style_32x32">
+	<a class="jiathis_button_qzone"></a>
+	<a class="jiathis_button_tsina"></a>
+	<a class="jiathis_button_tqq"></a>
+	<a class="jiathis_button_weixin"></a>
+	<a class="jiathis_button_renren"></a>
+	<a href="http://www.jiathis.com/share" class="jiathis jiathis_txt jtico jtico_jiathis" target="_blank"></a>
+	<a class="jiathis_counter_style"></a>
+</div>
+<script type="text/javascript" src="http://v3.jiathis.com/code/jia.js" charset="utf-8"></script>
+<!-- JiaThis Button END -->
+
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2026/11/01/your-design-system-is-a-contract-enforce-it-with-konsist-and-android-lint/" title="Previous Post: 用Konsist与Lint强制执行设计系统契约">&laquo; 用Konsist与Lint强制执行设计系统契约</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="comments"></div>
+    <!-- Duoshuo COMMENT BEGIN -->
+<script src="https://imsun.github.io/gitment/dist/gitment.browser.js"></script>
+<script>
+    var clientId = 'bc66a01ef24d14fc282b'
+    var clientSecret = 'c7fd5e55db1776204fe201fe20c050b140982884'
+    var gitment = new Gitment({
+      id: 'toughcoder.net',
+      owner: 'alexhilton',
+      repo: 'alexhilton.github.io',
+      oauth: {
+        client_id: clientId,
+        client_secret: clientSecret,
+      },
+    })
+
+    gitment.render('comments')
+</script>
+<!-- Duoshuo COMMENT END -->
+
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+    <div class="
+        col-lg-2 col-lg-offset-0
+        visible-lg-block
+        sidebar-container
+        catalog-container">
+        <div class="side-catalog">
+            <hr class="hidden-sm hidden-xs">
+            <h3>
+                <a class="catalog-toggle" href="#">CATALOG</a>
+            </h3>
+            <ul class="catalog-body"></ul>
+        </div>
+    </div>
+</section>
+<!-- Back to top and Scroll to bottom -->
+<a href="#" class="cd-top"></a>
+<a href="#" class="cd-bottom"></a>
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2026 - Alex Hilton -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+</p>
+
+</footer>
+  
+
+
+
+
+
+
+
+
+
+<script type="text/javascript">
+    //async load function 
+    function async(u, c) {
+        var d = document, t = 'script',
+            o = d.createElement(t),
+            s = d.getElementsByTagName(t)[0];
+        o.src = u;
+        if (c) { o.addEventListener('load', function (e) { c(null, e); }, false); }
+        s.parentNode.insertBefore(o, s);
+    }
+
+    function generateCatalog (selector) {
+        var P = $('article'),a,n,t,l,i,c, id;
+        a = P.find('h2,h3,h4,h5,h6');
+        var index = 0;
+        a.each(function () {
+            n = $(this).prop('tagName').toLowerCase();
+            id = $(this).prop('id');
+            if (!id) {
+                var nid = 'catalog-section-' + index;
+                $(this).attr('id', nid);
+                i = '#' + nid;
+            } else {
+                i = '#' + id;
+            }
+            t = $(this).text();
+            c = $('<a href="'+i+'" rel="nofollow">'+t+'</a>');
+            l = $('<li class="'+n+'_nav"></li>').append(c);
+            $(selector).append(l);
+            index++;
+        });
+        return true;
+    }
+
+    generateCatalog(".catalog-body");
+
+    // toggle side catalog
+    $(".catalog-toggle").click((function(e){
+        e.preventDefault();
+        $('.side-catalog').toggleClass("fold")
+    }))
+
+    /*
+     * Doc: https://github.com/davist11/jQuery-One-Page-Nav
+     * Fork by Hux to support padding
+     */
+    async("/javascripts/jquery.nav.js", function () {
+        $('.catalog-body').onePageNav({
+            currentClass: "active",
+            changeHash: !1,
+            easing: "swing",
+            filter: "",
+            scrollSpeed: 700,
+            scrollOffset: 0,
+            scrollThreshold: .2,
+            begin: null,
+            end: null,
+            scrollChange: null,
+            padding: 80
+        });
+    });
+
+// Navigation Scripts to Show Header on Scroll-Up
+jQuery(document).ready(function($) {
+    var MQL = 1170;
+
+    //primary navigation slide-in effect
+    if ($(window).width() > MQL) {
+        // We do not have the sticky nav bar so, first can be zero
+        var headerHeight = 0;
+        $('nav').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $('header').each(function() {
+            var h = $(this).outerHeight(true);
+            headerHeight += h;
+        });
+        $(window).on('scroll', {
+                previousTop: 0
+            },
+            function() {
+                var currentTop = $(window).scrollTop(),
+                    $catalog = $('.side-catalog');
+
+                this.previousTop = currentTop;
+
+                //adjust the appearance of side-catalog
+                $catalog.show()
+                if (currentTop > (headerHeight + 42)) {
+                    $catalog.addClass('fixed')
+                } else {
+                    $catalog.removeClass('fixed')
+                }
+            });
+    }
+});
+</script>
+
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?3fab3b1bae08e6d4a5e638d9e8c6f40a";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+
+
+</body>
+</html>

@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-11-01T03:13:44+00:00</updated>
+  <updated>2026-11-04T13:29:09+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,203 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[提升 Android Compose 页面的流畅度]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/04/improving-the-smoothness-of-android-compose-screens/"/>
+    <updated>2026-11-04T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/04/improving-the-smoothness-of-android-compose-screens</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Improving the Smoothness of Android Compose Screens」，原文链接<a href="https://proandroiddev.com/improving-the-smoothness-of-android-compose-screens-47607da631c8">https://proandroiddev.com/improving-the-smoothness-of-android-compose-screens-47607da631c8</a>，由@ruyouwei发布于2026年10月22日。</p></blockquote>
+
+<p>随着 Android 开发从传统的 View 系统转向 Jetpack Compose，更现代的 Compose 方法带来了截然不同的开发体验。两者在工具和性能跟踪工作流程方面也存在显著差异。除了帧率监控之外，View 系统通常依赖 ANR 报告来识别问题堆栈跟踪。然而，Compose 会根据数据变化更新 UI，因此 ANR 堆栈跟踪可能无法直接指出导致问题的代码。</p>
+
+<h2>影响 Compose 页面性能的因素</h2>
+
+<p>Compose 会将页面状态保存在内存中。当页面状态发生变化时，它会触发 UI 相应部分的重组。以下因素会影响渲染性能：</p>
+
+<ol>
+<li>重组触发的频率</li>
+<li>方法参数是否稳定</li>
+<li>触发状态变更的 UI 层级结构</li>
+</ol>
+
+
+<p>稳定性是 Compose 用来决定是否可以跳过重组的因素之一。在日常开发中，将不会改变的值声明为 <code>val</code> 可以避免不必要的状态更新和重组。开源 IDE 插件也可以直接在编辑器中显示可组合函数的参数是否稳定。</p>
+
+<p><a href="https://skydoves.github.io/compose-stability-analyzer/">Compose Stability Analyzer</a></p>
+
+<p><a href="https://alexhilton.github.io/blog/2026/11/04/improving-the-smoothness-of-android-compose-screens/"><img src="https://cdn-images-1.medium.com/max/1024/1*MfoP6Fg9eQfjcsueB6jKLw.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>Compose 性能问题的最常见原因是频繁的状态变化触发了过多的重组。识别频繁变化的状态是找到根本原因的关键。</p>
+
+<h2>监控 Compose 触发的 UI 更新</h2>
+
+<p>一种方法是收集所有状态和参数，在可组合函数重组时比较它们的值，并将差异打印到 logcat。Rebugger 等工具已经提供了这种功能，其 IDE 插件可以添加监控代码。</p>
+
+<p><a href="https://github.com/theapache64/rebugger">GitHub - theapache64/rebugger：一个简单的 Compose Multiplatform 库，旨在将重组的原因打印到你的控制台/Logcat 窗口中。</a></p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*ZlFCXJqkOKmgapgaG13o3g.png" alt="captionless image" /></p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*kopwkr9GgyHy3_R6vfSjLQ.png" alt="captionless image" /></p>
+
+<h2>通过自动注入监控代码来最大程度减少侵入</h2>
+
+<p>大多数情况下，日常开发过程中无需监控状态变化。只有当出现性能问题时才需要监控。在其他情况下，让插桩代码不进入源代码，有助于保持代码库整洁。</p>
+
+<p>添加和移除监控代码并非唯一的维护负担。随着业务逻辑的变更，可组合函数可能会增加或减少状态变量和参数，所有这些都需要手动维护。这增加了额外的工作量。是否可以改为在编译时自动注入监控代码，将其从发布构建中排除，仅在启用某个功能开关时才插入？</p>
+
+<p>在 Android 构建流水线中，可以使用与 ASM 相关的工具（<a href="https://asm.ow2.io/">https://asm.ow2.io/</a>）将监控代码注入到编译后的字节码中。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>compileDebugKotlin / compileDebugJavaWithJavac
+</span><span class='line'>                                    │
+</span><span class='line'>                                    │ finalizedBy
+</span><span class='line'>                                    ▼
+</span><span class='line'>┌───────────────────────────────────────────────────────────────────────┐
+</span><span class='line'>│ Pass 1 — generateVariableInfoDebug  (GenerateVariableInfoTask)        │
+</span><span class='line'>│   reads  build/tmp/kotlin-classes/debug/**/*.class                    │
+</span><span class='line'>│   for each method annotated @ComposableMonitor:                       │
+</span><span class='line'>│     record every local var (name, descriptor, signature, slot,        │
+</span><span class='line'>│     isMutableState, line of its last ASTORE)                          │
+</span><span class='line'>│   writes build/asm-analysis/&lt;Class&gt;_&lt;method&gt;.json                     │
+</span><span class='line'>└───────────────────────────────────────────────────────────────────────┘
+</span><span class='line'>                                    │
+</span><span class='line'>                                    ▼
+</span><span class='line'>┌───────────────────────────────────────────────────────────────────────┐
+</span><span class='line'>│ Pass 2 — transformDebugClassesWithAsm (ComposableStateMonitorLogger…) │
+</span><span class='line'>│   for each method annotated @ComposableMonitor:                       │
+</span><span class='line'>│     load its JSON, then inject bytecode that                          │
+</span><span class='line'>│       • builds an ArrayList&lt;Pair&lt;String, Any&gt;&gt; on entry               │
+</span><span class='line'>│       • adds every parameter on entry                                 │
+</span><span class='line'>│       • adds every State/MutableState local right after it's stored   │
+</span><span class='line'>│       • calls CollectAndPrintValues(...) before every exit            │
+</span><span class='line'>└───────────────────────────────────────────────────────────────────────┘
+</span><span class='line'>                                    │
+</span><span class='line'>                                    ▼
+</span><span class='line'>┌───────────────────────────────────────────────────────────────────────┐
+</span><span class='line'>│ Runtime — composemonitorhelper                                        │
+</span><span class='line'>│   CollectAndPrintValues → unwrap MutableState, strip "$delegate"      │
+</span><span class='line'>│   Inspector → remember previous values, diff, Log.d("Inspector", …)   │
+</span><span class='line'>└───────────────────────────────────────────────────────────────────────┘</span></code></pre></td></tr></table></div></figure>
+
+
+<p>实现过程始于一个注解：只需将 <code>@ComposableMonitor</code> 添加到需要监控状态变化的可组合函数即可。字节码注入插件可随时通过配置启用或禁用。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*HyDdTQQ6J9TjZQl70hGczA.png" alt="captionless image" /></p>
+
+<p>该实现会在编译时执行两遍字节码处理。第一遍收集状态变量的位置；第二遍注入监控代码。之所以需要两遍，是因为 ASM 必须先完成对方法的遍历，才能获取完整的局部变量符号集和帧布局。注入的代码有两个主要职责：收集所有状态和方法参数，以及在可组合函数触发重组时比较新旧值，以确定是哪个状态或参数发生了变化。</p>
+
+<p>主要挑战在于，可组合函数生成的 JVM 字节码在经过 Compose 编译器编译后，可能与其源代码存在显著差异。编译器会添加一些检查，例如针对 UI 更新的脏检查。因此，插桩必须在不破坏栈帧中变量索引的情况下，找到正确的插入点。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*g4NGQD705N69JVsmebasdw.png" alt="captionless image" /></p>
+
+<h2>更好的方法：为 Compose Multiplatform 编译</h2>
+
+<p>尽管 ASM 使得在 Android 上自动注入监控代码成为可能，但这种方法仍不完善。该插桩机制依赖于为可组合函数生成的字节码中的固定模式。由于 Compose 编译器会随着版本更新而不断发展和优化，匹配这些固定模式可能无法兼容未来的变化。此外，该监控工具仅支持 Android，而 Compose Multiplatform 目前已被广泛采用，需要更广泛的平台支持。因此，我们需要一种更好的代码注入方法。</p>
+
+<p>Kotlin Multiplatform (KMP) 的核心编译原则是“一次编写，到处运行”——代码在每个平台上都能原生运行。与 Flutter 使用 Skia/Impeller 引擎或 React Native 使用 JavaScript 桥接器在非原生平台上封装虚拟机不同，KMP 使用统一的编译器前端分析代码，然后使用不同的编译器后端将相同的 Kotlin 源代码编译成适用于各个平台的原生二进制文件或字节码。</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*xt5phhtToIV4ugbd25S_Zg.png" alt="captionless image" /></p>
+
+<p>这样就可以通过修改 Kotlin 前端生成的 IR 来注入代码。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Kotlin source ──► FIR (frontend) ──► IR
+</span><span class='line'>                                      │
+</span><span class='line'>                                      ▼
+</span><span class='line'>               ┌──────────────────────────────────────┐
+</span><span class='line'>               │ composemonitor IR extension          │  inserts plain @Composable calls
+</span><span class='line'>               │ (MonitorFunctionTransformer)         │  before every exit
+</span><span class='line'>               └──────────────────────────────────────┘
+</span><span class='line'>                                      │   -Xcompiler-plugin-order
+</span><span class='line'>                                      ▼
+</span><span class='line'>               ┌──────────────────────────────────────┐
+</span><span class='line'>               │ Compose compiler IR extension        │  adds $composer/$changed, groups,
+</span><span class='line'>               │                                      │  skipping, to user code AND ours
+</span><span class='line'>               └──────────────────────────────────────┘
+</span><span class='line'>                                      │
+</span><span class='line'>                                      ▼
+</span><span class='line'>           JVM / Android bytecode, Kotlin/Native, wasm, js backends</span></code></pre></td></tr></table></div></figure>
+
+
+<p>实现 IR 编译器扩展的主要挑战在于，不同 Kotlin 版本之间的 IR 编辑插件 API 存在差异。早期版本中，由于 API 不稳定，这些 API 也曾发生过更改。鉴于 Compose Monitor 编译器插件需要支持使用不同 Kotlin 版本的项目，因此它已针对大多数 Kotlin 2.0 及更高版本进行了适配。</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>user applies io.github.hellsong.composemonitor (Java, KGP 2.0 API)
+</span><span class='line'>        │  reads the project's Kotlin version, e.g. 2.2.10
+</span><span class='line'>        ▼
+</span><span class='line'>KotlinVersionSupport.lineFor("2.2.10") → k22
+</span><span class='line'>        │  getPluginArtifact()
+</span><span class='line'>        ▼
+</span><span class='line'>KGP resolves composemonitor-compiler-k22
+</span><span class='line'>        = shared/ + compat/{params, lookup-reference, registrar-legacy}
+</span><span class='line'>          compiled against Kotlin 2.2.0
+</span><span class='line'>        ▼
+</span><span class='line'>runs inside kotlinc 2.2.10 and transforms the IR before Compose</span></code></pre></td></tr></table></div></figure>
+
+
+<p>我为此创建了一个新的<strong>Gradle 插件</strong>，该插件已发布在<strong>GitHub</strong>上。你可以在下方找到源代码和使用说明：</p>
+
+<p><a href="https://github.com/hellsong/ComposeStateMonitor">GitHub - hellsong/ComposeStateMonitor：初始提交</a></p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[用Konsist与Lint强制执行设计系统契约]]></title>
@@ -8310,266 +8507,6 @@
 <p>如果你的工作流程中代理较多或 CI 较多，请立即关注轴 1。如果你的路线图上有应用内或设备上的 AI 功能，请立即关注 Axis 2。否则，请同时关注两者。一个很好的第一个实验：在一个副项目上使用一项官方技能加上“chrisbanes/skills”运行“android init”，并单独连接 ADK Kotlin 快速入门以感受运行时方面。</p>
 
 <p>来源</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[使用Android Archive进行打包]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/06/27/packaging-aar/"/>
-    <updated>2026-06-27T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/06/27/packaging-aar</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Packaging with Android Archive」，原文链接<a href="https://medium.com/gitconnected/packaging-with-android-archive-f5a33c48a25e">https://medium.com/gitconnected/packaging-with-android-archive-f5a33c48a25e</a>，由Chirani Rajapaksha发布于2026年6月20日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/06/27/packaging-aar/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*rz56vDEt8737r-0vmTnTzQ.jpeg" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>当 Android 开发者构建库模块时，输出的并非标准的 JAR 文件，而是 AAR 文件。Android 引入 AAR 格式的初衷是，JAR 文件基于 JVM 构建，并不包含 Android 特有的组件。JAR 文件可以包含编译后的字节码，但无法包含清单文件、资源文件、布局文件或原生 <code>.so</code> 库。</p>
-
-<p>AAR 是一种 ZIP 压缩的归档文件，它将 Android 库所需的所有内容打包到一个可分发的文件中。根据<a href="https://developer.android.com/studio/projects/android-library">Android开发者文档</a>，AAR文件可以包含：</p>
-
-<ul>
-<li><p><code>AndroidManifest.xml</code> — 在构建时合并到使用该库的应用的清单文件中</p></li>
-<li><p><code>classes.jar</code> — 已编译的Kotlin/Java字节码</p></li>
-<li><p><code>res/</code> — Android资源，例如布局、可绘制对象和字符串</p></li>
-<li><p><code>assets/</code> — 原始资源文件</p></li>
-<li><p><code>jni/</code> — 已编译的本地<code>.so</code>库</p></li>
-<li><p><code>libs/</code> — 其他JAR文件</p></li>
-<li><p>Consumer ProGuard规则</p></li>
-<li><p>资源引用的R.txt符号</p></li>
-</ul>
-
-
-<p>这与JAR文件有着本质区别，JAR文件仅包含已编译的类文件和元数据。当你的库需要声明权限、注册组件或发布本地代码时，这种区别就显得尤为重要，而这些都是封装硬件API（例如ARCore）的SDK的常见需求。</p>
-
-<p>AAR 与 JAR：选择合适的格式</p>
-
-<p>考虑一个使用 Flutter 开发的应用，其中包含一个用 Kotlin 编写的原生 Android 层。该应用程序使用 <a href="https://developers.google.com/ar/">Google ARCore</a> 进行平面检测和表面识别，例如识别摄像头在现实世界中看到的水平或垂直平面。</p>
-
-<p>在典型的初始版本中，开发者会在整个 Android 代码库中直接导入 ARCore：</p>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>flutter_app/
-</span><span class='line'>  └── android/
-</span><span class='line'>        └── app/
-</span><span class='line'>              ├── MainActivity.kt         ← ARCore imports here
-</span><span class='line'>              ├── ArSessionManager.kt     ← ARCore imports here
-</span><span class='line'>              └── PlaneDetectionHelper.kt ← ARCore imports here</span></code></pre></td></tr></table></div></figure>
-
-
-<p>每个涉及 AR 功能的文件都会与 ARCore 的内部类耦合，例如 <code>Session</code>、<code>Frame</code>、<code>Plane</code>、<code>Config</code>、<code>Trackable</code> 等等。这会带来一些实际问题：</p>
-
-<p><strong>升级 ARCore 存在风险。</strong> ARCore API 的任何重大变更都意味着所有导入它的文件都需要修改，而且没有统一的边界来控制影响范围。</p>
-
-<p><strong>客户端会获取过多信息。</strong> 如果你将此 Android 模块交付给客户，他们可以查看和修改所有 ARCore 集成代码。这可能会暴露你希望保护的实现细节。</p>
-
-<p><strong>测试难度加大。</strong> 由于调用应用程序模块了解 ARCore 类，因此无法像使用桩代码那样轻松地将 AR 后端替换为单元测试用的桩代码。</p>
-
-<p>解决方案是划定一个明确的边界。ARCore 成为一个实现细节，隐藏在一个接口之后，应用程序的其他部分无需了解底层 SDK 即可使用该接口。</p>
-
-<p>模块结构设计</p>
-
-<p>此模块仅包含契约。此处未声明任何 ARCore 依赖项。</p>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>// ar-facade/src/main/kotlin/com/example/ar/ArSurfaceDetector.kt
-</span><span class='line'>
-</span><span class='line'>interface ArSurfaceDetector {
-</span><span class='line'>    fun startSession()
-</span><span class='line'>    fun stopSession()
-</span><span class='line'>    fun getDetectedPlanes(): List&lt;DetectedPlane&gt;
-</span><span class='line'>}
-</span><span class='line'>
-</span><span class='line'>data class DetectedPlane(
-</span><span class='line'>    val id: String,
-</span><span class='line'>    val type: PlaneType,
-</span><span class='line'>    val centerX: Float,
-</span><span class='line'>    val centerY: Float
-</span><span class='line'>)
-</span><span class='line'>
-</span><span class='line'>enum class PlaneType { HORIZONTAL_UP, HORIZONTAL_DOWN, VERTICAL }</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>app</code> 模块依赖于 <code>ar-facade</code>。它调用 <code>detector.startSession()</code> 并接收 <code>List&lt;DetectedPlane&gt;</code>。它不会访问 <code>com.google.ar.core.Plane</code> 或任何其他 ARCore 类。</p>
-
-<p>模块：<code>ar-core-impl</code></p>
-
-<h3>步骤 1 — 将模块声明为 Android 库</h3>
-
-<p>在 <code>ar-core-impl/build.gradle.kts</code> 文件中，应用库插件而不是应用程序插件：</p>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>plugins {
-</span><span class='line'>    id("com.android.library")
-</span><span class='line'>    id("org.jetbrains.kotlin.android")
-</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>android {
-</span><span class='line'>    namespace = "com.example.ar.impl"
-</span><span class='line'>    compileSdk = 35    defaultConfig {
-</span><span class='line'>        minSdk = 24
-</span><span class='line'>        consumerProguardFiles("consumer-rules.pro")
-</span><span class='line'>    }
-</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
-
-
-<p><code>com.android.library</code> 插件使 Gradle 生成 AAR 文件而不是 APK 文件。正如 <a href="https://developer.android.com/studio/projects/android-library">Android Studio 文档</a> 所述，应用此插件后，构建过程会创建 AAR 文件，而不是 APK 文件。</p>
-
-<h3>步骤 2 — 添加 ARCore 依赖项</h3>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>dependencies {
-</span><span class='line'>    implementation("com.google.ar:core:1.45.0")
-</span><span class='line'>    implementation(project(":ar-facade"))
-</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
-
-
-<h3>步骤 3 — 添加 ARCore 所需的清单条目</h3>
-
-<p>AAR 的 <code>AndroidManifest.xml</code> 文件会自动包含其所需的条目。当使用 AAR 的应用包含该 AAR 时，这些清单条目会被合并到最终的应用清单中：</p>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>&lt;!-- ar-core-impl/src/main/AndroidManifest.xml --&gt;
-</span><span class='line'>&lt;manifest xmlns:android="http://schemas.android.com/apk/res/android"&gt;</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>&lt;uses-permission android:name="android.permission.CAMERA" /&gt;    
-</span><span class='line'>&lt;uses-feature
-</span><span class='line'>    android:name="android.hardware.camera.ar"
-</span><span class='line'>    android:required="true" /&gt;    &lt;application&gt;
-</span><span class='line'>    &lt;meta-data
-</span><span class='line'>        android:name="com.google.ar.core"
-</span><span class='line'>        android:value="required" /&gt;
-</span><span class='line'>&lt;/application&gt;&lt;/manifest&gt;</span></code></pre></td></tr></table></div></figure>
-
-
-<p>根据 <a href="https://developers.google.com/ar/develop/c/enable-arcore">ARCore NDK 快速入门文档</a>，<code>uses-feature</code> 标签会将应用在 Google Play 商店中的可见性限制在支持 ARCore 的设备上，而 <code>meta-data</code> 标签会将应用标记为 AR 必需，这意味着必须安装 Google Play 服务 AR 版。</p>
-
-<p>由于这些条目存在于 AAR 的清单中，因此使用 AAR 的 <code>app</code> 模块无需声明任何 ARCore 特有的清单配置。它会继承库中的所有配置。</p>
-
-<h3>步骤 4 — 添加消费者 ProGuard 规则</h3>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'># consumer-rules.pro
-</span><span class='line'>-keep class com.example.ar.impl.** { *; }</span></code></pre></td></tr></table></div></figure>
-
-
-<p>库的 Gradle 配置中的 <code>consumerProguardFiles</code> 设置可确保在使用库的应用运行 R8 或 ProGuard 时自动应用这些规则。<a href="https://developer.android.com/build/publish-library/prep-lib-release">Android 文档</a> 指出，消费者 ProGuard 规则会随 AAR 文件一起打包，并应用于消费者的构建；SDK 作者控制哪些规则会被保留，而无需消费者手动管理这些规则。</p>
-
-<h3>步骤 5 — 构建 AAR 文件</h3>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>./gradlew :ar-core-impl:assembleRelease</span></code></pre></td></tr></table></div></figure>
-
-
-<p>输出文件位于：</p>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>ar-core-impl/build/outputs/aar/ar-core-impl-release.aar</span></code></pre></td></tr></table></div></figure>
-
-
-<p>在应用模块中使用 AAR 文件</p>
-
-<p>边界到位后，“app”模块永远不会引用 ARCore。 Flutter 平台通道处理程序可能如下所示：</p>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>// app/src/main/kotlin/com/example/app/ArPlatformChannel.kt</span></code></pre></td></tr></table></div></figure>
-
-
-
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>import com.example.ar.ArSurfaceDetector   // facade only
-</span><span class='line'>import com.example.ar.DetectedPlane       // facade onlyclass
-</span><span class='line'>
-</span><span class='line'>ArPlatformChannel(private val detector: ArSurfaceDetector) :
-</span><span class='line'>    MethodChannel.MethodCallHandler {    
-</span><span class='line'>    
-</span><span class='line'>    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-</span><span class='line'>        when (call.method) {
-</span><span class='line'>            "startSession"       -&gt; { detector.startSession(); result.success(null) }
-</span><span class='line'>            "stopSession"        -&gt; { detector.stopSession();  result.success(null) }
-</span><span class='line'>            "getDetectedPlanes"  -&gt; result.success(detector.getDetectedPlanes().map { it.toMap() })
-</span><span class='line'>            else                 -&gt; result.notImplemented()
-</span><span class='line'>        }
-</span><span class='line'>    }
-</span><span class='line'>}</span></code></pre></td></tr></table></div></figure>
-
-
-<p>“app/”中的任何位置都不存在“import com.google.ar.core.*”行。</p>
-
-<p>向客户端演示隔离</p>
-
-<p><strong>可以进行逆向工程。</strong> AAR 是编译代码，而不是加密代码。 JADX 等工具可以反编译部分实现。为了提供更强大的 IP 保护，R8 混淆与激进的缩小和重命名提供了有意义的抵抗，尽管它并不能阻止坚定的逆向工程师。 C/C++ 中的本机实现更难反编译，并且可能适合特别敏感的逻辑。</p>
-
-<p><strong>原始 AAR 没有依赖项元数据。</strong> 正如 <a href="https://developer.android.com/build/publish-library/upload-library">Android 文档说明</a>，原始 AAR 文件不会声明其身份、版本或传递依赖项。对于超出简单本地集成的任何内容，建议通过 Maven 发布。</p>
-
-<p><strong>清单合并需要注意。</strong> 当 AAR 的清单合并到使用应用程序时，可能会出现冲突 - 例如，如果应用程序已经声明了具有不同设置的“uses-feature”。 Android 的<a href="https://developer.android.com/build/manage-manifests">清单合并工具</a> 会自动处理大多数情况，但冲突需要使用合并规则手动解决。</p>
-
-<p>参考文献</p>
 ]]></content>
   </entry>
   
