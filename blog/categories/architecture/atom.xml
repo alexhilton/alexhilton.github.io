@@ -4,7 +4,7 @@
   <title><![CDATA[Category: Architecture | 稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/blog/categories/architecture/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-11-12T14:00:20+00:00</updated>
+  <updated>2026-11-23T15:52:22+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,323 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[MVI 让屏幕一次只有一个状态]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/23/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time/"/>
+    <updated>2026-11-23T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/23/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「MVI in Android — Designing Screens That Can Only Be in One State at a Time」，原文链接<a href="https://medium.com/@aleyvaschz/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time-1ad894b8ff3e">https://medium.com/@aleyvaschz/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time-1ad894b8ff3e</a>，由Adrian Leyva发布于2026年8月12日。</p></blockquote>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*Lb4O7xRnAUHwbj9V721cIw.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<blockquote><p>使用 Kotlin、协程和 Jetpack Compose 实现单向数据流的实用指南</p></blockquote>
+
+<p>有一种特定的 bug，每个 Android 开发者最终都会遇到。测试人员会附上一张截图，显示一个加载指示器在错误信息上方旋转，两者背后都显示着一个只填充了一半的列表。你无法重现这个问题。你反复读取 ViewModel 三次，逻辑看起来都没问题。两天后，你终于找到了原因：用户下拉刷新之后，一个网络请求才返回；某个布尔值以错误的顺序被翻转；屏幕最终停留在了没人设计过的值组合上。</p>
+
+<p>这个 bug 并非传统意义上的编码错误，而是设计上的缺陷。当一个屏幕由五个独立变量描述时，它可以有 32 种不同的配置，而团队只考虑了其中的 4 种。其余的配置其实一直存在，只是等待着合适的竞态条件触发。</p>
+
+<p>模型-视图-意图（Model View Intent，简称 MVI）正是为了解决这个问题而生的。它并非一个全新的库，也并非要取代你已有的所有知识。它是一种应用于你可能已经使用的架构之上的规范，其核心理念很简单：在任何时刻，你的屏幕都只有一种状态，这种状态只在一个地方产生，并且它只会在响应明确的、命名的事件时才会改变。</p>
+
+<p>本文将介绍 MVI 在现代 Android 代码库中的实际含义、如何使用 Kotlin Flows 和 Jetpack Compose 实现它、如何测试它，以及何时它并不适用。</p>
+
+<h2>MVI 试图解决的问题</h2>
+
+<p>大多数 Android 团队编写的方案都接近 MVVM 模式。ViewModel 公开一些可观察的属性，UI 收集这些属性，用户操作调用 ViewModel 的公共方法。这种模式运行良好，对于大量屏幕来说，它的仪式感恰到好处。</p>
+
+<p>随着屏幕变得越来越复杂，摩擦就出现了。考虑一个用传统方式编写的典型产品搜索 ViewModel：</p>
+
+<pre><code class="kotlin">class ProductListViewModel : ViewModel() {
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow&lt;Boolean&gt; = _isLoading.asStateFlow()
+    private val _products = MutableStateFlow&lt;List&lt;Product&gt;&gt;(emptyList())
+    val products: StateFlow&lt;List&lt;Product&gt;&gt; = _products.asStateFlow()
+    private val _error = MutableStateFlow&lt;String?&gt;(null)
+    val error: StateFlow&lt;String?&gt; = _error.asStateFlow()
+    private val _isEmpty = MutableStateFlow(false)
+    val isEmpty: StateFlow&lt;Boolean&gt; = _isEmpty.asStateFlow()
+}
+</code></pre>
+
+<p>这里存在四个独立的真值来源。类型系统中没有任何机制阻止 <code>isLoading</code> 为真而 <code>error</code> 不为空。也没有任何机制强制 <code>isEmpty</code> 与 <code>products</code> 保持一致。每个新功能都会增加一个标志，而每个标志都会使理论状态的数量翻倍。最终，UI 层会使用防御性条件语句来弥补，而正确性则取决于每个人是否记得按正确的顺序更新正确的字段。</p>
+
+<p>MVI 将这四个属性合并为一个属性，从而消除了整个此类问题。</p>
+
+<h2>契约的三个部分</h2>
+
+<p>MVI 屏幕由一个包含三个部分的简短契约定义。在进行任何实现之前先编写这个契约，是该模式所教授的最有价值的习惯。</p>
+
+<ul>
+<li><strong>状态</strong> 是屏幕渲染所需所有内容的不可变快照。如果某个元素不在状态中，则无法显示在屏幕上。</li>
+<li><strong>意图</strong> 是用户操作或生命周期信号，以用户语言而非实现语言表达。<code>RetryClicked</code> 是一个意图，而 <code>SetLoadingTrue</code> 则不是。</li>
+<li><strong>效果</strong> 是一次性事件，完全不属于状态：例如导航到另一个屏幕、显示 Snackbar、触发触觉反馈等。</li>
+</ul>
+
+
+<p>产品搜索屏幕的契约如下：</p>
+
+<pre><code class="kotlin">data class ProductListState(
+    val query: String = "",
+    val content: Content = Content.Idle,
+    val isRefreshing: Boolean = false
+) {
+    sealed interface Content {
+        data object Idle : Content
+        data object Loading : Content
+        data class Success(val products: List&lt;Product&gt;) : Content
+        data object Empty : Content
+        data class Failure(val message: String) : Content
+    }
+}
+sealed interface ProductListIntent {
+    data class QueryChanged(val query: String) : ProductListIntent
+    data object SearchSubmitted : ProductListIntent
+    data object RetryClicked : ProductListIntent
+    data class ProductClicked(val productId: String) : ProductListIntent
+}
+sealed interface ProductListEffect {
+    data class NavigateToDetail(val productId: String) : ProductListEffect
+    data class ShowMessage(val message: String) : ProductListEffect
+}
+</code></pre>
+
+<p>注意 <code>Content</code> 层级结构的作用。加载和失败不再是碰巧共存的独立布尔值，而是密封接口中互斥的分支，因此导致我们最初遇到的 bug 的不可能组合现在无法表示。编译器强制执行了设计决策，而不是依赖代码审查意见。</p>
+
+<p>状态与效果的分离比表面看起来更为重要。状态会被重放：当设备旋转或进程恢复时，UI 会根据最新状态重新渲染，这是正常行为。而效果则不应该被重放。没有人希望每次配置更改后都出现相同的 Snackbar，也没有人希望导航两次。将它们建模为独立的通道才能确保这种区分的有效性。</p>
+
+<h2>将用户操作与系统观察结果区分开来</h2>
+
+<p>在实际项目中，区分意图和内部事件可以大大减少很多麻烦。意图来自 ViewModel 外部。内部事件是 ViewModel 发起的工作所产生的结果：例如，仓库响应、定时器触发、缓存发出新数据等。</p>
+
+<p>两者都需要修改状态，但它们的来源和名称不同。将它们分开可以防止意图层级结构中充斥着类似 <code>DataLoadedSuccessfully</code> 这样的条目，这些条目用户永远不会触发，也不应该从 UI 层调用。</p>
+
+<pre><code class="kotlin">internal sealed interface ProductListEvent {
+    data class QueryUpdated(val query: String) : ProductListEvent
+    data object LoadStarted : ProductListEvent
+    data class LoadSucceeded(val products: List&lt;Product&gt;) : ProductListEvent
+    data class LoadFailed(val message: String) : ProductListEvent
+    data class RefreshingChanged(val isRefreshing: Boolean) : ProductListEvent
+}
+</code></pre>
+
+<h2>Reducer</h2>
+
+<p>MVI 的声誉主要归功于 reducer。它是一个纯函数，接受当前状态和一个事件作为参数，并返回下一个状态。它不进行任何输入或输出操作，不启动任何协程，也不会触及参数之外的任何内容。</p>
+
+<pre><code class="kotlin">internal fun ProductListState.reduce(event: ProductListEvent): ProductListState =
+    when (event) {
+        is ProductListEvent.QueryUpdated -&gt; copy(query = event.query)
+        ProductListEvent.LoadStarted -&gt; copy(
+            content = if (content is ProductListState.Content.Success) {
+                content
+            } else {
+                ProductListState.Content.Loading
+            }
+        )
+        is ProductListEvent.LoadSucceeded -&gt; copy(
+            content = if (event.products.isEmpty()) {
+                ProductListState.Content.Empty
+            } else {
+                ProductListState.Content.Success(event.products)
+            },
+            isRefreshing = false
+        )
+        is ProductListEvent.LoadFailed -&gt; copy(
+            content = ProductListState.Content.Failure(event.message),
+            isRefreshing = false
+        )
+        is ProductListEvent.RefreshingChanged -&gt; copy(isRefreshing = event.isRefreshing)
+    }
+</code></pre>
+
+<p>现在，所有关于此屏幕行为的规则都集中在一个易于阅读的代码块中。例如，在刷新过程中保持显示现有结果而不是闪现一个加载指示器的决定，只需在 <code>LoadStarted</code> 分支中写上三行代码即可实现。而以前，这条规则分散在协程、布尔赋值语句和布局中的条件语句里。</p>
+
+<p>因为 reducer 是纯函数，所以它也很容易测试，这也是 MVI 屏幕往往具有异常高的测试覆盖率而无需任何人强制执行的原因。</p>
+
+<h2>ViewModel</h2>
+
+<p>有了契约和 reducer，ViewModel 就变得精简了。它的任务是接收意图、协调异步工作、将事件传递给 reducer 并发出效果。</p>
+
+<pre><code class="kotlin">@HiltViewModel
+class ProductListViewModel @Inject constructor(
+    private val searchProducts: SearchProductsUseCase
+) : ViewModel() {
+    private val _state = MutableStateFlow(ProductListState())
+    val state: StateFlow&lt;ProductListState&gt; = _state.asStateFlow()
+    private val _effects = Channel&lt;ProductListEffect&gt;(Channel.BUFFERED)
+    val effects: Flow&lt;ProductListEffect&gt; = _effects.receiveAsFlow()
+    private var searchJob: Job? = null
+    fun onIntent(intent: ProductListIntent) {
+        when (intent) {
+            is ProductListIntent.QueryChanged -&gt; {
+                dispatch(ProductListEvent.QueryUpdated(intent.query))
+            }
+            ProductListIntent.SearchSubmitted -&gt; search(_state.value.query)
+            ProductListIntent.RetryClicked -&gt; search(_state.value.query)
+            is ProductListIntent.ProductClicked -&gt; {
+                sendEffect(ProductListEffect.NavigateToDetail(intent.productId))
+            }
+        }
+    }
+    private fun search(query: String) {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            dispatch(ProductListEvent.LoadStarted)
+            searchProducts(query)
+                .onSuccess { products -&gt;
+                    dispatch(ProductListEvent.LoadSucceeded(products))
+                }
+                .onFailure { throwable -&gt;
+                    dispatch(ProductListEvent.LoadFailed(throwable.toUserMessage()))
+                    sendEffect(ProductListEffect.ShowMessage(throwable.toUserMessage()))
+                }
+        }
+    }
+    private fun dispatch(event: ProductListEvent) {
+        _state.update { current -&gt; current.reduce(event) }
+    }
+    private fun sendEffect(effect: ProductListEffect) {
+        _effects.trySend(effect)
+    }
+}
+</code></pre>
+
+<p>有两个细节值得我们停下来注意。</p>
+
+<p>首先是 <code>_state.update { }</code>。使用原子更新函数而不是赋值给 <code>_state.value</code> 可以确保来自不同协程的并发更新彼此叠加，而不是相互覆盖。在具有多个并行数据源的屏幕中，这决定了结果是始终正确还是偶尔出错。</p>
+
+<p>第二个是 <code>searchJob?.cancel()</code>。结构化并发会处理取消操作，但前提是你持有引用。在开始新的搜索之前取消之前的搜索，可以防止查询 <code>"sh"</code> 的慢响应在查询 <code>"shoes"</code> 的快速响应之后到达并覆盖后者。MVI 本身并不处理乱序结果，它为你提供了一个统一解决它们的地方。</p>
+
+<h2>连接用户界面</h2>
+
+<p>Compose 层接收一个状态对象，并把意图发送回去。它不包含任何业务决策。</p>
+
+<pre><code class="kotlin">@Composable
+fun ProductListRoute(
+    onNavigateToDetail: (String) -&gt; Unit,
+    viewModel: ProductListViewModel = hiltViewModel()
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(viewModel, lifecycleOwner) {
+        viewModel.effects
+            .flowWithLifecycle(lifecycleOwner.lifecycle, Lifecycle.State.STARTED)
+            .collect { effect -&gt;
+                when (effect) {
+                    is ProductListEffect.NavigateToDetail -&gt; {
+                        onNavigateToDetail(effect.productId)
+                    }
+                    is ProductListEffect.ShowMessage -&gt; {
+                        snackbarHostState.showSnackbar(effect.message)
+                    }
+                }
+            }
+    }
+    ProductListScreen(
+        state = state,
+        snackbarHostState = snackbarHostState,
+        onIntent = viewModel::onIntent
+    )
+}
+@Composable
+private fun ProductListScreen(
+    state: ProductListState,
+    snackbarHostState: SnackbarHostState,
+    onIntent: (ProductListIntent) -&gt; Unit
+) {
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { padding -&gt;
+        Column(modifier = Modifier.padding(padding)) {
+            SearchField(
+                query = state.query,
+                onQueryChange = { onIntent(ProductListIntent.QueryChanged(it)) },
+                onSubmit = { onIntent(ProductListIntent.SearchSubmitted) }
+            )
+            when (val content = state.content) {
+                ProductListState.Content.Idle -&gt; IdleHint()
+                ProductListState.Content.Loading -&gt; FullScreenLoader()
+                ProductListState.Content.Empty -&gt; EmptyResults(query = state.query)
+                is ProductListState.Content.Failure -&gt; ErrorMessage(
+                    message = content.message,
+                    onRetry = { onIntent(ProductListIntent.RetryClicked) }
+                )
+                is ProductListState.Content.Success -&gt; ProductGrid(
+                    products = content.products,
+                    onProductClick = { onIntent(ProductListIntent.ProductClicked(it)) }
+                )
+            }
+        }
+    }
+}
+</code></pre>
+
+<p>对密封接口进行详尽的 <code>when</code> 判断是一项低调但意义重大的优势。例如，下个季度添加一个新的内容分支，编译器会自动指出所有需要处理该分支的屏幕。而当状态是一串布尔值时，则无法提供类似的保证。</p>
+
+<p>将路由从无状态屏幕中分离出来，也意味着屏幕可组合函数接受普通参数，这使得预览和屏幕截图测试变得简单明了。</p>
+
+<h2>测试变得机械化</h2>
+
+<p>reducer 是一个纯函数，因此测试行为完全不需要协程机制。</p>
+
+<pre><code class="kotlin">@Test
+fun `keeps existing results visible while refreshing`() {
+    val initial = ProductListState(
+        query = "shoes",
+        content = ProductListState.Content.Success(listOf(sampleProduct))
+    )
+    val result = initial.reduce(ProductListEvent.LoadStarted)
+    assertThat(result.content).isEqualTo(initial.content)
+}
+@Test
+fun `empty response maps to empty content`() {
+    val result = ProductListState(query = "shoes")
+        .reduce(ProductListEvent.LoadSucceeded(products = emptyList()))
+    assertThat(result.content).isEqualTo(ProductListState.Content.Empty)
+}
+</code></pre>
+
+<p>对于 ViewModel 本身，你只需断言已发出的状态序列，读起来几乎就像是该功能的一份规格说明。</p>
+
+<pre><code class="kotlin">@Test
+fun `failed search emits failure state and a message effect`() = runTest {
+    coEvery { searchProducts("shoes") } returns Result.failure(IOException())
+    val viewModel = ProductListViewModel(searchProducts)
+    viewModel.state.test {
+        assertThat(awaitItem().content).isEqualTo(ProductListState.Content.Idle)
+        viewModel.onIntent(ProductListIntent.QueryChanged("shoes"))
+        awaitItem()
+        viewModel.onIntent(ProductListIntent.SearchSubmitted)
+        assertThat(awaitItem().content).isEqualTo(ProductListState.Content.Loading)
+        assertThat(awaitItem().content).isInstanceOf(ProductListState.Content.Failure::class.java)
+    }
+}
+</code></pre>
+
+<h2>重要注意事项</h2>
+
+<p>MVI 确实存在实际成本，而那些不讨论这些成本就采用 MVI 的团队往往会在中途放弃它。</p>
+
+<ul>
+<li><strong>状态类会变成垃圾场。</strong> 在复杂的屏幕上，很容易为了应对各种极端情况而添加一个可空字段。务必克制这种做法。如果某条数据属于屏幕的某个独立部分，请将其建模为嵌套的密封类型或独立的子状态，并独立进行归约。</li>
+<li><strong>如果不小心，重组的成本会增加。</strong> 单个大型状态对象意味着任何更改都会发出一个新的实例。当状态稳定且可组合对象只读取所需内容时，Compose 可以很好地处理这种情况，但如果将整个状态对象向下传递五层，就会破坏这种特性。请传递每个可组合对象实际需要的最小切片。</li>
+<li><strong>效果可能会丢失。</strong> <code>Channel</code> 会将数据传递给单个收集器。如果你的效果流在可组合对象中被收集，而该可组合对象在错误的时间点退出组合，则事件可能会丢失。如上所示，使用带有生命周期感知收集的缓冲通道可以涵盖常见情况。任何真正重要的信息，例如已完成的付款，都应该保存在状态或持久存储中，而不是瞬态效果中。</li>
+<li><strong>样板代码确实存在。</strong> 为一个显示静态设置列表的屏幕编写三个类型和一个 reducer 并不划算。共享的通用基类或小型内部库可以减少重复代码，但无法消除概念上的开销。</li>
+<li><strong>并非所有地方都需要。</strong> 启动画面、静态的“关于我们”页面或只有两个字段的简单表单并不需要 MVI。MVI 的收益与屏幕协调的异步源数量以及它可以占据的视觉状态数量成正比。建议在结账流程和搜索结果中使用 MVI，但在条款和条件页面则不需要。</li>
+</ul>
+
+
+<h2>结论</h2>
+
+<p>MVI 与其说是一个框架，不如说是一组你自愿接受的约束。你放弃了修改几个独立字段的便利，作为交换，你得到了一个屏幕，其行为由一个不可变类型和一个纯函数描述。重现错误变成了构建一个状态对象，添加新功能变成了添加一个编译器会确保你不会忘记处理的分支。从你已经感到担忧的屏幕开始。在实现之前编写契约，保持 reducer 的纯净性，并让密封类型消除那些本不应该存在的组合。</p>
+
+<p>感谢阅读！</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[响应式的Android身份验证架构]]></title>
@@ -2090,1298 +2407,6 @@ services:
 <p>俗话说，“几周的编码时间可以节省数小时的规划时间。” 投资于系统设计，未来的你（和团队）会感谢你。</p>
 
 <p>千个应用程序的旅程始于一个精心设计的系统。今天就开始像架构师一样思考，见证你的应用程序从脆弱的原型转变为经得起时间考验的强大、可扩展的平台。</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android ViewModel数据加载：基于Flow架构的最佳实践]]></title>
-    <link href="https://alexhilton.github.io/blog/2025/09/22/viewmodel-loading/"/>
-    <updated>2025-09-22T14:50:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2025/09/22/viewmodel-loading</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Android ViewModel Data Loading: Best Practices and Flow-Based Architecture」，原文链接<a href="https://funkymuse.dev/posts/properly-load-data/">https://funkymuse.dev/posts/properly-load-data/</a>，由FunkyMuse于2025年8月29日。</p></blockquote>
-
-<p>Android 开发中的架构讨论经常引发激烈的争论——有时褒贬不一。撰写这些主题的文章并不容易，但这正是它的价值所在。</p>
-
-<p>本文阐述了我对数据加载模式的独到见解，这些见解源于我的经验以及近期手术后的恢复（其中一次手术仍在进行中）。</p>
-
-<p>不妨将此视为我在 2025 年对数据加载模式的理解和技能的概述。</p>
-
-<p>我可能比其他人更晚加入这场讨论，但迟做总比不做好。</p>
-
-<h2>挑战：Android ViewModel 中常见的数据加载反模式</h2>
-
-<p>“大多数”Android 开发者使用 ViewModel 来管理 UI 状态，这些状态由视图（Fragment、Activity 或可组合组件）收集。为了显示有意义的内容，你需要从真实数据源加载数据，将其转换为视图状态，然后公开以供使用。</p>
-
-<p>以前是 LiveData，现在是 Flow，它充当视图和 ViewModel 之间的粘合剂（大多数情况下）。有一些解决方案使用 <a href="https://github.com/cashapp/molecule">molecule</a>，但这超出了我们的讨论范围。</p>
-
-<p><a href=""><img src="https://funkymuse.dev/assets/img/load_data/zhui.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>正如这篇 <a href="https://x.com/github_skydoves/status/1829315087611707848">Twitter 讨论</a> 所示，大多数开发者在 <code>ViewModel</code> 的 init {} 块中加载数据。虽然这种方法看似合乎逻辑，但它带来了一些架构问题，Ian Lake 和其他人认为这是反模式——包括使用 <code>LaunchedEffect</code> 进行数据加载。</p>
-
-<p><a href="https://funkymuse.dev/assets/img/load_data/jokes.png"><img src="https://funkymuse.dev/assets/img/load_data/jokes.png" alt="Irony" /></a></p>
-
-<p>讽刺的是，即使是官方示例有时也会与这些最佳做法相矛盾：</p>
-
-<p><a href="https://funkymuse.dev/assets/img/load_data/irony.png"><img src="https://funkymuse.dev/assets/img/load_data/irony.png" alt="Irony" /></a></p>
-
-<h3>开发者为何选择 init {} 块（以及它为何存在问题）</h3>
-
-<p>ViewModel 的 init {} 块的吸引力显而易见——它确保数据加载在配置更改后依然有效，从而避免了不必要的 API 调用或数据库读取。然而，这种方法也带来了四个关键问题：</p>
-
-<h4>问题 1：导航返回栈复杂化</h4>
-
-<p>使用 init {} 进行数据加载时，返回到包含现有 ViewModel 的屏幕不会触发重新初始化。这迫使开发者在 onStart 或 onResume 中添加变通逻辑来检查数据新鲜度，从而创建难以维护的意大利面条式代码。</p>
-
-<h4>问题 2：调度程序竞争条件</h4>
-
-<p>在 init {} 中加载数据通常使用 viewModelScope，它在 Dispatchers.Main.immediate 上运行。这种即时调度程序可能会导致竞争条件，即数据处理在 UI 组合之前就已完成，尤其是在 Jetpack Compose 应用中。</p>
-
-<p><a href="https://funkymuse.dev/assets/img/load_data/darkness.png"><img src="https://funkymuse.dev/assets/img/load_data/darkness.png" alt="Darkness" /></a></p>
-
-<h4>问题 #3：数据过期问题</h4>
-
-<p>现代 CRUD 应用程序需要更新数据。用户可能会从其他屏幕返回，或者在相当长一段时间后从暂停状态恢复。<code>init {}</code> 方法没有提供内置的数据新鲜度验证机制。</p>
-
-<h4>问题 #4：测试困难</h4>
-
-<p>每次运行测试时，你都必须构建 ViewModel 才能成功运行该特定测试用例的 <code>init {}</code> 代码块。</p>
-
-<h2>基于 Flow 的解决方案：将冷流转换为热流</h2>
-
-<p>该解决方案利用 Kotlin Flows——具体来说，使用 StateFlow 和适当的共享策略将冷流转换为热流。可以将其视为 Katy Perry 的“Hot N Cold”方法，但所有边缘情况的行为都是可预测的。</p>
-
-<h3>构建基础：用例和 ViewModel 结构</h3>
-
-<p><strong>请注意，此代码仅用于演示目的，如何构建由你决定，除加载部分外，并非最佳实践</strong></p>
-
-<pre><code class="kotlin">inline fun &lt;reified T : ViewModel&gt; provideFactory(
-    crossinline creator: () -&gt; T
-) = viewModelFactory {
-    initializer {
-        creator()
-    }
-}
-</code></pre>
-
-<p><em>注意：此工厂模式仅用于演示目的</em></p>
-
-<p>我们的用例处理数据检索、格式化和业务逻辑转换：</p>
-
-<pre><code class="kotlin">class GetUserDetailsUseCase private constructor(
-    private val authRepository: AuthRepository = AuthRepository(),
-    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val billingCache: BillingCache = BillingCache.create(),
-    private val dateFormatter: DateFormatter = DataFormatter()
-) {
-    suspend fun execute(): Result&lt;UserDetails&gt; =
-        withContext(dispatcher) {
-            val userDetails: Result&lt;UserDetailsResponseModel&gt; = authRepository.getUserDetails()
-
-            userDetails.map { details -&gt;
-                UserDetails(
-                    creationDate = dateFormatter.format(
-                        details.creationDate,
-                        DateFormatter.Format.UTC_SHORT
-                    ).getOrNull(),
-                    avatarUrl = details.avatar,
-                    isPremium = billingCache.isPremium(),
-                    email = details.email
-                )
-            }
-        }
-
-    companion object {
-        fun create() = GetUserDetailsUseCase()
-    }
-}
-</code></pre>
-
-<p>此用例封装了从存储库检索数据、日期格式化、高级状态验证以及准备用户信息以供显示。</p>
-
-<pre><code class="kotlin">internal class UserAccountDetailsViewModel private constructor(
-    private val getUserDetailsUseCase: GetUserDetailsUseCase = GetUserDetailsUseCase.create(),
-) : ViewModel() {
-    data class ViewState(
-        val isLoading: Boolean = false,
-        val isError: Boolean = false,
-        val userInfo: UserInfo? = null
-    ) {
-        data class UserInfo(
-            val displayEmail: String,
-            val avatarUrl: String?,
-            val showPremiumBadge: Boolean,
-            val memberSince: String?
-        )
-    }
-
-    val userDetails: Flow&lt;ViewState&gt; = flow {
-        emit(
-            getUserDetailsUseCase.execute()
-                .fold(
-                    onSuccess = {
-                        ViewState(
-                            isLoading = false,
-                            isError = false,
-                            userInfo = ViewState.UserInfo(
-                                displayEmail = it.email,
-                                avatarUrl = it.avatarUrl,
-                                showPremiumBadge = it.isPremium,
-                                memberSince = it.creationDate?.toString()
-                            )
-                        )
-                    },
-
-                    onFailure = {
-                        ViewState(isLoading = false, isError = true)
-                    }
-                )
-        )
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
-        ViewState(isLoading = true, isError = false)
-    )
-
-    companion object {
-        fun factory() = provideFactory { UserAccountDetailsViewModel() }
-    }
-}
-</code></pre>
-
-<p>这种方法有几个关键优势：</p>
-
-<ul>
-<li><strong>数据新鲜度</strong>：5 秒超时时间与 Android 的 ANR 阈值一致，确保在超时后收集器重新出现时数据能够刷新。</li>
-<li><strong>配置变更处理</strong>：在超时窗口内，即使配置发生变化，数据也能持久保存。</li>
-<li><strong>资源效率</strong>：避免不必要的网络调用，以实现快速导航模式。</li>
-</ul>
-
-
-<p><em>专业提示：对于需要实时数据新鲜度的应用程序，请将超时时间设置为 0</em></p>
-
-<h3>添加用户交互：实现刷新功能</h3>
-
-<p>实际应用程序需要用户主动发起的数据刷新功能。产品经理喜欢滑动刷新，但我们的基本流程无法适应这种模式。让我们来增强我们的架构：</p>
-
-<p>我们使用在主流程收集器中触发的 <code>MutableSharedFlow</code> 来实现这一点：</p>
-
-<pre><code class="kotlin">internal class UserAccountDetailsViewModel private constructor(
-    private val getUserDetailsUseCase: GetUserDetailsUseCase = GetUserDetailsUseCase.create(),
-) : ViewModel(), IntentAware&lt;UserAccountDetailsViewModel.ViewState.Intents&gt; {
-    data class ViewState(
-        val isLoading: Boolean = false,
-        val isError: Boolean = false,
-        val userInfo: UserInfo? = null
-    ) {
-        data class UserInfo(
-            val displayEmail: String,
-            val avatarUrl: String?,
-            val showPremiumBadge: Boolean,
-            val memberSince: String?
-        )
-
-        sealed class Intents {
-            data object Refresh : Intents()
-        }
-    }
-
-    private val refreshListener = MutableSharedFlow&lt;Unit&gt;()
-
-    val userDetails: Flow&lt;ViewState&gt; = flow {
-        emit(getUserDetailsState())
-        refreshListener.collect {
-            emit(ViewState(isLoading = true, isError = false))
-            emit(getUserDetailsState())
-        }
-    }.stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
-        ViewState(isLoading = true, isError = false)
-    )
-
-    private suspend fun getUserDetailsState(): ViewState = getUserDetailsUseCase.execute()
-        .fold(
-            onSuccess = {
-                ViewState(
-                    isLoading = false,
-                    isError = false,
-                    userInfo = ViewState.UserInfo(
-                        displayEmail = it.email,
-                        avatarUrl = it.avatarUrl,
-                        showPremiumBadge = it.isPremium,
-                        memberSince = it.creationDate?.toString()
-                    )
-                )
-            },
-
-            onFailure = {
-                ViewState(isLoading = false, isError = true)
-            }
-        )
-
-    override fun onIntent(intent: ViewState.Intents) {
-        when (intent) {
-            ViewState.Intents.Refresh -&gt; {
-                viewModelScope.launch {
-                    refreshListener.emit(Unit)
-                }
-            }
-        }
-    }
-
-    companion object {
-        fun factory() = provideFactory { UserAccountDetailsViewModel() }
-    }
-}
-</code></pre>
-
-<p>完美！我们成功重构了重复的数据加载逻辑，并实现了刷新功能。然而，这还不算完。</p>
-
-<h3>优化状态管理：消除冗余状态输出</h3>
-
-<p>为了避免不必要的 UI 更新，我们将添加 <code>distinctUntilChanged()</code> 来过滤重复的状态输出。</p>
-
-<h3>处理复杂的状态更新</h3>
-
-<p>对于意图修改 UI 状态而不需要重新加载数据的场景，我们需要在流程操作中访问当前状态。例如，切换电子邮件可见性——这需要修改状态而不是重新加载数据。</p>
-
-<pre><code class="kotlin">data class ViewState(
-    val isLoading: Boolean = false,
-    val isError: Boolean = false,
-    val isEmailVisible: Boolean = false,
-    val userInfo: UserInfo? = null
-) {
-    data class UserInfo(
-        val displayEmail: String,
-        val avatarUrl: String?,
-        val showPremiumBadge: Boolean,
-        val memberSince: String?
-    )
-
-    sealed class Intents {
-
-        data object Refresh : Intents()
-        data class ToggleEmailVisibility(val isEmailVisible: Boolean) : Intents()
-    }
-
-    sealed class StateParameters {
-        data class EmailVisibilityChanged(val isEmailVisible: Boolean) : StateParameters()
-        data object Refresh : StateParameters()
-    }
-}
-
-private val refreshListener = MutableSharedFlow&lt;ViewState.StateParameters&gt;()
-
-val userDetails: Flow&lt;ViewState&gt; = flow {
-    emit(getUserDetailsState())
-
-    refreshListener.collect { refreshParams -&gt;
-        when (refreshParams) {
-            is ViewState.StateParameters.EmailVisibilityChanged -&gt; {
-                //do some changes here
-            }
-
-            ViewState.StateParameters.Refresh -&gt; {
-                emit(ViewState(isLoading = true, isError = false))
-                emit(getUserDetailsState())
-            }
-        }
-    }
-}
-    .distinctUntilChanged()
-    .stateIn(
-        viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
-        ViewState(isLoading = true, isError = false)
-    )
-</code></pre>
-
-<p>这里的挑战在于如何在流程中访问当前状态。让我们通过内部跟踪状态来解决这个问题：</p>
-
-<pre><code class="kotlin">internal class UserAccountDetailsViewModel private constructor(
-    private val getUserDetailsUseCase: GetUserDetailsUseCase = GetUserDetailsUseCase.create(),
-) : ViewModel(), IntentAware&lt;UserAccountDetailsViewModel.ViewState.Intents&gt; {
-    data class ViewState(
-        val isLoading: Boolean = false,
-        val isError: Boolean = false,
-        val isEmailVisible: Boolean = false,
-        val userInfo: UserInfo? = null
-    ) {
-        data class UserInfo(
-            val displayEmail: String,
-            val avatarUrl: String?,
-            val showPremiumBadge: Boolean,
-            val memberSince: String?
-        )
-
-        sealed class Intents {
-            data object Refresh : Intents()
-            data class ToggleEmailVisibility(val isEmailVisible: Boolean) : Intents()
-        }
-
-        sealed class StateTriggers {
-            data class EmailVisibilityChanged(val isEmailVisible: Boolean) : StateTriggers()
-            data object Refresh : StateTriggers()
-        }
-    }
-
-    private var currentState = ViewState(isLoading = true, isError = false)
-
-    private val refreshListener = MutableSharedFlow&lt;ViewState.StateTriggers&gt;()
-
-    val userDetails: Flow&lt;ViewState&gt; = flow {
-        emit(getUserDetailsState())
-
-        refreshListener.collect { refreshParams -&gt;
-            when (refreshParams) {
-                is ViewState.StateTriggers.EmailVisibilityChanged -&gt; {
-                    emit(currentState.copy(isEmailVisible = refreshParams.isEmailVisible))
-                }
-                ViewState.StateTriggers.Refresh -&gt; {
-                    emit(ViewState(isLoading = true, isError = false))
-                    emit(getUserDetailsState())
-                }
-            }
-        }
-    }
-        .distinctUntilChanged()
-        .onEach {
-            currentState = it
-        }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5_000),
-            currentState
-        )
-
-    private suspend fun getUserDetailsState(): ViewState = getUserDetailsUseCase.execute()
-        .fold(
-            onSuccess = {
-                ViewState(
-                    isLoading = false,
-                    isError = false,
-                    userInfo = ViewState.UserInfo(
-                        displayEmail = it.email,
-                        avatarUrl = it.avatarUrl,
-                        showPremiumBadge = it.isPremium,
-                        memberSince = it.creationDate?.toString()
-                    )
-                )
-            },
-
-            onFailure = {
-                ViewState(isLoading = false, isError = true)
-            }
-        )
-
-    override fun onIntent(intent: ViewState.Intents) {
-        when (intent) {
-            ViewState.Intents.Refresh -&gt; {
-                viewModelScope.launch {
-                    refreshListener.emit(ViewState.StateTriggers.Refresh)
-                }
-            }
-
-            is ViewState.Intents.ToggleEmailVisibility -&gt; {
-                viewModelScope.launch {
-                    refreshListener.emit(ViewState.StateTriggers.EmailVisibilityChanged(intent.isEmailVisible))
-                }
-            }
-        }
-    }
-
-    companion object {
-        fun factory() = provideFactory { UserAccountDetailsViewModel() }
-    }
-}
-</code></pre>
-
-<h3>智能数据缓存：条件加载策略</h3>
-
-<p>现在我们可以实现复杂的缓存行为了。由于 <code>currentState</code> 在 ViewModel 生命周期内持续存在，我们可以立即发出缓存数据，并仅在必要时有条件地加载新数据：</p>
-
-<pre><code class="kotlin">internal class UserAccountDetailsViewModel private constructor(
-    private val getUserDetailsUseCase: GetUserDetailsUseCase = GetUserDetailsUseCase.create(),
-) : ViewModel(), IntentAware&lt;UserAccountDetailsViewModel.ViewState.Intents&gt; {
-    data class ViewState(
-        val isLoading: Boolean = false,
-        val isError: Boolean = false,
-        val isEmailVisible: Boolean = false,
-        val userInfo: UserInfo? = null
-    ) {
-        val isDataLoaded get() = userInfo != null
-
-        data class UserInfo(
-            val displayEmail: String,
-            val avatarUrl: String?,
-            val showPremiumBadge: Boolean,
-            val memberSince: String?
-        )
-
-        sealed class Intents {
-            data object Refresh : Intents()
-            data class ToggleEmailVisibility(val isEmailVisible: Boolean) : Intents()
-        }
-
-        sealed class StateTriggers {
-            data class EmailVisibilityChanged(val isEmailVisible: Boolean) : StateTriggers()
-            data object Refresh : StateTriggers()
-        }
-    }
-
-    private var currentState = ViewState(isLoading = true, isError = false)
-
-    private val refreshListener = MutableSharedFlow&lt;ViewState.StateTriggers&gt;()
-
-    val userDetails: Flow&lt;ViewState&gt; = flow {
-        emit(currentState)
-
-        //i added error check just because this is for demonstration of this edge case
-
-        if (currentState.isDataLoaded.not() || currentState.isError) {
-            emit(getUserDetailsState())
-        }
-
-        refreshListener.collect { refreshParams -&gt;
-            when (refreshParams) {
-                is ViewState.StateTriggers.EmailVisibilityChanged -&gt; {
-                    emit(currentState.copy(isEmailVisible = refreshParams.isEmailVisible))
-                }
-
-                ViewState.StateTriggers.Refresh -&gt; {
-                    emit(ViewState(isLoading = true, isError = false))
-                    emit(getUserDetailsState())
-                }
-            }
-        }
-    }
-        .distinctUntilChanged()
-        .onEach {
-            currentState = it
-        }
-
-        .stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5_000),
-            currentState
-        )
-
-    private suspend fun getUserDetailsState(): ViewState = getUserDetailsUseCase.execute()
-        .fold(
-            onSuccess = {
-                ViewState(
-                    isLoading = false,
-                    isError = false,
-                    userInfo = ViewState.UserInfo(
-                        displayEmail = it.email,
-                        avatarUrl = it.avatarUrl,
-                        showPremiumBadge = it.isPremium,
-                        memberSince = it.creationDate?.toString()
-                    )
-                )
-            },
-
-            onFailure = {
-                ViewState(isLoading = false, isError = true)
-            }
-        )
-
-    override fun onIntent(intent: ViewState.Intents) {
-        when (intent) {
-            ViewState.Intents.Refresh -&gt; {
-                viewModelScope.launch {
-                    refreshListener.emit(ViewState.StateTriggers.Refresh)
-                }
-            }
-
-            is ViewState.Intents.ToggleEmailVisibility -&gt; {
-                viewModelScope.launch {
-                    refreshListener.emit(ViewState.StateTriggers.EmailVisibilityChanged(intent.isEmailVisible))
-                }
-            }
-        }
-    }
-
-    companion object {
-        fun factory() = provideFactory { UserAccountDetailsViewModel() }
-    }
-}
-</code></pre>
-
-<p>此模式提供智能缓存——即使在 5 秒超时后，你也可以根据具体需求选择是否重新获取数据：</p>
-
-<ul>
-<li><strong>昂贵的 API 调用</strong>：在 ViewModel 中缓存数据以减少网络开销</li>
-<li><strong>静态后端数据</strong>：避免对很少更改的信息进行不必要的请求</li>
-<li><strong>实时需求</strong>：强制刷新需要更新数据的应用程序</li>
-</ul>
-
-
-<h3>创建可复用的抽象</h3>
-
-<p>重复编写此模式会变得非常繁琐。让我们从 ViewModel 扩展函数开始，创建可复用的抽象：</p>
-
-<pre><code class="kotlin">fun &lt;T, R&gt; ViewModel.loadData(
-    initialState: T,
-    loadData: suspend FlowCollector&lt;T&gt;.(currentState: T) -&gt; Unit,
-    refreshMechanism: SharedFlow&lt;R&gt;? = null,
-    timeout: Long = 5_000,
-    refreshData: (suspend FlowCollector&lt;T&gt;.(currentState: T, refreshParams: R) -&gt; Unit)? = null,
-): StateFlow&lt;T&gt; {
-
-    if (refreshMechanism != null) {
-        requireNotNull(refreshData) {
-            "You've provided a refresh mechanism but no way to refresh the data"
-        }
-    }
-
-    if (refreshData != null) {
-        requireNotNull(refreshMechanism) {
-            "You've provided a refresh data but no mechanism to refresh the data"
-        }
-    }
-
-    var latestValue = initialState
-
-    return flow {
-        emit(latestValue)
-
-        loadData(latestValue)
-
-        refreshMechanism?.collect { refreshParams -&gt;
-            if (refreshData != null) {
-                refreshData(latestValue, refreshParams)
-            }
-        }
-    }
-        .distinctUntilChanged()
-        .onEach {
-            latestValue = it
-        }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(timeout),
-            initialValue = initialState
-        )
-}
-
-fun &lt;T&gt; ViewModel.loadData(
-    initialState: T,
-    loadData: suspend FlowCollector&lt;T&gt;.(currentState: T) -&gt; Unit,
-    timeout: Long = 5_000,
-): StateFlow&lt;T&gt; {
-    var latestValue = initialState
-
-    return flow {
-        emit(latestValue)
-        loadData(latestValue)
-    }
-        .onEach {
-            latestValue = it
-        }
-        .distinctUntilChanged()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(timeout),
-            initialValue = initialState
-        )
-}
-</code></pre>
-
-<p>有了我们抽象的扩展函数，ViewModel 变得更加简洁：</p>
-
-<p><em>注意：此抽象涵盖了 90% 的常见用例，但不支持复杂的流程链式操作</em></p>
-
-<pre><code class="kotlin">internal class UserAccountDetailsViewModel private constructor(
-    private val getUserDetailsUseCase: GetUserDetailsUseCase = GetUserDetailsUseCase.create(),
-) : ViewModel(), IntentAware&lt;UserAccountDetailsViewModel.ViewState.Intents&gt; {
-    data class ViewState(
-        val isLoading: Boolean = false,
-        val isError: Boolean = false,
-        val isEmailVisible: Boolean = false,
-        val userInfo: UserInfo? = null
-    ) {
-        val isDataLoaded get() = userInfo != null
-
-        data class UserInfo(
-            val displayEmail: String,
-            val avatarUrl: String?,
-            val showPremiumBadge: Boolean,
-            val memberSince: String?
-        )
-
-        sealed class Intents {
-            data object Refresh : Intents()
-            data class ToggleEmailVisibility(val isEmailVisible: Boolean) : Intents()
-        }
-
-        sealed class StateTriggers {
-            data class EmailVisibilityChanged(val isEmailVisible: Boolean) : StateTriggers()
-            data object Refresh : StateTriggers()
-        }
-    }
-
-    private val refreshListener = MutableSharedFlow&lt;ViewState.StateTriggers&gt;()
-
-    val userDetails = loadData(
-        initialState = ViewState(isLoading = true, isError = false),
-        loadData = { currentState -&gt;
-            if (currentState.isDataLoaded.not() || currentState.isError.not()) {
-                emit(getUserDetailsState())
-            }
-        },
-        refreshMechanism = refreshListener,
-        refreshData = { currentState, refreshParams -&gt;
-            when (refreshParams) {
-                is ViewState.StateTriggers.EmailVisibilityChanged -&gt; {
-                    emit(currentState.copy(isEmailVisible = refreshParams.isEmailVisible))
-                }
-
-                ViewState.StateTriggers.Refresh -&gt; {
-                    emit(ViewState(isLoading = true, isError = false))
-                    emit(getUserDetailsState())
-                }
-            }
-        }
-    )
-
-    private suspend fun getUserDetailsState(): ViewState = getUserDetailsUseCase.execute()
-        .fold(
-            onSuccess = {
-                ViewState(
-                    isLoading = false,
-                    isError = false,
-                    userInfo = ViewState.UserInfo(
-                        displayEmail = it.email,
-                        avatarUrl = it.avatarUrl,
-                        showPremiumBadge = it.isPremium,
-                        memberSince = it.creationDate?.toString()
-                    )
-                )
-            },
-
-            onFailure = {
-                ViewState(isLoading = false, isError = true)
-            }
-        )
-
-    override fun onIntent(intent: ViewState.Intents) {
-        when (intent) {
-            ViewState.Intents.Refresh -&gt; {
-                viewModelScope.launch {
-                    refreshListener.emit(ViewState.StateTriggers.Refresh)
-                }
-            }
-
-            is ViewState.Intents.ToggleEmailVisibility -&gt; {
-                viewModelScope.launch {
-                    refreshListener.emit(ViewState.StateTriggers.EmailVisibilityChanged(intent.isEmailVisible))
-                }
-            }
-        }
-    }
-
-    companion object {
-        fun factory() = provideFactory { UserAccountDetailsViewModel() }
-    }
-}
-</code></pre>
-
-<p>我们可以通过创建更复杂的基类来消除重复的 <code>refreshListener</code> 声明：</p>
-
-<pre><code class="kotlin">abstract class ViewModelLoader&lt;State : Any, Intent : Any, Trigger : Any&gt; : ViewModel() {
-    private val _trigger by lazy { MutableSharedFlow&lt;Trigger&gt;() }
-
-    fun &lt;T&gt; loadData(
-        initialState: T,
-        loadData: suspend FlowCollector&lt;T&gt;.(currentState: T) -&gt; Unit,
-        triggerData: (suspend FlowCollector&lt;T&gt;.(currentState: T, triggerParams: Trigger) -&gt; Unit)? = null,
-        timeout: Long = 5000L, //matching ANR timeout in Android
-    ): StateFlow&lt;T&gt; {
-        var latestValue = initialState
-
-        return flow {
-            emit(latestValue)
-
-            loadData(latestValue)
-
-            if (triggerData != null) {
-                _trigger.collect { triggerParams -&gt;
-                    triggerData(this, latestValue, triggerParams)
-                }
-            }
-        }
-            .distinctUntilChanged()
-            .onEach {
-                latestValue = it
-            }
-
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(timeout),
-                initialValue = initialState
-            )
-    }
-
-    abstract val state: StateFlow&lt;State&gt;
-
-    val currentState get() = state.value
-
-    open fun onIntent(intent: Intent) {}
-
-    protected fun sendTrigger(trigger: Trigger) {
-        viewModelScope.launch {
-            _trigger.emit(trigger)
-        }
-    }
-}
-</code></pre>
-
-<p>我们的最终实现将变得非常简洁且易于维护：</p>
-
-<pre><code class="kotlin">internal class UserAccountDetailsViewModel private constructor(
-    private val getUserDetailsUseCase: GetUserDetailsUseCase = GetUserDetailsUseCase.create(),
-) : ViewModelLoader&lt;UserAccountDetailsViewModel.ViewState, UserAccountDetailsViewModel.ViewState.Intents, UserAccountDetailsViewModel.ViewState.StateTriggers&gt;() {
-    data class ViewState(
-        val isLoading: Boolean = false,
-        val isError: Boolean = false,
-        val isEmailVisible: Boolean = false,
-        val userInfo: UserInfo? = null
-    ) {
-        val isDataLoaded get() = userInfo != null
-
-        data class UserInfo(
-            val displayEmail: String,
-            val avatarUrl: String?,
-            val showPremiumBadge: Boolean,
-            val memberSince: String?
-        )
-
-        sealed class Intents {
-            data object Refresh : Intents()
-            data class ToggleEmailVisibility(val isEmailVisible: Boolean) : Intents()
-        }
-
-        sealed class StateTriggers {
-            data class EmailVisibilityChanged(val isEmailVisible: Boolean) : StateTriggers()
-            data object Refresh : StateTriggers()
-        }
-    }
-
-    override val state = loadData(
-        initialState = ViewState(isLoading = true, isError = false),
-        loadData = { currentState -&gt;
-            if (currentState.isDataLoaded.not() || currentState.isError.not()) {
-                emit(getUserDetailsState())
-            }
-        },
-
-        triggerData = { currentState, refreshParams -&gt;
-            when (refreshParams) {
-                is ViewState.StateTriggers.EmailVisibilityChanged -&gt; {
-                    emit(currentState.copy(isEmailVisible = refreshParams.isEmailVisible))
-                }
-
-                ViewState.StateTriggers.Refresh -&gt; {
-                    emit(ViewState(isLoading = true, isError = false))
-                    emit(getUserDetailsState())
-                }
-            }
-        }
-    )
-
-    private suspend fun getUserDetailsState(): ViewState = getUserDetailsUseCase.execute()
-
-        .fold(
-            onSuccess = {
-                ViewState(
-                    isLoading = false,
-                    isError = false,
-                    userInfo = ViewState.UserInfo(
-                        displayEmail = it.email,
-                        avatarUrl = it.avatarUrl,
-                        showPremiumBadge = it.isPremium,
-                        memberSince = it.creationDate?.toString()
-                    )
-                )
-            },
-
-            onFailure = {
-                ViewState(isLoading = false, isError = true)
-            }
-        )
-
-    override fun onIntent(intent: ViewState.Intents) {
-        when (intent) {
-            ViewState.Intents.Refresh -&gt; {
-                sendTrigger(ViewState.StateTriggers.Refresh)
-            }
-
-            is ViewState.Intents.ToggleEmailVisibility -&gt; {
-                sendTrigger(ViewState.StateTriggers.EmailVisibilityChanged(intent.isEmailVisible))
-            }
-        }
-    }
-
-    companion object {
-        fun factory() = provideFactory { UserAccountDetailsViewModel() }
-    }
-}
-</code></pre>
-
-<h3>处理 UI 状态复杂性</h3>
-
-<p>此抽象使用布尔标志（<code>isLoading</code>、<code>isError</code>），这些标志可能会创建模糊状态。为了更清晰地管理状态，可以考虑使用密封类：</p>
-
-<pre><code class="kotlin">@Immutable
-sealed interface UIState {
-    @Immutable
-    data object Success : UIState
-    @Immutable
-    data object Error : UIState
-    @Immutable
-    data object Idle : UIState
-    @Immutable
-    data object Loading : UIState
-}
-</code></pre>
-
-<p>对于需要同时显示错误信息（例如 Snackbars）和现有数据的场景，你可以创建更复杂的状态持有者：</p>
-
-<pre><code class="kotlin">@Immutable
-data class UIStateHolder&lt;out T&gt;(
-    val uiState: UIState = UIState.Idle,
-    val payload: T? = null
-)
-</code></pre>
-
-<p>这种方法可以实现灵活的 UI 状态管理，同时保持 UI 状态和数据负载之间的明确分离，但可能会增加认知负荷，并引入更多的映射行为和解包逻辑。</p>
-
-<h3>超越 ViewModel</h3>
-
-<p>此模式不仅限于 ViewModel。通过提供自定义协程作用域，你可以在任何组件（可组合组件、存储库或业务逻辑层）中使用此数据加载方法。</p>
-
-<h2>流组合模式</h2>
-
-<p>这种方法的优点还在于可以组合多个数据源。以下是处理单流和双流的示例：</p>
-
-<pre><code class="kotlin">inline fun &lt;reified T, R&gt; ViewModel.loadFlow(
-    initialState: R,
-    flow: Flow&lt;T&gt;,
-    crossinline transform: suspend CoroutineScope.(newValue: T, currentState: R) -&gt; R,
-    timeout: Long = 0,
-): StateFlow&lt;R&gt; {
-
-    var latestValue = initialState
-
-    return flow
-        .map { newValue -&gt;
-            coroutineScope {
-                transform(newValue, latestValue)
-            }
-        }
-
-        .onEach {
-            latestValue = it
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(timeout),
-            initialValue = latestValue
-        )
-}
-</code></pre>
-
-<p>组合双流的示例：</p>
-
-<pre><code class="kotlin">inline fun &lt;reified T1, reified T2, R&gt; ViewModel.loadFlow(
-    initialState: R,
-    flow1: Flow&lt;T1&gt;,
-    flow2: Flow&lt;T2&gt;,
-    crossinline transform: suspend CoroutineScope.(newValue1: T1, newValue2: T2, currentState: R) -&gt; R,
-    timeout: Long = 0,
-): StateFlow&lt;R&gt; {
-
-    var latestValue = initialState
-
-    return combine(flow1, flow2) { value1, value2 -&gt;
-        coroutineScope {
-            transform(value1, value2, latestValue)
-        }
-    }
-        .onEach {
-            latestValue = it
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(timeout),
-            initialValue = latestValue
-        )
-}
-</code></pre>
-
-<p>这些扩展允许你轻松组合多个数据源，同时保持相同的智能缓存和状态管理原则。</p>
-
-<h3>测试基于流的 ViewModel</h3>
-
-<p>在结束之前，让我们探索如何使用 fakes 和 Turbine 进行流测试，正确地测试我们的 <code>UserAccountDetailsViewModel</code> 实现。</p>
-
-<h4>使用 Fakes 和 Turbine 设置测试依赖项</h4>
-
-<pre><code class="kotlin">@OptIn(ExperimentalCoroutinesApi::class)
-class UserAccountDetailsViewModelTest {
-    private val testDispatcher = StandardTestDispatcher()
-
-    private val fakeGetUserDetailsUseCase = FakeGetUserDetailsUseCase()
-
-    private lateinit var viewModel: UserAccountDetailsViewModel
-
-    @Before
-    fun setUp() {
-        Dispatchers.setMain(testDispatcher)
-        viewModel = UserAccountDetailsViewModel(fakeGetUserDetailsUseCase)
-    }
-
-    @After
-    fun tearDown() {
-        Dispatchers.resetMain()
-    }
-}
-
-// Fake implementation for realistic testing, this sounds funny to write haha
-class FakeGetUserDetailsUseCase {
-    private var shouldReturnError = false
-
-    private var userDetailsToReturn: UserDetails? = null
-
-    private var executionCount = 0
-
-    fun setSuccessResponse(userDetails: UserDetails) {
-        this.userDetailsToReturn = userDetails
-        this.shouldReturnError = false
-    }
-
-    fun setErrorResponse() {
-        this.shouldReturnError = true
-        this.userDetailsToReturn = null
-    }
-
-    // Expose execution count when testing caching/performance behavior
-    fun getExecutionCount() = executionCount
-
-    fun reset() {
-        executionCount = 0
-    }
-
-    suspend fun execute(): Result&lt;UserDetails&gt; {
-        executionCount++
-
-        delay(50) // Simulate network delay
-
-        return if (shouldReturnError) {
-            Result.failure(Exception("Network error"))
-        } else {
-            Result.success(userDetailsToReturn ?: createDefaultUserDetails())
-        }
-    }
-
-    private fun createDefaultUserDetails() = UserDetails(
-        email = "default@example.com",
-        avatarUrl = null,
-        isPremium = false,
-        creationDate = "2023-01-01"
-    )
-}
-</code></pre>
-
-<h4>成功和失败场景的参数化测试</h4>
-
-<pre><code class="kotlin">@ParameterizedTest
-@ValueSource(booleans = [true, false])
-fun `should handle both success and error scenarios`(shouldSucceed: Boolean) = runTest {
-    // Given
-
-    if (shouldSucceed) {
-        fakeGetUserDetailsUseCase.setSuccessResponse(
-            UserDetails(
-                email = "success@example.com",
-                avatarUrl = "https://avatar.url",
-                isPremium = true,
-                creationDate = "2023-01-01"
-            )
-        )
-    } else {
-        fakeGetUserDetailsUseCase.setErrorResponse()
-    }
-
-    // When
-
-    viewModel.state.test {
-        advanceUntilIdle()
-
-        // Then Focus on behavior, not implementation details
-
-        if (shouldSucceed) {
-            awaitItem() // Loading state
-
-            val successState = awaitItem()
-
-            assertThat(successState.isLoading).isFalse()
-
-            assertThat(successState.isError).isFalse()
-
-            assertThat(successState.userInfo?.displayEmail).isEqualTo("success@example.com")
-
-            assertThat(successState.userInfo?.showPremiumBadge).isTrue()
-        } else {
-            awaitItem() // Loading state
-
-            val errorState = awaitItem()
-
-            assertThat(errorState.isLoading).isFalse()
-
-            assertThat(errorState.isError).isTrue()
-
-            assertThat(errorState.userInfo).isNull()
-        }
-    }
-}
-
-@Test
-fun `should refresh data when refresh intent is triggered`() = runTest {
-    // Given Initial successful load
-    fakeGetUserDetailsUseCase.setSuccessResponse(
-        UserDetails(
-            email = "initial@example.com",
-            avatarUrl = null,
-            isPremium = false,
-            creationDate = "2022-01-01"
-        )
-    )
-
-    viewModel.state.test {
-        advanceUntilIdle()
-
-        awaitItem() // Loading
-
-        val initialState = awaitItem() // Success
-
-        assertThat(initialState.userInfo?.displayEmail).isEqualTo("initial@example.com")
-
-        // Change response and trigger refresh
-        fakeGetUserDetailsUseCase.setSuccessResponse(
-            UserDetails(
-                email = "refreshed@example.com",
-                avatarUrl = "https://new-avatar.url",
-                isPremium = true,
-                creationDate = "2023-01-01"
-            )
-        )
-
-        viewModel.onIntent(ViewState.Intents.Refresh)
-
-        advanceUntilIdle()
-
-        // Then
-        awaitItem() // Loading during refresh
-
-        val refreshedState = awaitItem() // New Success
-
-        assertThat(refreshedState.isLoading).isFalse()
-
-        assertThat(refreshedState.userInfo?.displayEmail).isEqualTo("refreshed@example.com")
-
-        assertThat(refreshedState.userInfo?.showPremiumBadge).isTrue()
-
-        // Verify both initial load and refresh were called
-        assertThat(fakeGetUserDetailsUseCase.getExecutionCount()).isEqualTo(2)
-    }
-}
-</code></pre>
-
-<h4>测试仅 UI 状态变化</h4>
-
-<pre><code class="kotlin">@Test
-fun `should toggle email visibility without triggering data reload`() = runTest {
-    // Given Successful initial load
-    fakeGetUserDetailsUseCase.setSuccessResponse(
-        UserDetails(
-            email = "test@example.com",
-            avatarUrl = null,
-            isPremium = false,
-            creationDate = "2023-01-01"
-        )
-    )
-
-    viewModel.state.test {
-        advanceUntilIdle()
-
-        awaitItem() // Loading
-
-        val loadedState = awaitItem() // Success
-
-        assertThat(loadedState.userInfo?.displayEmail).isEqualTo("test@example.com")
-
-        assertThat(loadedState.isEmailVisible).isFalse()
-
-        // When Toggle email visibility
-
-        viewModel.onIntent(ViewState.Intents.ToggleEmailVisibility(isEmailVisible = true))
-
-        advanceUntilIdle()
-
-        // Then
-        val toggledState = awaitItem()
-
-        assertThat(toggledState.isEmailVisible).isTrue()
-
-        assertThat(toggledState.userInfo?.displayEmail).isEqualTo("test@example.com")
-
-        assertThat(fakeGetUserDetailsUseCase.getExecutionCount()).isEqualTo(1)
-    }
-}
-</code></pre>
-
-<h4>测试数据缓存行为</h4>
-
-<pre><code class="kotlin">@Test
-fun `should use cached data when returning to screen quickly`() = runTest {
-    // Given
-
-    fakeGetUserDetailsUseCase.setSuccessResponse(
-        UserDetails(
-            email = "cached@example.com",
-            avatarUrl = null,
-            isPremium = true,
-            creationDate = "2023-01-01"
-        )
-    )
-
-    // When First collection
-
-    viewModel.state.test {
-        advanceUntilIdle()
-
-        awaitItem() // Loading
-
-        val firstState = awaitItem() // Success
-
-        assertThat(firstState.userInfo?.displayEmail).isEqualTo("cached@example.com")
-
-        cancel() // Simulate leaving screen
-    }
-
-    // When Quick return (simulating navigation back within timeout)
-
-    viewModel.state.test {
-        advanceUntilIdle()
-
-        // Then Should have cached data immediately (no Loadin)
-
-        val cachedState = awaitItem()
-
-        assertThat(cachedState.isLoading).isFalse()
-
-        assertThat(cachedState.userInfo?.displayEmail).isEqualTo("cached@example.com")
-
-        expectNoEvents()
-    }
-
-    assertThat(fakeGetUserDetailsUseCase.getExecutionCount()).isEqualTo(1)
-}
-</code></pre>
-
-<h4>测试错误恢复</h4>
-
-<pre><code class="kotlin">@Test
-fun `should recover from Error on successful refresh`() = runTest {
-    // Given Initial error
-
-    fakeGetUserDetailsUseCase.setErrorResponse()
-
-    viewModel.state.test {
-        advanceUntilIdle()
-
-        awaitItem() // Loading
-
-        val errorState = awaitItem() // Error
-
-        assertThat(errorState.isError).isTrue()
-
-        // When Fix the response and refresh
-
-        fakeGetUserDetailsUseCase.setSuccessResponse(
-            UserDetails(
-                email = "recovered@example.com",
-                avatarUrl = null,
-                isPremium = false,
-                creationDate = "2023-01-01"
-            )
-        )
-
-        viewModel.onIntent(ViewState.Intents.Refresh)
-
-        advanceUntilIdle()
-
-        // Then Should recover successfully
-
-        awaitItem() // Loading during refresh
-
-        val recoveredState = awaitItem() // Success
-
-        assertThat(recoveredState.isError).isFalse()
-
-        assertThat(recoveredState.userInfo?.displayEmail).isEqualTo("recovered@example.com")
-
-        assertThat(fakeGetUserDetailsUseCase.getExecutionCount()).isEqualTo(2)
-    }
-}
-</code></pre>
-
-<h3>为什么要测试基于流的 ViewModel 的原则</h3>
-
-<p>哦……这可能会引发一些争论，但这里有一篇很棒的文章，它提供了更好的描述，并且不会影响本文关于我为什么使用 Fakes 的目的。这里有一个简短的总结，可以补充文章顶部</p>
-
-<ol>
-<li><strong>使用 Fakes 而非 Mocks</strong>：Fake 提供逼真的行为，并且更易于维护，尤其是在如今 LLM 的帮助下……</li>
-<li><strong>参数化测试</strong>：用一个测试用例同时测试成功和失败路径</li>
-<li><strong>使用 Turbine 进行流程测试</strong>：简洁、富有表现力的流程测试，并进行适当的状态验证</li>
-<li><strong>测试状态转换</strong>：验证完整的状态流程，而不仅仅是最终状态</li>
-<li><strong>谨慎执行计数</strong>：仅在测试缓存、性能或重试行为时验证调用计数</li>
-<li><strong>关注行为</strong>：测试用户体验，而不是实现细节（我想这一点显而易见）</li>
-</ol>
-
-
-<h3>结论</h3>
-
-<p>本文对 Android ViewModel 中基于流程的数据加载的探索，解决了传统 <code>init {}</code> 块方法的根本挑战。虽然涵盖所有架构变体会很繁琐，但该模式成功处理了大约 90% 的常见用例。</p>
-
-<p>抽象基类方法（<code>ViewModelLoader</code>）提供了最可预测和可维护的解决方案，它提供：</p>
-
-<ul>
-<li><strong>可预测的状态管理</strong>：清晰的状态触发器和意图处理</li>
-<li><strong>内置测试支持</strong>：具有适当协程处理的可测试架构</li>
-<li><strong>灵活性</strong>：易于扩展效果和混合 MVI 模式</li>
-<li><strong>缓存和刷新</strong>：缓存和刷新机制（本文将尽可能详细地介绍）</li>
-</ul>
-
-
-<h3>关键要点</h3>
-
-<ol>
-<li><strong>基于流的加载</strong>消除了竞争条件，提高了测试的简易性，并解决了 <code>init {}</code> 块中固有的回栈问题</li>
-<li><strong>具有适当共享策略的 StateFlow</strong> 提供了最佳的生命周期感知数据管理</li>
-<li><strong>抽象层</strong>减少了样板代码，同时保持了灵活性</li>
-<li><strong>全面的测试</strong>确保所有用例的可靠性</li>
-</ol>
-
-
-<p>请记住，这只是众多架构方法中的一种，它解决了我的问题，但可能无法解决你的问题。我们的目标是了解潜在问题并评估此解决方案是否符合你的特定需求。随着时间的推移，这个解决方案将经历许多变化，甚至可能被淘汰。最近，我更多地投入到使用 Ktor 进行后端开发，这本身就是一次很棒的体验。</p>
-
-<p>该架构成功地为 iOS 和 Android 平台上的 <a href="https://wallhub.app/">WallHub</a> 提供了支持，证明了其在现实世界中的“可行性”以及跨平台适应性（如果可以这么说的话）。</p>
-
-<p>继续潜水，直到下一篇文章……</p>
 ]]></content>
   </entry>
   

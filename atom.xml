@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-11-12T14:00:20+00:00</updated>
+  <updated>2026-11-23T15:52:22+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,524 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[MVI 让屏幕一次只有一个状态]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/23/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time/"/>
+    <updated>2026-11-23T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/23/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「MVI in Android — Designing Screens That Can Only Be in One State at a Time」，原文链接<a href="https://medium.com/@aleyvaschz/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time-1ad894b8ff3e">https://medium.com/@aleyvaschz/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time-1ad894b8ff3e</a>，由Adrian Leyva发布于2026年8月12日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/11/23/mvi-in-android-designing-screens-that-can-only-be-in-one-state-at-a-time/"><img src="https://cdn-images-1.medium.com/max/1024/1*Lb4O7xRnAUHwbj9V721cIw.jpeg" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<blockquote><p>使用 Kotlin、协程和 Jetpack Compose 实现单向数据流的实用指南</p></blockquote>
+
+<p>有一种特定的 bug，每个 Android 开发者最终都会遇到。测试人员会附上一张截图，显示一个加载指示器在错误信息上方旋转，两者背后都显示着一个只填充了一半的列表。你无法重现这个问题。你反复读取 ViewModel 三次，逻辑看起来都没问题。两天后，你终于找到了原因：用户下拉刷新之后，一个网络请求才返回；某个布尔值以错误的顺序被翻转；屏幕最终停留在了没人设计过的值组合上。</p>
+
+<p>这个 bug 并非传统意义上的编码错误，而是设计上的缺陷。当一个屏幕由五个独立变量描述时，它可以有 32 种不同的配置，而团队只考虑了其中的 4 种。其余的配置其实一直存在，只是等待着合适的竞态条件触发。</p>
+
+<p>模型-视图-意图（Model View Intent，简称 MVI）正是为了解决这个问题而生的。它并非一个全新的库，也并非要取代你已有的所有知识。它是一种应用于你可能已经使用的架构之上的规范，其核心理念很简单：在任何时刻，你的屏幕都只有一种状态，这种状态只在一个地方产生，并且它只会在响应明确的、命名的事件时才会改变。</p>
+
+<p>本文将介绍 MVI 在现代 Android 代码库中的实际含义、如何使用 Kotlin Flows 和 Jetpack Compose 实现它、如何测试它，以及何时它并不适用。</p>
+
+<h2>MVI 试图解决的问题</h2>
+
+<p>大多数 Android 团队编写的方案都接近 MVVM 模式。ViewModel 公开一些可观察的属性，UI 收集这些属性，用户操作调用 ViewModel 的公共方法。这种模式运行良好，对于大量屏幕来说，它的仪式感恰到好处。</p>
+
+<p>随着屏幕变得越来越复杂，摩擦就出现了。考虑一个用传统方式编写的典型产品搜索 ViewModel：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">ProductListViewModel</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_isLoading</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">(</span><span class="k">false</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">isLoading</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">Boolean</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">_isLoading</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_products</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">&lt;</span><span class="n">List</span><span class="p">&lt;</span><span class="n">Product</span><span class="p">&gt;&gt;(</span><span class="n">emptyList</span><span class="p">())</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">products</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">List</span><span class="p">&lt;</span><span class="n">Product</span><span class="p">&gt;&gt;</span> <span class="p">=</span> <span class="n">_products</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_error</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">&lt;</span><span class="n">String</span><span class="p">?&gt;(</span><span class="k">null</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">error</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">String</span><span class="p">?&gt;</span> <span class="p">=</span> <span class="n">_error</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_isEmpty</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">(</span><span class="k">false</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">isEmpty</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">Boolean</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">_isEmpty</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>这里存在四个独立的真值来源。类型系统中没有任何机制阻止 <code>isLoading</code> 为真而 <code>error</code> 不为空。也没有任何机制强制 <code>isEmpty</code> 与 <code>products</code> 保持一致。每个新功能都会增加一个标志，而每个标志都会使理论状态的数量翻倍。最终，UI 层会使用防御性条件语句来弥补，而正确性则取决于每个人是否记得按正确的顺序更新正确的字段。</p>
+
+<p>MVI 将这四个属性合并为一个属性，从而消除了整个此类问题。</p>
+
+<h2>契约的三个部分</h2>
+
+<p>MVI 屏幕由一个包含三个部分的简短契约定义。在进行任何实现之前先编写这个契约，是该模式所教授的最有价值的习惯。</p>
+
+<ul>
+<li><strong>状态</strong> 是屏幕渲染所需所有内容的不可变快照。如果某个元素不在状态中，则无法显示在屏幕上。</li>
+<li><strong>意图</strong> 是用户操作或生命周期信号，以用户语言而非实现语言表达。<code>RetryClicked</code> 是一个意图，而 <code>SetLoadingTrue</code> 则不是。</li>
+<li><strong>效果</strong> 是一次性事件，完全不属于状态：例如导航到另一个屏幕、显示 Snackbar、触发触觉反馈等。</li>
+</ul>
+
+
+<p>产品搜索屏幕的契约如下：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">data</span> <span class="k">class</span> <span class="nc">ProductListState</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">query</span><span class="p">:</span> <span class="n">String</span> <span class="p">=</span> <span class="s">&quot;&quot;</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">content</span><span class="p">:</span> <span class="n">Content</span> <span class="p">=</span> <span class="n">Content</span><span class="p">.</span><span class="n">Idle</span><span class="p">,</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">isRefreshing</span><span class="p">:</span> <span class="n">Boolean</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">sealed</span> <span class="n">interface</span> <span class="n">Content</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">data</span> <span class="k">object</span> <span class="nc">Idle</span> <span class="p">:</span> <span class="n">Content</span>
+</span><span class='line'>        <span class="n">data</span> <span class="k">object</span> <span class="nc">Loading</span> <span class="p">:</span> <span class="n">Content</span>
+</span><span class='line'>        <span class="n">data</span> <span class="k">class</span> <span class="nc">Success</span><span class="p">(</span><span class="k">val</span> <span class="py">products</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Product</span><span class="p">&gt;)</span> <span class="p">:</span> <span class="n">Content</span>
+</span><span class='line'>        <span class="n">data</span> <span class="k">object</span> <span class="nc">Empty</span> <span class="p">:</span> <span class="n">Content</span>
+</span><span class='line'>        <span class="n">data</span> <span class="k">class</span> <span class="nc">Failure</span><span class="p">(</span><span class="k">val</span> <span class="py">message</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">Content</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">ProductListIntent</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">QueryChanged</span><span class="p">(</span><span class="k">val</span> <span class="py">query</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">ProductListIntent</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">object</span> <span class="nc">SearchSubmitted</span> <span class="p">:</span> <span class="n">ProductListIntent</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">object</span> <span class="nc">RetryClicked</span> <span class="p">:</span> <span class="n">ProductListIntent</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">ProductClicked</span><span class="p">(</span><span class="k">val</span> <span class="py">productId</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">ProductListIntent</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">sealed</span> <span class="n">interface</span> <span class="n">ProductListEffect</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">NavigateToDetail</span><span class="p">(</span><span class="k">val</span> <span class="py">productId</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">ProductListEffect</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">ShowMessage</span><span class="p">(</span><span class="k">val</span> <span class="py">message</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">ProductListEffect</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>注意 <code>Content</code> 层级结构的作用。加载和失败不再是碰巧共存的独立布尔值，而是密封接口中互斥的分支，因此导致我们最初遇到的 bug 的不可能组合现在无法表示。编译器强制执行了设计决策，而不是依赖代码审查意见。</p>
+
+<p>状态与效果的分离比表面看起来更为重要。状态会被重放：当设备旋转或进程恢复时，UI 会根据最新状态重新渲染，这是正常行为。而效果则不应该被重放。没有人希望每次配置更改后都出现相同的 Snackbar，也没有人希望导航两次。将它们建模为独立的通道才能确保这种区分的有效性。</p>
+
+<h2>将用户操作与系统观察结果区分开来</h2>
+
+<p>在实际项目中，区分意图和内部事件可以大大减少很多麻烦。意图来自 ViewModel 外部。内部事件是 ViewModel 发起的工作所产生的结果：例如，仓库响应、定时器触发、缓存发出新数据等。</p>
+
+<p>两者都需要修改状态，但它们的来源和名称不同。将它们分开可以防止意图层级结构中充斥着类似 <code>DataLoadedSuccessfully</code> 这样的条目，这些条目用户永远不会触发，也不应该从 UI 层调用。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">internal</span> <span class="n">sealed</span> <span class="n">interface</span> <span class="n">ProductListEvent</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">QueryUpdated</span><span class="p">(</span><span class="k">val</span> <span class="py">query</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">ProductListEvent</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">object</span> <span class="nc">LoadStarted</span> <span class="p">:</span> <span class="n">ProductListEvent</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">LoadSucceeded</span><span class="p">(</span><span class="k">val</span> <span class="py">products</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">Product</span><span class="p">&gt;)</span> <span class="p">:</span> <span class="n">ProductListEvent</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">LoadFailed</span><span class="p">(</span><span class="k">val</span> <span class="py">message</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">:</span> <span class="n">ProductListEvent</span>
+</span><span class='line'>    <span class="n">data</span> <span class="k">class</span> <span class="nc">RefreshingChanged</span><span class="p">(</span><span class="k">val</span> <span class="py">isRefreshing</span><span class="p">:</span> <span class="n">Boolean</span><span class="p">)</span> <span class="p">:</span> <span class="n">ProductListEvent</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>Reducer</h2>
+
+<p>MVI 的声誉主要归功于 reducer。它是一个纯函数，接受当前状态和一个事件作为参数，并返回下一个状态。它不进行任何输入或输出操作，不启动任何协程，也不会触及参数之外的任何内容。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">internal</span> <span class="k">fun</span> <span class="nf">ProductListState</span><span class="p">.</span><span class="n">reduce</span><span class="p">(</span><span class="n">event</span><span class="p">:</span> <span class="n">ProductListEvent</span><span class="p">):</span> <span class="n">ProductListState</span> <span class="p">=</span>
+</span><span class='line'>    <span class="k">when</span> <span class="p">(</span><span class="n">event</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">is</span> <span class="n">ProductListEvent</span><span class="p">.</span><span class="n">QueryUpdated</span> <span class="p">-&gt;</span> <span class="n">copy</span><span class="p">(</span><span class="n">query</span> <span class="p">=</span> <span class="n">event</span><span class="p">.</span><span class="n">query</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadStarted</span> <span class="p">-&gt;</span> <span class="n">copy</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">content</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">content</span> <span class="k">is</span> <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Success</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">content</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Loading</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="k">is</span> <span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadSucceeded</span> <span class="p">-&gt;</span> <span class="n">copy</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">content</span> <span class="p">=</span> <span class="k">if</span> <span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="n">products</span><span class="p">.</span><span class="n">isEmpty</span><span class="p">())</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Empty</span>
+</span><span class='line'>            <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Success</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="n">products</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">},</span>
+</span><span class='line'>            <span class="n">isRefreshing</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="k">is</span> <span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadFailed</span> <span class="p">-&gt;</span> <span class="n">copy</span><span class="p">(</span>
+</span><span class='line'>            <span class="n">content</span> <span class="p">=</span> <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Failure</span><span class="p">(</span><span class="n">event</span><span class="p">.</span><span class="n">message</span><span class="p">),</span>
+</span><span class='line'>            <span class="n">isRefreshing</span> <span class="p">=</span> <span class="k">false</span>
+</span><span class='line'>        <span class="p">)</span>
+</span><span class='line'>        <span class="k">is</span> <span class="n">ProductListEvent</span><span class="p">.</span><span class="n">RefreshingChanged</span> <span class="p">-&gt;</span> <span class="n">copy</span><span class="p">(</span><span class="n">isRefreshing</span> <span class="p">=</span> <span class="n">event</span><span class="p">.</span><span class="n">isRefreshing</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>现在，所有关于此屏幕行为的规则都集中在一个易于阅读的代码块中。例如，在刷新过程中保持显示现有结果而不是闪现一个加载指示器的决定，只需在 <code>LoadStarted</code> 分支中写上三行代码即可实现。而以前，这条规则分散在协程、布尔赋值语句和布局中的条件语句里。</p>
+
+<p>因为 reducer 是纯函数，所以它也很容易测试，这也是 MVI 屏幕往往具有异常高的测试覆盖率而无需任何人强制执行的原因。</p>
+
+<h2>ViewModel</h2>
+
+<p>有了契约和 reducer，ViewModel 就变得精简了。它的任务是接收意图、协调异步工作、将事件传递给 reducer 并发出效果。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@HiltViewModel</span>
+</span><span class='line'><span class="k">class</span> <span class="nc">ProductListViewModel</span> <span class="n">@Inject</span> <span class="n">constructor</span><span class="p">(</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">searchProducts</span><span class="p">:</span> <span class="n">SearchProductsUseCase</span>
+</span><span class='line'><span class="p">)</span> <span class="p">:</span> <span class="n">ViewModel</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_state</span> <span class="p">=</span> <span class="n">MutableStateFlow</span><span class="p">(</span><span class="n">ProductListState</span><span class="p">())</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">state</span><span class="p">:</span> <span class="n">StateFlow</span><span class="p">&lt;</span><span class="n">ProductListState</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">_state</span><span class="p">.</span><span class="n">asStateFlow</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">_effects</span> <span class="p">=</span> <span class="n">Channel</span><span class="p">&lt;</span><span class="n">ProductListEffect</span><span class="p">&gt;(</span><span class="n">Channel</span><span class="p">.</span><span class="n">BUFFERED</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">effects</span><span class="p">:</span> <span class="n">Flow</span><span class="p">&lt;</span><span class="n">ProductListEffect</span><span class="p">&gt;</span> <span class="p">=</span> <span class="n">_effects</span><span class="p">.</span><span class="n">receiveAsFlow</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">searchJob</span><span class="p">:</span> <span class="n">Job</span><span class="p">?</span> <span class="p">=</span> <span class="k">null</span>
+</span><span class='line'>    <span class="k">fun</span> <span class="nf">onIntent</span><span class="p">(</span><span class="n">intent</span><span class="p">:</span> <span class="n">ProductListIntent</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">when</span> <span class="p">(</span><span class="n">intent</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>            <span class="k">is</span> <span class="n">ProductListIntent</span><span class="p">.</span><span class="n">QueryChanged</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">dispatch</span><span class="p">(</span><span class="n">ProductListEvent</span><span class="p">.</span><span class="n">QueryUpdated</span><span class="p">(</span><span class="n">intent</span><span class="p">.</span><span class="n">query</span><span class="p">))</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>            <span class="n">ProductListIntent</span><span class="p">.</span><span class="n">SearchSubmitted</span> <span class="p">-&gt;</span> <span class="n">search</span><span class="p">(</span><span class="n">_state</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">query</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">ProductListIntent</span><span class="p">.</span><span class="n">RetryClicked</span> <span class="p">-&gt;</span> <span class="n">search</span><span class="p">(</span><span class="n">_state</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">query</span><span class="p">)</span>
+</span><span class='line'>            <span class="k">is</span> <span class="n">ProductListIntent</span><span class="p">.</span><span class="n">ProductClicked</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">sendEffect</span><span class="p">(</span><span class="n">ProductListEffect</span><span class="p">.</span><span class="n">NavigateToDetail</span><span class="p">(</span><span class="n">intent</span><span class="p">.</span><span class="n">productId</span><span class="p">))</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">search</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="n">String</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">searchJob</span><span class="o">?.</span><span class="n">cancel</span><span class="p">()</span>
+</span><span class='line'>        <span class="n">searchJob</span> <span class="p">=</span> <span class="n">viewModelScope</span><span class="p">.</span><span class="n">launch</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">dispatch</span><span class="p">(</span><span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadStarted</span><span class="p">)</span>
+</span><span class='line'>            <span class="n">searchProducts</span><span class="p">(</span><span class="n">query</span><span class="p">)</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">onSuccess</span> <span class="p">{</span> <span class="n">products</span> <span class="p">-&gt;</span>
+</span><span class='line'>                    <span class="n">dispatch</span><span class="p">(</span><span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadSucceeded</span><span class="p">(</span><span class="n">products</span><span class="p">))</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>                <span class="p">.</span><span class="n">onFailure</span> <span class="p">{</span> <span class="n">throwable</span> <span class="p">-&gt;</span>
+</span><span class='line'>                    <span class="n">dispatch</span><span class="p">(</span><span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadFailed</span><span class="p">(</span><span class="n">throwable</span><span class="p">.</span><span class="n">toUserMessage</span><span class="p">()))</span>
+</span><span class='line'>                    <span class="n">sendEffect</span><span class="p">(</span><span class="n">ProductListEffect</span><span class="p">.</span><span class="n">ShowMessage</span><span class="p">(</span><span class="n">throwable</span><span class="p">.</span><span class="n">toUserMessage</span><span class="p">()))</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">dispatch</span><span class="p">(</span><span class="n">event</span><span class="p">:</span> <span class="n">ProductListEvent</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">_state</span><span class="p">.</span><span class="n">update</span> <span class="p">{</span> <span class="n">current</span> <span class="p">-&gt;</span> <span class="n">current</span><span class="p">.</span><span class="n">reduce</span><span class="p">(</span><span class="n">event</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">fun</span> <span class="nf">sendEffect</span><span class="p">(</span><span class="n">effect</span><span class="p">:</span> <span class="n">ProductListEffect</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">_effects</span><span class="p">.</span><span class="n">trySend</span><span class="p">(</span><span class="n">effect</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>有两个细节值得我们停下来注意。</p>
+
+<p>首先是 <code>_state.update { }</code>。使用原子更新函数而不是赋值给 <code>_state.value</code> 可以确保来自不同协程的并发更新彼此叠加，而不是相互覆盖。在具有多个并行数据源的屏幕中，这决定了结果是始终正确还是偶尔出错。</p>
+
+<p>第二个是 <code>searchJob?.cancel()</code>。结构化并发会处理取消操作，但前提是你持有引用。在开始新的搜索之前取消之前的搜索，可以防止查询 <code>"sh"</code> 的慢响应在查询 <code>"shoes"</code> 的快速响应之后到达并覆盖后者。MVI 本身并不处理乱序结果，它为你提供了一个统一解决它们的地方。</p>
+
+<h2>连接用户界面</h2>
+
+<p>Compose 层接收一个状态对象，并把意图发送回去。它不包含任何业务决策。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+<span class='line-number'>16</span>
+<span class='line-number'>17</span>
+<span class='line-number'>18</span>
+<span class='line-number'>19</span>
+<span class='line-number'>20</span>
+<span class='line-number'>21</span>
+<span class='line-number'>22</span>
+<span class='line-number'>23</span>
+<span class='line-number'>24</span>
+<span class='line-number'>25</span>
+<span class='line-number'>26</span>
+<span class='line-number'>27</span>
+<span class='line-number'>28</span>
+<span class='line-number'>29</span>
+<span class='line-number'>30</span>
+<span class='line-number'>31</span>
+<span class='line-number'>32</span>
+<span class='line-number'>33</span>
+<span class='line-number'>34</span>
+<span class='line-number'>35</span>
+<span class='line-number'>36</span>
+<span class='line-number'>37</span>
+<span class='line-number'>38</span>
+<span class='line-number'>39</span>
+<span class='line-number'>40</span>
+<span class='line-number'>41</span>
+<span class='line-number'>42</span>
+<span class='line-number'>43</span>
+<span class='line-number'>44</span>
+<span class='line-number'>45</span>
+<span class='line-number'>46</span>
+<span class='line-number'>47</span>
+<span class='line-number'>48</span>
+<span class='line-number'>49</span>
+<span class='line-number'>50</span>
+<span class='line-number'>51</span>
+<span class='line-number'>52</span>
+<span class='line-number'>53</span>
+<span class='line-number'>54</span>
+<span class='line-number'>55</span>
+<span class='line-number'>56</span>
+<span class='line-number'>57</span>
+<span class='line-number'>58</span>
+<span class='line-number'>59</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">fun</span> <span class="nf">ProductListRoute</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">onNavigateToDetail</span><span class="p">:</span> <span class="p">(</span><span class="n">String</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">viewModel</span><span class="p">:</span> <span class="n">ProductListViewModel</span> <span class="p">=</span> <span class="n">hiltViewModel</span><span class="p">()</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">state</span> <span class="k">by</span> <span class="n">viewModel</span><span class="p">.</span><span class="n">state</span><span class="p">.</span><span class="n">collectAsStateWithLifecycle</span><span class="p">()</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">snackbarHostState</span> <span class="p">=</span> <span class="n">remember</span> <span class="p">{</span> <span class="n">SnackbarHostState</span><span class="p">()</span> <span class="p">}</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">lifecycleOwner</span> <span class="p">=</span> <span class="n">LocalLifecycleOwner</span><span class="p">.</span><span class="n">current</span>
+</span><span class='line'>    <span class="n">LaunchedEffect</span><span class="p">(</span><span class="n">viewModel</span><span class="p">,</span> <span class="n">lifecycleOwner</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">effects</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">flowWithLifecycle</span><span class="p">(</span><span class="n">lifecycleOwner</span><span class="p">.</span><span class="n">lifecycle</span><span class="p">,</span> <span class="n">Lifecycle</span><span class="p">.</span><span class="n">State</span><span class="p">.</span><span class="n">STARTED</span><span class="p">)</span>
+</span><span class='line'>            <span class="p">.</span><span class="n">collect</span> <span class="p">{</span> <span class="n">effect</span> <span class="p">-&gt;</span>
+</span><span class='line'>                <span class="k">when</span> <span class="p">(</span><span class="n">effect</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                    <span class="k">is</span> <span class="n">ProductListEffect</span><span class="p">.</span><span class="n">NavigateToDetail</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">onNavigateToDetail</span><span class="p">(</span><span class="n">effect</span><span class="p">.</span><span class="n">productId</span><span class="p">)</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                    <span class="k">is</span> <span class="n">ProductListEffect</span><span class="p">.</span><span class="n">ShowMessage</span> <span class="p">-&gt;</span> <span class="p">{</span>
+</span><span class='line'>                        <span class="n">snackbarHostState</span><span class="p">.</span><span class="n">showSnackbar</span><span class="p">(</span><span class="n">effect</span><span class="p">.</span><span class="n">message</span><span class="p">)</span>
+</span><span class='line'>                    <span class="p">}</span>
+</span><span class='line'>                <span class="p">}</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'>    <span class="n">ProductListScreen</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">state</span> <span class="p">=</span> <span class="n">state</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">snackbarHostState</span> <span class="p">=</span> <span class="n">snackbarHostState</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">onIntent</span> <span class="p">=</span> <span class="n">viewModel</span><span class="o">::</span><span class="n">onIntent</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">@Composable</span>
+</span><span class='line'><span class="k">private</span> <span class="k">fun</span> <span class="nf">ProductListScreen</span><span class="p">(</span>
+</span><span class='line'>    <span class="n">state</span><span class="p">:</span> <span class="n">ProductListState</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">snackbarHostState</span><span class="p">:</span> <span class="n">SnackbarHostState</span><span class="p">,</span>
+</span><span class='line'>    <span class="n">onIntent</span><span class="p">:</span> <span class="p">(</span><span class="n">ProductListIntent</span><span class="p">)</span> <span class="p">-&gt;</span> <span class="n">Unit</span>
+</span><span class='line'><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">Scaffold</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">snackbarHost</span> <span class="p">=</span> <span class="p">{</span> <span class="n">SnackbarHost</span><span class="p">(</span><span class="n">snackbarHostState</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>    <span class="p">)</span> <span class="p">{</span> <span class="n">padding</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">Column</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">Modifier</span><span class="p">.</span><span class="n">padding</span><span class="p">(</span><span class="n">padding</span><span class="p">))</span> <span class="p">{</span>
+</span><span class='line'>            <span class="n">SearchField</span><span class="p">(</span>
+</span><span class='line'>                <span class="n">query</span> <span class="p">=</span> <span class="n">state</span><span class="p">.</span><span class="n">query</span><span class="p">,</span>
+</span><span class='line'>                <span class="n">onQueryChange</span> <span class="p">=</span> <span class="p">{</span> <span class="n">onIntent</span><span class="p">(</span><span class="n">ProductListIntent</span><span class="p">.</span><span class="n">QueryChanged</span><span class="p">(</span><span class="n">it</span><span class="p">))</span> <span class="p">},</span>
+</span><span class='line'>                <span class="n">onSubmit</span> <span class="p">=</span> <span class="p">{</span> <span class="n">onIntent</span><span class="p">(</span><span class="n">ProductListIntent</span><span class="p">.</span><span class="n">SearchSubmitted</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>            <span class="p">)</span>
+</span><span class='line'>            <span class="k">when</span> <span class="p">(</span><span class="k">val</span> <span class="py">content</span> <span class="p">=</span> <span class="n">state</span><span class="p">.</span><span class="n">content</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>                <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Idle</span> <span class="p">-&gt;</span> <span class="n">IdleHint</span><span class="p">()</span>
+</span><span class='line'>                <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Loading</span> <span class="p">-&gt;</span> <span class="n">FullScreenLoader</span><span class="p">()</span>
+</span><span class='line'>                <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Empty</span> <span class="p">-&gt;</span> <span class="n">EmptyResults</span><span class="p">(</span><span class="n">query</span> <span class="p">=</span> <span class="n">state</span><span class="p">.</span><span class="n">query</span><span class="p">)</span>
+</span><span class='line'>                <span class="k">is</span> <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Failure</span> <span class="p">-&gt;</span> <span class="n">ErrorMessage</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">message</span> <span class="p">=</span> <span class="n">content</span><span class="p">.</span><span class="n">message</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">onRetry</span> <span class="p">=</span> <span class="p">{</span> <span class="n">onIntent</span><span class="p">(</span><span class="n">ProductListIntent</span><span class="p">.</span><span class="n">RetryClicked</span><span class="p">)</span> <span class="p">}</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>                <span class="k">is</span> <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Success</span> <span class="p">-&gt;</span> <span class="n">ProductGrid</span><span class="p">(</span>
+</span><span class='line'>                    <span class="n">products</span> <span class="p">=</span> <span class="n">content</span><span class="p">.</span><span class="n">products</span><span class="p">,</span>
+</span><span class='line'>                    <span class="n">onProductClick</span> <span class="p">=</span> <span class="p">{</span> <span class="n">onIntent</span><span class="p">(</span><span class="n">ProductListIntent</span><span class="p">.</span><span class="n">ProductClicked</span><span class="p">(</span><span class="n">it</span><span class="p">))</span> <span class="p">}</span>
+</span><span class='line'>                <span class="p">)</span>
+</span><span class='line'>            <span class="p">}</span>
+</span><span class='line'>        <span class="p">}</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对密封接口进行详尽的 <code>when</code> 判断是一项低调但意义重大的优势。例如，下个季度添加一个新的内容分支，编译器会自动指出所有需要处理该分支的屏幕。而当状态是一串布尔值时，则无法提供类似的保证。</p>
+
+<p>将路由从无状态屏幕中分离出来，也意味着屏幕可组合函数接受普通参数，这使得预览和屏幕截图测试变得简单明了。</p>
+
+<h2>测试变得机械化</h2>
+
+<p>reducer 是一个纯函数，因此测试行为完全不需要协程机制。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+<span class='line-number'>14</span>
+<span class='line-number'>15</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Test</span>
+</span><span class='line'><span class="k">fun</span> <span class="err">`</span><span class="nf">keeps</span> <span class="n">existing</span> <span class="n">results</span> <span class="n">visible</span> <span class="k">while</span> <span class="n">refreshing</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">initial</span> <span class="p">=</span> <span class="n">ProductListState</span><span class="p">(</span>
+</span><span class='line'>        <span class="n">query</span> <span class="p">=</span> <span class="s">&quot;shoes&quot;</span><span class="p">,</span>
+</span><span class='line'>        <span class="n">content</span> <span class="p">=</span> <span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Success</span><span class="p">(</span><span class="n">listOf</span><span class="p">(</span><span class="n">sampleProduct</span><span class="p">))</span>
+</span><span class='line'>    <span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">result</span> <span class="p">=</span> <span class="n">initial</span><span class="p">.</span><span class="n">reduce</span><span class="p">(</span><span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadStarted</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">assertThat</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">content</span><span class="p">).</span><span class="n">isEqualTo</span><span class="p">(</span><span class="n">initial</span><span class="p">.</span><span class="n">content</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span><span class='line'><span class="n">@Test</span>
+</span><span class='line'><span class="k">fun</span> <span class="err">`</span><span class="nf">empty</span> <span class="n">response</span> <span class="n">maps</span> <span class="n">to</span> <span class="n">empty</span> <span class="n">content</span><span class="err">`</span><span class="p">()</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">result</span> <span class="p">=</span> <span class="n">ProductListState</span><span class="p">(</span><span class="n">query</span> <span class="p">=</span> <span class="s">&quot;shoes&quot;</span><span class="p">)</span>
+</span><span class='line'>        <span class="p">.</span><span class="n">reduce</span><span class="p">(</span><span class="n">ProductListEvent</span><span class="p">.</span><span class="n">LoadSucceeded</span><span class="p">(</span><span class="n">products</span> <span class="p">=</span> <span class="n">emptyList</span><span class="p">()))</span>
+</span><span class='line'>    <span class="n">assertThat</span><span class="p">(</span><span class="n">result</span><span class="p">.</span><span class="n">content</span><span class="p">).</span><span class="n">isEqualTo</span><span class="p">(</span><span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Empty</span><span class="p">)</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>对于 ViewModel 本身，你只需断言已发出的状态序列，读起来几乎就像是该功能的一份规格说明。</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+<span class='line-number'>9</span>
+<span class='line-number'>10</span>
+<span class='line-number'>11</span>
+<span class='line-number'>12</span>
+<span class='line-number'>13</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="n">@Test</span>
+</span><span class='line'><span class="k">fun</span> <span class="err">`</span><span class="nf">failed</span> <span class="n">search</span> <span class="n">emits</span> <span class="n">failure</span> <span class="n">state</span> <span class="n">and</span> <span class="n">a</span> <span class="n">message</span> <span class="n">effect</span><span class="err">`</span><span class="p">()</span> <span class="p">=</span> <span class="n">runTest</span> <span class="p">{</span>
+</span><span class='line'>    <span class="n">coEvery</span> <span class="p">{</span> <span class="n">searchProducts</span><span class="p">(</span><span class="s">&quot;shoes&quot;</span><span class="p">)</span> <span class="p">}</span> <span class="n">returns</span> <span class="n">Result</span><span class="p">.</span><span class="n">failure</span><span class="p">(</span><span class="n">IOException</span><span class="p">())</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">viewModel</span> <span class="p">=</span> <span class="n">ProductListViewModel</span><span class="p">(</span><span class="n">searchProducts</span><span class="p">)</span>
+</span><span class='line'>    <span class="n">viewModel</span><span class="p">.</span><span class="n">state</span><span class="p">.</span><span class="n">test</span> <span class="p">{</span>
+</span><span class='line'>        <span class="n">assertThat</span><span class="p">(</span><span class="n">awaitItem</span><span class="p">().</span><span class="n">content</span><span class="p">).</span><span class="n">isEqualTo</span><span class="p">(</span><span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Idle</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">onIntent</span><span class="p">(</span><span class="n">ProductListIntent</span><span class="p">.</span><span class="n">QueryChanged</span><span class="p">(</span><span class="s">&quot;shoes&quot;</span><span class="p">))</span>
+</span><span class='line'>        <span class="n">awaitItem</span><span class="p">()</span>
+</span><span class='line'>        <span class="n">viewModel</span><span class="p">.</span><span class="n">onIntent</span><span class="p">(</span><span class="n">ProductListIntent</span><span class="p">.</span><span class="n">SearchSubmitted</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">assertThat</span><span class="p">(</span><span class="n">awaitItem</span><span class="p">().</span><span class="n">content</span><span class="p">).</span><span class="n">isEqualTo</span><span class="p">(</span><span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Loading</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">assertThat</span><span class="p">(</span><span class="n">awaitItem</span><span class="p">().</span><span class="n">content</span><span class="p">).</span><span class="n">isInstanceOf</span><span class="p">(</span><span class="n">ProductListState</span><span class="p">.</span><span class="n">Content</span><span class="p">.</span><span class="n">Failure</span><span class="o">::</span><span class="k">class</span><span class="p">.</span><span class="n">java</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<h2>重要注意事项</h2>
+
+<p>MVI 确实存在实际成本，而那些不讨论这些成本就采用 MVI 的团队往往会在中途放弃它。</p>
+
+<ul>
+<li><strong>状态类会变成垃圾场。</strong> 在复杂的屏幕上，很容易为了应对各种极端情况而添加一个可空字段。务必克制这种做法。如果某条数据属于屏幕的某个独立部分，请将其建模为嵌套的密封类型或独立的子状态，并独立进行归约。</li>
+<li><strong>如果不小心，重组的成本会增加。</strong> 单个大型状态对象意味着任何更改都会发出一个新的实例。当状态稳定且可组合对象只读取所需内容时，Compose 可以很好地处理这种情况，但如果将整个状态对象向下传递五层，就会破坏这种特性。请传递每个可组合对象实际需要的最小切片。</li>
+<li><strong>效果可能会丢失。</strong> <code>Channel</code> 会将数据传递给单个收集器。如果你的效果流在可组合对象中被收集，而该可组合对象在错误的时间点退出组合，则事件可能会丢失。如上所示，使用带有生命周期感知收集的缓冲通道可以涵盖常见情况。任何真正重要的信息，例如已完成的付款，都应该保存在状态或持久存储中，而不是瞬态效果中。</li>
+<li><strong>样板代码确实存在。</strong> 为一个显示静态设置列表的屏幕编写三个类型和一个 reducer 并不划算。共享的通用基类或小型内部库可以减少重复代码，但无法消除概念上的开销。</li>
+<li><strong>并非所有地方都需要。</strong> 启动画面、静态的“关于我们”页面或只有两个字段的简单表单并不需要 MVI。MVI 的收益与屏幕协调的异步源数量以及它可以占据的视觉状态数量成正比。建议在结账流程和搜索结果中使用 MVI，但在条款和条件页面则不需要。</li>
+</ul>
+
+
+<h2>结论</h2>
+
+<p>MVI 与其说是一个框架，不如说是一组你自愿接受的约束。你放弃了修改几个独立字段的便利，作为交换，你得到了一个屏幕，其行为由一个不可变类型和一个纯函数描述。重现错误变成了构建一个状态对象，添加新功能变成了添加一个编译器会确保你不会忘记处理的分支。从你已经感到担忧的屏幕开始。在实现之前编写契约，保持 reducer 的纯净性，并让密封类型消除那些本不应该存在的组合。</p>
+
+<p>感谢阅读！</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[2027 Android 开发者路线图：学习、面试与 AI]]></title>
@@ -9032,154 +9550,6 @@
 <p>希望我的经验可以帮助你避免我的错误，让你的迁移更快、更少痛苦！</p>
 
 <p>祝撸码快乐！ 😃</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[Android车载OS中的Remote Compose]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/07/03/remote-compose-in-andorid-auto/"/>
-    <updated>2026-07-03T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/07/03/remote-compose-in-andorid-auto</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Remote Compose in Android Automotive OS: Embed rich UI without the usual pain」，原文链接<a href="https://proandroiddev.com/remote-compose-in-android-automotive-os-embed-rich-ui-without-the-usual-pain-90b857d59d8c">https://proandroiddev.com/remote-compose-in-android-automotive-os-embed-rich-ui-without-the-usual-pain-90b857d59d8c</a>，由Daniel Georg发布于2026年5月31日。</p></blockquote>
-
-<p>在 Android Automotive OS 上构建信息娱乐系统时，一个问题会反复出现：你需要将一个应用程序的用户界面显示在另一个应用程序的界面中。例如，在启动器中添加手机小部件，在仪表盘中添加媒体卡片，或者在 OEM 系统界面中嵌入第三方应用程序的内容。听起来很简单——直到你真正尝试实现它。</p>
-
-<p><a href="https://alexhilton.github.io/blog/2026/07/03/remote-compose-in-andorid-auto/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*Zwt8BF_TM0Yx_XPszrEycg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>Android 提供了多种跨应用 UI 共享机制，每种机制都有其优缺点。让我们来看看目前有哪些机制：</p>
-
-<p><strong>内部组件/视图</strong>——这是显而易见的首选：所有内容都直接构建在宿主应用内部（例如启动器）。没有跨进程开销。缺点是需要掌握相关知识，并且存在耦合问题。在汽车领域，要构建一个媒体卡片，你的团队需要学习并理解完整的 MediaSession/MediaBrowser 堆栈。要构建一个电话组件，他们需要深入了解 Telephony API。再加上汽车 API、OEM 内部 API 以及每个领域特有的特性——你的团队就变成了<strong>十几个互不相关领域的专家</strong>。每个组件都与其依赖的 API 紧密耦合，而当 API 发生变化时，没有人记得当初为何如此设计。</p>
-
-<p><strong>TaskView / CarTaskView</strong> — 在系统级别运行，将另一个应用的完整 Activity 嵌入到你的窗口层级结构中。它仅限于系统应用，需要特权权限，会在主机和客户端之间建立紧密的生命周期耦合，并添加一个专用的 SurfaceFlinger 层——会迅速消耗 Hardware Composer 的叠加层预算，尤其是在多用户多显示器 (MUMD) 设置中，例如主机、乘客显示屏和后排屏幕/用户同时运行的情况下。</p>
-
-<p><strong>SurfaceControlViewHost</strong> — 避免了特权权限，并共享相同的层开销，但引入了脆弱的进程间通信 (IPC) 边界。虽然基本渲染功能正常，但同步结构更改、处理客户端进程崩溃以及管理 AAOS 旋转焦点或无缝触摸手势切换都迫使主机采用复杂的手动变通方案。</p>
-
-<p><strong>RemoteViews</strong> — 任何应用均可使用，无需特殊权限。但它的组件库过于原始，无法构建任何严肃的用户界面：只有寥寥几个 TextView、ImageView 和 Button。除此之外，其他功能都无法实现。</p>
-
-<p>Remote Compose方案</p>
-
-<p>从本质上讲，RemoteCompose 文档是 Canvas 绘制调用的序列化记录——与 Android 用于渲染任何 UI 的原语（绘制矩形、设置颜色、剪辑区域）相同。提供程序不会立即执行这些调用，而是将它们打包成紧凑的、独立的二进制格式。它包含构建 UI 所需的一切：形状、带有字体和样式的文本、图像，甚至动画表达式。</p>
-
-<p>当主机收到此文档时，它只需根据其本地 Canvas 迭代指令即可。主机不需要了解数据来自何处的领域知识——它只需回放数据即可。虽然这就像浏览器呈现静态页面一样，但提供者可以以 IPC 允许的速度推送更新的文档。这将流程转变为高频流，从而实现流畅、状态驱动的 UI 更新，完全无需 XML 膨胀的开销。</p>
-
-<p>动画通过在记录时间嵌入到文档中的表达式来工作。提供程序不是对值进行硬编码，而是编写一个类似于 ContinuousSec() * 360 的表达式 - 主机在每一帧上本地对其进行计算，从而生成流畅的动画，而无需与提供程序进程进行任何往返。</p>
-
-<h3>PoC：将理论付诸实践</h3>
-
-<p>我想看看 RemoteCompose 作为跨应用程序 UI 机制可以发展到什么程度。在 AAOS 堆栈中工作多年后，我看到 OEM 编写了数千行样板文件只是为了共享一个简单的小部件。汽车发射器是完美的试验场。</p>
-
-<p>模拟环境</p>
-
-<p>目标还在于证明 RemoteCompose 可以与现有 AAOS 渲染技术共存。新的三列启动器布局完美地证明了这一点。</p>
-
-<p><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*gI0bbbw8NILSTNQwPEPA-Q.png" alt="无字幕图像" /></p>
-
-<p>从左到右查看主显示屏。这是一个实时共存测试：</p>
-
-<ul>
-<li><strong>第 1 列：Native Widget。</strong> 直接在 Launcher 进程中实现的标准视图。在传统设置中，每个小部件都会像这样，迫使启动器管理电话 API 和复杂的观察者。</li>
-<li><strong>第 2 列：RemoteCompose。</strong> 我们的 PoC 电话小部件。通过将其转移到 RemoteCompose，启动器在设计上仍然是愚蠢的。它仅管理布局槽并回放传入的 UI 描述。 Phone 团队可以独立更新其 UI，而无需触及任何 Launcher 代码。</li>
-<li><strong>第 3 列：CarTaskView。</strong> 嵌入在启动器表面中的另一个应用程序的完整映射活动。</li>
-</ul>
-
-
-<p>此次集成确认 RemoteCompose 可以与传统的基于 View 的系统和复杂的 CarTaskView 环境共存，而不会产生副作用。这验证了无中断的采用路径：原始设备制造商可以将现代的远程驱动组件逐步引入其生产堆栈，从而避免整个系统重写的风险和成本。</p>
-
-<p>PoC 架构</p>
-
-<p>RemoteCompose 没有提及如何传送二进制流。它仅定义格式，这意味着传输完全取决于你。以下是一些在 AAOS 环境中有意义的选项：</p>
-
-<ul>
-<li><strong>AIDL：</strong> 低延迟，直接进程间通信，非常适合频繁更新。这就是 PoC 使用的内容。</li>
-<li><strong>ContentProvider：</strong> 如果小部件数据已经建模为内容（如媒体元数据或联系人），那么这是一个自然的选择。它使用基于拉动的模型，非常适合静态或缓慢变化的 UI。</li>
-<li><strong>BroadcastReceiver：</strong> 提供简单的推送模型。然而，缺乏背压和严格的有效负载大小限制使得除了微小更新之外的任何事情都变得尴尬。</li>
-<li><strong>WebSocket：</strong> 对于服务器驱动的 UI 场景来说，这是一个有趣的选项，其中文档直接来自后端而不是本地进程。</li>
-</ul>
-
-
-<p>对于 PoC，<strong>AIDL</strong> 是显而易见的选择。它提供低开销、基于回调的推送传递，并直接控制提供者何时将新文档推送到主机。</p>
-
-<p>我之前提到过，这两个应用程序之间的契约非常小。这是证据。我们来看看实际的实现。</p>
-
-<p>PoC 中的 AIDL 合约</p>
-
-<p>提供者使用熟悉的 Compose 语法编写 UI。它使用远程等效项，而不是列、行或文本。结果永远不会呈现到屏幕上。相反，它使用 captureSingleRemoteDocument 直接打包到字节数组中。</p>
-
-<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-<span class='line-number'>16</span>
-<span class='line-number'>17</span>
-<span class='line-number'>18</span>
-<span class='line-number'>19</span>
-<span class='line-number'>20</span>
-<span class='line-number'>21</span>
-<span class='line-number'>22</span>
-<span class='line-number'>23</span>
-<span class='line-number'>24</span>
-</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="c1">// 1. Build the document familiar Compose syntax, but with Remote* components</span>
-</span><span class='line'> <span class="n">suspend</span> <span class="k">fun</span> <span class="nf">createIdleDocument</span><span class="p">(</span><span class="n">context</span><span class="p">:</span> <span class="n">Context</span><span class="p">,</span> <span class="n">callLog</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">CallLogEntry</span><span class="p">&gt;):</span> <span class="n">ByteArray</span> <span class="p">{</span>
-</span><span class='line'>      <span class="k">return</span> <span class="n">captureSingleRemoteDocument</span><span class="p">(</span><span class="n">context</span><span class="p">)</span> <span class="p">{</span> <span class="n">IdleScreen</span><span class="p">(</span><span class="n">callLog</span><span class="p">)</span> <span class="p">}.</span><span class="n">bytes</span>
-</span><span class='line'>  <span class="p">}</span>
-</span><span class='line'>
-</span><span class='line'><span class="c1">// 2. The composable itself looks like regular Compose                                                                                                                                                 </span>
-</span><span class='line'>  <span class="n">@RemoteComposable</span>
-</span><span class='line'>  <span class="n">@Composable</span>
-</span><span class='line'>  <span class="k">private</span> <span class="k">fun</span> <span class="nf">IdleScreen</span><span class="p">(</span><span class="n">entries</span><span class="p">:</span> <span class="n">List</span><span class="p">&lt;</span><span class="n">CallLogEntry</span><span class="p">&gt;)</span> <span class="p">{</span>
-</span><span class='line'>      <span class="n">RemoteColumn</span><span class="p">(</span><span class="n">modifier</span> <span class="p">=</span> <span class="n">RemoteModifier</span><span class="p">.</span><span class="n">fillMaxSize</span><span class="p">().</span><span class="n">padding</span><span class="p">(</span><span class="m">16.</span><span class="n">dp</span><span class="p">))</span> <span class="p">{</span>
-</span><span class='line'>          <span class="n">RemoteText</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="s">&quot;Recent Calls&quot;</span><span class="p">,</span> <span class="n">fontSize</span> <span class="p">=</span> <span class="m">24.</span><span class="n">rsp</span><span class="p">)</span>
-</span><span class='line'>
-</span><span class='line'>          <span class="n">entries</span><span class="p">.</span><span class="n">forEachIndexed</span> <span class="p">{</span> <span class="n">index</span><span class="p">,</span> <span class="n">entry</span> <span class="p">-&gt;</span>
-</span><span class='line'>              <span class="n">RemoteRow</span><span class="p">(</span>
-</span><span class='line'>                  <span class="n">modifier</span> <span class="p">=</span> <span class="n">RemoteModifier</span>
-</span><span class='line'>                      <span class="p">.</span><span class="n">fillMaxWidth</span><span class="p">()</span>
-</span><span class='line'>                      <span class="p">.</span><span class="n">clickable</span><span class="p">(</span><span class="n">HostAction</span><span class="p">(</span><span class="n">RemoteString</span><span class="p">(</span><span class="s">&quot;${2000 + index}&quot;</span><span class="p">)))</span>
-</span><span class='line'>              <span class="p">)</span> <span class="p">{</span>
-</span><span class='line'>                  <span class="n">RemoteText</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">entry</span><span class="p">.</span><span class="n">name</span><span class="p">,</span> <span class="n">fontSize</span> <span class="p">=</span> <span class="m">16.</span><span class="n">rsp</span><span class="p">)</span>
-</span><span class='line'>                  <span class="n">RemoteText</span><span class="p">(</span><span class="n">text</span> <span class="p">=</span> <span class="n">entry</span><span class="p">.</span><span class="n">number</span><span class="p">,</span> <span class="n">fontSize</span> <span class="p">=</span> <span class="m">12.</span><span class="n">rsp</span><span class="p">)</span>
-</span><span class='line'>              <span class="p">}</span>
-</span><span class='line'>          <span class="p">}</span>
-</span><span class='line'>      <span class="p">}</span>
-</span><span class='line'>  <span class="p">}</span>
-</span></code></pre></td></tr></table></div></figure>
-
-
-<p>语法几乎与标准 Compose 相同。唯一的区别是 Remote 前缀以及输出是 ByteArray 而不是屏幕上的像素这一事实。</p>
-
-<p>主持人：渲染</p>
-
-<p>现代 UI 框架的一个常见问题是采用成本。对于此 PoC，我使用标准 <strong>AAOS CarLauncher</strong> 作为主机。与大部分核心 Automotive 堆栈一样，它构建在传统 Android 视图系统上：XML 布局、片段和自定义视图。对于 OEM 而言，仅仅为了支持一些“小部件”而将生产级系统 shell 迁移到 Jetpack Compose 很少是现实的选择。</p>
-
-<p>幸运的是，RemoteCompose 就是针对这一现实而设计的。它附带两个不同的玩家工件：</p>
-
-<ul>
-<li><strong>remote-player-compose：</strong> 对于已在 Jetpack Compose 上运行的主机。</li>
-<li><strong>remote-player-view：</strong> 对于传统的基于视图的应用程序。</li>
-</ul>
-
-
-<p>由于参考 CarLauncher 是基于视图的，因此我使用了远程播放器视图工件。 RemoteDocumentPlayer 是一个普通的 FrameLayout，你可以将其直接放入任何 XML 布局中。你只需调用 setDocument(bytes)，它就会通过 Canvas 呈现提供者的 UI。</p>
-
-<p>主机端不需要 Compose 依赖项，不需要 ComposeView 包装器，并且迁移工作量为零。提供者端保持完全相同：无论谁渲染它，它都会推送相同的字节数组。这证明了行业采用的关键点：一个提供商可以以零耦合的方式为现代和传统主机提供服务。</p>
-
-<p><strong>关于 Android 框架 (API 35) 的说明</strong> 如果你仔细查看最新的 Android 开源项目 (AOSP) 更新，你会发现 Android 实际上从 API 35 开始将其自己的本机 RemoteCompose 播放器直接烘焙到框架中。它为标准系统小部件的新 DrawInstructions 提供支持。然而，依赖框架播放器意味着将你的主机与操作系统更新周期联系起来。通过使用上述 AndroidX 播放器工件，第三方启动器和 OEM 主机现在就可以采用这种下一代架构，即使在较旧的 Android 版本上也是如此，同时支持比基本系统更新的操作。</p>
-
-<p>局限性和悬而未决的问题</p>
 ]]></content>
   </entry>
   
