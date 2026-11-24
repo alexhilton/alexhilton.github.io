@@ -4,7 +4,7 @@
   <title><![CDATA[稀有猿诉]]></title>
   <link href="https://alexhilton.github.io/atom.xml" rel="self"/>
   <link href="https://alexhilton.github.io/"/>
-  <updated>2026-11-23T15:52:22+00:00</updated>
+  <updated>2026-11-24T13:52:14+00:00</updated>
   <id>https://alexhilton.github.io/</id>
   <author>
     <name><![CDATA[Alex Hilton]]></name>
@@ -12,6 +12,188 @@
   </author>
   <generator uri="http://octopress.org/">Octopress</generator>
 
+  
+  <entry>
+    <title type="html"><![CDATA[卡顿定位：从 UI 线程到 RenderThread]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/24/android-ui-thread-vs-renderthread-what-actually-happens-when-a-frame-is-drawn/"/>
+    <updated>2026-11-24T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/24/android-ui-thread-vs-renderthread-what-actually-happens-when-a-frame-is-drawn</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Android UI thread vs. RenderThread: what actually happens when a frame is drawn」，原文链接<a href="https://proandroiddev.com/android-ui-thread-vs-renderthread-3f54bb74340f">https://proandroiddev.com/android-ui-thread-vs-renderthread-3f54bb74340f</a>，由Ravi Rawal发布于2026年11月18日。</p></blockquote>
+
+<p><a href="https://alexhilton.github.io/blog/2026/11/24/android-ui-thread-vs-renderthread-what-actually-happens-when-a-frame-is-drawn/"><img src="https://cdn-images-1.medium.com/max/1024/1*f-w-S5m3GnXvViKBnBoIlg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>即使你的 Android 应用的主线程是非阻塞的，仍然可能出现掉帧现象。这似乎很奇怪，因为我们知道绘制一帧需要多个组件。而我们的代码只会在第一个组件中运行。</p>
+
+<p>UI 线程负责处理应用程序端的操作并记录绘图命令。原生线程（RenderThread）会接收这些记录并执行实际的渲染。然后，GPU 会执行图形命令，SurfaceFlinger 会将应用的缓冲区与屏幕上的所有其他内容进行合成。</p>
+
+<p>在排查掉帧问题时，这可能会让人困惑：<code>onDraw()</code> 里的操作缓慢和 GPU 过载在用户看来是一样的，但需要不同的解决方案。将代码移到后台线程只能解决其中一个问题。要找出具体问题所在，请跟踪帧在渲染管线中的执行过程。</p>
+
+<h2>UI 线程执行的操作</h2>
+
+<p>每个应用程序都有一个主线程，通常称为 UI 线程。它管理主消息队列，运行生命周期回调、输入事件，以及所有投递到主 Looper 的任务。对于视图系统，它还负责应用属性更改、测量和布局层级结构、运行动画回调、调用 <code>View.draw()</code> 和你的 <code>onDraw()</code> 方法，并记录用于硬件加速渲染的绘制操作。</p>
+
+<p>最后一点很容易被忽略。在硬件加速的情况下，<code>onDraw()</code> 不会进行任何光栅化操作。你的 <code>Canvas</code> 调用会被记录到一个显示列表中，每个 View 都维护着自己的显示列表（一个 <code>RenderNode</code>）。以下是一个简单的自定义 View 示例：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+<span class='line-number'>8</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">class</span> <span class="nc">ProgressView</span><span class="p">(</span><span class="n">context</span><span class="p">:</span> <span class="n">Context</span><span class="p">)</span> <span class="p">:</span> <span class="n">View</span><span class="p">(</span><span class="n">context</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">val</span> <span class="py">paint</span> <span class="p">=</span> <span class="n">Paint</span><span class="p">(</span><span class="n">Paint</span><span class="p">.</span><span class="n">ANTI_ALIAS_FLAG</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">private</span> <span class="k">var</span> <span class="py">progress</span> <span class="p">=</span> <span class="m">0.5f</span>
+</span><span class='line'>    <span class="k">override</span> <span class="k">fun</span> <span class="nf">onDraw</span><span class="p">(</span><span class="n">canvas</span><span class="p">:</span> <span class="n">Canvas</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>        <span class="k">super</span><span class="p">.</span><span class="n">onDraw</span><span class="p">(</span><span class="n">canvas</span><span class="p">)</span>
+</span><span class='line'>        <span class="n">canvas</span><span class="p">.</span><span class="n">drawCircle</span><span class="p">(</span><span class="n">width</span> <span class="p">/</span> <span class="m">2f</span><span class="p">,</span> <span class="n">height</span> <span class="p">/</span> <span class="m">2f</span><span class="p">,</span> <span class="n">width</span> <span class="p">*</span> <span class="n">progress</span> <span class="p">/</span> <span class="m">2f</span><span class="p">,</span> <span class="n">paint</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>当 <code>invalidate()</code> 安排重绘时，框架会在下一帧遍历期间（在 UI 线程上）调用 <code>onDraw()</code>，此时圆会被记录下来而不是绘制出来。</p>
+
+<p>这就是为什么自定义 View 会在 GPU 几乎空闲时导致卡顿。</p>
+
+<p>如果 <code>onDraw()</code> 执行繁重的计算、分配大型临时对象或循环遍历数千个元素，则 UI 线程会将时间花费在这些地方，而 GPU 无法处理尚未有人提交的帧。</p>
+
+<p>Android 渲染性能文档也描述了同样的划分：在 UI 线程上进行记录阶段，然后在 RenderThread 上进行绘制阶段。</p>
+
+<h2>RenderThread 的作用</h2>
+
+<p>RenderThread 是硬件加速渲染路径中的一个原生线程。它不运行你的 UI 代码。它接收 UI 线程记录的显示列表，通过 HWUI（<strong>Android 基于 Skia 的渲染器</strong>）重放这些列表，并将生成的命令发送给图形驱动程序。</p>
+
+<p>所以这三个阶段可以这样划分：</p>
+
+<ol>
+<li>UI 线程决定用户界面的外观并将其记录下来。</li>
+<li>RenderThread 重放记录的内容并提交图形命令。</li>
+<li>GPU 进行光栅化和着色。</li>
+</ol>
+
+
+<p>在系统跟踪中，这两个 CPU 阶段分别显示为主线程上的 <code>Record View#draw()</code> 和 RenderThread 上的 <code>DrawFrame</code>。将它们分开可以让 Android 将帧准备与渲染重叠执行，而不是将所有操作都推送到应用程序线程中。</p>
+
+<p>即使 <code>Canvas</code> 调用看起来很轻量，RenderThread 也会执行一些代价高昂的工作。在许多设备上，较大的 <code>Path</code> 对象会在 CPU 上进行光栅化并上传到 GPU，而 <code>clipPath()</code> 会增加渲染成本。应用程序代码中看似无害的调用，在后续阶段可能会成为性能瓶颈。</p>
+
+<p>RenderThread 还可以独立运行一些动画。<code>ViewPropertyAnimator</code> 和涟漪效果可以在主线程繁忙时继续运行，这也是它们保持流畅的原因之一。</p>
+
+<h2>一帧，从头到尾</h2>
+
+<p>假设用户正在滚动一个 <code>RecyclerView</code>。滚动操作会移动内容，并可能将新的项目显示出来。这一帧会经历以下几个阶段：</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*Z3MsxZKf-s-61UKv13ceUw.png" alt="无标题图像" /></p>
+
+<p>各个阶段在不同帧之间重叠，如果某一帧不需要更改任何内容，则会跳过大部分阶段。顺序如下：</p>
+
+<ol>
+<li>VSync 信号到达后，<code>Choreographer</code> 在主线程的 Looper 上运行帧回调。输入、动画和视图遍历都由此开始。</li>
+<li>UI 线程处理状态变化，如果发生变化则进行布局，并记录绘制操作。并非每一帧都需要完整的测量和布局过程。如果只有绘制属性（例如 <code>translationX</code> 或 <code>alpha</code>）发生变化，框架通常可以跳过布局，并经常重用现有的显示列表。这就是为什么动画化 <code>translationX</code> 比动画化边距（强制在每一帧都进行布局）更高效的原因。</li>
+<li>UI 线程将记录的工作交给 RenderThread。RenderThread 处理这些工作，构建图形命令并将其提交给驱动程序。</li>
+<li>GPU 执行这些命令。从 CPU 的角度来看，这是异步的：提交命令并不意味着 GPU 已经完成执行。</li>
+<li>SurfaceFlinger 将应用的缓冲区与系统 Surface 合成，并呈现结果。应用无法控制这最后一个阶段。</li>
+</ol>
+
+
+<p>因此，完成 <code>View.draw()</code> 并不意味着画面已经显示在屏幕上。渲染、缓冲区可用性、合成和呈现等过程仍然需要进行。</p>
+
+<h2>为什么线程之间会互相等待</h2>
+
+<p>这两个线程不能完全<strong>独立</strong>运行。</p>
+
+<p>UI 线程拥有 UI 状态，而 RenderThread 需要 UI 状态的一致快照。</p>
+
+<p>在跟踪日志中，你会看到 <code>syncFrameState</code>：主线程被阻塞，而 RenderThread 正在复制所需的状态。这是有意为之，因为允许两个线程同时访问共享状态会导致帧不一致。大型位图可能会使同步速度变慢，因为它们可能需要先移动到 GPU 可访问的内存中才能绘制。</p>
+
+<p>RenderThread 也可能等待合成器。</p>
+
+<p>当它请求缓冲区或归还缓冲区（<code>dequeueBuffer</code>、<code>eglSwapBuffers</code>）时，如果 GPU 或 SurfaceFlinger 响应滞后，它就会阻塞。这些等待本身都不是 bug。在跟踪记录中看起来空闲的线程可能只是在等待前面的阶段，因此在指责某个线程之前，应该查看整个帧。</p>
+
+<h2>为什么 RenderThread 不能防止卡顿</h2>
+
+<p>人们通常认为，专用的 RenderThread 应该可以避免耗费资源的 UI 操作。但事实并非如此，因为 RenderThread 只能绘制 UI 线程已经记录的内容。以下三个例子说明了其中的区别。</p>
+
+<p><strong>耗时的绘图代码。</strong> 假设 <code>onDraw()</code> 函数如下所示：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+<span class='line-number'>5</span>
+<span class='line-number'>6</span>
+<span class='line-number'>7</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">override</span> <span class="k">fun</span> <span class="nf">onDraw</span><span class="p">(</span><span class="n">canvas</span><span class="p">:</span> <span class="n">Canvas</span><span class="p">)</span> <span class="p">{</span>
+</span><span class='line'>    <span class="k">super</span><span class="p">.</span><span class="n">onDraw</span><span class="p">(</span><span class="n">canvas</span><span class="p">)</span>
+</span><span class='line'>    <span class="k">val</span> <span class="py">points</span> <span class="p">=</span> <span class="n">generateComplexGeometry</span><span class="p">()</span>
+</span><span class='line'>    <span class="n">points</span><span class="p">.</span><span class="n">forEach</span> <span class="p">{</span> <span class="n">point</span> <span class="p">-&gt;</span>
+</span><span class='line'>        <span class="n">canvas</span><span class="p">.</span><span class="n">drawCircle</span><span class="p">(</span><span class="n">point</span><span class="p">.</span><span class="n">x</span><span class="p">,</span> <span class="n">point</span><span class="p">.</span><span class="n">y</span><span class="p">,</span> <span class="n">point</span><span class="p">.</span><span class="n">radius</span><span class="p">,</span> <span class="n">paint</span><span class="p">)</span>
+</span><span class='line'>    <span class="p">}</span>
+</span><span class='line'><span class="p">}</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>如果 <code>generateComplexGeometry()</code> 函数运行缓慢，它会在每一帧都运行在 UI 线程上。RenderThread 会等待延迟到达的显示列表，GPU 几乎无所事事，导致帧仍然错过截止时间。因此，应该只计算一次几何数据，将其缓存，仅在输入发生变化时才重新计算。</p>
+
+<p><strong>耗时的绘制命令。</strong> 现在，UI 线程只记录少量命令，耗时远低于一毫秒，但这些命令包含大型的 <code>clipPath</code> 或 <code>Path</code>。记录很快完成，但 <code>DrawFrame</code> 却运行很长时间。将你的代码移到工作线程并不能解决这个问题，因为开销在于命令本身。简化这些命令。</p>
+
+<p><strong>GPU 负载过高。</strong> CPU 线程均按时完成，但 GPU 渲染延迟。大型纹理、过度绘制和繁重的着色器是常见原因。优化 <code>onDraw()</code> 函数无济于事，因为延迟发生在渲染提交之后。</p>
+
+<p>屏幕上显示的症状可能完全相同，所以要留意时间实际都花到哪里去了：</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*dOVVVqGpMFOUXAjn883L3Q.png" alt="无标题图像" /></p>
+
+<p>将工作从主线程移开只对第一行有帮助。</p>
+
+<h2>Jetpack Compose 有哪些变化</h2>
+
+<p>Compose 引入了描述和更新 UI 的新语义，但底层图形管线保持不变。该管线包含三个阶段：Compose（组合）、Layout（布局）和 Draw（绘制）。所有这些阶段都在 UI 线程上执行，并且 Draw 阶段写入相同的渲染节点。因此，同样的机制仍然适用：耗时的组合或布局操作会延迟帧准备，耗时的绘制命令会减慢 RenderThread 的速度。GPU 繁忙或饱和会导致应用程序所有工作完成后帧延迟。</p>
+
+<p>Compose 允许你指定状态读取发生在哪个阶段。在组合过程中进行状态读取会导致组合重新运行。在 <code>graphicsLayer</code> lambda 表达式中进行相同的读取操作只会重新运行绘制阶段：</p>
+
+<figure class='code'><figcaption><span></span></figcaption><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+</pre></td><td class='code'><pre><code class='kotlin'><span class='line'><span class="k">val</span> <span class="py">alpha</span> <span class="p">=</span> <span class="n">animateFloatAsState</span><span class="p">(</span><span class="k">if</span> <span class="p">(</span><span class="n">visible</span><span class="p">)</span> <span class="m">1f</span> <span class="k">else</span> <span class="m">0f</span><span class="p">)</span>
+</span><span class='line'><span class="n">Box</span><span class="p">(</span><span class="n">Modifier</span><span class="p">.</span><span class="n">graphicsLayer</span> <span class="p">{</span> <span class="k">this</span><span class="p">.</span><span class="n">alpha</span> <span class="p">=</span> <span class="n">alpha</span><span class="p">.</span><span class="n">value</span> <span class="p">})</span> <span class="c1">// no recomposition per frame</span>
+</span></code></pre></td></tr></table></div></figure>
+
+
+<p>要确定问题出自 Compose 还是整个管线，请启用组合跟踪并抓取系统跟踪。</p>
+
+<h2>查找跟踪中的瓶颈</h2>
+
+<p>Android Studio 的性能分析器和 Perfetto 都可以记录系统跟踪信息，其中显示了主线程、RenderThread、GPU 完成情况和帧事件。实际操作流程如下：</p>
+
+<ol>
+<li>重现卡顿的交互并记录跟踪信息。</li>
+<li>在 Android 12 (API 31) 及更高版本上，在“卡顿帧”跟踪中找到延迟帧。Perfetto 的 <code>FrameTimeline</code> 会比较预期显示时间和实际显示时间，从而判断帧是否按时到达屏幕。</li>
+<li>查看主线程中是否存在耗时的 <code>Choreographer#doFrame</code> 调用，包括布局和绘制操作。</li>
+<li>查看 RenderThread 中是否存在耗时的 <code>DrawFrame</code> 调用。</li>
+<li>检查 GPU 工作何时完成。</li>
+</ol>
+
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*J1uoDP0Q60IZdv283-CyFw.png" alt="无标题图像" /></p>
+
+<p>不要看到第一个耗时较长的片段就停下来。</p>
+
+<p>RenderThread 执行时间过长并不一定意味着 GPU 速度慢。同样，GPU 完成渲染的时间较晚也不一定意味着 UI 线程存在问题。</p>
+
+<p>如果你想在不手动跟踪的情况下捕获回归，那么 <code>Macrobenchmark</code> 的 <code>FrameTimingMetric</code> 和 <code>JankStats</code> 库将自动为你提供有关帧计时的信息。</p>
+
+<p>帧间隔在 60Hz 时为 16.7 毫秒，90Hz 时为 11.1 毫秒，120Hz 时为 8.3 毫秒。</p>
+
+<p>这是两次刷新之间的时间间隔，不包括调度所需的时间。同步、渲染和合成都会占用一部分时间。</p>
+
+<p>此外，帧是流水线式处理的。因此，线程处理帧的时间并不等同于用户触摸屏幕到看到结果之间的延迟。</p>
+
+<p>测量整个帧生命周期，而不是将 16 毫秒作为代码的预算。</p>
+]]></content>
+  </entry>
   
   <entry>
     <title type="html"><![CDATA[MVI 让屏幕一次只有一个状态]]></title>
@@ -9386,170 +9568,6 @@
 <p>一个合理的经验法则是：DSL 必须由很多人多次编写，或者阅读的次数远多于其实现 — 否则会编写出无聊的代码。</p>
 
 <p>TL;DR——整篇文章六行</p>
-]]></content>
-  </entry>
-  
-  <entry>
-    <title type="html"><![CDATA[将应用迁移到Navigation 3：痛点、加班和紧急修复]]></title>
-    <link href="https://alexhilton.github.io/blog/2026/07/06/migrate-to-navigation-3/"/>
-    <updated>2026-07-06T00:00:00+00:00</updated>
-    <id>https://alexhilton.github.io/blog/2026/07/06/migrate-to-navigation-3</id>
-    <content type="html"><![CDATA[<blockquote><p>本文译自「Migrating App to Navigation 3: Pain, Overtimes, and Hotfixes」，原文链接<a href="https://medium.com/proandroiddev/migrating-app-to-navigation-3-pain-overtimes-and-hotfixes-88321b59314b">https://medium.com/proandroiddev/migrating-app-to-navigation-3-pain-overtimes-and-hotfixes-88321b59314b</a>，由Tetiana Synytsyna发布于2026年6月30日。</p></blockquote>
-
-<p><a href="https://alexhilton.github.io/blog/2026/07/06/migrate-to-navigation-3/"><img src="https://miro.medium.com/v2/resize:fit:1400/format:webp/1*TgDxjDuRjydIOhSNkKAWrg.png" title="auto auto" ></a></p>
-
-<!-- more -->
-
-
-<p>2026 年初，我们将拥有超过 170 个页面的 Android 应用从 Navigation 2 迁移到了 Navigation 3。</p>
-
-<p>Navigation 3 引入了类型安全的目标位置、持久化的返回栈以及更现代化的导航 API。虽然整个迁移过程相对顺利，但我们仍然遇到了一些意想不到的挑战——从处理底部面板到修复发布后才出现的崩溃问题。</p>
-
-<p>在本文中，我将分享我们决定迁移的原因、迁移过程、遇到的问题以及从中汲取的经验教训。</p>
-
-<p>如果你正计划迁移到 Navigation 3，本文的经验或许能帮你节省一些时间，并避免一些麻烦。</p>
-
-<p>Navigation 2 的使用体验</p>
-
-<p>我们开始权衡技术债务与未来机遇，最终决定进行迁移。对我们而言，这不仅仅是“更新一个库”。</p>
-
-<p>我们将此次迁移视为对平台的一项投资。</p>
-
-<p>首先，我们的产品路线图已经涵盖平板电脑和折叠屏设备，而现有的导航实现与自适应布局和多窗格场景并不兼容。</p>
-
-<p>其次，导航堆栈逐渐被扩展功能和自定义逻辑所淹没。虽然它能够运行，但导航层中每个后续功能的维护成本都越来越高。</p>
-
-<p>我们明白迁移意味着风险、影响范围广以及潜在的回归问题。然而，推迟迁移只会增加技术债务，并使未来的迁移成本更高。</p>
-
-<p>是什么说服了我们</p>
-
-<h3>2025 年 11 月</h3>
-
-<p>我看到 Nav3 的稳定版本已发布，作为一名积极主动的开发人员，受到新导航方法的启发，我为下一个冲刺创建了一个调查任务。</p>
-
-<p>调查的目标很简单：评估迁移的可行性、受影响的区域、风险，并了解它对于我们应用程序的规模是否现实。很快，人们就清楚了：这并不容易。</p>
-
-<p>我立即发现了主要风险——增量迁移是不可能的。由于 Nav2 和 Nav3 之间缺乏向后兼容性，只有一次性迁移所有页面才能进行转换。部分迁移不是一种选择。</p>
-
-<p>调查结束后，领导和我评估了风险、潜在的回归以及未来几个季度的路线图。由于已经规划了自适应布局，因此迁移获得了批准。</p>
-
-<h3>2026 年 2 月</h3>
-
-<p>在下一个冲刺计划中，我被分配了一个专门的迁移冲刺，并且在整个持续时间（漫长而有趣且充满痛苦的两周）中，我专门从事导航工作。迁移完全是手动完成的。</p>
-
-<p>是的，我尝试过使用人工智能。但事实证明，对于遗留下来的代码库来说，迁移过于复杂。由于扩展功能、自定义导航解决方案和重要的依赖关系，Claude Code 有时会为我们的特定旧设置提供不一致的结果。它不会迁移到 Nav3，而是返回 Nav2 代码并写入：<em>“迁移成功完成，该项目现在可以在最新的稳定版本的导航上运行”。</em>但我们稍后会回到这一点。</p>
-
-<p>迁移到 Nav3 花了我漫长的两周时间，而且每天都加班。免责声明：不，公司没有强迫我。是的，他们会给我尽可能多的时间。是的，没有人让我写这个😄。</p>
-
-<p>有趣的事实：Gemini 和 Claude Code 估计整个迁移过程需要团队花费 6 至 8 周的时间。最终我一个人用了两周时间完成了。</p>
-
-<p>加班。为什么？</p>
-
-<h3>底页</h3>
-
-<p>在计划迁移时，我错过了一个关键细节 - 底页。 Nav3 没有现成的解决方案来通过导航显示底部表单。我必须围绕 <code>entry&lt;&gt;</code> 编写自己的、不太优雅的包装器，在 <code>metadata</code> 中传递信息，指示它是底部工作表，如果为真，则通过 <code>ModalBottomSheetLayout</code> （材料 3）而不是 <code>NavDisplay</code> 显示此页面。</p>
-
-<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
-<span class='line-number'>2</span>
-<span class='line-number'>3</span>
-<span class='line-number'>4</span>
-<span class='line-number'>5</span>
-<span class='line-number'>6</span>
-<span class='line-number'>7</span>
-<span class='line-number'>8</span>
-<span class='line-number'>9</span>
-<span class='line-number'>10</span>
-<span class='line-number'>11</span>
-<span class='line-number'>12</span>
-<span class='line-number'>13</span>
-<span class='line-number'>14</span>
-<span class='line-number'>15</span>
-</pre></td><td class='code'><pre><code class=''><span class='line'>val NavEntry&lt;out NavKey&gt;.isBottomSheet: Boolean
-</span><span class='line'>    get() = metadata["isBottomSheet"] as? Boolean == true
-</span><span class='line'>inline fun &lt;reified T : NavKey&gt; EntryProviderScope&lt;NavKey&gt;.bottomSheetEntry(
-</span><span class='line'>    noinline content: @Composable (T) -&gt; Unit,
-</span><span class='line'>) {
-</span><span class='line'>    entry&lt;T&gt;(
-</span><span class='line'>        metadata = mapOf("isBottomSheet" to true),
-</span><span class='line'>        content = content
-</span><span class='line'>    )
-</span><span class='line'>}
-</span><span class='line'>NavDisplay(
-</span><span class='line'>    entries = navigationState.toEntries(mainEntryProvider)
-</span><span class='line'>        .filter { it.isBottomSheet.not() },
-</span><span class='line'>    onBack = { navigator.goBack() },
-</span><span class='line'>)</span></code></pre></td></tr></table></div></figure>
-
-
-<p>这不是一个理想的解决方案——更多的是一个让我们能够继续前进的临时解决方案。如今，通过“SceneStrategy”存在更好的方法，我们后来替换了这个实现。</p>
-
-<p>深层链接</p>
-
-<p>完整的回归测试、稳定性和错误修复花费了大约一周半的时间。老实说，我以为我们会发现错误并再稳定一个月（只是不要告诉我的领导）。借助自动化测试，我们发现了大量很难手动重现的问题，但用户肯定会留下有关这些问题的评论。</p>
-
-<p>发布</p>
-
-<p>还记得我提到过我手动迁移了所有内容吗？尝试过人工智能，但失败了。好吧，在我们发布一个半月后，Google 专门针对 Nav3 迁移推出了 Claude Code 技能。</p>
-
-<p>我很好奇克劳德·科德会对我有多大帮助。我切换回迁移前分支并尝试使用 Claude Code 进行迁移。我可以自信地说，这可以节省我一周的工作时间。这意味着迁移速度会快两倍。是的，扩展和遗留代码仍然需要手动迁移，并且在 Claude Code 之后验证更改会花费大量时间，但不可否认的是，Claude Code 会优化我所做的大量单调的手动工作。</p>
-
-<p>此外，Google 已经为 Bottom Sheets 提供了内置解决方案 - 特别是通过“SceneStrategy”。我们已经用“BottomSheetSceneStrategy”替换了自定义解决方法。这种方法要方便得多。</p>
-
-<p>你可以在<a href="https://developer.android.com/guide/navigation/navigation-3/recipes/bottomsheet">此处</a>找到“BottomSheetSceneStrategy”的完整代码。</p>
-
-<p>因此，如果我没有急于迁移并等待几个月，那么由于 Claude Code 和 Bottom Sheets 的现成解决方案，迁移会更容易一些，并且开发速度会快两倍。不过，我认为稳定和修复错误所需的时间不会有太大变化。</p>
-
-<p>结论和经验教训</p>
-
-<p>我强烈建议在以下情况下权衡转向 Nav3 的必要性：</p>
-
-<ul>
-<li><strong>基于片段的架构：</strong> 在迁移之前，你必须完全摆脱片段。这可能意味着具有高风险的大规模重构。</li>
-<li><strong>紧迫的期限：</strong> 即使你已经使用 Compose 导航，迁移也会造成巨大的受影响区域，并且由于回归可能会给业务带来高昂的成本。</li>
-<li><strong>专有导航解决方案：</strong> 如果你的自定义解决方案已经稳定运行，则迁移可能是不合理的。</li>
-<li><strong>游戏：</strong> 如果你的应用程序是游戏并且你严格依赖屏幕方向（在本例中主要是横向），Google 允许例外以保持方向固定。</li>
-</ul>
-
-
-<p>优点</p>
-
-<p>整个迁移过程大致可以总结为：</p>
-
-<ul>
-<li><strong>团队：</strong> 1 名活跃且尚未精疲力竭的开发人员</li>
-<li><strong>开发时间：</strong> 2 周</li>
-<li><strong>解决合并冲突：</strong> 1 天</li>
-<li><strong>受影响区域：</strong> 302 个文件，或者简单地说 — 整个应用程序</li>
-<li><strong>测试和稳定：</strong> ~1.5 周</li>
-<li><strong>修补程序：</strong> 1</li>
-</ul>
-
-
-<p>至关重要的是，我们通过几个实际标准评估了迁移的成功：</p>
-
-<ul>
-<li>发布后导航流程的稳定性（崩溃和与导航相关的回归）。</li>
-<li>将新页面集成到新导航框架的速度。</li>
-<li>能够无缝构建自适应布局，无需额外的解决方法。</li>
-<li>调试导航堆栈（是否变得更容易重现场景）。</li>
-</ul>
-
-
-<p>迁移后，最明显的变化出现在日常开发中：</p>
-
-<ul>
-<li>新页面更容易连接导航，无需额外的扩展功能。</li>
-<li>导航堆栈更可预测且更易于调试。</li>
-<li>很大一部分遗留逻辑就这样消失了。</li>
-<li>Nav3 事实证明更接近于状态驱动的方法，并且自适应布局不再感觉像一个巨大的独立项目。</li>
-</ul>
-
-
-<p>但如果你还计划迁移，请分配更多时间来保持稳定，不要低估底部工作表，并仔细检查导航中的序列化设置。</p>
-
-<p>希望我的经验可以帮助你避免我的错误，让你的迁移更快、更少痛苦！</p>
-
-<p>祝撸码快乐！ 😃</p>
 ]]></content>
   </entry>
   

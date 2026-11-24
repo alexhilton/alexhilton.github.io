@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+
+  <title><![CDATA[Category: Performance | 稀有猿诉]]></title>
+  <link href="https://alexhilton.github.io/blog/categories/performance/atom.xml" rel="self"/>
+  <link href="https://alexhilton.github.io/"/>
+  <updated>2026-11-24T13:52:14+00:00</updated>
+  <id>https://alexhilton.github.io/</id>
+  <author>
+    <name><![CDATA[Alex Hilton]]></name>
+    
+  </author>
+  <generator uri="http://octopress.org/">Octopress</generator>
+
+  
+  <entry>
+    <title type="html"><![CDATA[卡顿定位：从 UI 线程到 RenderThread]]></title>
+    <link href="https://alexhilton.github.io/blog/2026/11/24/android-ui-thread-vs-renderthread-what-actually-happens-when-a-frame-is-drawn/"/>
+    <updated>2026-11-24T00:00:00+00:00</updated>
+    <id>https://alexhilton.github.io/blog/2026/11/24/android-ui-thread-vs-renderthread-what-actually-happens-when-a-frame-is-drawn</id>
+    <content type="html"><![CDATA[<blockquote><p>本文译自「Android UI thread vs. RenderThread: what actually happens when a frame is drawn」，原文链接<a href="https://proandroiddev.com/android-ui-thread-vs-renderthread-3f54bb74340f">https://proandroiddev.com/android-ui-thread-vs-renderthread-3f54bb74340f</a>，由Ravi Rawal发布于2026年11月18日。</p></blockquote>
+
+<p><a href=""><img src="https://cdn-images-1.medium.com/max/1024/1*f-w-S5m3GnXvViKBnBoIlg.png" title="auto auto" ></a></p>
+
+<!-- more -->
+
+
+<p>即使你的 Android 应用的主线程是非阻塞的，仍然可能出现掉帧现象。这似乎很奇怪，因为我们知道绘制一帧需要多个组件。而我们的代码只会在第一个组件中运行。</p>
+
+<p>UI 线程负责处理应用程序端的操作并记录绘图命令。原生线程（RenderThread）会接收这些记录并执行实际的渲染。然后，GPU 会执行图形命令，SurfaceFlinger 会将应用的缓冲区与屏幕上的所有其他内容进行合成。</p>
+
+<p>在排查掉帧问题时，这可能会让人困惑：<code>onDraw()</code> 里的操作缓慢和 GPU 过载在用户看来是一样的，但需要不同的解决方案。将代码移到后台线程只能解决其中一个问题。要找出具体问题所在，请跟踪帧在渲染管线中的执行过程。</p>
+
+<h2>UI 线程执行的操作</h2>
+
+<p>每个应用程序都有一个主线程，通常称为 UI 线程。它管理主消息队列，运行生命周期回调、输入事件，以及所有投递到主 Looper 的任务。对于视图系统，它还负责应用属性更改、测量和布局层级结构、运行动画回调、调用 <code>View.draw()</code> 和你的 <code>onDraw()</code> 方法，并记录用于硬件加速渲染的绘制操作。</p>
+
+<p>最后一点很容易被忽略。在硬件加速的情况下，<code>onDraw()</code> 不会进行任何光栅化操作。你的 <code>Canvas</code> 调用会被记录到一个显示列表中，每个 View 都维护着自己的显示列表（一个 <code>RenderNode</code>）。以下是一个简单的自定义 View 示例：</p>
+
+<pre><code class="kotlin">class ProgressView(context: Context) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var progress = 0.5f
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        canvas.drawCircle(width / 2f, height / 2f, width * progress / 2f, paint)
+    }
+}
+</code></pre>
+
+<p>当 <code>invalidate()</code> 安排重绘时，框架会在下一帧遍历期间（在 UI 线程上）调用 <code>onDraw()</code>，此时圆会被记录下来而不是绘制出来。</p>
+
+<p>这就是为什么自定义 View 会在 GPU 几乎空闲时导致卡顿。</p>
+
+<p>如果 <code>onDraw()</code> 执行繁重的计算、分配大型临时对象或循环遍历数千个元素，则 UI 线程会将时间花费在这些地方，而 GPU 无法处理尚未有人提交的帧。</p>
+
+<p>Android 渲染性能文档也描述了同样的划分：在 UI 线程上进行记录阶段，然后在 RenderThread 上进行绘制阶段。</p>
+
+<h2>RenderThread 的作用</h2>
+
+<p>RenderThread 是硬件加速渲染路径中的一个原生线程。它不运行你的 UI 代码。它接收 UI 线程记录的显示列表，通过 HWUI（<strong>Android 基于 Skia 的渲染器</strong>）重放这些列表，并将生成的命令发送给图形驱动程序。</p>
+
+<p>所以这三个阶段可以这样划分：</p>
+
+<ol>
+<li>UI 线程决定用户界面的外观并将其记录下来。</li>
+<li>RenderThread 重放记录的内容并提交图形命令。</li>
+<li>GPU 进行光栅化和着色。</li>
+</ol>
+
+
+<p>在系统跟踪中，这两个 CPU 阶段分别显示为主线程上的 <code>Record View#draw()</code> 和 RenderThread 上的 <code>DrawFrame</code>。将它们分开可以让 Android 将帧准备与渲染重叠执行，而不是将所有操作都推送到应用程序线程中。</p>
+
+<p>即使 <code>Canvas</code> 调用看起来很轻量，RenderThread 也会执行一些代价高昂的工作。在许多设备上，较大的 <code>Path</code> 对象会在 CPU 上进行光栅化并上传到 GPU，而 <code>clipPath()</code> 会增加渲染成本。应用程序代码中看似无害的调用，在后续阶段可能会成为性能瓶颈。</p>
+
+<p>RenderThread 还可以独立运行一些动画。<code>ViewPropertyAnimator</code> 和涟漪效果可以在主线程繁忙时继续运行，这也是它们保持流畅的原因之一。</p>
+
+<h2>一帧，从头到尾</h2>
+
+<p>假设用户正在滚动一个 <code>RecyclerView</code>。滚动操作会移动内容，并可能将新的项目显示出来。这一帧会经历以下几个阶段：</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*Z3MsxZKf-s-61UKv13ceUw.png" alt="无标题图像" /></p>
+
+<p>各个阶段在不同帧之间重叠，如果某一帧不需要更改任何内容，则会跳过大部分阶段。顺序如下：</p>
+
+<ol>
+<li>VSync 信号到达后，<code>Choreographer</code> 在主线程的 Looper 上运行帧回调。输入、动画和视图遍历都由此开始。</li>
+<li>UI 线程处理状态变化，如果发生变化则进行布局，并记录绘制操作。并非每一帧都需要完整的测量和布局过程。如果只有绘制属性（例如 <code>translationX</code> 或 <code>alpha</code>）发生变化，框架通常可以跳过布局，并经常重用现有的显示列表。这就是为什么动画化 <code>translationX</code> 比动画化边距（强制在每一帧都进行布局）更高效的原因。</li>
+<li>UI 线程将记录的工作交给 RenderThread。RenderThread 处理这些工作，构建图形命令并将其提交给驱动程序。</li>
+<li>GPU 执行这些命令。从 CPU 的角度来看，这是异步的：提交命令并不意味着 GPU 已经完成执行。</li>
+<li>SurfaceFlinger 将应用的缓冲区与系统 Surface 合成，并呈现结果。应用无法控制这最后一个阶段。</li>
+</ol>
+
+
+<p>因此，完成 <code>View.draw()</code> 并不意味着画面已经显示在屏幕上。渲染、缓冲区可用性、合成和呈现等过程仍然需要进行。</p>
+
+<h2>为什么线程之间会互相等待</h2>
+
+<p>这两个线程不能完全<strong>独立</strong>运行。</p>
+
+<p>UI 线程拥有 UI 状态，而 RenderThread 需要 UI 状态的一致快照。</p>
+
+<p>在跟踪日志中，你会看到 <code>syncFrameState</code>：主线程被阻塞，而 RenderThread 正在复制所需的状态。这是有意为之，因为允许两个线程同时访问共享状态会导致帧不一致。大型位图可能会使同步速度变慢，因为它们可能需要先移动到 GPU 可访问的内存中才能绘制。</p>
+
+<p>RenderThread 也可能等待合成器。</p>
+
+<p>当它请求缓冲区或归还缓冲区（<code>dequeueBuffer</code>、<code>eglSwapBuffers</code>）时，如果 GPU 或 SurfaceFlinger 响应滞后，它就会阻塞。这些等待本身都不是 bug。在跟踪记录中看起来空闲的线程可能只是在等待前面的阶段，因此在指责某个线程之前，应该查看整个帧。</p>
+
+<h2>为什么 RenderThread 不能防止卡顿</h2>
+
+<p>人们通常认为，专用的 RenderThread 应该可以避免耗费资源的 UI 操作。但事实并非如此，因为 RenderThread 只能绘制 UI 线程已经记录的内容。以下三个例子说明了其中的区别。</p>
+
+<p><strong>耗时的绘图代码。</strong> 假设 <code>onDraw()</code> 函数如下所示：</p>
+
+<pre><code class="kotlin">override fun onDraw(canvas: Canvas) {
+    super.onDraw(canvas)
+    val points = generateComplexGeometry()
+    points.forEach { point -&gt;
+        canvas.drawCircle(point.x, point.y, point.radius, paint)
+    }
+}
+</code></pre>
+
+<p>如果 <code>generateComplexGeometry()</code> 函数运行缓慢，它会在每一帧都运行在 UI 线程上。RenderThread 会等待延迟到达的显示列表，GPU 几乎无所事事，导致帧仍然错过截止时间。因此，应该只计算一次几何数据，将其缓存，仅在输入发生变化时才重新计算。</p>
+
+<p><strong>耗时的绘制命令。</strong> 现在，UI 线程只记录少量命令，耗时远低于一毫秒，但这些命令包含大型的 <code>clipPath</code> 或 <code>Path</code>。记录很快完成，但 <code>DrawFrame</code> 却运行很长时间。将你的代码移到工作线程并不能解决这个问题，因为开销在于命令本身。简化这些命令。</p>
+
+<p><strong>GPU 负载过高。</strong> CPU 线程均按时完成，但 GPU 渲染延迟。大型纹理、过度绘制和繁重的着色器是常见原因。优化 <code>onDraw()</code> 函数无济于事，因为延迟发生在渲染提交之后。</p>
+
+<p>屏幕上显示的症状可能完全相同，所以要留意时间实际都花到哪里去了：</p>
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*dOVVVqGpMFOUXAjn883L3Q.png" alt="无标题图像" /></p>
+
+<p>将工作从主线程移开只对第一行有帮助。</p>
+
+<h2>Jetpack Compose 有哪些变化</h2>
+
+<p>Compose 引入了描述和更新 UI 的新语义，但底层图形管线保持不变。该管线包含三个阶段：Compose（组合）、Layout（布局）和 Draw（绘制）。所有这些阶段都在 UI 线程上执行，并且 Draw 阶段写入相同的渲染节点。因此，同样的机制仍然适用：耗时的组合或布局操作会延迟帧准备，耗时的绘制命令会减慢 RenderThread 的速度。GPU 繁忙或饱和会导致应用程序所有工作完成后帧延迟。</p>
+
+<p>Compose 允许你指定状态读取发生在哪个阶段。在组合过程中进行状态读取会导致组合重新运行。在 <code>graphicsLayer</code> lambda 表达式中进行相同的读取操作只会重新运行绘制阶段：</p>
+
+<pre><code class="kotlin">val alpha = animateFloatAsState(if (visible) 1f else 0f)
+Box(Modifier.graphicsLayer { this.alpha = alpha.value }) // no recomposition per frame
+</code></pre>
+
+<p>要确定问题出自 Compose 还是整个管线，请启用组合跟踪并抓取系统跟踪。</p>
+
+<h2>查找跟踪中的瓶颈</h2>
+
+<p>Android Studio 的性能分析器和 Perfetto 都可以记录系统跟踪信息，其中显示了主线程、RenderThread、GPU 完成情况和帧事件。实际操作流程如下：</p>
+
+<ol>
+<li>重现卡顿的交互并记录跟踪信息。</li>
+<li>在 Android 12 (API 31) 及更高版本上，在“卡顿帧”跟踪中找到延迟帧。Perfetto 的 <code>FrameTimeline</code> 会比较预期显示时间和实际显示时间，从而判断帧是否按时到达屏幕。</li>
+<li>查看主线程中是否存在耗时的 <code>Choreographer#doFrame</code> 调用，包括布局和绘制操作。</li>
+<li>查看 RenderThread 中是否存在耗时的 <code>DrawFrame</code> 调用。</li>
+<li>检查 GPU 工作何时完成。</li>
+</ol>
+
+
+<p><img src="https://cdn-images-1.medium.com/max/1024/1*J1uoDP0Q60IZdv283-CyFw.png" alt="无标题图像" /></p>
+
+<p>不要看到第一个耗时较长的片段就停下来。</p>
+
+<p>RenderThread 执行时间过长并不一定意味着 GPU 速度慢。同样，GPU 完成渲染的时间较晚也不一定意味着 UI 线程存在问题。</p>
+
+<p>如果你想在不手动跟踪的情况下捕获回归，那么 <code>Macrobenchmark</code> 的 <code>FrameTimingMetric</code> 和 <code>JankStats</code> 库将自动为你提供有关帧计时的信息。</p>
+
+<p>帧间隔在 60Hz 时为 16.7 毫秒，90Hz 时为 11.1 毫秒，120Hz 时为 8.3 毫秒。</p>
+
+<p>这是两次刷新之间的时间间隔，不包括调度所需的时间。同步、渲染和合成都会占用一部分时间。</p>
+
+<p>此外，帧是流水线式处理的。因此，线程处理帧的时间并不等同于用户触摸屏幕到看到结果之间的延迟。</p>
+
+<p>测量整个帧生命周期，而不是将 16 毫秒作为代码的预算。</p>
+]]></content>
+  </entry>
+  
+</feed>
